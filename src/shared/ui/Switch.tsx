@@ -1,18 +1,25 @@
 import { HTMLAttributes } from 'react'
 import { cn } from '@/shared/utils'
 
-interface SwitchProps extends Omit<HTMLAttributes<HTMLButtonElement>, 'onChange'> {
+interface SwitchProps extends Omit<HTMLAttributes<HTMLButtonElement>, 'onChange' | 'onCheckedChange'> {
   checked?: boolean
+  onCheckedChange?: (checked: boolean) => void
   onChange?: (checked: boolean) => void
 }
 
-export function Switch({ checked = false, onChange, className, ...props }: SwitchProps) {
+export function Switch({ checked = false, onCheckedChange, onChange, className, ...props }: SwitchProps) {
+  const handleToggle = () => {
+    const newValue = !checked
+    onCheckedChange?.(newValue)
+    onChange?.(newValue)
+  }
+
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      onClick={() => onChange?.(!checked)}
+      onClick={handleToggle}
       className={cn(
         'relative inline-flex h-5 w-9 items-center rounded-full transition-colors',
         checked ? 'bg-accent' : 'bg-surface-2',

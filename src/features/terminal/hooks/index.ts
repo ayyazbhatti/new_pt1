@@ -1,2 +1,3 @@
 // Terminal hooks exports
+export {}
 

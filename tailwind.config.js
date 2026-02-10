@@ -10,9 +10,11 @@ export default {
       colors: {
         background: '#0b1220',
         surface: '#111a2b',
+        'surface-1': '#1a2332',
         'surface-2': '#0f172a',
         border: 'rgba(255, 255, 255, 0.08)',
         text: '#e5e7eb',
+        'text-muted': '#94a3b8',
         'text-dim': '#94a3b8',
         muted: '#94a3b8',
         accent: '#3b82f6',

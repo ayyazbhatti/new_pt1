@@ -1,6 +1,10 @@
-import { createBrowserRouter, RouterProvider } from 'react-router-dom'
+import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { routes } from './routes'
+import { adminRoutes } from './adminRoutes'
 import { AppShell } from '../layout'
+import { AdminLayout } from '@/shared/layout'
+import { AuthGuard } from '@/shared/components/guards/AuthGuard'
+import { AdminGuard } from '@/shared/components/guards/AdminGuard'
 
 const futureFlags = {
   v7_startTransition: true,
@@ -9,15 +13,33 @@ const futureFlags = {
 }
 
 const router = createBrowserRouter(
-  routes.map((route) => {
-    if (route.path === '/login' || route.path === '/') {
-      return route
-    }
-    return {
+  [
+    ...routes.map((route) => {
+      // Auth pages and terminal page don't need AppShell (terminal has its own layout)
+      if (route.path === '/login' || route.path === '/register' || route.path === '/') {
+        return route
+      }
+      // Protected routes get AppShell wrapper
+      return {
+        ...route,
+        element: <AppShell>{route.element}</AppShell>,
+      }
+    }),
+    ...adminRoutes.map((route) => ({
       ...route,
-      element: <AppShell>{route.element}</AppShell>,
-    }
-  }),
+      element: (
+        <AuthGuard>
+          <AdminGuard>
+            <AdminLayout>{route.element}</AdminLayout>
+          </AdminGuard>
+        </AuthGuard>
+      ),
+    })),
+    {
+      path: '/admin',
+      element: <Navigate to="/admin/dashboard" replace />,
+    },
+  ],
   {
     future: futureFlags,
   }

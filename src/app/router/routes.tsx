@@ -1,20 +1,34 @@
 import { RouteObject } from 'react-router-dom'
 import { TerminalPage } from '@/features/terminal'
 import { TradingPage } from '@/features/trading'
-import { LoginPage } from '@/features/auth'
+import { LoginPage } from '@/pages/auth/LoginPage'
+import { RegisterPage } from '@/pages/auth/RegisterPage'
+import { AuthGuard } from '@/shared/components/guards/AuthGuard'
 
 export const routes: RouteObject[] = [
   {
+    path: '/login',
+    element: <LoginPage />,
+  },
+  {
+    path: '/register',
+    element: <RegisterPage />,
+  },
+  {
     path: '/',
-    element: <TerminalPage />,
+    element: (
+      <AuthGuard>
+        <TerminalPage />
+      </AuthGuard>
+    ),
   },
   {
     path: '/user/trading',
-    element: <TradingPage />,
-  },
-  {
-    path: '/login',
-    element: <LoginPage />,
+    element: (
+      <AuthGuard>
+        <TradingPage />
+      </AuthGuard>
+    ),
   },
 ]
 

@@ -1,0 +1,195 @@
+import { ColumnDef } from '@tanstack/react-table'
+import { DataTable } from '@/shared/ui/table'
+import { Button } from '@/shared/ui/button'
+import { Badge } from '@/shared/ui/badge'
+import { UserGroup } from '../types/group'
+import { GroupFormDialog } from './GroupFormDialog'
+import { DeleteGroupDialog } from './DeleteGroupDialog'
+import { Eye, Edit, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { formatDistanceToNow } from 'date-fns'
+
+interface GroupsTableProps {
+  groups: UserGroup[]
+  onRefresh?: () => void
+}
+
+export function GroupsTable({ groups, onRefresh }: GroupsTableProps) {
+  const [viewingGroup, setViewingGroup] = useState<UserGroup | null>(null)
+  const [editingGroup, setEditingGroup] = useState<UserGroup | null>(null)
+  const [deletingGroup, setDeletingGroup] = useState<UserGroup | null>(null)
+  const [viewDialogOpen, setViewDialogOpen] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+
+  const handleView = (group: UserGroup) => {
+    setViewingGroup(group)
+    setViewDialogOpen(true)
+  }
+
+  const handleEdit = (group: UserGroup) => {
+    setEditingGroup(group)
+    setEditDialogOpen(true)
+  }
+
+  const handleDelete = (group: UserGroup) => {
+    setDeletingGroup(group)
+    setDeleteDialogOpen(true)
+  }
+
+  const columns: ColumnDef<UserGroup>[] = [
+    {
+      accessorKey: 'name',
+      header: 'Name',
+      cell: ({ row }) => {
+        return <span className="font-semibold text-text">{row.getValue('name')}</span>
+      },
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ row }) => {
+        const status = row.getValue('status') as string
+        const variant = status === 'active' ? 'success' : 'danger'
+        return <Badge variant={variant}>{status}</Badge>
+      },
+    },
+    {
+      accessorKey: 'priority',
+      header: 'Priority',
+      cell: ({ row }) => {
+        return <span className="text-text">{row.getValue('priority')}</span>
+      },
+    },
+    {
+      id: 'leverage',
+      header: 'Leverage',
+      cell: ({ row }) => {
+        const group = row.original
+        return (
+          <span className="text-text font-mono text-sm">
+            {group.minLeverage}× — {group.maxLeverage}×
+          </span>
+        )
+      },
+    },
+    {
+      id: 'limits',
+      header: 'Limits',
+      cell: ({ row }) => {
+        const group = row.original
+        return (
+          <span className="text-text text-sm">
+            Pos: {group.maxOpenPositions} • Ord: {group.maxOpenOrders}
+          </span>
+        )
+      },
+    },
+    {
+      accessorKey: 'riskMode',
+      header: 'Risk Mode',
+      cell: ({ row }) => {
+        const riskMode = row.getValue('riskMode') as string
+        const variant = riskMode === 'aggressive' ? 'warning' : riskMode === 'conservative' ? 'info' : 'neutral'
+        return <Badge variant={variant}>{riskMode}</Badge>
+      },
+    },
+    {
+      accessorKey: 'updatedAt',
+      header: 'Updated',
+      cell: ({ row }) => {
+        const date = row.getValue('updatedAt') as string
+        return (
+          <span className="text-text-muted text-sm">
+            {formatDistanceToNow(new Date(date), { addSuffix: true })}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: ({ row }) => {
+        const group = row.original
+        return (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleView(group)}
+              title="View"
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleEdit(group)}
+              title="Edit"
+            >
+              <Edit className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleDelete(group)}
+              title="Delete"
+              className="text-danger hover:text-danger"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        )
+      },
+    },
+  ]
+
+  return (
+    <>
+      <DataTable data={groups} columns={columns} />
+      
+      {viewingGroup && (
+        <GroupFormDialog
+          mode="view"
+          initial={viewingGroup}
+          open={viewDialogOpen}
+          onOpenChange={(open) => {
+            setViewDialogOpen(open)
+            if (!open) {
+              setViewingGroup(null)
+            }
+          }}
+        />
+      )}
+
+      {editingGroup && (
+        <GroupFormDialog
+          mode="edit"
+          initial={editingGroup}
+          open={editDialogOpen}
+          onOpenChange={(open) => {
+            setEditDialogOpen(open)
+            if (!open) {
+              setEditingGroup(null)
+              onRefresh?.()
+            }
+          }}
+        />
+      )}
+
+      {deletingGroup && (
+        <DeleteGroupDialog
+          group={deletingGroup}
+          open={deleteDialogOpen}
+          onOpenChange={(open) => {
+            setDeleteDialogOpen(open)
+            if (!open) {
+              setDeletingGroup(null)
+              onRefresh?.()
+            }
+          }}
+        />
+      )}
+    </>
+  )
+}
