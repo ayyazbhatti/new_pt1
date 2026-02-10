@@ -2,12 +2,17 @@ import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { UserGroup } from '../types/group'
 import { GroupFormDialog } from './GroupFormDialog'
 import { DeleteGroupDialog } from './DeleteGroupDialog'
 import { Eye, Edit, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { toast } from 'react-hot-toast'
+import { updateGroupPriceProfile, updateGroupLeverageProfile } from '../api/groups.api'
+import { useMarkupProfiles } from '@/features/adminMarkup/hooks/useMarkup'
+import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 
 interface GroupsTableProps {
   groups: UserGroup[]
@@ -21,6 +26,56 @@ export function GroupsTable({ groups, onRefresh }: GroupsTableProps) {
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [updatingProfiles, setUpdatingProfiles] = useState<Set<string>>(new Set())
+
+  // Fetch available profiles
+  const { data: priceProfilesData } = useMarkupProfiles()
+  const { data: leverageProfilesData } = useLeverageProfilesList({ page_size: 100 })
+  
+  const priceProfiles = priceProfilesData || []
+  const leverageProfiles = leverageProfilesData?.items || []
+
+  const handlePriceProfileChange = async (groupId: string, groupName: string, profileId: string | null) => {
+    const key = `${groupId}-price`
+    setUpdatingProfiles((prev) => new Set(prev).add(key))
+    
+    try {
+      await updateGroupPriceProfile(groupId, profileId)
+      const profileName = profileId ? priceProfiles.find(p => p.id === profileId)?.name || 'Unknown' : 'None'
+      toast.success(`Price stream profile for ${groupName} updated to ${profileName}`)
+      onRefresh?.()
+    } catch (error: any) {
+      const errorMessage = error?.response?.data?.error?.message || error?.message || 'Failed to update price profile'
+      toast.error(errorMessage)
+    } finally {
+      setUpdatingProfiles((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }
+  }
+
+  const handleLeverageProfileChange = async (groupId: string, groupName: string, profileId: string | null) => {
+    const key = `${groupId}-leverage`
+    setUpdatingProfiles((prev) => new Set(prev).add(key))
+    
+    try {
+      await updateGroupLeverageProfile(groupId, profileId)
+      const profileName = profileId ? leverageProfiles.find(p => p.id === profileId)?.name || 'Unknown' : 'None'
+      toast.success(`Leverage profile for ${groupName} updated to ${profileName}`)
+      onRefresh?.()
+    } catch (error: any) {
+      const errorMessage = error?.response?.data?.error?.message || error?.message || 'Failed to update leverage profile'
+      toast.error(errorMessage)
+    } finally {
+      setUpdatingProfiles((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }
+  }
 
   const handleView = (group: UserGroup) => {
     setViewingGroup(group)
@@ -92,6 +147,70 @@ export function GroupsTable({ groups, onRefresh }: GroupsTableProps) {
         const riskMode = row.getValue('riskMode') as string
         const variant = riskMode === 'aggressive' ? 'warning' : riskMode === 'conservative' ? 'info' : 'neutral'
         return <Badge variant={variant}>{riskMode}</Badge>
+      },
+    },
+    {
+      id: 'priceProfile',
+      header: 'Price Stream Profile',
+      cell: ({ row }) => {
+        const group = row.original
+        const currentProfileId = group.priceProfileId || ''
+        const isUpdating = updatingProfiles.has(`${group.id}-price`)
+        const currentProfileName = priceProfiles.find(p => p.id === currentProfileId)?.name || 'None'
+
+        return (
+          <div className="min-w-[180px]">
+            <Select
+              value={currentProfileId || 'none'}
+              onValueChange={(value) => handlePriceProfileChange(group.id, group.name, value === 'none' ? null : value)}
+              disabled={isUpdating}
+            >
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue placeholder={isUpdating ? 'Updating...' : currentProfileName} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {priceProfiles.map((profile) => (
+                  <SelectItem key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )
+      },
+    },
+    {
+      id: 'leverageProfile',
+      header: 'Leverage Profile',
+      cell: ({ row }) => {
+        const group = row.original
+        const currentProfileId = group.leverageProfileId || ''
+        const isUpdating = updatingProfiles.has(`${group.id}-leverage`)
+        const currentProfileName = leverageProfiles.find(p => p.id === currentProfileId)?.name || 'None'
+
+        return (
+          <div className="min-w-[180px]">
+            <Select
+              value={currentProfileId || 'none'}
+              onValueChange={(value) => handleLeverageProfileChange(group.id, group.name, value === 'none' ? null : value)}
+              disabled={isUpdating}
+            >
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue placeholder={isUpdating ? 'Updating...' : currentProfileName} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {leverageProfiles.map((profile) => (
+                  <SelectItem key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )
       },
     },
     {

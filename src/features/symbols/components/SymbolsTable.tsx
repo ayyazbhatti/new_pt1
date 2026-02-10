@@ -2,64 +2,78 @@ import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
+import { Switch } from '@/shared/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { AdminSymbol } from '../types/symbol'
 import { useModalStore } from '@/app/store'
 import { EditSymbolModal } from '../modals/EditSymbolModal'
 import { SymbolGroupMarkupsModal } from '../modals/SymbolGroupMarkupsModal'
-import { Eye, Edit, DollarSign, X, TrendingUp } from 'lucide-react'
+import { Eye, Edit, Trash2, TrendingUp } from 'lucide-react'
+import { useToggleSymbolEnabled, useDeleteSymbol } from '../hooks/useSymbols'
+import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
+import { useUpdateSymbol } from '../hooks/useSymbols'
 import { toast } from 'react-hot-toast'
-import { useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { PriceCell } from './PriceCell'
+import { usePriceStream } from '../hooks/usePriceStream'
+import { useMemo, useEffect } from 'react'
 
 interface SymbolsTableProps {
   symbols: AdminSymbol[]
-  filters?: {
-    search: string
-    market: string
-    status: string
-  }
+  total: number
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (size: number) => void
 }
 
-const marketBadgeColors: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
-  crypto: 'primary',
-  forex: 'success',
-  metals: 'warning',
-  indices: 'info',
-  stocks: 'primary',
+const assetClassBadgeColors: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
+  Crypto: 'primary',
+  FX: 'success',
+  Metals: 'warning',
+  Indices: 'info',
+  Stocks: 'primary',
+  Commodities: 'warning',
 }
 
-export function SymbolsTable({ symbols, filters }: SymbolsTableProps) {
+export function SymbolsTable({
+  symbols,
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}: SymbolsTableProps) {
   const openModal = useModalStore((state) => state.openModal)
-  const navigate = useNavigate()
+  const toggleEnabled = useToggleSymbolEnabled()
+  const deleteSymbol = useDeleteSymbol()
+  const updateSymbol = useUpdateSymbol()
+  const { data: leverageProfiles } = useLeverageProfilesList()
 
-  const filteredSymbols = useMemo(() => {
-    return symbols.filter((symbol) => {
-      if (filters?.search) {
-        const searchLower = filters.search.toLowerCase()
-        if (
-          !symbol.code.toLowerCase().includes(searchLower) &&
-          !symbol.name.toLowerCase().includes(searchLower)
-        ) {
-          return false
-        }
-      }
-      if (filters?.market && filters.market !== 'all') {
-        if (symbol.market !== filters.market) {
-          return false
-        }
-      }
-      if (filters?.status && filters.status !== 'all') {
-        if (symbol.status !== filters.status) {
-          return false
-        }
-      }
-      return true
-    })
-  }, [symbols, filters])
+  // Get all symbol codes for price streaming (use provider symbol or symbol code, uppercase)
+  const symbolCodes = useMemo(() => {
+    const codes = symbols
+      .map((s) => (s.providerSymbol || s.symbolCode).toUpperCase())
+      .filter((code) => code && code.length > 0)
+    console.log('📋 SymbolsTable: Symbol codes to subscribe:', codes)
+    console.log('📋 SymbolsTable: Symbols data:', symbols.map(s => ({ 
+      code: s.symbolCode, 
+      provider: s.providerSymbol,
+      final: (s.providerSymbol || s.symbolCode).toUpperCase()
+    })))
+    return codes
+  }, [symbols])
+
+  // Subscribe to price stream for current page symbols
+  const { isConnected } = usePriceStream(symbolCodes)
+  
+  // Debug: Log connection status
+  useEffect(() => {
+    console.log('🔌 SymbolsTable: WebSocket connection status:', isConnected, '| Symbols:', symbolCodes)
+  }, [isConnected, symbolCodes.join(',')])
 
   const handleView = (symbol: AdminSymbol) => {
     openModal(`view-symbol-${symbol.id}`, <EditSymbolModal symbol={symbol} readOnly />, {
-      title: `View Symbol - ${symbol.code}`,
+      title: `View Symbol - ${symbol.symbolCode}`,
       size: 'lg',
     })
   }
@@ -73,110 +87,197 @@ export function SymbolsTable({ symbols, filters }: SymbolsTableProps) {
 
   const handleGroupMarkups = (symbol: AdminSymbol) => {
     openModal(`group-markups-${symbol.id}`, <SymbolGroupMarkupsModal symbol={symbol} />, {
-      title: `Group Markups - ${symbol.code}`,
+      title: `Group Markups - ${symbol.symbolCode}`,
       size: 'xl',
     })
   }
 
-  const handleMarkup = (symbol: AdminSymbol) => {
-    navigate(`/admin/markup?symbol=${symbol.code}`)
+  const handleToggleEnabled = async (symbol: AdminSymbol) => {
+    try {
+      await toggleEnabled.mutateAsync({
+        id: symbol.id,
+        isEnabled: !symbol.isEnabled,
+      })
+    } catch (error) {
+      // Error handled by hook
+    }
   }
 
-  const handleDisable = (symbol: AdminSymbol) => {
-    toast.success(`Symbol "${symbol.code}" ${symbol.status === 'enabled' ? 'disabled' : 'enabled'}`)
+  const handleLeverageProfileChange = async (symbol: AdminSymbol, profileId: string | null) => {
+    try {
+      await updateSymbol.mutateAsync({
+        id: symbol.id,
+        payload: {
+          symbol_code: symbol.symbolCode,
+          provider_symbol: symbol.providerSymbol || symbol.symbolCode.toLowerCase(),
+          asset_class: symbol.assetClass || 'FX',
+          base_currency: symbol.baseCurrency,
+          quote_currency: symbol.quoteCurrency,
+          price_precision: symbol.pricePrecision,
+          volume_precision: symbol.volumePrecision,
+          contract_size: symbol.contractSize,
+          is_enabled: symbol.isEnabled,
+          trading_enabled: symbol.tradingEnabled,
+          leverage_profile_id: profileId,
+        },
+      })
+    } catch (error) {
+      // Error handled by hook
+    }
+  }
+
+  const handleDelete = async (symbol: AdminSymbol) => {
+    if (confirm(`Are you sure you want to delete symbol "${symbol.symbolCode}"?`)) {
+      try {
+        await deleteSymbol.mutateAsync(symbol.id)
+      } catch (error) {
+        // Error handled by hook
+      }
+    }
   }
 
   const columns: ColumnDef<AdminSymbol>[] = [
     {
-      accessorKey: 'code',
+      accessorKey: 'symbolCode',
       header: 'Symbol',
       cell: ({ row }) => {
         const symbol = row.original
         return (
           <div className="flex items-center gap-2">
-            <span className="font-mono font-semibold">{symbol.code}</span>
-            <Badge variant={marketBadgeColors[symbol.market] || 'neutral'} className="text-xs">
-              {symbol.market}
+            <span className="font-mono font-semibold">{symbol.symbolCode}</span>
+            {symbol.assetClass && (
+              <Badge
+                variant={assetClassBadgeColors[symbol.assetClass] || 'neutral'}
+                className="text-xs"
+              >
+                {symbol.assetClass}
+              </Badge>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      accessorKey: 'baseCurrency',
+      header: 'Currency Pair',
+      cell: ({ row }) => {
+        const symbol = row.original
+        return (
+          <span className="font-mono text-sm">
+            {symbol.baseCurrency}/{symbol.quoteCurrency}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'livePrice',
+      header: (
+        <div className="flex items-center gap-2">
+          <span>Live Price</span>
+          {isConnected ? (
+            <Badge variant="success" className="text-xs">
+              Live
+            </Badge>
+          ) : (
+            <Badge variant="neutral" className="text-xs">
+              Offline
+            </Badge>
+          )}
+        </div>
+      ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        // Use provider symbol if available, otherwise use symbol code
+        // Data provider expects uppercase symbols
+        const symbolCode = (symbol.providerSymbol || symbol.symbolCode).toUpperCase()
+        return <PriceCell symbol={symbolCode} />
+      },
+    },
+    {
+      accessorKey: 'providerSymbol',
+      header: 'Provider Symbol',
+      cell: ({ row }) => {
+        const providerSymbol = row.getValue('providerSymbol') as string | null
+        return <span className="font-mono text-sm text-text-muted">{providerSymbol || '-'}</span>
+      },
+    },
+    {
+      accessorKey: 'leverageProfileName',
+      header: 'Leverage Profile',
+      cell: ({ row }) => {
+        const symbol = row.original
+        return (
+          <Select
+            value={symbol.leverageProfileId || 'none'}
+            onValueChange={(value) =>
+              handleLeverageProfileChange(symbol, value === 'none' ? null : value)
+            }
+            disabled={updateSymbol.isPending}
+          >
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Select profile" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No Profile</SelectItem>
+              {leverageProfiles?.items.map((profile) => (
+                <SelectItem key={profile.id} value={profile.id}>
+                  {profile.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )
+      },
+    },
+    {
+      accessorKey: 'contractSize',
+      header: 'Contract Size',
+      cell: ({ row }) => {
+        const size = row.getValue('contractSize') as string
+        return <span className="font-mono text-sm">{size}</span>
+      },
+    },
+    {
+      id: 'precision',
+      header: 'Precision',
+      cell: ({ row }) => {
+        const symbol = row.original
+        return (
+          <span className="text-sm text-text-muted">
+            Price: {symbol.pricePrecision} | Vol: {symbol.volumePrecision}
+          </span>
+        )
+      },
+    },
+    {
+      accessorKey: 'isEnabled',
+      header: 'Enabled',
+      cell: ({ row }) => {
+        const symbol = row.original
+        return (
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={symbol.isEnabled}
+              onCheckedChange={() => handleToggleEnabled(symbol)}
+              disabled={toggleEnabled.isPending}
+            />
+            <Badge variant={symbol.isEnabled ? 'success' : 'danger'} className="text-xs">
+              {symbol.isEnabled ? 'Enabled' : 'Disabled'}
             </Badge>
           </div>
         )
       },
     },
     {
-      accessorKey: 'name',
-      header: 'Display Name',
-    },
-    {
-      accessorKey: 'market',
-      header: 'Market',
+      accessorKey: 'tradingEnabled',
+      header: 'Trading',
       cell: ({ row }) => {
-        const market = row.getValue('market') as string
-        return <span className="capitalize">{market}</span>
-      },
-    },
-    {
-      accessorKey: 'provider',
-      header: 'Price Source',
-    },
-    {
-      accessorKey: 'leverageProfileName',
-      header: 'Leverage Profile',
-    },
-    {
-      accessorKey: 'contractSize',
-      header: 'Contract Size',
-      cell: ({ row }) => {
-        const size = row.getValue('contractSize') as number
-        return <span className="font-mono">{size.toLocaleString()}</span>
-      },
-    },
-    {
-      accessorKey: 'tickSize',
-      header: 'Tick Size',
-      cell: ({ row }) => {
-        const size = row.getValue('tickSize') as number
-        return <span className="font-mono">{size}</span>
-      },
-    },
-    {
-      id: 'lotRange',
-      header: 'Lot Min / Max',
-      cell: ({ row }) => {
-        const symbol = row.original
+        const tradingEnabled = row.getValue('tradingEnabled') as boolean
         return (
-          <span className="font-mono text-sm">
-            {symbol.lotMin} / {symbol.lotMax}
-          </span>
+          <Badge variant={tradingEnabled ? 'success' : 'danger'} className="text-xs">
+            {tradingEnabled ? 'Enabled' : 'Disabled'}
+          </Badge>
         )
-      },
-    },
-    {
-      id: 'groupsMarkup',
-      header: 'Groups Markup',
-      cell: ({ row }) => {
-        // Mock: 3 groups assigned
-        return (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-text-muted">3 groups</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleGroupMarkups(row.original)}
-              className="h-6 px-2 text-xs"
-            >
-              View
-            </Button>
-          </div>
-        )
-      },
-    },
-    {
-      accessorKey: 'status',
-      header: 'Status',
-      cell: ({ row }) => {
-        const status = row.getValue('status') as string
-        const variant = status === 'enabled' ? 'success' : 'danger'
-        return <Badge variant={variant}>{status}</Badge>
       },
     },
     {
@@ -186,20 +287,10 @@ export function SymbolsTable({ symbols, filters }: SymbolsTableProps) {
         const symbol = row.original
         return (
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleView(symbol)}
-              title="View"
-            >
+            <Button variant="ghost" size="sm" onClick={() => handleView(symbol)} title="View">
               <Eye className="h-4 w-4" />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleEdit(symbol)}
-              title="Edit"
-            >
+            <Button variant="ghost" size="sm" onClick={() => handleEdit(symbol)} title="Edit">
               <Edit className="h-4 w-4" />
             </Button>
             <Button
@@ -208,23 +299,16 @@ export function SymbolsTable({ symbols, filters }: SymbolsTableProps) {
               onClick={() => handleGroupMarkups(symbol)}
               title="Group Markups"
             >
-              <DollarSign className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleMarkup(symbol)}
-              title="Markup"
-            >
               <TrendingUp className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => handleDisable(symbol)}
-              title={symbol.status === 'enabled' ? 'Disable' : 'Enable'}
+              onClick={() => handleDelete(symbol)}
+              title="Delete"
+              className="text-danger hover:text-danger"
             >
-              <X className="h-4 w-4" />
+              <Trash2 className="h-4 w-4" />
             </Button>
           </div>
         )
@@ -232,6 +316,17 @@ export function SymbolsTable({ symbols, filters }: SymbolsTableProps) {
     },
   ]
 
-  return <DataTable data={filteredSymbols} columns={columns} />
+  return (
+    <DataTable
+      data={symbols}
+      columns={columns}
+      pagination={{
+        page,
+        pageSize,
+        total,
+        onPageChange,
+        onPageSizeChange,
+      }}
+    />
+  )
 }
-

@@ -1,11 +1,15 @@
 import { create } from 'zustand'
-import { mockSymbols, type MockSymbol } from '@/shared/mock/terminalMock'
+import { type MockSymbol } from '@/shared/mock/terminalMock'
 
 interface TerminalStore {
-  selectedSymbol: MockSymbol
+  selectedSymbol: MockSymbol | null
+  symbols: MockSymbol[]
+  isLoading: boolean
   watchlist: Set<string>
   searchQuery: string
   activeTab: 'all' | 'watchlists'
+  setSymbols: (symbols: MockSymbol[]) => void
+  setLoading: (loading: boolean) => void
   setSelectedSymbol: (symbol: MockSymbol) => void
   toggleWatchlist: (symbolId: string) => void
   setSearchQuery: (query: string) => void
@@ -14,10 +18,21 @@ interface TerminalStore {
 }
 
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
-  selectedSymbol: mockSymbols[0],
+  selectedSymbol: null,
+  symbols: [],
+  isLoading: false,
   watchlist: new Set(),
   searchQuery: '',
   activeTab: 'all',
+  setSymbols: (symbols) => {
+    const state = get()
+    set({ symbols })
+    // Auto-select first symbol if none selected
+    if (!state.selectedSymbol && symbols.length > 0) {
+      set({ selectedSymbol: symbols[0] })
+    }
+  },
+  setLoading: (loading) => set({ isLoading: loading }),
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
   toggleWatchlist: (symbolId) =>
     set((state) => {
@@ -32,8 +47,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   setSearchQuery: (query) => set({ searchQuery: query }),
   setActiveTab: (tab) => set({ activeTab: tab }),
   getFilteredSymbols: () => {
-    const { searchQuery, activeTab, watchlist } = get()
-    let filtered = mockSymbols
+    const { searchQuery, activeTab, watchlist, symbols } = get()
+    let filtered = symbols
 
     // Filter by tab
     if (activeTab === 'watchlists') {

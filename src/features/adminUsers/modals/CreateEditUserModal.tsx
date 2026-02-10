@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
 import { User, UserStatus } from '../types/users'
-import { mockGroups } from '@/features/groups/mocks/groups.mock'
+import { useGroupsList } from '@/features/groups/hooks/useGroups'
 
 const userSchema = z.object({
   firstName: z.string().min(1, 'First name is required'),
@@ -27,6 +27,11 @@ interface CreateEditUserModalProps {
 
 export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
+
+  // Fetch groups dynamically - fetch all groups to include disabled ones when editing
+  const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
+    page_size: 100, // Get a reasonable number of groups
+  })
 
   const nameParts = user?.name.split(' ') || ['', '']
   const firstName = nameParts[0] || ''
@@ -52,6 +57,7 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
   })
 
   const group = watch('group')
+  const groups = groupsData?.items || []
 
   const onSubmit = (data: UserFormData) => {
     if (user) {
@@ -97,12 +103,19 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
         </div>
         <div>
           <label className="text-sm font-medium text-text mb-2 block">Group *</label>
-          <Select value={group} onValueChange={(value) => setValue('group', value)}>
+          <Select 
+            value={group} 
+            onValueChange={(value) => setValue('group', value)}
+            disabled={groupsLoading}
+          >
             <SelectTrigger>
-              <SelectValue placeholder="Select group" />
+              <SelectValue placeholder={groupsLoading ? "Loading groups..." : "Select group"} />
             </SelectTrigger>
             <SelectContent>
-              {mockGroups.map((g) => (
+              {groups.length === 0 && !groupsLoading && (
+                <SelectItem value="no-groups" disabled>No groups available</SelectItem>
+              )}
+              {groups.map((g) => (
                 <SelectItem key={g.id} value={g.id}>
                   {g.name}
                 </SelectItem>

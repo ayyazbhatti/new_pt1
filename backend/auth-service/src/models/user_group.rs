@@ -15,6 +15,10 @@ pub struct UserGroup {
     pub max_open_positions: i32,
     pub max_open_orders: i32,
     pub risk_mode: String, // 'standard', 'conservative', 'aggressive'
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_price_profile_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_leverage_profile_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

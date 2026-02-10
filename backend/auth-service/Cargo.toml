@@ -51,3 +51,6 @@ dotenv = "0.15"
 anyhow = "1.0"
 thiserror = "1.0"
 
+# Redis
+redis = { version = "0.24", features = ["tokio-comp"] }
+

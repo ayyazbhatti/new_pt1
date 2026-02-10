@@ -21,6 +21,8 @@ function toCamelCase(obj: any): UserGroup {
     maxOpenPositions: obj.max_open_positions,
     maxOpenOrders: obj.max_open_orders,
     riskMode: obj.risk_mode,
+    priceProfileId: obj.default_price_profile_id,
+    leverageProfileId: obj.default_leverage_profile_id,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
   }
@@ -95,6 +97,24 @@ export async function deleteGroup(id: string): Promise<void> {
 export async function getGroupUsage(id: string): Promise<UsageResponse> {
   return http<UsageResponse>(`/api/admin/groups/${id}/usage`, {
     method: 'GET',
+  })
+}
+
+export async function updateGroupPriceProfile(groupId: string, priceProfileId: string | null): Promise<void> {
+  await http(`/api/admin/groups/${groupId}/price-profile`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      price_profile_id: priceProfileId,
+    }),
+  })
+}
+
+export async function updateGroupLeverageProfile(groupId: string, leverageProfileId: string | null): Promise<void> {
+  await http(`/api/admin/groups/${groupId}/leverage-profile`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      leverage_profile_id: leverageProfileId,
+    }),
   })
 }
 

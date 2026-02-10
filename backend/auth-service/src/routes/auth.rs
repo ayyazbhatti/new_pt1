@@ -64,6 +64,10 @@ pub struct UserResponse {
     pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub referral_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,6 +139,8 @@ async fn register(
                 created_at: Some(user.created_at),
                 last_login_at: user.last_login_at,
                 referral_code: user.referral_code.clone(),
+                group_id: user.group_id,
+                group_name: None, // Will be populated if needed
             },
         })),
         Err(e) => {
@@ -193,6 +199,8 @@ async fn login(
                 created_at: Some(user.created_at),
                 last_login_at: user.last_login_at,
                 referral_code: user.referral_code.clone(),
+                group_id: user.group_id,
+                group_name: None, // Will be populated if needed
             },
         })),
         Err(e) => Err((
@@ -254,22 +262,40 @@ async fn me(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<ErrorResponse>)> {
 
-    let service = AuthService::new(pool);
+    let service = AuthService::new(pool.clone());
 
     match service.get_user_by_id(claims.sub).await {
-        Ok(user) => Ok(Json(UserResponse {
-            id: user.id,
-            email: user.email,
-            first_name: user.first_name,
-            last_name: user.last_name,
-            role: user.role,
-            status: user.status.into(),
-            phone: user.phone,
-            country: user.country,
-            created_at: Some(user.created_at),
-            last_login_at: user.last_login_at,
-            referral_code: user.referral_code,
-        })),
+        Ok(user) => {
+            // Fetch group name if user has a group
+            let group_name: Option<String> = if let Some(group_id) = user.group_id {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT name FROM user_groups WHERE id = $1"
+                )
+                .bind(group_id)
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+
+            Ok(Json(UserResponse {
+                id: user.id,
+                email: user.email,
+                first_name: user.first_name,
+                last_name: user.last_name,
+                role: user.role,
+                status: user.status.into(),
+                phone: user.phone,
+                country: user.country,
+                created_at: Some(user.created_at),
+                last_login_at: user.last_login_at,
+                referral_code: user.referral_code,
+                group_id: user.group_id,
+                group_name,
+            }))
+        },
         Err(e) => Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -300,7 +326,7 @@ async fn list_users(
         ));
     }
 
-    let service = AuthService::new(pool);
+    let service = AuthService::new(pool.clone());
 
     let limit = params
         .get("limit")
@@ -311,9 +337,23 @@ async fn list_users(
 
     match service.list_users(limit, offset).await {
         Ok(users) => {
-            let user_responses: Vec<UserResponse> = users
-                .into_iter()
-                .map(|u| UserResponse {
+            // Fetch group names for all users
+            let mut user_responses: Vec<UserResponse> = Vec::new();
+            for u in users {
+                let group_name: Option<String> = if let Some(group_id) = u.group_id {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT name FROM user_groups WHERE id = $1"
+                    )
+                    .bind(group_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                };
+
+                user_responses.push(UserResponse {
                     id: u.id,
                     email: u.email,
                     first_name: u.first_name,
@@ -325,8 +365,10 @@ async fn list_users(
                     created_at: Some(u.created_at),
                     last_login_at: u.last_login_at,
                     referral_code: u.referral_code,
-                })
-                .collect();
+                    group_id: u.group_id,
+                    group_name,
+                });
+            }
             Ok(Json(user_responses))
         }
         Err(e) => Err((

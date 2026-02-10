@@ -1,0 +1,342 @@
+use crate::state::connection_registry::ConnectionRegistry;
+use crate::ws::protocol::ServerMessage;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use uuid::Uuid;
+use tracing::{error, info, warn};
+use dashmap::DashMap;
+
+pub struct Broadcaster {
+    registry: Arc<ConnectionRegistry>,
+    connection_txs: Arc<DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>>,
+}
+
+impl Broadcaster {
+    pub fn new(
+        registry: Arc<ConnectionRegistry>,
+        mut message_rx: mpsc::Receiver<(String, serde_json::Value)>,
+    ) -> Self {
+        let connection_txs = Arc::new(DashMap::new());
+        let registry_clone = registry.clone();
+        let connection_txs_clone = connection_txs.clone();
+        
+        // Spawn the broadcaster task
+        tokio::spawn(async move {
+            info!("Broadcaster started");
+            while let Some((channel, payload)) = message_rx.recv().await {
+                match Self::handle_message(&registry_clone, &connection_txs_clone, channel, payload).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Error broadcasting message: {}", e);
+                    }
+                }
+            }
+        });
+
+        Self {
+            registry,
+            connection_txs,
+        }
+    }
+
+    pub fn register_connection(&self, conn_id: Uuid, tx: mpsc::UnboundedSender<ServerMessage>) {
+        self.connection_txs.insert(conn_id, tx);
+    }
+
+    pub fn unregister_connection(&self, conn_id: Uuid) {
+        self.connection_txs.remove(&conn_id);
+    }
+
+    async fn handle_message(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        channel: String,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        match channel.as_str() {
+            "price:ticks" => {
+                Self::broadcast_tick(registry, connection_txs, payload).await?;
+            }
+            "orders:updates" => {
+                Self::broadcast_order_update(registry, connection_txs, payload).await?;
+            }
+            "positions:updates" => {
+                Self::broadcast_position_update(registry, connection_txs, payload).await?;
+            }
+            "risk:alerts" => {
+                Self::broadcast_risk_alert(registry, connection_txs, payload).await?;
+            }
+            _ => {
+                warn!("Unknown channel: {}", channel);
+            }
+        }
+        Ok(())
+    }
+
+    async fn broadcast_tick(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let symbol = payload
+            .get("symbol")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing symbol in tick"))?;
+
+        let bid = payload
+            .get("bid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| payload.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("Missing bid in tick"))?;
+
+        let ask = payload
+            .get("ask")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| payload.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("Missing ask in tick"))?;
+
+        let ts = payload
+            .get("ts")
+            .or_else(|| payload.get("timestamp"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+        let message = ServerMessage::Tick {
+            symbol: symbol.to_string(),
+            bid,
+            ask,
+            ts,
+        };
+
+        // Get subscribers for this symbol
+        let subscribers = registry.get_symbol_subscribers(symbol);
+
+        let mut sent = 0;
+        let mut failed = 0;
+
+        for conn_id in subscribers {
+            if let Some(tx) = connection_txs.get(&conn_id) {
+                if tx.send(message.clone()).is_ok() {
+                    sent += 1;
+                } else {
+                    failed += 1;
+                    // Connection closed, remove it
+                    connection_txs.remove(&conn_id);
+                    registry.unregister(conn_id);
+                }
+            }
+        }
+
+        if sent > 0 {
+            // Log only if significant activity
+            if sent % 1000 == 0 {
+                info!("Broadcast tick {} to {} connections ({} failed)", symbol, sent, failed);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_order_update(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let user_id = payload
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing user_id in order update"))?;
+
+        let order_id = payload
+            .get("order_id")
+            .or_else(|| payload.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Missing order_id"))?;
+
+        let status = payload
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let symbol = payload
+            .get("symbol")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        let side = payload
+            .get("side")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        let quantity = payload
+            .get("quantity")
+            .or_else(|| payload.get("volume"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| payload.get("quantity").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+            .unwrap_or_default();
+
+        let price = payload
+            .get("price")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| payload.get("price").and_then(|v| v.as_f64()).map(|f| f.to_string()));
+
+        let ts = payload
+            .get("ts")
+            .or_else(|| payload.get("timestamp"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+        let message = ServerMessage::OrderUpdate {
+            order_id,
+            status,
+            symbol,
+            side,
+            quantity,
+            price,
+            ts,
+        };
+
+        // Send to all user connections
+        let connections = registry.get_user_connections(user_id);
+        for conn_id in connections {
+            if let Some(tx) = connection_txs.get(&conn_id) {
+                let _ = tx.send(message.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_position_update(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let user_id = payload
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing user_id in position update"))?;
+
+        let position_id = payload
+            .get("position_id")
+            .or_else(|| payload.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Missing position_id"))?;
+
+        let symbol = payload
+            .get("symbol")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        let side = payload
+            .get("side")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        let quantity = payload
+            .get("quantity")
+            .or_else(|| payload.get("volume"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| payload.get("quantity").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+            .unwrap_or_default();
+
+        let unrealized_pnl = payload
+            .get("unrealized_pnl")
+            .or_else(|| payload.get("pnl"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| payload.get("unrealized_pnl").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+            .unwrap_or_default();
+
+        let ts = payload
+            .get("ts")
+            .or_else(|| payload.get("timestamp"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+        let message = ServerMessage::PositionUpdate {
+            position_id,
+            symbol,
+            side,
+            quantity,
+            unrealized_pnl,
+            ts,
+        };
+
+        // Send to all user connections
+        let connections = registry.get_user_connections(user_id);
+        for conn_id in connections {
+            if let Some(tx) = connection_txs.get(&conn_id) {
+                let _ = tx.send(message.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_risk_alert(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let user_id = payload
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing user_id in risk alert"))?;
+
+        let alert_type = payload
+            .get("alert_type")
+            .or_else(|| payload.get("type"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        let message_text = payload
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        let severity = payload
+            .get("severity")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "warning".to_string());
+
+        let ts = payload
+            .get("ts")
+            .or_else(|| payload.get("timestamp"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+        let message = ServerMessage::RiskAlert {
+            alert_type,
+            message: message_text,
+            severity,
+            ts,
+        };
+
+        // Send to all user connections
+        let connections = registry.get_user_connections(user_id);
+        for conn_id in connections {
+            if let Some(tx) = connection_txs.get(&conn_id) {
+                let _ = tx.send(message.clone());
+            }
+        }
+
+        Ok(())
+    }
+}
+

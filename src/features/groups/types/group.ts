@@ -9,6 +9,8 @@ export type UserGroup = {
   maxOpenPositions: number
   maxOpenOrders: number
   riskMode: 'standard' | 'conservative' | 'aggressive'
+  priceProfileId?: string | null
+  leverageProfileId?: string | null
   createdAt: string
   updatedAt: string
 }

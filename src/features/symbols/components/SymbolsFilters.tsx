@@ -2,40 +2,26 @@ import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Button } from '@/shared/ui/button'
 import { Search, X } from 'lucide-react'
-import { useState } from 'react'
 
 interface SymbolsFiltersProps {
-  onFilterChange?: (filters: {
-    search: string
-    market: string
-    status: string
-  }) => void
+  search: string
+  onSearchChange: (value: string) => void
+  assetClass: string
+  isEnabled: string
+  onFilterChange: (key: string, value: string) => void
 }
 
-export function SymbolsFilters({ onFilterChange }: SymbolsFiltersProps) {
-  const [search, setSearch] = useState('')
-  const [market, setMarket] = useState('all')
-  const [status, setStatus] = useState('all')
-
+export function SymbolsFilters({
+  search,
+  onSearchChange,
+  assetClass,
+  isEnabled,
+  onFilterChange,
+}: SymbolsFiltersProps) {
   const handleClear = () => {
-    setSearch('')
-    setMarket('all')
-    setStatus('all')
-    onFilterChange?.({ search: '', market: 'all', status: 'all' })
-  }
-
-  const handleChange = (field: string, value: string) => {
-    const newFilters = {
-      search: field === 'search' ? value : search,
-      market: field === 'market' ? value : market,
-      status: field === 'status' ? value : status,
-    }
-
-    if (field === 'search') setSearch(value)
-    if (field === 'market') setMarket(value)
-    if (field === 'status') setStatus(value)
-
-    onFilterChange?.(newFilters)
+    onSearchChange('')
+    onFilterChange('asset_class', 'all')
+    onFilterChange('is_enabled', 'all')
   }
 
   return (
@@ -47,32 +33,33 @@ export function SymbolsFilters({ onFilterChange }: SymbolsFiltersProps) {
             type="search"
             placeholder="Search symbols..."
             value={search}
-            onChange={(e) => handleChange('search', e.target.value)}
+            onChange={(e) => onSearchChange(e.target.value)}
             className="pl-10"
           />
         </div>
       </div>
-      <Select value={market} onValueChange={(value) => handleChange('market', value)}>
+      <Select value={assetClass} onValueChange={(value) => onFilterChange('asset_class', value)}>
         <SelectTrigger className="w-[180px]">
-          <SelectValue placeholder="Market" />
+          <SelectValue placeholder="Asset Class" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Markets</SelectItem>
-          <SelectItem value="crypto">Crypto</SelectItem>
-          <SelectItem value="forex">Forex</SelectItem>
-          <SelectItem value="metals">Metals</SelectItem>
-          <SelectItem value="indices">Indices</SelectItem>
-          <SelectItem value="stocks">Stocks</SelectItem>
+          <SelectItem value="all">All Classes</SelectItem>
+          <SelectItem value="FX">FX</SelectItem>
+          <SelectItem value="Crypto">Crypto</SelectItem>
+          <SelectItem value="Metals">Metals</SelectItem>
+          <SelectItem value="Indices">Indices</SelectItem>
+          <SelectItem value="Stocks">Stocks</SelectItem>
+          <SelectItem value="Commodities">Commodities</SelectItem>
         </SelectContent>
       </Select>
-      <Select value={status} onValueChange={(value) => handleChange('status', value)}>
+      <Select value={isEnabled} onValueChange={(value) => onFilterChange('is_enabled', value)}>
         <SelectTrigger className="w-[180px]">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All Status</SelectItem>
-          <SelectItem value="enabled">Enabled</SelectItem>
-          <SelectItem value="disabled">Disabled</SelectItem>
+          <SelectItem value="true">Enabled</SelectItem>
+          <SelectItem value="false">Disabled</SelectItem>
         </SelectContent>
       </Select>
       <Button variant="outline" size="sm" onClick={handleClear}>

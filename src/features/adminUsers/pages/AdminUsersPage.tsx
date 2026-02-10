@@ -18,8 +18,8 @@ function mapUserResponse(user: UserResponse): User {
     email: user.email,
     phone: user.phone || undefined,
     country: user.country || 'Unknown',
-    group: '1', // TODO: Get from user_groups table
-    groupName: 'Default Group', // TODO: Get from user_groups table
+    group: user.group_id || '',
+    groupName: user.group_name || 'No Group',
     balance: 0, // TODO: Calculate from wallets table
     marginLevel: 0, // TODO: Calculate from positions
     status: user.status as 'active' | 'disabled' | 'suspended',
@@ -53,10 +53,23 @@ export function AdminUsersPage() {
     queryFn: () => listUsers({ limit: 100 }),
   })
   
+  const [usersState, setUsersState] = useState<User[]>([])
+
   const users = useMemo(() => {
     if (!usersData) return []
-    return usersData.map(mapUserResponse)
-  }, [usersData])
+    const mappedUsers = usersData.map(mapUserResponse)
+    // Update state when data changes
+    if (mappedUsers.length > 0 && usersState.length === 0) {
+      setUsersState(mappedUsers)
+    }
+    return mappedUsers
+  }, [usersData, usersState.length])
+
+  const handleUserUpdate = (userId: string, updates: Partial<User>) => {
+    setUsersState((prev) =>
+      prev.map((user) => (user.id === userId ? { ...user, ...updates } : user))
+    )
+  }
   const [filters, setFilters] = useState({
     search: '',
     status: 'all',
@@ -67,8 +80,11 @@ export function AdminUsersPage() {
     balanceMax: '',
   })
 
+  // Use state if available, otherwise use computed users
+  const displayUsers = usersState.length > 0 ? usersState : users
+
   const filteredUsers = useMemo(() => {
-    return users.filter((user) => {
+    return displayUsers.filter((user) => {
       if (filters.search) {
         const searchLower = filters.search.toLowerCase()
         if (
@@ -93,7 +109,7 @@ export function AdminUsersPage() {
       }
       return true
     })
-  }, [users, filters])
+  }, [displayUsers, filters])
 
   const handleCreateUser = () => {
     openModal('create-user', <CreateEditUserModal />, {
@@ -147,9 +163,9 @@ export function AdminUsersPage() {
           </div>
         }
       />
-      <UserKPICards users={users} />
+      <UserKPICards users={displayUsers} />
       <UserFiltersBar filters={filters} onFilterChange={setFilters} />
-      <UsersTable users={filteredUsers} />
+      <UsersTable users={filteredUsers} onUserUpdate={handleUserUpdate} />
     </ContentShell>
   )
 }

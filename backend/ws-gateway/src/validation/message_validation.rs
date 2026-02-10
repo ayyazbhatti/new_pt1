@@ -1,0 +1,84 @@
+use crate::ws::protocol::ClientMessage;
+use crate::config::LimitsConfig;
+use anyhow::Result;
+
+pub struct MessageValidator {
+    limits: LimitsConfig,
+}
+
+impl MessageValidator {
+    pub fn new(limits: LimitsConfig) -> Self {
+        Self { limits }
+    }
+
+    pub fn validate_message(&self, message: &ClientMessage) -> Result<()> {
+        match message {
+            ClientMessage::Subscribe { symbols, channels } => {
+                if symbols.len() > self.limits.max_symbols_per_client {
+                    return Err(anyhow::anyhow!(
+                        "Too many symbols: {} (max: {})",
+                        symbols.len(),
+                        self.limits.max_symbols_per_client
+                    ));
+                }
+
+                if symbols.is_empty() {
+                    return Err(anyhow::anyhow!("Symbols list cannot be empty"));
+                }
+
+                if channels.is_empty() {
+                    return Err(anyhow::anyhow!("Channels list cannot be empty"));
+                }
+
+                // Validate symbol format (alphanumeric, max 20 chars)
+                for symbol in symbols {
+                    if symbol.len() > 20 || !symbol.chars().all(|c| c.is_alphanumeric()) {
+                        return Err(anyhow::anyhow!("Invalid symbol format: {}", symbol));
+                    }
+                }
+
+                // Validate channel names
+                let valid_channels = ["tick", "positions", "orders", "risk"];
+                for channel in channels {
+                    if !valid_channels.contains(&channel.as_str()) {
+                        return Err(anyhow::anyhow!("Invalid channel: {}", channel));
+                    }
+                }
+            }
+            ClientMessage::Unsubscribe { symbols } => {
+                if symbols.len() > self.limits.max_symbols_per_client {
+                    return Err(anyhow::anyhow!(
+                        "Too many symbols: {} (max: {})",
+                        symbols.len(),
+                        self.limits.max_symbols_per_client
+                    ));
+                }
+            }
+            ClientMessage::Auth { token } => {
+                if token.is_empty() {
+                    return Err(anyhow::anyhow!("Token cannot be empty"));
+                }
+                if token.len() > 2048 {
+                    return Err(anyhow::anyhow!("Token too long"));
+                }
+            }
+            ClientMessage::Ping => {
+                // No validation needed
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_message_size(&self, size: usize) -> Result<()> {
+        if size > self.limits.max_message_size_bytes {
+            return Err(anyhow::anyhow!(
+                "Message too large: {} bytes (max: {})",
+                size,
+                self.limits.max_message_size_bytes
+            ));
+        }
+        Ok(())
+    }
+}
+

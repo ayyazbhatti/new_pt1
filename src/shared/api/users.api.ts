@@ -12,6 +12,8 @@ export interface UserResponse {
   created_at?: string
   last_login_at?: string | null
   referral_code?: string | null
+  group_id?: string | null
+  group_name?: string | null
 }
 
 export interface ListUsersParams {

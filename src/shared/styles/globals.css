@@ -74,21 +74,44 @@
 }
 
 @layer components {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .scrollbar-thin:hover,
+  .scrollbar-thin.scrolling {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-track {
-    @apply bg-surface;
+    @apply bg-transparent;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply bg-border rounded-full;
+    @apply bg-transparent rounded-full;
+    transition: background-color 0.2s ease;
   }
 
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  /* Show scrollbar thumb on hover of the container or when scrolling */
+  .scrollbar-thin:hover::-webkit-scrollbar-thumb,
+  .scrollbar-thin.scrolling::-webkit-scrollbar-thumb {
+    @apply bg-border;
+  }
+
+  .scrollbar-thin:hover::-webkit-scrollbar-thumb:hover,
+  .scrollbar-thin.scrolling::-webkit-scrollbar-thumb:hover {
     @apply bg-text-dim;
+  }
+
+  /* Show scrollbar when focused (for keyboard navigation) */
+  .scrollbar-thin:focus-within::-webkit-scrollbar-thumb {
+    @apply bg-border;
   }
 
   .scrollbar-hide::-webkit-scrollbar {
@@ -208,6 +231,39 @@
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  /* Price flash animations */
+  @keyframes price-flash-up {
+    0% {
+      background-color: transparent;
+    }
+    50% {
+      background-color: rgba(34, 197, 94, 0.2);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+
+  @keyframes price-flash-down {
+    0% {
+      background-color: transparent;
+    }
+    50% {
+      background-color: rgba(239, 68, 68, 0.2);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+
+  .price-flash-up {
+    animation: price-flash-up 0.3s ease-out;
+  }
+
+  .price-flash-down {
+    animation: price-flash-down 0.3s ease-out;
   }
 }
 

@@ -19,6 +19,9 @@ use db::create_pool;
 use routes::auth::create_auth_router;
 use routes::admin_groups::create_admin_groups_router;
 use routes::admin_leverage_profiles::create_admin_leverage_profiles_router;
+use routes::admin_symbols::create_admin_symbols_router;
+use routes::admin_markup::create_admin_markup_router;
+use routes::admin_users::create_admin_users_router;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -73,6 +76,9 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/auth", create_auth_router(pool.clone()))
         .nest("/api/admin/groups", create_admin_groups_router(pool.clone()))
         .nest("/api/admin/leverage-profiles", create_admin_leverage_profiles_router(pool.clone()))
+        .nest("/api/admin/symbols", create_admin_symbols_router(pool.clone()))
+        .nest("/api/admin/markup", create_admin_markup_router(pool.clone()))
+        .nest("/api/admin/users", create_admin_users_router(pool.clone()))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(pool);

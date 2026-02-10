@@ -271,7 +271,6 @@ impl AuthService {
         let users = sqlx::query_as::<_, User>(
             r#"
             SELECT * FROM users
-            WHERE deleted_at IS NULL
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
             "#,

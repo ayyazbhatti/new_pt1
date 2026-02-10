@@ -1,21 +1,20 @@
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
-import {
-  PriceStreamProfilesPanel,
-  GroupPriceProfilePanel,
-  SymbolPriceOverridePanel,
-} from '../components'
+import { ProfilesTable } from '../components/ProfilesTable'
+import { CreateProfileModal } from '../modals/CreateProfileModal'
 import { useModalStore } from '@/app/store'
-import { CreateEditProfileModal } from '../modals/CreateEditProfileModal'
-import { Plus } from 'lucide-react'
+import { useMarkupProfiles } from '../hooks/useMarkup'
+import { Plus, RefreshCw } from 'lucide-react'
+import { Spinner } from '@/shared/ui/loading'
+import { EmptyState } from '@/shared/ui/empty'
 
 export function AdminMarkupPage() {
   const openModal = useModalStore((state) => state.openModal)
+  const { data: profiles, isLoading, error, refetch } = useMarkupProfiles()
 
   const handleCreateProfile = () => {
-    openModal('create-profile', <CreateEditProfileModal />, {
-      title: 'Create Price Stream Profile',
+    openModal('create-profile', <CreateProfileModal />, {
+      title: 'Create Markup Profile',
       size: 'md',
     })
   }
@@ -23,31 +22,46 @@ export function AdminMarkupPage() {
   return (
     <ContentShell>
       <PageHeader
-        title="Price Stream Profiles"
-        description="Configure bid/ask markups and assign pricing profiles to groups and symbols."
+        title="Price Markup Profiles"
+        description="Configure real-time bid/ask markup profiles. Click on a profile to edit symbol markups."
         actions={
-          <Button onClick={handleCreateProfile}>
-            <Plus className="h-4 w-4 mr-2" />
-            Create Profile
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button onClick={handleCreateProfile}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Profile
+            </Button>
+          </div>
         }
       />
-      <Tabs defaultValue="profiles" className="w-full">
-        <TabsList>
-          <TabsTrigger value="profiles">Profiles</TabsTrigger>
-          <TabsTrigger value="group-assignment">Group Assignment</TabsTrigger>
-          <TabsTrigger value="symbol-overrides">Symbol Overrides</TabsTrigger>
-        </TabsList>
-        <TabsContent value="profiles">
-          <PriceStreamProfilesPanel />
-        </TabsContent>
-        <TabsContent value="group-assignment">
-          <GroupPriceProfilePanel />
-        </TabsContent>
-        <TabsContent value="symbol-overrides">
-          <SymbolPriceOverridePanel />
-        </TabsContent>
-      </Tabs>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Spinner className="h-8 w-8" />
+        </div>
+      ) : error ? (
+        <div className="text-center py-12">
+          <p className="text-danger">Failed to load profiles</p>
+          <Button variant="outline" onClick={() => refetch()} className="mt-4">
+            Retry
+          </Button>
+        </div>
+      ) : !profiles || profiles.length === 0 ? (
+        <EmptyState
+          title="No profiles found"
+          description="Create your first markup profile to get started"
+          action={
+            <Button onClick={handleCreateProfile}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Profile
+            </Button>
+          }
+        />
+      ) : (
+        <ProfilesTable profiles={profiles} isLoading={isLoading} />
+      )}
     </ContentShell>
   )
 }

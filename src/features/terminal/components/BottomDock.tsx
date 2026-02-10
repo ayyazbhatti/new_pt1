@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { cn } from '@/shared/utils'
 import { toast } from 'react-hot-toast'
 import * as Dialog from '@radix-ui/react-dialog'
-import { Input } from '@/shared/ui'
+import { Input, Skeleton } from '@/shared/ui'
 
 export function BottomDock() {
   const [activeTab, setActiveTab] = useState('positions')
@@ -26,22 +26,25 @@ export function BottomDock() {
   ]
 
   return (
-    <div className="h-[300px] min-h-0 overflow-hidden flex flex-col border-t border-border bg-surface">
-      {/* Tab Strip + Toolbar */}
-      <div className="shrink-0 h-10 border-b border-border flex items-center justify-between px-4">
+    <div className="h-[300px] min-h-0 overflow-hidden flex flex-col border-t border-white/5 bg-gradient-to-b from-surface to-surface-2/30 shadow-lg shadow-black/10">
+      {/* Tab Strip + Toolbar - Enhanced */}
+      <div className="shrink-0 h-12 border-b border-white/5 flex items-center justify-between px-4 bg-gradient-to-r from-white/[0.02] to-transparent">
         <div className="flex items-center gap-1">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                'px-4 py-2 text-xs font-bold rounded-lg transition-all duration-200 relative uppercase tracking-wider',
                 activeTab === tab.id
-                  ? 'bg-accent text-white'
-                  : 'text-muted hover:text-text'
+                  ? 'bg-accent text-white shadow-md shadow-accent/20'
+                  : 'text-muted hover:text-text hover:bg-surface-2/50'
               )}
             >
               {tab.label}
+              {activeTab === tab.id && (
+                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white"></div>
+              )}
             </button>
           ))}
         </div>
@@ -49,27 +52,27 @@ export function BottomDock() {
           {activeTab === 'positions' && (
             <button
               onClick={() => toast.success('All positions closed successfully')}
-              className="px-3 py-1.5 text-sm text-danger hover:bg-danger/20 rounded transition-colors flex items-center gap-1.5"
+              className="px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5 border border-transparent"
               title="Close All Positions"
             >
-              <XCircle className="h-4 w-4 text-danger stroke-current" strokeWidth={2} />
+              <XCircle className="h-3.5 w-3.5" />
               <span>Close All</span>
             </button>
           )}
           <button
             onClick={() => toast.info('Column customization coming soon')}
-            className="px-3 py-1.5 text-sm text-text hover:bg-surface-2 rounded transition-colors flex items-center gap-1.5"
+            className="px-3 py-1.5 text-xs font-semibold text-text hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5"
             title="Customize Columns"
           >
-            <Columns className="h-4 w-4 text-text stroke-current" strokeWidth={2} />
+            <Columns className="h-3.5 w-3.5" />
             <span>Columns</span>
           </button>
           <button
             onClick={() => toast.success('Data exported successfully')}
-            className="px-3 py-1.5 text-sm text-text hover:bg-surface-2 rounded transition-colors flex items-center gap-1.5"
+            className="px-3 py-1.5 text-xs font-semibold text-text hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5"
             title="Export Data"
           >
-            <Download className="h-4 w-4 text-text stroke-current" strokeWidth={2} />
+            <Download className="h-3.5 w-3.5" />
             <span>Export</span>
           </button>
         </div>
@@ -107,45 +110,53 @@ export function BottomDock() {
                 </div>
               </div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="bg-surface-2 sticky top-0">
+              <table className="w-full text-xs">
+                <thead className="bg-gradient-to-r from-surface-2 to-surface-2/80 sticky top-0 z-10 border-b border-white/5">
                   <tr>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">ID</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Symbol</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Quantity</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Direction</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Margin</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Entry</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Current</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">P&L</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">S/L</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">T/P</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Actions</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">ID</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Symbol</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Quantity</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Direction</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Margin</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Entry</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Current</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">P&L</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">S/L</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">T/P</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mockPositions.map((pos) => (
-                    <tr key={pos.id} className="border-b border-border hover:bg-surface-2/50 transition-colors">
-                      <td className="px-3 py-2 text-text">{pos.id}</td>
-                      <td className="px-3 py-2 text-text">{pos.symbol}</td>
-                      <td className="px-3 py-2 text-text">{pos.quantity}</td>
-                      <td className="px-3 py-2">
-                        <span className="text-success">{pos.direction}</span>
+                  {mockPositions.map((pos, index) => (
+                    <tr 
+                      key={pos.id} 
+                      className={cn(
+                        "border-b border-white/5 hover:bg-surface-2/40 transition-all duration-200",
+                        index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
+                      )}
+                    >
+                      <td className="px-4 py-3 font-mono text-text font-semibold">{pos.id}</td>
+                      <td className="px-4 py-3 font-mono font-bold text-text">{pos.symbol}</td>
+                      <td className="px-4 py-3 text-text font-medium">{pos.quantity}</td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
+                          {pos.direction}
+                        </span>
                       </td>
-                      <td className="px-3 py-2 text-text">${pos.margin}</td>
-                      <td className="px-3 py-2 text-text">${pos.entry}</td>
-                      <td className="px-3 py-2 text-success">${pos.current}</td>
-                      <td className="px-3 py-2 text-success">+${pos.pnl}</td>
-                      <td className="px-3 py-2 text-text">${pos.sl}</td>
-                      <td className="px-3 py-2 text-text">${pos.tp}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-4 py-3 text-text font-semibold">${pos.margin}</td>
+                      <td className="px-4 py-3 font-mono text-text font-medium">${pos.entry}</td>
+                      <td className="px-4 py-3 font-mono text-success font-bold">${pos.current}</td>
+                      <td className="px-4 py-3 font-mono text-success font-bold">+${pos.pnl}</td>
+                      <td className="px-4 py-3 font-mono text-text/70">${pos.sl}</td>
+                      <td className="px-4 py-3 font-mono text-text/70">${pos.tp}</td>
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => {
                               setEditItem({ type: 'position', id: pos.id })
                               setEditDialogOpen(true)
                             }}
-                            className="p-1.5 hover:bg-accent/20 rounded transition-colors text-accent hover:text-accent/80"
+                            className="p-2 hover:bg-accent/20 rounded-lg transition-all duration-200 text-accent hover:text-accent/80 hover:scale-110 active:scale-95"
                             title="Edit Position"
                           >
                             <Edit className="h-3.5 w-3.5" />
@@ -155,7 +166,7 @@ export function BottomDock() {
                               setClosePositionId(pos.id)
                               setClosePositionDialogOpen(true)
                             }}
-                            className="p-1.5 hover:bg-danger/20 rounded transition-colors text-danger hover:text-danger/80"
+                            className="p-2 hover:bg-danger/20 rounded-lg transition-all duration-200 text-danger hover:text-danger/80 hover:scale-110 active:scale-95"
                             title="Close Position"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -181,40 +192,58 @@ export function BottomDock() {
                 </div>
               </div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="bg-surface-2 sticky top-0">
+              <table className="w-full text-xs">
+                <thead className="bg-gradient-to-r from-surface-2 to-surface-2/80 sticky top-0 z-10 border-b border-white/5">
                   <tr>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">ID</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Symbol</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Type</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Side</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Size</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Price</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Status</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Created</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Actions</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">ID</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Symbol</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Type</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Side</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Size</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Price</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Status</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Created</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mockOrders.map((order) => (
-                    <tr key={order.id} className="border-b border-border hover:bg-surface-2/50 transition-colors">
-                      <td className="px-3 py-2 text-text">{order.id}</td>
-                      <td className="px-3 py-2 text-text">{order.symbol}</td>
-                      <td className="px-3 py-2 text-text">{order.type}</td>
-                      <td className="px-3 py-2">
-                        <span className={order.side === 'buy' ? 'text-success' : 'text-danger'}>
+                  {mockOrders.map((order, index) => (
+                    <tr 
+                      key={order.id} 
+                      className={cn(
+                        "border-b border-white/5 hover:bg-surface-2/40 transition-all duration-200",
+                        index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
+                      )}
+                    >
+                      <td className="px-4 py-3 font-mono text-text font-semibold">{order.id}</td>
+                      <td className="px-4 py-3 font-mono font-bold text-text">{order.symbol}</td>
+                      <td className="px-4 py-3 text-text font-medium">{order.type}</td>
+                      <td className="px-4 py-3">
+                        <span className={cn(
+                          "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
+                          order.side === 'buy' 
+                            ? 'bg-success/20 text-success' 
+                            : 'bg-danger/20 text-danger'
+                        )}>
                           {order.side.toUpperCase()}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-text">{order.size}</td>
-                      <td className="px-3 py-2 text-text">{order.price || '-'}</td>
-                      <td className="px-3 py-2">
-                        <span className={order.status === 'filled' ? 'text-success' : order.status === 'open' ? 'text-info' : 'text-muted'}>
+                      <td className="px-4 py-3 text-text font-medium">{order.size}</td>
+                      <td className="px-4 py-3 font-mono text-text">{order.price || '-'}</td>
+                      <td className="px-4 py-3">
+                        <span className={cn(
+                          "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
+                          order.status === 'filled' 
+                            ? 'bg-success/20 text-success' 
+                            : order.status === 'open' 
+                            ? 'bg-info/20 text-info' 
+                            : 'bg-muted/20 text-muted'
+                        )}>
                           {order.status}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-text">{order.createdAt}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-4 py-3 text-text font-medium">{order.createdAt}</td>
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           {order.status === 'open' && (
                             <>
@@ -223,7 +252,7 @@ export function BottomDock() {
                                   setEditItem({ type: 'order', id: order.id })
                                   setEditDialogOpen(true)
                                 }}
-                                className="p-1.5 hover:bg-accent/20 rounded transition-colors text-accent hover:text-accent/80"
+                                className="p-2 hover:bg-accent/20 rounded-lg transition-all duration-200 text-accent hover:text-accent/80 hover:scale-110 active:scale-95"
                                 title="Edit Order"
                               >
                                 <Edit className="h-3.5 w-3.5" />
@@ -233,7 +262,7 @@ export function BottomDock() {
                                   setCancelOrderId(order.id)
                                   setCancelOrderDialogOpen(true)
                                 }}
-                                className="p-1.5 hover:bg-danger/20 rounded transition-colors text-danger hover:text-danger/80"
+                                className="p-2 hover:bg-danger/20 rounded-lg transition-all duration-200 text-danger hover:text-danger/80 hover:scale-110 active:scale-95"
                                 title="Cancel Order"
                               >
                                 <X className="h-3.5 w-3.5" />
@@ -261,36 +290,49 @@ export function BottomDock() {
                 </div>
               </div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="bg-surface-2 sticky top-0">
+              <table className="w-full text-xs">
+                <thead className="bg-gradient-to-r from-surface-2 to-surface-2/80 sticky top-0 z-10 border-b border-white/5">
                   <tr>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">ID</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Symbol</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Type</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Side</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Size</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Price</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Status</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Created</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">ID</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Symbol</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Type</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Side</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Size</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Price</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Status</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Created</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mockOrderHistory.map((order) => (
-                    <tr key={order.id} className="border-b border-border hover:bg-surface-2/50 transition-colors">
-                      <td className="px-3 py-2 text-text">{order.id}</td>
-                      <td className="px-3 py-2 text-text">{order.symbol}</td>
-                      <td className="px-3 py-2 text-text">{order.type}</td>
-                      <td className="px-3 py-2">
-                        <span className={order.side === 'buy' ? 'text-success' : 'text-danger'}>
+                  {mockOrderHistory.map((order, index) => (
+                    <tr 
+                      key={order.id} 
+                      className={cn(
+                        "border-b border-white/5 hover:bg-surface-2/40 transition-all duration-200",
+                        index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
+                      )}
+                    >
+                      <td className="px-4 py-3 font-mono text-text font-semibold">{order.id}</td>
+                      <td className="px-4 py-3 font-mono font-bold text-text">{order.symbol}</td>
+                      <td className="px-4 py-3 text-text font-medium">{order.type}</td>
+                      <td className="px-4 py-3">
+                        <span className={cn(
+                          "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
+                          order.side === 'buy' 
+                            ? 'bg-success/20 text-success' 
+                            : 'bg-danger/20 text-danger'
+                        )}>
                           {order.side.toUpperCase()}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-text">{order.size}</td>
-                      <td className="px-3 py-2 text-text">{order.price || '-'}</td>
-                      <td className="px-3 py-2">
-                        <span className="text-success">{order.status}</span>
+                      <td className="px-4 py-3 text-text font-medium">{order.size}</td>
+                      <td className="px-4 py-3 font-mono text-text">{order.price || '-'}</td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
+                          {order.status}
+                        </span>
                       </td>
-                      <td className="px-3 py-2 text-text">{order.createdAt}</td>
+                      <td className="px-4 py-3 text-text font-medium">{order.createdAt}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -310,30 +352,38 @@ export function BottomDock() {
                 </div>
               </div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="bg-surface-2 sticky top-0">
+              <table className="w-full text-xs">
+                <thead className="bg-gradient-to-r from-surface-2 to-surface-2/80 sticky top-0 z-10 border-b border-white/5">
                   <tr>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">ID</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Symbol</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Quantity</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Direction</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Entry</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">Exit</th>
-                    <th className="px-3 py-2 text-left text-muted uppercase font-semibold">P&L</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">ID</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Symbol</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Quantity</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Direction</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Entry</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Exit</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">P&L</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mockPositionHistory.map((pos) => (
-                    <tr key={pos.id} className="border-b border-border hover:bg-surface-2/50 transition-colors">
-                      <td className="px-3 py-2 text-text">{pos.id}</td>
-                      <td className="px-3 py-2 text-text">{pos.symbol}</td>
-                      <td className="px-3 py-2 text-text">{pos.quantity}</td>
-                      <td className="px-3 py-2">
-                        <span className="text-success">{pos.direction}</span>
+                  {mockPositionHistory.map((pos, index) => (
+                    <tr 
+                      key={pos.id} 
+                      className={cn(
+                        "border-b border-white/5 hover:bg-surface-2/40 transition-all duration-200",
+                        index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
+                      )}
+                    >
+                      <td className="px-4 py-3 font-mono text-text font-semibold">{pos.id}</td>
+                      <td className="px-4 py-3 font-mono font-bold text-text">{pos.symbol}</td>
+                      <td className="px-4 py-3 text-text font-medium">{pos.quantity}</td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
+                          {pos.direction}
+                        </span>
                       </td>
-                      <td className="px-3 py-2 text-text">${pos.entry}</td>
-                      <td className="px-3 py-2 text-text">${pos.current}</td>
-                      <td className="px-3 py-2 text-success">+${pos.pnl}</td>
+                      <td className="px-4 py-3 font-mono text-text font-medium">${pos.entry}</td>
+                      <td className="px-4 py-3 font-mono text-text font-medium">${pos.current}</td>
+                      <td className="px-4 py-3 font-mono text-success font-bold">+${pos.pnl}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -354,7 +404,7 @@ export function BottomDock() {
       </div>
 
       {/* Bottom Stats Bar */}
-      <div className="shrink-0 h-14 border-t border-border bg-surface-2 flex items-center px-4 text-sm overflow-x-auto scrollbar-thin scrollbar-hide">
+      <div className="shrink-0 h-14 border-t border-white/5 bg-surface-2 flex items-center px-4 text-sm overflow-x-auto scrollbar-thin scrollbar-hide">
         <div className="flex items-center gap-4 min-w-max">
           <div className="flex items-center gap-1.5 shrink-0">
             <Wallet className="h-4 w-4 text-muted" />

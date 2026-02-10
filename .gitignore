@@ -23,3 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 
+# Rust
+target/
+**/target/
+*.rs.bk
+Cargo.lock
+

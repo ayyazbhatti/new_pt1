@@ -1,0 +1,59 @@
+[package]
+name = "ws-gateway"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros", "ws"] }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tower = { version = "0.4", features = ["util", "make"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+simd-json = { version = "0.14", features = ["serde_impl"] }
+
+# Async runtime
+futures-util = "0.3"
+
+# Redis
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager", "streams"] }
+
+# JWT
+jsonwebtoken = "9.2"
+base64 = "0.21"
+
+# UUID
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Lock-free data structures
+dashmap = "5.5"
+
+# Metrics
+prometheus = "0.13"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Environment variables
+dotenv = "0.15"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Rate limiting
+governor = "0.6"
+
+# Validation
+validator = { version = "0.18", features = ["derive"] }
+

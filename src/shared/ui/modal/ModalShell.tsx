@@ -11,6 +11,7 @@ interface ModalShellProps {
   children: ReactNode
   className?: string
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full'
+  onClose?: () => void // Alias for onOpenChange for convenience
 }
 
 const sizeClasses = {
@@ -24,14 +25,22 @@ const sizeClasses = {
 export function ModalShell({
   open,
   onOpenChange,
+  onClose,
   title,
   description,
   children,
   className,
   size = 'md',
 }: ModalShellProps) {
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen && onClose) {
+      onClose()
+    }
+    onOpenChange?.(newOpen)
+  }
+
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <Dialog.Content
@@ -41,18 +50,16 @@ export function ModalShell({
             className
           )}
         >
-          {(title || description) && (
-            <div className="flex flex-col space-y-1.5">
-              {title && (
-                <Dialog.Title className="text-lg font-semibold leading-none tracking-tight text-text">
-                  {title}
-                </Dialog.Title>
-              )}
-              {description && (
-                <Dialog.Description className="text-sm text-text-muted">{description}</Dialog.Description>
-              )}
-            </div>
-          )}
+          <div className="flex flex-col space-y-1.5">
+            {title && (
+              <Dialog.Title className="text-lg font-semibold leading-none tracking-tight text-text">
+                {title}
+              </Dialog.Title>
+            )}
+            <Dialog.Description className={description ? "text-sm text-text-muted" : "sr-only"}>
+              {description || (title ? `${title} dialog` : 'Dialog')}
+            </Dialog.Description>
+          </div>
           <Dialog.Close asChild>
             <button
               className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-surface-2 text-text hover:text-text"

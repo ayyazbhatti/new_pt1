@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { User } from '../types/users'
 import { useModalStore } from '@/app/store'
 import { UserDetailsModal } from '../modals/UserDetailsModal'
@@ -10,13 +12,54 @@ import { RestrictUserModal } from '../modals/RestrictUserModal'
 import { Eye, Edit, Shield, X } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
+import { useGroupsList } from '@/features/groups/hooks/useGroups'
+import { updateUserGroup } from '../api/users.api'
 
 interface UsersTableProps {
   users: User[]
+  onUserUpdate?: (userId: string, updates: Partial<User>) => void
 }
 
-export function UsersTable({ users }: UsersTableProps) {
+export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
+  const [updatingGroups, setUpdatingGroups] = useState<Set<string>>(new Set())
+
+  // Fetch groups for the dropdown
+  const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
+    page_size: 100, // Get a reasonable number of groups
+  })
+
+  const groups = groupsData?.items || []
+
+  const handleGroupChange = async (userId: string, userName: string, newGroupId: string) => {
+    const selectedGroup = groups.find((g) => g.id === newGroupId)
+    if (!selectedGroup) return
+
+    setUpdatingGroups((prev) => new Set(prev).add(userId))
+
+    try {
+      await updateUserGroup(userId, { group_id: newGroupId })
+      
+      // Update local state
+      if (onUserUpdate) {
+        onUserUpdate(userId, {
+          group: newGroupId,
+          groupName: selectedGroup.name,
+        })
+      }
+
+      toast.success(`User ${userName} group changed to ${selectedGroup.name}`)
+    } catch (error: any) {
+      const errorMessage = error?.response?.data?.error?.message || error?.message || 'Failed to update user group'
+      toast.error(errorMessage)
+    } finally {
+      setUpdatingGroups((prev) => {
+        const next = new Set(prev)
+        next.delete(userId)
+        return next
+      })
+    }
+  }
 
   const handleView = (user: User) => {
     openModal(`user-details-${user.id}`, <UserDetailsModal user={user} />, {
@@ -87,32 +130,62 @@ export function UsersTable({ users }: UsersTableProps) {
       accessorKey: 'id',
       header: 'User ID',
       cell: ({ row }) => {
-        return <span className="font-mono text-sm">{row.getValue('id')}</span>
+        return <span className="font-mono text-sm whitespace-nowrap">{row.getValue('id')}</span>
       },
     },
     {
       accessorKey: 'name',
       header: 'Name',
       cell: ({ row }) => {
-        return <span className="font-semibold text-text">{row.getValue('name')}</span>
+        return <span className="font-semibold text-text whitespace-nowrap">{row.getValue('name')}</span>
       },
     },
     {
       accessorKey: 'email',
       header: 'Email',
       cell: ({ row }) => {
-        return <span className="text-sm text-text-muted">{row.getValue('email')}</span>
+        return <span className="text-sm text-text-muted whitespace-nowrap">{row.getValue('email')}</span>
       },
     },
     {
       accessorKey: 'groupName',
       header: 'Group',
+      cell: ({ row }) => {
+        const user = row.original
+        const currentGroupId = user.group || ''
+        const currentGroupName = user.groupName || ''
+        const isUpdating = updatingGroups.has(user.id)
+
+        return (
+          <div className="whitespace-nowrap min-w-[150px]">
+            <Select
+              value={currentGroupId}
+              onValueChange={(value) => handleGroupChange(user.id, user.name, value)}
+              disabled={groupsLoading || isUpdating}
+            >
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue placeholder={groupsLoading ? 'Loading...' : isUpdating ? 'Updating...' : currentGroupName || 'Select group'} />
+              </SelectTrigger>
+              <SelectContent>
+                {groups.length === 0 && !groupsLoading && (
+                  <SelectItem value="no-groups" disabled>No groups available</SelectItem>
+                )}
+                {groups.map((group) => (
+                  <SelectItem key={group.id} value={group.id}>
+                    {group.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )
+      },
     },
     {
       accessorKey: 'country',
       header: 'Country',
       cell: ({ row }) => {
-        return <span className="font-mono text-sm">{row.getValue('country')}</span>
+        return <span className="font-mono text-sm whitespace-nowrap">{row.getValue('country')}</span>
       },
     },
     {
@@ -120,7 +193,7 @@ export function UsersTable({ users }: UsersTableProps) {
       header: 'Balance',
       cell: ({ row }) => {
         return (
-          <span className="font-mono font-semibold text-text">
+          <span className="font-mono font-semibold text-text whitespace-nowrap">
             {formatCurrency(row.getValue('balance'), 'USD')}
           </span>
         )
@@ -132,7 +205,7 @@ export function UsersTable({ users }: UsersTableProps) {
       cell: ({ row }) => {
         const level = row.getValue('marginLevel') as number
         return (
-          <span className="font-mono text-sm text-text">
+          <span className="font-mono text-sm text-text whitespace-nowrap">
             {level > 0 ? level.toFixed(2) + '%' : '—'}
           </span>
         )
@@ -141,23 +214,23 @@ export function UsersTable({ users }: UsersTableProps) {
     {
       accessorKey: 'status',
       header: 'Status',
-      cell: ({ row }) => getStatusBadge(row.getValue('status')),
+      cell: ({ row }) => <div className="whitespace-nowrap">{getStatusBadge(row.getValue('status'))}</div>,
     },
     {
       accessorKey: 'kycStatus',
       header: 'KYC',
-      cell: ({ row }) => getKYCBadge(row.getValue('kycStatus')),
+      cell: ({ row }) => <div className="whitespace-nowrap">{getKYCBadge(row.getValue('kycStatus'))}</div>,
     },
     {
       accessorKey: 'riskFlag',
       header: 'Risk Flag',
-      cell: ({ row }) => getRiskBadge(row.getValue('riskFlag')),
+      cell: ({ row }) => <div className="whitespace-nowrap">{getRiskBadge(row.getValue('riskFlag'))}</div>,
     },
     {
       accessorKey: 'createdAt',
       header: 'Created',
       cell: ({ row }) => {
-        return <span className="text-sm text-text-muted">{formatDateTime(row.getValue('createdAt'))}</span>
+        return <span className="text-sm text-text-muted whitespace-nowrap">{formatDateTime(row.getValue('createdAt'))}</span>
       },
     },
     {

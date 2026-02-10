@@ -70,6 +70,8 @@ pub fn create_admin_groups_router(pool: PgPool) -> Router<PgPool> {
         .route("/", get(list_groups).post(create_group))
         .route("/:id", get(get_group).put(update_group).delete(delete_group))
         .route("/:id/usage", get(get_group_usage))
+        .route("/:id/price-profile", put(update_group_price_profile))
+        .route("/:id/leverage-profile", put(update_group_leverage_profile))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -343,5 +345,295 @@ async fn get_group_usage(
             }),
         )),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePriceProfileRequest {
+    pub price_profile_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateLeverageProfileRequest {
+    pub leverage_profile_id: Option<String>,
+}
+
+async fn update_group_price_profile(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdatePriceProfileRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+
+    // Parse price_profile_id
+    let price_profile_id: Option<Uuid> = if let Some(profile_id_str) = payload.price_profile_id {
+        match Uuid::parse_str(&profile_id_str) {
+            Ok(uuid) => Some(uuid),
+            Err(_) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "INVALID_PROFILE_ID".to_string(),
+                            message: "Invalid price profile ID format".to_string(),
+                        },
+                    }),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    // Verify profile exists if provided
+    if let Some(profile_id) = price_profile_id {
+        let profile_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM price_stream_profiles WHERE id = $1)",
+        )
+        .bind(profile_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+        if !profile_exists {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "PROFILE_NOT_FOUND".to_string(),
+                        message: "Price stream profile not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    // Verify group exists
+    let group_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1)",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !group_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "GROUP_NOT_FOUND".to_string(),
+                    message: "Group not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    // Update group's price profile
+    let rows_affected = sqlx::query(
+        "UPDATE user_groups SET default_price_profile_id = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(price_profile_id)
+    .bind(id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if rows_affected.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "GROUP_NOT_FOUND".to_string(),
+                    message: "Group not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Group price stream profile updated successfully"
+    })))
+}
+
+async fn update_group_leverage_profile(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateLeverageProfileRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+
+    // Parse leverage_profile_id
+    let leverage_profile_id: Option<Uuid> = if let Some(profile_id_str) = payload.leverage_profile_id {
+        match Uuid::parse_str(&profile_id_str) {
+            Ok(uuid) => Some(uuid),
+            Err(_) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "INVALID_PROFILE_ID".to_string(),
+                            message: "Invalid leverage profile ID format".to_string(),
+                        },
+                    }),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    // Verify profile exists if provided
+    if let Some(profile_id) = leverage_profile_id {
+        let profile_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM leverage_profiles WHERE id = $1)",
+        )
+        .bind(profile_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+        if !profile_exists {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "PROFILE_NOT_FOUND".to_string(),
+                        message: "Leverage profile not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    // Verify group exists
+    let group_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1)",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !group_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "GROUP_NOT_FOUND".to_string(),
+                    message: "Group not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    // Update group's leverage profile
+    let rows_affected = sqlx::query(
+        "UPDATE user_groups SET default_leverage_profile_id = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(leverage_profile_id)
+    .bind(id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if rows_affected.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "GROUP_NOT_FOUND".to_string(),
+                    message: "Group not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Group leverage profile updated successfully"
+    })))
 }
 
