@@ -27,5 +27,4 @@ dist-ssr
 target/
 **/target/
 *.rs.bk
-Cargo.lock
 
