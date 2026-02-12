@@ -156,7 +156,52 @@ impl TickHandler {
                             self.metrics.inc_orders_filled();
                         }
                         Err(e) => {
-                            error!("Failed to fill order {}: {}", order_id, e);
+                            // Check if order was already filled (common for fast fills)
+                            let error_msg = e.to_string();
+                            if error_msg.contains("order_not_pending") || error_msg.contains("FILLED") {
+                                // Order was already filled, but we still need to publish the event
+                                // Get the filled order data from Redis to publish correct event
+                                let mut conn = self.redis.get_connection().await;
+                                let order_key = format!("order:{}", order.id);
+                                let order_json: Option<String> = {
+                                    use redis::AsyncCommands;
+                                    conn.get(&order_key).await.unwrap_or(None)
+                                };
+                                if let Some(json_str) = order_json {
+                                    if let Ok(order_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                                        if let Some(status) = order_data.get("status").and_then(|v| v.as_str()) {
+                                            if status == "FILLED" {
+                                                // Order is already filled, publish the event anyway
+                                                let filled_size = order_data.get("filled_size")
+                                                    .and_then(|v| v.as_str())
+                                                    .and_then(|s| Decimal::from_str_exact(s).ok())
+                                                    .unwrap_or(order.size);
+                                                let avg_fill_price = order_data.get("average_fill_price")
+                                                    .and_then(|v| v.as_str())
+                                                    .and_then(|s| Decimal::from_str_exact(s).ok());
+                                                
+                                                let order_updated_event = contracts::events::OrderUpdatedEvent {
+                                                    order_id: order.id,
+                                                    user_id: order.user_id,
+                                                    status: contracts::enums::OrderStatus::Filled,
+                                                    filled_size,
+                                                    avg_fill_price,
+                                                    reason: None,
+                                                    ts: now(),
+                                                };
+                                                
+                                                if let Err(pub_err) = self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event).await {
+                                                    error!("❌ Failed to publish evt.order.updated for already-filled order {}: {}", order.id, pub_err);
+                                                } else {
+                                                    info!("📤 Published evt.order.updated for already-filled order: order_id={}, status=FILLED", order.id);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                error!("Failed to fill order {}: {}", order_id, e);
+                            }
                         }
                     }
                 }

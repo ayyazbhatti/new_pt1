@@ -7,7 +7,7 @@ use futures::StreamExt;
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 pub struct OrderEventHandler {
@@ -39,9 +39,36 @@ impl OrderEventHandler {
     }
 
     async fn handle_order_update(&self, payload: Vec<u8>) -> Result<()> {
+        // Log raw payload for debugging
+        let payload_str = String::from_utf8_lossy(&payload);
+        debug!("📥 Raw order update payload: {}", payload_str);
+        
         // Try to deserialize as VersionedMessage first
-        let versioned: VersionedMessage = serde_json::from_slice(&payload)
-            .context("Failed to deserialize versioned message")?;
+        let versioned: VersionedMessage = match serde_json::from_slice(&payload) {
+            Ok(v) => v,
+            Err(e) => {
+                // If VersionedMessage fails, try direct deserialization
+                warn!("Failed to deserialize as VersionedMessage: {}. Trying direct deserialization...", e);
+                let event: OrderUpdatedEvent = serde_json::from_slice(&payload)
+                    .context("Failed to deserialize OrderUpdatedEvent directly")?;
+                
+                info!(
+                    "📦 Received order update event (direct): order_id={}, status={:?}, filled_size={}, avg_fill_price={:?}",
+                    event.order_id, event.status, event.filled_size, event.avg_fill_price
+                );
+                
+                // Only update database if order is filled
+                if matches!(event.status, OrderStatus::Filled) {
+                    self.update_order_in_database(&event).await?;
+                } else if matches!(event.status, OrderStatus::Cancelled) {
+                    self.update_order_cancelled_in_database(&event).await?;
+                } else {
+                    info!("Order status is {:?}, skipping database update", event.status);
+                }
+                
+                return Ok(());
+            }
+        };
 
         let event: OrderUpdatedEvent = versioned
             .deserialize_payload()
