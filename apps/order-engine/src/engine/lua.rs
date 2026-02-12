@@ -11,6 +11,7 @@ pub struct LuaScripts {
     fill_order_script: Script,
     cancel_order_script: Script,
     close_position_script: Script,
+    check_sltp_triggers_script: Script,
 }
 
 impl LuaScripts {
@@ -18,11 +19,13 @@ impl LuaScripts {
         let fill_order_script = Script::new(include_str!("../../lua/atomic_fill_order.lua"));
         let cancel_order_script = Script::new(include_str!("../../lua/atomic_cancel_order.lua"));
         let close_position_script = Script::new(include_str!("../../lua/atomic_close_position.lua"));
+        let check_sltp_triggers_script = Script::new(include_str!("../../lua/check_sltp_triggers.lua"));
         
         Ok(Self {
             fill_order_script,
             cancel_order_script,
             close_position_script,
+            check_sltp_triggers_script,
         })
     }
     
@@ -80,8 +83,9 @@ impl LuaScripts {
             .map(|s| s.to_string())
             .unwrap_or_else(|| "0".to_string());
         
+        // Try new format first, fallback to old format
         let result: String = self.close_position_script
-            .key(format!("position:{}", position_id))
+            .key(format!("pos:by_id:{}", position_id))  // New format
             .arg(position_id.to_string())
             .arg(exit_price.to_string())
             .arg(size_arg)
@@ -94,6 +98,28 @@ impl LuaScripts {
             .context("Failed to parse close result")?;
         
         debug!("Atomic close result: {}", json);
+        Ok(json)
+    }
+    
+    pub async fn check_sltp_triggers(
+        &self,
+        conn: &mut ConnectionManager,
+        symbol: &str,
+        bid: Decimal,
+        ask: Decimal,
+    ) -> Result<serde_json::Value> {
+        let result: String = self.check_sltp_triggers_script
+            .arg(symbol)
+            .arg(bid.to_string())
+            .arg(ask.to_string())
+            .invoke_async(conn)
+            .await
+            .context("Failed to execute check_sltp_triggers Lua script")?;
+        
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .context("Failed to parse SL/TP triggers result")?;
+        
+        debug!("SL/TP triggers result: {}", json);
         Ok(json)
     }
 }

@@ -1,6 +1,7 @@
 -- Atomic position close script
 -- Args: position_id, exit_price, close_size (0 = full), timestamp_ms
 -- Returns: JSON with close result
+-- Supports both old format (JSON) and new format (Hash)
 
 local position_key = KEYS[1]
 local position_id = ARGV[1]
@@ -8,16 +9,48 @@ local exit_price = ARGV[2]
 local close_size = ARGV[3]
 local timestamp_ms = ARGV[4]
 
--- Get position
+-- Try new format first (Hash)
+local pos_key_new = 'pos:by_id:' .. position_id
+local position = nil
+local is_new_format = false
+local symbol = nil
+local side = nil
+local user_id = nil
+
+-- Check new format (Hash)
+if redis.call('EXISTS', pos_key_new) == 1 then
+    is_new_format = true
+    symbol = redis.call('HGET', pos_key_new, 'symbol')
+    side = redis.call('HGET', pos_key_new, 'side')
+    user_id = redis.call('HGET', pos_key_new, 'user_id')
+    local status = redis.call('HGET', pos_key_new, 'status')
+    if status ~= "OPEN" then
+        return '{"error":"position_not_open","status":"' .. (status or "unknown") .. '"}'
+    end
+    -- Convert Hash to table-like structure for compatibility
+    position = {
+        symbol = symbol,
+        side = side,
+        user_id = user_id,
+        status = status,
+        size = redis.call('HGET', pos_key_new, 'size') or "0",
+        entry_price = redis.call('HGET', pos_key_new, 'entry_price') or "0",
+        realized_pnl = redis.call('HGET', pos_key_new, 'realized_pnl') or "0"
+    }
+else
+    -- Try old format (JSON)
 local position_json = redis.call('GET', position_key)
 if not position_json then
     return '{"error":"position_not_found"}'
 end
+    position = cjson.decode(position_json)
+    symbol = position.symbol
+    side = position.side
+    user_id = position.user_id
+end
 
-local position = cjson.decode(position_json)
-
--- Verify status is OPEN
-if position.status ~= "OPEN" then
+-- Status already checked above for new format
+if not is_new_format and position.status ~= "OPEN" then
     return '{"error":"position_not_open","status":"' .. position.status .. '"}'
 end
 
@@ -46,25 +79,64 @@ end
 -- Update position
 if actual_close_size >= current_size then
     -- Full close
+    if is_new_format then
+        redis.call('HSET', pos_key_new, 'status', 'CLOSED')
+        redis.call('HSET', pos_key_new, 'size', '0')
+        redis.call('HSET', pos_key_new, 'closed_at', timestamp_ms)
+        redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
+        local new_realized_pnl = tonumber(position.realized_pnl or "0") + pnl
+        redis.call('HSET', pos_key_new, 'realized_pnl', tostring(new_realized_pnl))
+        
+        -- Remove from symbol indexes (full close)
+        local symbol_open_key = 'pos:open:' .. symbol
+        redis.call('ZREM', symbol_open_key, position_id)
+        local sl_key = 'pos:sl:' .. symbol
+        redis.call('ZREM', sl_key, position_id)
+        local tp_key = 'pos:tp:' .. symbol
+        redis.call('ZREM', tp_key, position_id)
+    else
     position.status = "CLOSED"
     position.size = "0"
     position.closed_at = timestamp_ms
+        position.realized_pnl = tostring(tonumber(position.realized_pnl or "0") + pnl)
+        position.updated_at = timestamp_ms
+        redis.call('SET', position_key, cjson.encode(position))
+        
+        -- Remove from symbol indexes (full close)
+        local symbol_open_key = 'pos:open:' .. symbol
+        redis.call('ZREM', symbol_open_key, position_id)
+        local sl_key = 'pos:sl:' .. symbol
+        redis.call('ZREM', sl_key, position_id)
+        local tp_key = 'pos:tp:' .. symbol
+        redis.call('ZREM', tp_key, position_id)
+    end
 else
     -- Partial close
+    if is_new_format then
+        local new_size = current_size - actual_close_size
+        redis.call('HSET', pos_key_new, 'size', tostring(new_size))
+        redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
+        local new_realized_pnl = tonumber(position.realized_pnl or "0") + pnl
+        redis.call('HSET', pos_key_new, 'realized_pnl', tostring(new_realized_pnl))
+        -- Indexes remain (position still open)
+    else
     position.size = tostring(current_size - actual_close_size)
-end
-
 position.realized_pnl = tostring(tonumber(position.realized_pnl or "0") + pnl)
 position.updated_at = timestamp_ms
-
--- Save position
 redis.call('SET', position_key, cjson.encode(position))
-
--- Remove from user positions if fully closed
-if position.status == "CLOSED" then
-    local user_id = position.user_id
-    redis.call('SREM', 'user:' .. user_id .. ':positions', position_id)
+        -- Indexes remain (position still open)
+    end
 end
+
+-- Keep closed positions in the user's position set (don't remove them)
+-- This allows the API to return both open and closed positions
+-- The status field will indicate whether the position is OPEN or CLOSED
+-- if actual_close_size >= current_size then
+--     local positions_key = 'pos:' .. user_id
+--     local old_positions_key = 'user:' .. user_id .. ':positions'
+--     redis.call('SREM', positions_key, position_id)
+--     redis.call('SREM', old_positions_key, position_id)
+-- end
 
 -- Update balance
 local user_id = position.user_id

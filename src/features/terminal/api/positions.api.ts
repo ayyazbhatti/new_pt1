@@ -55,3 +55,29 @@ export async function updatePositionSltp(
   })
 }
 
+export interface ClosePositionRequest {
+  size?: string | null // Optional size to close (null = full close)
+}
+
+export interface ClosePositionResponse {
+  success: boolean
+  message: string
+  position_id: string
+}
+
+export async function closePosition(
+  positionId: string,
+  payload?: ClosePositionRequest
+): Promise<ClosePositionResponse> {
+  const userId = useAuthStore.getState().user?.id
+  if (!userId) {
+    throw new Error('User not authenticated')
+  }
+  return await http<ClosePositionResponse>(`/v1/users/${userId}/positions/${positionId}/close`, {
+    method: 'POST',
+    body: JSON.stringify({
+      size: payload?.size || null,
+    }),
+  })
+}
+

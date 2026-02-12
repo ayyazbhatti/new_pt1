@@ -7,6 +7,7 @@ use std::env;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use tracing::{error, info};
 use tracing_subscriber;
 
 mod db;
@@ -29,6 +30,7 @@ use routes::admin_trading::create_admin_trading_router;
 use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
 use routes::symbols::create_symbols_router;
+use services::order_event_handler::OrderEventHandler;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -139,6 +141,9 @@ async fn main() -> anyhow::Result<()> {
         nats: Arc::new(nats_client.clone()),
     };
 
+    // Clone pool for event handler before passing to router
+    let pool_for_events = Arc::new(pool.clone());
+
     // Build application
     let app = Router::new()
         .route("/health", get(health_check))
@@ -162,6 +167,24 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(pool);
+
+    // Start order event listener to sync filled orders to database
+    let nats_for_events = nats_client.clone();
+    let redis_for_events = redis.clone();
+    tokio::spawn(async move {
+        let event_handler = OrderEventHandler::new(pool_for_events, redis_for_events);
+        match nats_for_events.subscribe("evt.order.updated".to_string()).await {
+            Ok(subscriber) => {
+                info!("✅ Subscribed to evt.order.updated for database sync");
+                if let Err(e) = event_handler.start_listener(subscriber).await {
+                    error!("Order event listener error: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Failed to subscribe to evt.order.updated: {}", e);
+            }
+        }
+    });
 
     // Start server
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());

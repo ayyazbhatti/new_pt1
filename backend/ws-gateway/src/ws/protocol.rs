@@ -57,6 +57,8 @@ pub enum ServerMessage {
         quantity: String,
         unrealized_pnl: String,
         ts: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        trigger_reason: Option<String>, // "SL" or "TP" for stop loss/take profit triggers
     },
     #[serde(rename = "risk_alert")]
     RiskAlert {

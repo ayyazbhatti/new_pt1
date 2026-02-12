@@ -56,6 +56,9 @@ thiserror = "1.0"
 # Redis
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
+# Futures for parallel operations and streams
+futures = { version = "0.3", features = ["std"] }
+
 # Event streaming
 async-nats = "0.32"
 

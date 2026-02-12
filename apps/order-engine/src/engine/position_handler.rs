@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_nats::Message;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
+use uuid::Uuid;
 
 use crate::engine::{OrderCache, LuaScripts};
 use crate::models::{ClosePositionCommand, PositionClosedEvent, BalanceUpdatedEvent};
@@ -67,8 +68,39 @@ impl PositionHandler {
         info!("Received close position command: position_id={}, user_id={}, size={:?}, correlation_id={}",
               position_id, user_id, close_size, correlation_id);
         
-        // Get position from Redis
+        // Get position from Redis (check new format first, then old format)
         let mut conn = self.redis.get_connection().await;
+        use redis_model::keys::Keys;
+        
+        // Try new format (Hash) first
+        let pos_key_new = Keys::position_by_id(position_id);
+        let position_data: std::collections::HashMap<String, String> = redis::cmd("HGETALL")
+            .arg(&pos_key_new)
+            .query_async(&mut conn)
+            .await?;
+        
+        let (symbol, side) = if !position_data.is_empty() {
+            // New format (Hash)
+            let pos_user_id_str = position_data.get("user_id")
+                .ok_or_else(|| anyhow::anyhow!("Missing user_id in position"))?;
+            let pos_user_id = Uuid::parse_str(pos_user_id_str)
+                .context("Invalid user_id in position")?;
+            
+            if pos_user_id != user_id {
+                warn!("Position {} does not belong to user {}", position_id, user_id);
+                return Ok(());
+            }
+            
+            let symbol = position_data.get("symbol")
+                .ok_or_else(|| anyhow::anyhow!("Missing symbol in position"))?
+                .clone();
+            let side = position_data.get("side")
+                .ok_or_else(|| anyhow::anyhow!("Missing side in position"))?
+                .clone();
+            
+            (symbol, side)
+        } else {
+            // Try old format (JSON)
         let position_key = format!("position:{}", position_id);
         let position_json: Option<String> = redis::cmd("GET")
             .arg(&position_key)
@@ -76,7 +108,7 @@ impl PositionHandler {
             .await?;
         
         if position_json.is_none() {
-            warn!("Position {} not found", position_id);
+                warn!("Position {} not found in Redis", position_id);
             return Ok(());
         }
         
@@ -92,7 +124,6 @@ impl PositionHandler {
             return Ok(());
         }
         
-        // Get current tick for exit price
         let symbol = position.get("symbol")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
@@ -102,6 +133,9 @@ impl PositionHandler {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .context("Missing side in position")?;
+            
+            (symbol, side)
+        };
         
         let tick = self.cache.get_last_tick(&symbol)
             .context("No tick data available for symbol")?;
@@ -151,9 +185,33 @@ impl PositionHandler {
                     realized_pnl,
                     correlation_id: correlation_id.clone(),
                     ts: now(),
+                    trigger_reason: None, // Manual close, not SL/TP trigger
                 };
                 
+                // Publish to NATS
                 self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &event).await?;
+                
+                // Also publish to Redis pub/sub for gateway-ws
+                let redis_payload = serde_json::json!({
+                    "user_id": user_id.to_string(),
+                    "position_id": position_id.to_string(),
+                    "symbol": symbol.clone(),
+                    "side": if side == "LONG" { "LONG" } else { "SHORT" },
+                    "quantity": closed_size.to_string(),
+                    "unrealized_pnl": realized_pnl.to_string(),
+                    "trigger_reason": None::<String>, // Manual close, no trigger
+                    "ts": now().timestamp_millis(),
+                });
+                
+                if let Err(e) = redis::cmd("PUBLISH")
+                    .arg("positions:updates")
+                    .arg(serde_json::to_string(&redis_payload)?)
+                    .query_async::<_, i64>(&mut conn)
+                    .await
+                {
+                    warn!("Failed to publish position closed event to Redis: {}", e);
+                }
+                
                 self.metrics.inc_positions_closed();
                 
                 // Publish balance updated event

@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use config::Config;
 use nats::NatsClient;
 use redis::RedisClient;
-use engine::{OrderCache, LuaScripts, Validator, TickHandler, OrderHandler, CancelHandler, PositionHandler};
+use engine::{OrderCache, LuaScripts, Validator, TickHandler, OrderHandler, CancelHandler, PositionHandler, SltpHandler};
 use observability::{init_logging, Metrics};
 use subjects::subjects as nats_subjects;
 use health::subscription::SubscriptionMonitor;
@@ -54,14 +54,6 @@ async fn main() -> Result<()> {
     warm_cache(&cache, &redis).await?;
     
     // Initialize handlers
-    let tick_handler = Arc::new(TickHandler::new(
-        cache.clone(),
-        redis.clone(),
-        nats.clone(),
-        lua.clone(),
-        metrics.clone(),
-    ));
-    
     let order_handler = Arc::new(OrderHandler::new(
         cache.clone(),
         redis.clone(),
@@ -84,6 +76,25 @@ async fn main() -> Result<()> {
         nats.clone(),
         lua.clone(),
         metrics.clone(),
+    ));
+    
+    let sltp_handler = Arc::new(SltpHandler::new(
+        redis.clone(),
+        lua.clone(),
+        position_handler.clone(),
+        cache.clone(),
+        nats.clone(),
+        metrics.clone(),
+    ));
+    
+    // Create tick_handler with SL/TP handler
+    let tick_handler = Arc::new(TickHandler::new(
+        cache.clone(),
+        redis.clone(),
+        nats.clone(),
+        lua.clone(),
+        metrics.clone(),
+        sltp_handler.clone(),
     ));
     
     // Subscribe to NATS subjects

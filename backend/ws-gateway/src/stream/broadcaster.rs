@@ -272,6 +272,11 @@ impl Broadcaster {
             .or_else(|| payload.get("unrealized_pnl").and_then(|v| v.as_f64()).map(|f| f.to_string()))
             .unwrap_or_default();
 
+        let trigger_reason = payload
+            .get("trigger_reason")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let ts = payload
             .get("ts")
             .or_else(|| payload.get("timestamp"))
@@ -285,6 +290,7 @@ impl Broadcaster {
             quantity,
             unrealized_pnl,
             ts,
+            trigger_reason,
         };
 
         // Send to all user connections

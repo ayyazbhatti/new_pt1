@@ -172,6 +172,8 @@ pub struct PositionClosedEvent {
     pub realized_pnl: Decimal,
     pub correlation_id: String,
     pub ts: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_reason: Option<String>, // "SL" or "TP" for stop loss/take profit triggers
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

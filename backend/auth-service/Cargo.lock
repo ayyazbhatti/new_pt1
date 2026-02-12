@@ -161,6 +161,7 @@ dependencies = [
  "chrono",
  "contracts",
  "dotenv",
+ "futures",
  "hex",
  "hyper",
  "hyper-util",

@@ -90,18 +90,31 @@ for _, pos_id in ipairs(existing_positions) do
                 redis.call('HSET', pos_key_new, 'avg_price', tostring(new_entry_price))
                 redis.call('HSET', pos_key_new, 'margin', tostring(new_margin))
                 redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
+                
+                -- Update symbol indexes (position already exists, just update entry price in index)
+                local symbol_open_key = 'pos:open:' .. symbol
+                redis.call('ZADD', symbol_open_key, new_entry_price, position_id)
+                -- SL/TP indexes remain the same unless order has new SL/TP
+                if order.stop_loss then
+                    local sl_key = 'pos:sl:' .. symbol
+                    redis.call('ZADD', sl_key, tonumber(order.stop_loss), position_id)
+                end
+                if order.take_profit then
+                    local tp_key = 'pos:tp:' .. symbol
+                    redis.call('ZADD', tp_key, tonumber(order.take_profit), position_id)
+                end
                 break
             end
         end
     else
         -- Check old format (JSON) for backward compatibility
         local pos_json = redis.call('GET', pos_key_old)
-        if pos_json then
-            local pos = cjson.decode(pos_json)
-            if pos.symbol == symbol and pos.status == "OPEN" then
-                if (order.side == "BUY" and pos.side == "LONG") or
-                   (order.side == "SELL" and pos.side == "SHORT") then
-                    position_id = pos_id
+    if pos_json then
+        local pos = cjson.decode(pos_json)
+        if pos.symbol == symbol and pos.status == "OPEN" then
+            if (order.side == "BUY" and pos.side == "LONG") or
+               (order.side == "SELL" and pos.side == "SHORT") then
+                position_id = pos_id
                     -- Migrate to new format and update
                     local pos_size = tonumber(pos.size or '0')
                     local pos_entry_price = tonumber(pos.entry_price or '0')
@@ -146,6 +159,19 @@ for _, pos_id in ipairs(existing_positions) do
                         -- Remove old ID from set and add UUID
                         redis.call('SREM', positions_key, pos_id)
                         redis.call('SADD', positions_key, position_id)
+                        
+                        -- Add to symbol indexes for SL/TP trigger system
+                        local symbol_open_key = 'pos:open:' .. symbol
+                        redis.call('ZADD', symbol_open_key, new_entry_price, position_id)
+                        
+                        if pos.stop_loss then
+                            local sl_key = 'pos:sl:' .. symbol
+                            redis.call('ZADD', sl_key, tonumber(pos.stop_loss), position_id)
+                        end
+                        if pos.take_profit then
+                            local tp_key = 'pos:tp:' .. symbol
+                            redis.call('ZADD', tp_key, tonumber(pos.take_profit), position_id)
+                        end
                     else
                         -- Already UUID format, just update
                         position_id = pos_id
@@ -159,8 +185,21 @@ for _, pos_id in ipairs(existing_positions) do
                         redis.call('HSET', new_pos_key, 'avg_price', tostring(new_entry_price))
                         redis.call('HSET', new_pos_key, 'margin', tostring(new_margin))
                         redis.call('HSET', new_pos_key, 'updated_at', timestamp_ms)
+                        
+                        -- Update symbol indexes
+                        local symbol_open_key = 'pos:open:' .. symbol
+                        redis.call('ZADD', symbol_open_key, new_entry_price, position_id)
+                        -- SL/TP indexes remain the same unless order has new SL/TP
+                        if order.stop_loss then
+                            local sl_key = 'pos:sl:' .. symbol
+                            redis.call('ZADD', sl_key, tonumber(order.stop_loss), position_id)
+                        end
+                        if order.take_profit then
+                            local tp_key = 'pos:tp:' .. symbol
+                            redis.call('ZADD', tp_key, tonumber(order.take_profit), position_id)
+                        end
                     end
-                    break
+                break
                 end
             end
         end
@@ -228,6 +267,19 @@ if not position_id then
                         -- Migrate from old set to new set
                         redis.call('SREM', old_positions_key, pos_id)
                         redis.call('SADD', positions_key, position_id)
+                        
+                        -- Add to symbol indexes for SL/TP trigger system
+                        local symbol_open_key = 'pos:open:' .. symbol
+                        redis.call('ZADD', symbol_open_key, new_entry_price, position_id)
+                        
+                        if pos.stop_loss then
+                            local sl_key = 'pos:sl:' .. symbol
+                            redis.call('ZADD', sl_key, tonumber(pos.stop_loss), position_id)
+                        end
+                        if pos.take_profit then
+                            local tp_key = 'pos:tp:' .. symbol
+                            redis.call('ZADD', tp_key, tonumber(pos.take_profit), position_id)
+                        end
                         break
                     end
                 end
@@ -272,6 +324,22 @@ if not position_id then
     
     -- Add to positions set using correct key format
     redis.call('SADD', positions_key, position_id)
+    
+    -- Add to symbol indexes for SL/TP trigger system
+    local symbol_open_key = 'pos:open:' .. symbol
+    redis.call('ZADD', symbol_open_key, tonumber(fill_price), position_id)
+    
+    -- Add to SL index if stop_loss exists
+    if order.stop_loss then
+        local sl_key = 'pos:sl:' .. symbol
+        redis.call('ZADD', sl_key, tonumber(order.stop_loss), position_id)
+    end
+    
+    -- Add to TP index if take_profit exists
+    if order.take_profit then
+        local tp_key = 'pos:tp:' .. symbol
+        redis.call('ZADD', tp_key, tonumber(order.take_profit), position_id)
+    end
 end
 
 -- Update balance (simplified - would need proper margin calculation)

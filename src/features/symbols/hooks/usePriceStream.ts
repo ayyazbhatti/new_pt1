@@ -9,7 +9,7 @@ const getCleanWsUrl = () => {
     let url = import.meta.env.VITE_DATA_PROVIDER_WS_URL
     // Only remove trailing slash, keep /ws path for gateway-ws
     url = url.replace(/\/$/, '')
-    return url
+  return url
   }
   // Default to gateway-ws which forwards ticks from NATS (requires /ws path)
   return 'ws://localhost:3003/ws'

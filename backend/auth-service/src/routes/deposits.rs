@@ -764,18 +764,42 @@ async fn get_user_positions(
 
     let mut positions = Vec::new();
     
+    // Optimize: Fetch all positions in parallel using futures
+    // This reduces latency from O(n) sequential calls to O(1) parallel batch
+    if position_ids.is_empty() {
+        return Ok(Json(PositionsResponse { positions }));
+    }
+    
+    // Parse all position IDs and create futures for parallel fetching
+    let mut fetch_futures = Vec::new();
+    let redis_client = deposits_state.redis.clone();
+    
     for pos_id_str in position_ids {
         if let Ok(pos_id) = Uuid::parse_str(&pos_id_str) {
             let pos_key = Keys::position_by_id(pos_id);
-            let pos_data: std::collections::HashMap<String, String> = conn.hgetall(&pos_key).await
-                .map_err(|e| {
-                    error!("Failed to get position data: {}", e);
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?;
+            let pos_id_str_clone = pos_id_str.clone();
+            let redis_clone = redis_client.clone();
             
+            // Create future for each position fetch using a new connection
+            let fetch_future = async move {
+                let mut conn = redis_clone.get_async_connection().await.ok()?;
+                let pos_data: std::collections::HashMap<String, String> = conn.hgetall(&pos_key).await.ok()?;
+                Some((pos_id_str_clone, pos_data))
+            };
+            
+            fetch_futures.push(fetch_future);
+        }
+    }
+    
+    // Execute all fetches in parallel
+    let results = futures::future::join_all(fetch_futures).await;
+    
+    // Process results
+    for result in results {
+        if let Some((pos_id_str, pos_data)) = result {
             if !pos_data.is_empty() {
                 let mut pos_json = serde_json::Map::new();
-                pos_json.insert("id".to_string(), serde_json::Value::String(pos_id_str));
+                pos_json.insert("id".to_string(), serde_json::Value::String(pos_id_str.clone()));
                 
                 for (k, v) in pos_data {
                     if let Ok(num) = v.parse::<f64>() {
@@ -911,34 +935,81 @@ async fn update_position_sltp(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    // Update SL/TP in Redis
+    // Get symbol for index updates
+    let symbol: Option<String> = conn.hget(&pos_key, "symbol").await
+        .map_err(|e| {
+            error!("Failed to get position symbol: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    let symbol = symbol.ok_or_else(|| {
+        error!("Position {} has no symbol", position_id);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Update SL/TP in Redis and update indexes
     if let Some(sl) = &req.stop_loss {
+        let sl_key = format!("pos:sl:{}", symbol);
         if sl.is_empty() || sl == "null" {
             let _: () = conn.hset(&pos_key, "sl", "null").await
                 .map_err(|e| {
                     error!("Failed to update SL: {}", e);
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
+            // Remove from SL index
+            let _: () = conn.zrem(&sl_key, position_id.to_string()).await
+                .map_err(|e| {
+                    error!("Failed to remove from SL index: {}", e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
         } else {
+            let sl_price: f64 = sl.parse().map_err(|_| {
+                error!("Invalid SL price: {}", sl);
+                StatusCode::BAD_REQUEST
+            })?;
             let _: () = conn.hset(&pos_key, "sl", sl).await
                 .map_err(|e| {
                     error!("Failed to update SL: {}", e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+            // Update SL index (add or update)
+            // ZADD: key, member, score
+            let _: () = conn.zadd(&sl_key, position_id.to_string(), sl_price).await
+                .map_err(|e| {
+                    error!("Failed to update SL index: {}", e);
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
         }
     }
 
     if let Some(tp) = &req.take_profit {
+        let tp_key = format!("pos:tp:{}", symbol);
         if tp.is_empty() || tp == "null" {
             let _: () = conn.hset(&pos_key, "tp", "null").await
                 .map_err(|e| {
                     error!("Failed to update TP: {}", e);
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
+            // Remove from TP index
+            let _: () = conn.zrem(&tp_key, position_id.to_string()).await
+                .map_err(|e| {
+                    error!("Failed to remove from TP index: {}", e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
         } else {
+            let tp_price: f64 = tp.parse().map_err(|_| {
+                error!("Invalid TP price: {}", tp);
+                StatusCode::BAD_REQUEST
+            })?;
             let _: () = conn.hset(&pos_key, "tp", tp).await
                 .map_err(|e| {
                     error!("Failed to update TP: {}", e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+            // Update TP index (add or update)
+            let _: () = conn.zadd(&tp_key, position_id.to_string(), tp_price).await
+                .map_err(|e| {
+                    error!("Failed to update TP index: {}", e);
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
         }
@@ -959,12 +1030,101 @@ async fn update_position_sltp(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ClosePositionRequest {
+    pub size: Option<String>, // Optional size to close (None = full close)
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClosePositionResponse {
+    pub success: bool,
+    pub message: String,
+    pub position_id: String,
+}
+
+async fn close_position(
+    State(_pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Path((user_id, position_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<ClosePositionRequest>,
+) -> Result<Json<ClosePositionResponse>, StatusCode> {
+    // Users can only close their own positions, admins can close any
+    let is_own_position = claims.sub == user_id;
+    let is_admin = claims.role == "admin";
+    
+    if !is_own_position && !is_admin {
+        error!("Forbidden: user_id={}, claims.sub={}, claims.role={}", user_id, claims.sub, claims.role);
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Verify position exists and belongs to user
+    let mut conn = deposits_state.redis.get_async_connection().await
+        .map_err(|e| {
+            error!("Failed to get Redis connection: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let pos_key = Keys::position_by_id(position_id);
+    let pos_data: std::collections::HashMap<String, String> = conn.hgetall(&pos_key).await
+        .map_err(|e| {
+            error!("Failed to get position data: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if pos_data.is_empty() {
+        error!("Position not found: {}", position_id);
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let pos_user_id: Option<String> = pos_data.get("user_id").cloned();
+    if pos_user_id.as_deref() != Some(&user_id.to_string()) {
+        error!("Position {} does not belong to user {}", position_id, user_id);
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let pos_status: Option<String> = pos_data.get("status").cloned();
+    if pos_status.as_deref() != Some("OPEN") {
+        error!("Position {} is not open (status: {:?})", position_id, pos_status);
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Parse close size if provided
+    // Note: The order-engine will get the current market price when processing the close command
+    let close_size = req.size
+        .and_then(|s| Decimal::from_str(&s).ok());
+
+    // Publish close position command to NATS
+    let correlation_id = Uuid::new_v4().to_string();
+    let cmd = serde_json::json!({
+        "position_id": position_id.to_string(),
+        "user_id": user_id.to_string(),
+        "size": close_size.map(|s| s.to_string()),
+        "correlation_id": correlation_id,
+        "ts": Utc::now().to_rfc3339(),
+    });
+
+    if let Err(e) = deposits_state.nats.publish("cmd.position.close".to_string(), cmd.to_string().into()).await {
+        error!("Failed to publish close position command: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    info!("Published close position command: position_id={}, user_id={}, size={:?}", 
+          position_id, user_id, close_size);
+
+    Ok(Json(ClosePositionResponse {
+        success: true,
+        message: "Position close command sent successfully".to_string(),
+        position_id: position_id.to_string(),
+    }))
+}
+
 pub fn create_positions_router(
     pool: PgPool,
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
     Router::new()
         .route("/:user_id/positions/:position_id/sltp", put(update_position_sltp)) // More specific route first
+        .route("/:user_id/positions/:position_id/close", post(close_position)) // Close position route
         .route("/:user_id/positions", get(get_user_positions))
         .layer(axum::middleware::from_fn(auth_middleware))
         .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {

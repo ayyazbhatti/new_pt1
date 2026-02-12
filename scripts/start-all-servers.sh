@@ -215,7 +215,7 @@ echo ""
 print_info "Step 2: Starting Backend Services..."
 
 # Set common environment variables
-export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/trading}"
+export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/newpt}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export NATS_URL="${NATS_URL:-nats://localhost:4222}"
 

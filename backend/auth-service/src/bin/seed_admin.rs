@@ -41,14 +41,14 @@ async fn main() -> anyhow::Result<()> {
 
     if existing.is_some() {
         // Update password hash
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE users SET password_hash = $1, role = 'admin', status = 'active' WHERE email = $2"
         )
         .bind(&password_hash)
         .bind(email)
         .execute(&pool)
         .await?;
-        println!("✅ Admin user password updated");
+        println!("✅ Admin user password updated (rows affected: {})", result.rows_affected());
     } else {
         // Create admin user
         sqlx::query(

@@ -1,17 +1,28 @@
 import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Percent, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, Bot, AlertCircle } from 'lucide-react'
-import { mockOrders, mockOrderHistory, mockPositionHistory } from '@/shared/mock/terminalMock'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { cn } from '@/shared/utils'
 import { toast } from 'react-hot-toast'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Input, Skeleton } from '@/shared/ui'
-import { getPositions, Position, updatePositionSltp } from '../api/positions.api'
+import { getPositions, Position, updatePositionSltp, closePosition } from '../api/positions.api'
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
 
 export function BottomDock() {
-  const [activeTab, setActiveTab] = useState('positions')
+  // Valid tab IDs
+  const validTabs = ['positions', 'orders', 'order-history', 'position-history', 'bot-positions']
+  
+  // Load active tab from localStorage, default to 'positions'
+  // Validate that the saved tab is one of the valid tabs
+  const [activeTab, setActiveTab] = useState(() => {
+    const savedTab = localStorage.getItem('bottomDockActiveTab')
+    // Validate saved tab is still valid
+    if (savedTab && validTabs.includes(savedTab)) {
+      return savedTab
+    }
+    return 'positions'
+  })
   const [isLoading, setIsLoading] = useState(false)
   const [closeAllDialogOpen, setCloseAllDialogOpen] = useState(false)
   const [closePositionDialogOpen, setClosePositionDialogOpen] = useState(false)
@@ -20,8 +31,11 @@ export function BottomDock() {
   const [cancelOrderId, setCancelOrderId] = useState<string | null>(null)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editItem, setEditItem] = useState<{ type: 'position' | 'order'; id: string } | null>(null)
-  const [editSl, setEditSl] = useState<string>('')
-  const [editTp, setEditTp] = useState<string>('')
+  const [editSl, setEditSl] = useState<string>('') // SL price
+  const [editTp, setEditTp] = useState<string>('') // TP price
+  const [editSlAmount, setEditSlAmount] = useState<string>('') // SL dollar amount
+  const [editTpAmount, setEditTpAmount] = useState<string>('') // TP dollar amount
+  const [editingPosition, setEditingPosition] = useState<Position | null>(null) // Store position being edited
   const [positions, setPositions] = useState<Position[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
@@ -47,6 +61,12 @@ export function BottomDock() {
     { id: 'position-history', label: 'Position History' },
     { id: 'bot-positions', label: 'Bot Positions' },
   ]
+  
+  // Handler to change tab and persist to localStorage
+  const handleTabChange = useCallback((tabId: string) => {
+    setActiveTab(tabId)
+    localStorage.setItem('bottomDockActiveTab', tabId)
+  }, [])
 
   // Fetch positions from API
   const fetchPositions = useCallback(async () => {
@@ -109,13 +129,16 @@ export function BottomDock() {
       })
       setFilledOrders(data.items)
       if (data.items.length > 0) {
-        console.log(`✅ ${data.items.length} filled order(s) loaded and will appear in positions tab`)
+        console.log(`✅ ${data.items.length} filled order(s) loaded`)
       }
     } catch (error: any) {
       console.error('❌ Failed to fetch filled orders:', error)
-      // Don't show error toast for filled orders, just log it
+      // Only show error toast if we're on the order-history tab
+      if (activeTab === 'order-history') {
+        toast.error('Failed to load order history')
     }
-  }, [])
+    }
+  }, [activeTab])
 
   // Initial fetch
   useEffect(() => {
@@ -124,6 +147,8 @@ export function BottomDock() {
       fetchFilledOrders() // Also fetch filled orders for positions tab
     } else if (activeTab === 'orders') {
       fetchOrders()
+    } else if (activeTab === 'order-history') {
+      fetchFilledOrders() // Fetch filled orders for order history tab
     }
   }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
@@ -170,9 +195,35 @@ export function BottomDock() {
         }
         
         // Handle position update events
-        if (data.type === 'position' && data.payload) {
-          const position = data.payload
-          console.log('📊 Position update received:', position)
+        if (data.type === 'position_update' || (data.type === 'position' && data.payload)) {
+          const position = data.type === 'position_update' ? data : data.payload
+          console.log('📊 Position update received:', data)
+          console.log('📊 Position data:', position)
+          console.log('📊 Trigger reason:', data.trigger_reason || position?.trigger_reason)
+          
+          // Check if this is an SL/TP trigger
+          // For position_update type, trigger_reason is directly on data
+          // For position type with payload, it's on the payload
+          const triggerReason = data.type === 'position_update' 
+            ? (data.trigger_reason || null)
+            : (position?.trigger_reason || null)
+          
+          console.log('📊 Final trigger reason:', triggerReason)
+          
+          if (triggerReason && (triggerReason === 'SL' || triggerReason === 'TP')) {
+            const triggerType = triggerReason === 'SL' ? 'Stop Loss' : 'Take Profit'
+            const symbol = position?.symbol || data.symbol || 'Unknown'
+            const side = position?.side || data.side || 'Unknown'
+            console.log('🎯 Showing toaster for', triggerType, 'on', side, symbol)
+            toast.success(
+              `🎯 ${triggerType} Triggered!`,
+              {
+                description: `${side} ${symbol} position closed`,
+                duration: 5000,
+              }
+            )
+          }
+          
           setPositions(prev => {
             const existing = prev.findIndex(p => p.id === position.position_id || p.id === position.id)
             if (existing >= 0) {
@@ -274,7 +325,22 @@ export function BottomDock() {
     }
   }, [])
 
-  // Refresh data periodically
+  // Fetch data immediately when tab changes (don't wait for WebSocket)
+  useEffect(() => {
+    if (activeTab === 'positions') {
+      fetchPositions()
+      fetchFilledOrders()
+    } else if (activeTab === 'orders') {
+      fetchOrders()
+    } else if (activeTab === 'order-history') {
+      setIsLoading(true)
+      fetchFilledOrders().finally(() => setIsLoading(false)) // Fetch filled orders for order history tab
+    } else if (activeTab === 'position-history') {
+      fetchPositions() // Fetch all positions (includes closed ones)
+    }
+  }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
+
+  // Refresh data periodically (only after WebSocket is connected)
   useEffect(() => {
     if (wsConnected) {
       const interval = setInterval(() => {
@@ -283,11 +349,15 @@ export function BottomDock() {
         fetchFilledOrders()
       } else if (activeTab === 'orders') {
         fetchOrders()
+      } else if (activeTab === 'order-history') {
+        fetchFilledOrders() // Refresh filled orders for order history tab
+      } else if (activeTab === 'position-history') {
+        fetchPositions() // Fetch all positions (includes closed ones)
       }
       }, 5000) // Refresh every 5 seconds
       return () => clearInterval(interval)
     }
-  }, [activeTab, wsConnected, fetchPositions, fetchOrders])
+  }, [activeTab, wsConnected, fetchPositions, fetchOrders, fetchFilledOrders])
 
   return (
     <div className="h-[300px] min-h-0 overflow-hidden flex flex-col border-t border-white/5 bg-gradient-to-b from-surface to-surface-2/30 shadow-lg shadow-black/10">
@@ -297,7 +367,7 @@ export function BottomDock() {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={cn(
                 'px-4 py-2 text-xs font-bold rounded-lg transition-all duration-200 relative uppercase tracking-wider',
                 activeTab === tab.id
@@ -469,10 +539,40 @@ export function BottomDock() {
                               <button
                                 onClick={() => {
                                   const currentPos = positions.find(p => p.id === pos.id)
+                                  if (currentPos) {
+                                    setEditingPosition(currentPos)
                                   setEditItem({ type: 'position', id: pos.id })
-                                  setEditSl(currentPos?.sl && currentPos.sl !== 'null' ? currentPos.sl : '')
-                                  setEditTp(currentPos?.tp && currentPos.tp !== 'null' ? currentPos.tp : '')
+                                    const slPrice = currentPos.sl && currentPos.sl !== 'null' ? currentPos.sl : ''
+                                    const tpPrice = currentPos.tp && currentPos.tp !== 'null' ? currentPos.tp : ''
+                                    setEditSl(slPrice)
+                                    setEditTp(tpPrice)
+                                    
+                                    // Calculate dollar amounts from prices
+                                    if (slPrice) {
+                                      const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                                      const sizeNum = parseFloat(currentPos.size || '0')
+                                      const slPriceNum = parseFloat(slPrice)
+                                      const slAmount = currentPos.side === 'LONG' 
+                                        ? (entryPrice - slPriceNum) * sizeNum // Loss for LONG
+                                        : (slPriceNum - entryPrice) * sizeNum // Loss for SHORT
+                                      setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
+                                    } else {
+                                      setEditSlAmount('')
+                                    }
+                                    
+                                    if (tpPrice) {
+                                      const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                                      const sizeNum = parseFloat(currentPos.size || '0')
+                                      const tpPriceNum = parseFloat(tpPrice)
+                                      const tpAmount = currentPos.side === 'LONG'
+                                        ? (tpPriceNum - entryPrice) * sizeNum // Profit for LONG
+                                        : (entryPrice - tpPriceNum) * sizeNum // Profit for SHORT
+                                      setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
+                                    } else {
+                                      setEditTpAmount('')
+                                    }
                                   setEditDialogOpen(true)
+                                  }
                                 }}
                                 className="p-2 hover:bg-accent/20 rounded-lg transition-all duration-200 text-accent hover:text-accent/80 hover:scale-110 active:scale-95"
                                 title="Edit Position"
@@ -697,7 +797,22 @@ export function BottomDock() {
 
         {activeTab === 'order-history' && (
           <>
-            {mockOrderHistory.length === 0 ? (
+            {isLoading ? (
+              <div className="p-4 space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-4">
+                    <Skeleton className="h-4 w-8" variant="text" />
+                    <Skeleton className="h-4 w-20" variant="text" />
+                    <Skeleton className="h-4 w-16" variant="text" />
+                    <Skeleton className="h-4 w-12" variant="text" />
+                    <Skeleton className="h-4 w-16" variant="text" />
+                    <Skeleton className="h-4 w-16" variant="text" />
+                    <Skeleton className="h-4 w-16" variant="text" />
+                    <Skeleton className="h-4 w-12" variant="text" />
+                  </div>
+                ))}
+              </div>
+            ) : filledOrders.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-muted">
                   <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
@@ -714,13 +829,25 @@ export function BottomDock() {
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Type</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Side</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Size</th>
-                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Price</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Filled</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Avg Price</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Status</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Created</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mockOrderHistory.map((order, index) => (
+                  {filledOrders.map((order, index) => {
+                    const createdDate = new Date(order.created_at)
+                    const timeStr = createdDate.toLocaleString('en-US', { 
+                      month: 'short', 
+                      day: 'numeric', 
+                      hour: '2-digit', 
+                      minute: '2-digit' 
+                    })
+                    const filledSize = parseFloat(order.filled_size || order.size || '0')
+                    const avgPrice = parseFloat(order.average_price || order.price || '0')
+                    
+                    return (
                     <tr 
                       key={order.id} 
                       className={cn(
@@ -728,29 +855,31 @@ export function BottomDock() {
                         index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
                       )}
                     >
-                      <td className="px-4 py-3 font-mono text-text font-semibold">{order.id}</td>
+                        <td className="px-4 py-3 font-mono text-text font-semibold">{order.id.slice(0, 8)}...</td>
                       <td className="px-4 py-3 font-mono font-bold text-text">{order.symbol}</td>
-                      <td className="px-4 py-3 text-text font-medium">{order.type}</td>
+                        <td className="px-4 py-3 text-text font-medium uppercase">{order.order_type}</td>
                       <td className="px-4 py-3">
                         <span className={cn(
                           "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
-                          order.side === 'buy' 
+                            order.side === 'BUY' 
                             ? 'bg-success/20 text-success' 
                             : 'bg-danger/20 text-danger'
                         )}>
-                          {order.side.toUpperCase()}
+                            {order.side}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-text font-medium">{order.size}</td>
-                      <td className="px-4 py-3 font-mono text-text">{order.price || '-'}</td>
+                        <td className="px-4 py-3 text-text font-medium">{filledSize.toFixed(6)}</td>
+                        <td className="px-4 py-3 font-mono text-text">{avgPrice > 0 ? `$${avgPrice.toFixed(2)}` : '-'}</td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
                           {order.status}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-text font-medium">{order.createdAt}</td>
+                        <td className="px-4 py-3 text-text/70 text-[10px]">{timeStr}</td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             )}
@@ -759,7 +888,9 @@ export function BottomDock() {
 
         {activeTab === 'position-history' && (
           <>
-            {mockPositionHistory.length === 0 ? (
+            {(() => {
+              const closedPositions = positions.filter(p => p.status === 'CLOSED')
+              return closedPositions.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-muted">
                   <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
@@ -778,10 +909,17 @@ export function BottomDock() {
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Entry</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Exit</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">P&L</th>
+                      <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Closed</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mockPositionHistory.map((pos, index) => (
+                    {closedPositions.map((pos, index) => {
+                      const sizeNum = parseFloat(pos.size || '0')
+                      const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
+                      const realizedPnl = parseFloat(pos.realized_pnl || '0')
+                      const closedAt = pos.updated_at ? new Date(pos.updated_at).toLocaleString() : '-'
+                      
+                      return (
                     <tr 
                       key={pos.id} 
                       className={cn(
@@ -789,22 +927,35 @@ export function BottomDock() {
                         index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
                       )}
                     >
-                      <td className="px-4 py-3 font-mono text-text font-semibold">{pos.id}</td>
+                          <td className="px-4 py-3 font-mono text-text font-semibold">{pos.id.slice(0, 8)}...</td>
                       <td className="px-4 py-3 font-mono font-bold text-text">{pos.symbol}</td>
-                      <td className="px-4 py-3 text-text font-medium">{pos.quantity}</td>
+                          <td className="px-4 py-3 text-text font-medium">{sizeNum.toFixed(6)}</td>
                       <td className="px-4 py-3">
-                        <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
-                          {pos.direction}
+                            <span className={cn(
+                              "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
+                              pos.side === 'LONG' 
+                                ? 'bg-success/20 text-success' 
+                                : 'bg-danger/20 text-danger'
+                            )}>
+                              {pos.side}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-mono text-text font-medium">${pos.entry}</td>
-                      <td className="px-4 py-3 font-mono text-text font-medium">${pos.current}</td>
-                      <td className="px-4 py-3 font-mono text-success font-bold">+${pos.pnl}</td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(2)}</td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">-</td>
+                          <td className={cn(
+                            "px-4 py-3 font-mono font-bold",
+                            realizedPnl >= 0 ? "text-success" : "text-danger"
+                          )}>
+                            {realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-text/70 text-[10px]">{closedAt}</td>
                     </tr>
-                  ))}
+                      )
+                    })}
                 </tbody>
               </table>
-            )}
+              )
+            })()}
           </>
         )}
 
@@ -925,10 +1076,18 @@ export function BottomDock() {
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  toast.success(`Position ${closePositionId} closed successfully`)
+                onClick={async () => {
+                  if (!closePositionId) return
+                  try {
+                    await closePosition(closePositionId)
+                    toast.success(`Position ${closePositionId.slice(0, 8)}... closed successfully`)
                   setClosePositionDialogOpen(false)
                   setClosePositionId(null)
+                    // Refresh positions list
+                    fetchPositions()
+                  } catch (error: any) {
+                    toast.error(`Failed to close position: ${error.message}`)
+                  }
                 }}
                 className="px-4 py-2 text-sm bg-danger text-white hover:bg-danger/90 rounded transition-colors"
               >
@@ -982,29 +1141,140 @@ export function BottomDock() {
               Edit {editItem?.type === 'position' ? 'Position' : 'Order'} {editItem?.id}
             </Dialog.Title>
             <div className="space-y-4 mb-6">
-              {editItem?.type === 'position' ? (
+              {editItem?.type === 'position' && editingPosition ? (
                 <>
+                  {/* Stop Loss Section */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-muted mb-1 block font-semibold">Stop Loss</label>
+                    <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-muted mb-1 block">Stop Loss</label>
-                    <Input 
-                      type="number" 
-                      step="0.01" 
-                      placeholder="Enter SL price (leave empty to remove)" 
-                      className="w-full"
-                      value={editSl}
-                      onChange={(e) => setEditSl(e.target.value)}
-                    />
+                        <label className="text-[10px] text-muted mb-1 block">Price ($)</label>
+                        <Input 
+                          type="number" 
+                          step="0.01" 
+                          placeholder="SL Price" 
+                          className="w-full"
+                          value={editSl}
+                          onChange={(e) => {
+                            const price = e.target.value
+                            setEditSl(price)
+                            // Calculate dollar amount from price
+                            if (price && editingPosition) {
+                              const entryPrice = parseFloat(editingPosition.avg_price || editingPosition.entry_price || '0')
+                              const sizeNum = parseFloat(editingPosition.size || '0')
+                              const slPriceNum = parseFloat(price)
+                              if (!isNaN(slPriceNum) && sizeNum > 0) {
+                                const slAmount = editingPosition.side === 'LONG' 
+                                  ? (entryPrice - slPriceNum) * sizeNum
+                                  : (slPriceNum - entryPrice) * sizeNum
+                                setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
+                              } else {
+                                setEditSlAmount('')
+                              }
+                            } else {
+                              setEditSlAmount('')
+                            }
+                          }}
+                        />
                   </div>
                   <div>
-                    <label className="text-xs text-muted mb-1 block">Take Profit</label>
-                    <Input 
-                      type="number" 
-                      step="0.01" 
-                      placeholder="Enter TP price (leave empty to remove)" 
-                      className="w-full"
-                      value={editTp}
-                      onChange={(e) => setEditTp(e.target.value)}
-                    />
+                        <label className="text-[10px] text-muted mb-1 block">Amount ($)</label>
+                        <Input 
+                          type="number" 
+                          step="0.01" 
+                          placeholder="Loss Amount" 
+                          className="w-full"
+                          value={editSlAmount}
+                          onChange={(e) => {
+                            const amount = e.target.value
+                            setEditSlAmount(amount)
+                            // Calculate price from dollar amount
+                            if (amount && editingPosition) {
+                              const entryPrice = parseFloat(editingPosition.avg_price || editingPosition.entry_price || '0')
+                              const sizeNum = parseFloat(editingPosition.size || '0')
+                              const lossAmount = parseFloat(amount)
+                              if (!isNaN(lossAmount) && sizeNum > 0) {
+                                const slPrice = editingPosition.side === 'LONG'
+                                  ? entryPrice - (lossAmount / sizeNum)
+                                  : entryPrice + (lossAmount / sizeNum)
+                                setEditSl(slPrice > 0 ? slPrice.toFixed(2) : '')
+                              } else {
+                                setEditSl('')
+                              }
+                            } else {
+                              setEditSl('')
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Take Profit Section */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-muted mb-1 block font-semibold">Take Profit</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-muted mb-1 block">Price ($)</label>
+                        <Input 
+                          type="number" 
+                          step="0.01" 
+                          placeholder="TP Price" 
+                          className="w-full"
+                          value={editTp}
+                          onChange={(e) => {
+                            const price = e.target.value
+                            setEditTp(price)
+                            // Calculate dollar amount from price
+                            if (price && editingPosition) {
+                              const entryPrice = parseFloat(editingPosition.avg_price || editingPosition.entry_price || '0')
+                              const sizeNum = parseFloat(editingPosition.size || '0')
+                              const tpPriceNum = parseFloat(price)
+                              if (!isNaN(tpPriceNum) && sizeNum > 0) {
+                                const tpAmount = editingPosition.side === 'LONG'
+                                  ? (tpPriceNum - entryPrice) * sizeNum
+                                  : (entryPrice - tpPriceNum) * sizeNum
+                                setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
+                              } else {
+                                setEditTpAmount('')
+                              }
+                            } else {
+                              setEditTpAmount('')
+                            }
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-muted mb-1 block">Amount ($)</label>
+                        <Input 
+                          type="number" 
+                          step="0.01" 
+                          placeholder="Profit Amount" 
+                          className="w-full"
+                          value={editTpAmount}
+                          onChange={(e) => {
+                            const amount = e.target.value
+                            setEditTpAmount(amount)
+                            // Calculate price from dollar amount
+                            if (amount && editingPosition) {
+                              const entryPrice = parseFloat(editingPosition.avg_price || editingPosition.entry_price || '0')
+                              const sizeNum = parseFloat(editingPosition.size || '0')
+                              const profitAmount = parseFloat(amount)
+                              if (!isNaN(profitAmount) && sizeNum > 0) {
+                                const tpPrice = editingPosition.side === 'LONG'
+                                  ? entryPrice + (profitAmount / sizeNum)
+                                  : entryPrice - (profitAmount / sizeNum)
+                                setEditTp(tpPrice > 0 ? tpPrice.toFixed(2) : '')
+                              } else {
+                                setEditTp('')
+                              }
+                            } else {
+                              setEditTp('')
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </>
               ) : (
@@ -1027,6 +1297,9 @@ export function BottomDock() {
                   setEditItem(null)
                   setEditSl('')
                   setEditTp('')
+                  setEditSlAmount('')
+                  setEditTpAmount('')
+                  setEditingPosition(null)
                 }}
                 className="px-4 py-2 text-sm text-text hover:bg-surface-2 rounded transition-colors"
               >
@@ -1047,17 +1320,23 @@ export function BottomDock() {
                       setEditItem(null)
                       setEditSl('')
                       setEditTp('')
+                      setEditSlAmount('')
+                      setEditTpAmount('')
+                      setEditingPosition(null)
                       // Refresh positions
                       fetchPositions()
                     } catch (error: any) {
                       toast.error(`Failed to update position: ${error.message}`)
                     }
                   } else {
-                    toast.success(`${editItem?.type === 'position' ? 'Position' : 'Order'} ${editItem?.id} updated successfully`)
-                    setEditDialogOpen(false)
-                    setEditItem(null)
+                  toast.success(`${editItem?.type === 'position' ? 'Position' : 'Order'} ${editItem?.id} updated successfully`)
+                  setEditDialogOpen(false)
+                  setEditItem(null)
                     setEditSl('')
                     setEditTp('')
+                    setEditSlAmount('')
+                    setEditTpAmount('')
+                    setEditingPosition(null)
                   }
                 }}
                 className="px-4 py-2 text-sm bg-accent text-white hover:bg-accent/90 rounded transition-colors"

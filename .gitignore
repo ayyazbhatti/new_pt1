@@ -28,3 +28,7 @@ target/
 **/target/
 *.rs.bk
 
+
+# Rust build artifacts
+target/
+**/target/

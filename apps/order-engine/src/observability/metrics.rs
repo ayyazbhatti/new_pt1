@@ -10,6 +10,7 @@ pub struct Metrics {
     ticks_processed: Arc<AtomicU64>,
     positions_opened: Arc<AtomicU64>,
     positions_closed: Arc<AtomicU64>,
+    sltp_triggers: Arc<AtomicU64>,
 }
 
 impl Metrics {
@@ -22,6 +23,7 @@ impl Metrics {
             ticks_processed: Arc::new(AtomicU64::new(0)),
             positions_opened: Arc::new(AtomicU64::new(0)),
             positions_closed: Arc::new(AtomicU64::new(0)),
+            sltp_triggers: Arc::new(AtomicU64::new(0)),
         }
     }
     
@@ -51,6 +53,10 @@ impl Metrics {
     
     pub fn inc_positions_closed(&self) {
         self.positions_closed.fetch_add(1, Ordering::Relaxed);
+    }
+    
+    pub fn inc_sltp_triggers(&self, count: u64) {
+        self.sltp_triggers.fetch_add(count, Ordering::Relaxed);
     }
 }
 

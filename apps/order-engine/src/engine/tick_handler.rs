@@ -8,7 +8,7 @@ use tracing::{debug, error, info, warn, instrument};
 use uuid::Uuid;
 use rust_decimal::Decimal;
 
-use crate::engine::{OrderCache, LuaScripts};
+use crate::engine::{OrderCache, LuaScripts, SltpHandler};
 use crate::models::{Tick, Order};
 use crate::nats::NatsClient;
 use crate::observability::Metrics;
@@ -21,6 +21,7 @@ pub struct TickHandler {
     nats: Arc<NatsClient>,
     lua: Arc<LuaScripts>,
     metrics: Arc<Metrics>,
+    sltp_handler: Arc<SltpHandler>,
 }
 
 impl TickHandler {
@@ -30,6 +31,7 @@ impl TickHandler {
         nats: Arc<NatsClient>,
         lua: Arc<LuaScripts>,
         metrics: Arc<Metrics>,
+        sltp_handler: Arc<SltpHandler>,
     ) -> Self {
         Self {
             cache,
@@ -37,6 +39,7 @@ impl TickHandler {
             nats,
             lua,
             metrics,
+            sltp_handler,
         }
     }
     
@@ -158,6 +161,13 @@ impl TickHandler {
                     }
                 }
             }
+        }
+        
+        // Check SL/TP triggers for open positions (event-driven, no polling)
+        // Uses range queries for O(log N + M) performance - scales to 1M+ positions
+        if let Err(e) = self.sltp_handler.check_and_trigger(&tick.symbol, tick.bid, tick.ask).await {
+            error!("SL/TP check failed for {}: {}", tick.symbol, e);
+            // Don't fail tick processing, just log the error
         }
         
         Ok(())

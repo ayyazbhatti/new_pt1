@@ -5,6 +5,7 @@ pub mod tick_handler;
 pub mod order_handler;
 pub mod cancel_handler;
 pub mod position_handler;
+pub mod sltp_handler;
 
 pub use cache::*;
 pub use lua::*;
@@ -13,4 +14,5 @@ pub use tick_handler::*;
 pub use order_handler::*;
 pub use cancel_handler::*;
 pub use position_handler::*;
+pub use sltp_handler::*;
 
