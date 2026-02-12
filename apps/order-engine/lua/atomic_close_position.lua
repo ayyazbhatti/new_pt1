@@ -82,6 +82,10 @@ if actual_close_size >= current_size then
     if is_new_format then
         redis.call('HSET', pos_key_new, 'status', 'CLOSED')
         redis.call('HSET', pos_key_new, 'size', '0')
+        -- Preserve original size for position history display
+        redis.call('HSET', pos_key_new, 'original_size', tostring(current_size))
+        -- Store exit price for position history
+        redis.call('HSET', pos_key_new, 'exit_price', tostring(exit_price))
         redis.call('HSET', pos_key_new, 'closed_at', timestamp_ms)
         redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
         local new_realized_pnl = tonumber(position.realized_pnl or "0") + pnl
@@ -97,6 +101,10 @@ if actual_close_size >= current_size then
     else
     position.status = "CLOSED"
     position.size = "0"
+    -- Preserve original size for position history display
+    position.original_size = tostring(current_size)
+    -- Store exit price for position history
+    position.exit_price = tostring(exit_price)
     position.closed_at = timestamp_ms
         position.realized_pnl = tostring(tonumber(position.realized_pnl or "0") + pnl)
         position.updated_at = timestamp_ms

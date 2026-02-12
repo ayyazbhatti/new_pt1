@@ -43,6 +43,8 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
     numericPrice2: ask,
     change24h: 0, // TODO: Calculate from price history
     volume24h: 0, // TODO: Get from market data
+    baseCurrency: symbol.baseCurrency,
+    quoteCurrency: symbol.quoteCurrency,
   }
 }
 

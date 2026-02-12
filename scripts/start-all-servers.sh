@@ -175,6 +175,16 @@ print_status "npm is available"
 
 echo ""
 
+# Step 0: Ensure Docker PostgreSQL is ready
+print_status "Step 0: Ensuring Docker PostgreSQL is ready..."
+if [ -f "scripts/ensure-docker-postgres.sh" ]; then
+    bash scripts/ensure-docker-postgres.sh || {
+        print_warning "Docker PostgreSQL check failed, continuing anyway..."
+    }
+else
+    print_warning "ensure-docker-postgres.sh not found, skipping check"
+fi
+
 # Step 1: Start Infrastructure
 print_info "Step 1: Starting Infrastructure Services..."
 cd "$(dirname "$0")/../infra" || exit 1
@@ -214,8 +224,17 @@ echo ""
 # Step 2: Start Backend Services
 print_info "Step 2: Starting Backend Services..."
 
-# Set common environment variables
+# Ensure Docker PostgreSQL is running (not local PostgreSQL)
+# Check if local PostgreSQL is running and warn
+if pg_isready -h localhost -U postgres -d newpt >/dev/null 2>&1 && ! docker ps --format "{{.Names}}" | grep -q "^trading-postgres$"; then
+    print_warning "Local PostgreSQL detected on port 5432"
+    print_warning "This project uses Docker PostgreSQL. Please stop local PostgreSQL or use a different port."
+    print_info "To stop local PostgreSQL: brew services stop postgresql@14 (or your version)"
+fi
+
+# Set common environment variables - Using Docker PostgreSQL
 export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/newpt}"
+print_info "Using Docker PostgreSQL: ${DATABASE_URL}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export NATS_URL="${NATS_URL:-nats://localhost:4222}"
 

@@ -7,8 +7,10 @@ export interface Position {
   symbol: string
   side: 'LONG' | 'SHORT'
   size: string
+  original_size?: string // Original size before closing (for closed positions)
   entry_price: string
   avg_price: string
+  exit_price?: string // Exit price when position was closed
   sl?: string
   tp?: string
   leverage: string
@@ -18,6 +20,7 @@ export interface Position {
   status: 'OPEN' | 'CLOSED'
   opened_at: number
   updated_at: number
+  closed_at?: number // Timestamp when position was closed
 }
 
 export interface PositionsResponse {

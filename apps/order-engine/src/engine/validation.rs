@@ -64,6 +64,20 @@ impl Validator {
             }
         }
         
+        // Validate SL/TP prices if provided
+        // Note: We can't validate against entry price here since market orders don't have a fixed entry price
+        // The grace period in check_sltp_triggers.lua will prevent immediate triggering
+        if let Some(sl) = cmd.stop_loss {
+            if sl <= Decimal::ZERO {
+                return Err(anyhow::anyhow!("Stop loss price must be greater than zero"));
+            }
+        }
+        if let Some(tp) = cmd.take_profit {
+            if tp <= Decimal::ZERO {
+                return Err(anyhow::anyhow!("Take profit price must be greater than zero"));
+            }
+        }
+        
         // Check balance (simplified - would need proper margin calculation)
         let balance_key = format!("user:{}:balance", cmd.user_id);
         let balance_json: Option<String> = redis::cmd("GET")

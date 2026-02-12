@@ -15,6 +15,31 @@ local function add_triggered(pos_id, reason, trigger_price)
     -- Verify position exists and is OPEN
     local status = redis.call('HGET', pos_key, 'status')
     if status == 'OPEN' then
+        -- Check if position was just created (grace period of 2 seconds)
+        -- This prevents immediate SL/TP triggering right after order fill
+        local opened_at = redis.call('HGET', pos_key, 'opened_at')
+        if opened_at then
+            local current_time = redis.call('TIME')
+            -- TIME returns [seconds, microseconds], convert to milliseconds
+            -- microseconds is 0-999999, so divide by 1000 to get milliseconds
+            local current_timestamp_ms = tonumber(current_time[1]) * 1000 + math.floor(tonumber(current_time[2]) / 1000)
+            local opened_timestamp_ms = tonumber(opened_at)
+            
+            -- Handle case where opened_at might be in seconds instead of milliseconds
+            -- Check if it's a reasonable timestamp in seconds (e.g., > year 2000 but < year 2100)
+            if opened_timestamp_ms > 946684800 and opened_timestamp_ms < 4102444800 then
+                -- It's in seconds (Unix timestamp), convert to milliseconds
+                opened_timestamp_ms = opened_timestamp_ms * 1000
+            end
+            
+            local age_ms = current_timestamp_ms - opened_timestamp_ms
+            
+            -- Grace period: 2 seconds (2000ms) - don't trigger SL/TP immediately after creation
+            if age_ms >= 0 and age_ms < 2000 then
+                return -- Skip triggering for positions created less than 2 seconds ago
+            end
+        end
+        
         table.insert(triggered, {
             position_id = pos_id,
             reason = reason,

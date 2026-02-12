@@ -17,6 +17,8 @@ interface TerminalStore {
   getFilteredSymbols: () => MockSymbol[]
 }
 
+const STORAGE_KEY_SELECTED_SYMBOL = 'terminal.selectedSymbolId'
+
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   selectedSymbol: null,
   symbols: [],
@@ -26,14 +28,46 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   activeTab: 'all',
   setSymbols: (symbols) => {
     const state = get()
+    const currentSelectedId = state.selectedSymbol?.id
+    
     set({ symbols })
-    // Auto-select first symbol if none selected
-    if (!state.selectedSymbol && symbols.length > 0) {
+    
+    // If we have a currently selected symbol, check if it still exists in the new symbols list
+    if (currentSelectedId) {
+      const stillExists = symbols.find((s) => s.id === currentSelectedId)
+      if (stillExists) {
+        // Update the selected symbol with the latest data (prices may have changed)
+        set({ selectedSymbol: stillExists })
+        return
+      }
+      // Current selection no longer exists, clear it
+      set({ selectedSymbol: null })
+    }
+    
+    // Try to restore selected symbol from localStorage
+    if (!currentSelectedId && symbols.length > 0) {
+      const savedSymbolId = localStorage.getItem(STORAGE_KEY_SELECTED_SYMBOL)
+      if (savedSymbolId) {
+        const savedSymbol = symbols.find((s) => s.id === savedSymbolId)
+        if (savedSymbol) {
+          set({ selectedSymbol: savedSymbol })
+          return
+        }
+      }
+      // Fallback to first symbol if no saved symbol found
       set({ selectedSymbol: symbols[0] })
     }
   },
   setLoading: (loading) => set({ isLoading: loading }),
-  setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
+  setSelectedSymbol: (symbol) => {
+    set({ selectedSymbol: symbol })
+    // Persist selected symbol ID to localStorage
+    if (symbol) {
+      localStorage.setItem(STORAGE_KEY_SELECTED_SYMBOL, symbol.id)
+    } else {
+      localStorage.removeItem(STORAGE_KEY_SELECTED_SYMBOL)
+    }
+  },
   toggleWatchlist: (symbolId) =>
     set((state) => {
       const newWatchlist = new Set(state.watchlist)

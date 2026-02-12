@@ -328,8 +328,7 @@ export function BottomDock() {
   // Fetch data immediately when tab changes (don't wait for WebSocket)
   useEffect(() => {
     if (activeTab === 'positions') {
-      fetchPositions()
-      fetchFilledOrders()
+      fetchPositions() // Only fetch positions (open positions will be filtered in render)
     } else if (activeTab === 'orders') {
       fetchOrders()
     } else if (activeTab === 'order-history') {
@@ -345,8 +344,7 @@ export function BottomDock() {
     if (wsConnected) {
       const interval = setInterval(() => {
       if (activeTab === 'positions') {
-        fetchPositions()
-        fetchFilledOrders()
+        fetchPositions() // Only fetch positions for positions tab
       } else if (activeTab === 'orders') {
         fetchOrders()
       } else if (activeTab === 'order-history') {
@@ -463,7 +461,15 @@ export function BottomDock() {
                 <tbody>
                   {/* Open Positions */}
                   {(() => {
-                    const openPositions = positions.filter(p => p.status === 'OPEN')
+                    const openPositions = positions
+                      .filter(p => p.status === 'OPEN')
+                      .sort((a, b) => {
+                        // Sort by opened_at timestamp (newest first)
+                        // Use updated_at as fallback if opened_at is not available
+                        const aTime = a.opened_at || a.updated_at || 0
+                        const bTime = b.opened_at || b.updated_at || 0
+                        return bTime - aTime // Descending order (newest first)
+                      })
                     if (openPositions.length > 0) {
                       console.log(`📋 Rendering ${openPositions.length} open position(s) in positions tab`)
                     }
@@ -595,76 +601,8 @@ export function BottomDock() {
                       )
                     })
                     
-                    // Filled Orders (shown as positions)
-                    if (filledOrders.length > 0) {
-                      console.log(`📋 Rendering ${filledOrders.length} filled order(s) in positions tab`)
-                    }
-                    const filledOrderRows = filledOrders.map((order, index) => {
-                    const sizeNum = parseFloat(order.filled_size || order.size || '0')
-                    // Handle both average_price and average_fill_price field names
-                    const entryPrice = parseFloat(
-                      (order as any).average_price || 
-                      (order as any).average_fill_price || 
-                      order.price || 
-                      '0'
-                    )
-                      const side = order.side === 'BUY' ? 'LONG' : 'SHORT'
-                      const offsetIndex = positions.filter(p => p.status === 'OPEN').length + index
-                      
-                      // Log when order appears in positions tab
-                      if (index === 0 && filledOrders.length > 0) {
-                        console.log('📊 Filled orders appearing in positions tab:', {
-                          total_filled_orders: filledOrders.length,
-                          open_positions: positions.filter(p => p.status === 'OPEN').length,
-                          first_order: {
-                            id: order.id,
-                            symbol: order.symbol,
-                            side: order.side,
-                            filled_size: order.filled_size,
-                            entry_price: entryPrice
-                          }
-                        })
-                      }
-                      
-                      return (
-                        <tr 
-                          key={`filled-${order.id}`} 
-                          className={cn(
-                            "border-b border-white/5 hover:bg-surface-2/40 transition-all duration-200",
-                            offsetIndex % 2 === 0 ? "bg-surface/30" : "bg-surface/50",
-                            "opacity-75" // Slightly dimmed to distinguish from open positions
-                          )}
-                        >
-                          <td className="px-4 py-3 font-mono text-text font-semibold">{order.id.slice(0, 8)}...</td>
-                          <td className="px-4 py-3 font-mono font-bold text-text">{order.symbol}</td>
-                          <td className="px-4 py-3 text-text font-medium">{sizeNum.toFixed(6)}</td>
-                          <td className="px-4 py-3">
-                            <span className={cn(
-                              "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
-                              side === 'LONG' 
-                                ? 'bg-success/20 text-success' 
-                                : 'bg-danger/20 text-danger'
-                            )}>
-                              {side}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-text font-semibold">-</td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-text font-bold">${entryPrice.toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-text/70">-</td>
-                          <td className="px-4 py-3 font-mono text-text/70">-</td>
-                          <td className="px-4 py-3 font-mono text-text/70">-</td>
-                          <td className="px-4 py-3">
-                            <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
-                              FILLED
-                            </span>
-                          </td>
-                        </tr>
-                      )
-                    })
-                    
-                    // Combine both arrays
-                    return [...positionRows, ...filledOrderRows]
+                    // Only return open positions (filled orders should only appear in Order History tab)
+                    return positionRows
                   })()}
                 </tbody>
               </table>
@@ -889,7 +827,15 @@ export function BottomDock() {
         {activeTab === 'position-history' && (
           <>
             {(() => {
-              const closedPositions = positions.filter(p => p.status === 'CLOSED')
+              const closedPositions = positions
+                .filter(p => p.status === 'CLOSED')
+                .sort((a, b) => {
+                  // Sort by closed_at timestamp (newest first)
+                  // Use updated_at as fallback if closed_at is not available
+                  const aTime = a.closed_at || a.updated_at || 0
+                  const bTime = b.closed_at || b.updated_at || 0
+                  return bTime - aTime // Descending order (newest first)
+                })
               return closedPositions.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-muted">
@@ -914,8 +860,17 @@ export function BottomDock() {
                 </thead>
                 <tbody>
                     {closedPositions.map((pos, index) => {
-                      const sizeNum = parseFloat(pos.size || '0')
+                      // Use original_size for closed positions if available, otherwise use size
+                      const sizeValue = pos.status === 'CLOSED' && pos.original_size 
+                        ? pos.original_size 
+                        : pos.size
+                      const sizeNum = parseFloat(sizeValue || '0')
                       const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
+                      // Handle both snake_case and camelCase for exit_price
+                      const exitPriceValue = pos.exit_price || (pos as any).exitPrice || (pos as any).exit_price
+                      const exitPrice = exitPriceValue && exitPriceValue !== 'null' && exitPriceValue !== '' 
+                        ? parseFloat(String(exitPriceValue)) 
+                        : null
                       const realizedPnl = parseFloat(pos.realized_pnl || '0')
                       const closedAt = pos.updated_at ? new Date(pos.updated_at).toLocaleString() : '-'
                       
@@ -941,7 +896,9 @@ export function BottomDock() {
                         </span>
                       </td>
                           <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">-</td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">
+                            {exitPrice !== null ? `$${exitPrice.toFixed(2)}` : '-'}
+                          </td>
                           <td className={cn(
                             "px-4 py-3 font-mono font-bold",
                             realizedPnl >= 0 ? "text-success" : "text-danger"

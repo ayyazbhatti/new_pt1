@@ -9,6 +9,8 @@ export interface MockSymbol {
   numericPrice2: number
   change24h: number
   volume24h: number
+  baseCurrency: string
+  quoteCurrency: string
 }
 
 export interface MockPosition {
@@ -36,15 +38,15 @@ export interface MockOrder {
 }
 
 export const mockSymbols: MockSymbol[] = [
-  { id: '1', code: 'BTC-USD', price: '$107438.65', price2: '$107438.65', value: '$0', enabled: false, numericPrice: 107438.65, numericPrice2: 107438.65, change24h: 2.45, volume24h: 1250000000 },
-  { id: '2', code: 'ETH-USD', price: '$3766.92', price2: '$3766.93', value: '$0.01', enabled: false, numericPrice: 3766.92, numericPrice2: 3766.93, change24h: 1.23, volume24h: 850000000 },
-  { id: '3', code: 'BNB-USD', price: '$1070.79', price2: '$1070.80', value: '$0.01', enabled: false, numericPrice: 1070.79, numericPrice2: 1070.80, change24h: -0.45, volume24h: 320000000 },
-  { id: '4', code: 'SOL-USD', price: '$165.28', price2: '$165.29', value: '$0.01', enabled: false, numericPrice: 165.28, numericPrice2: 165.29, change24h: 3.67, volume24h: 450000000 },
-  { id: '5', code: 'AVAX-USD', price: '$0.00', price2: '$0.00', value: '$0', enabled: false, numericPrice: 0, numericPrice2: 0, change24h: 0, volume24h: 0 },
-  { id: '6', code: 'DOT-USD', price: '$2.84', price2: '$2.84', value: '$0.001', enabled: false, numericPrice: 2.84, numericPrice2: 2.84, change24h: -1.12, volume24h: 180000000 },
-  { id: '7', code: 'XRP-USD', price: '$2.45', price2: '$2.45', value: '$0.0001', enabled: false, numericPrice: 2.45, numericPrice2: 2.45, change24h: 0.89, volume24h: 150000000 },
-  { id: '8', code: 'ADA-USD', price: '$0.601400', price2: '$0.601500', value: '$0.0001', enabled: false, numericPrice: 0.6014, numericPrice2: 0.6015, change24h: -0.23, volume24h: 120000000 },
-  { id: '9', code: 'DOGE-USD', price: '$0.00', price2: '$0.00', value: '$0', enabled: false, numericPrice: 0, numericPrice2: 0, change24h: 0, volume24h: 0 },
+  { id: '1', code: 'BTC-USD', price: '$107438.65', price2: '$107438.65', value: '$0', enabled: false, numericPrice: 107438.65, numericPrice2: 107438.65, change24h: 2.45, volume24h: 1250000000, baseCurrency: 'BTC', quoteCurrency: 'USD' },
+  { id: '2', code: 'ETH-USD', price: '$3766.92', price2: '$3766.93', value: '$0.01', enabled: false, numericPrice: 3766.92, numericPrice2: 3766.93, change24h: 1.23, volume24h: 850000000, baseCurrency: 'ETH', quoteCurrency: 'USD' },
+  { id: '3', code: 'BNB-USD', price: '$1070.79', price2: '$1070.80', value: '$0.01', enabled: false, numericPrice: 1070.79, numericPrice2: 1070.80, change24h: -0.45, volume24h: 320000000, baseCurrency: 'BNB', quoteCurrency: 'USD' },
+  { id: '4', code: 'SOL-USD', price: '$165.28', price2: '$165.29', value: '$0.01', enabled: false, numericPrice: 165.28, numericPrice2: 165.29, change24h: 3.67, volume24h: 450000000, baseCurrency: 'SOL', quoteCurrency: 'USD' },
+  { id: '5', code: 'AVAX-USD', price: '$0.00', price2: '$0.00', value: '$0', enabled: false, numericPrice: 0, numericPrice2: 0, change24h: 0, volume24h: 0, baseCurrency: 'AVAX', quoteCurrency: 'USD' },
+  { id: '6', code: 'DOT-USD', price: '$2.84', price2: '$2.84', value: '$0.001', enabled: false, numericPrice: 2.84, numericPrice2: 2.84, change24h: -1.12, volume24h: 180000000, baseCurrency: 'DOT', quoteCurrency: 'USD' },
+  { id: '7', code: 'XRP-USD', price: '$2.45', price2: '$2.45', value: '$0.0001', enabled: false, numericPrice: 2.45, numericPrice2: 2.45, change24h: 0.89, volume24h: 150000000, baseCurrency: 'XRP', quoteCurrency: 'USD' },
+  { id: '8', code: 'ADA-USD', price: '$0.601400', price2: '$0.601500', value: '$0.0001', enabled: false, numericPrice: 0.6014, numericPrice2: 0.6015, change24h: -0.23, volume24h: 120000000, baseCurrency: 'ADA', quoteCurrency: 'USD' },
+  { id: '9', code: 'DOGE-USD', price: '$0.00', price2: '$0.00', value: '$0', enabled: false, numericPrice: 0, numericPrice2: 0, change24h: 0, volume24h: 0, baseCurrency: 'DOGE', quoteCurrency: 'USD' },
 ]
 
 export const mockPositions: MockPosition[] = [

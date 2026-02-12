@@ -17,7 +17,7 @@ export function RightTradingPanel() {
   const { selectedSymbol, setSelectedSymbol, symbols } = useTerminalStore()
   const [orderType, setOrderType] = useState('market')
   const [size, setSize] = useState('0.003457')
-  const [currency, setCurrency] = useState('BTC')
+  const [currency, setCurrency] = useState<string>('')
   const [marginPercent, setMarginPercent] = useState(1.0)
   const [useSlTp, setUseSlTp] = useState(false)
   const [stopLoss, setStopLoss] = useState('')
@@ -27,7 +27,19 @@ export function RightTradingPanel() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
 
+  // Update currency to base currency when symbol changes
+  useEffect(() => {
+    if (selectedSymbol?.baseCurrency) {
+      // Only update if currency is not set or if it's not a valid currency for this symbol
+      if (!currency || (currency !== selectedSymbol.baseCurrency && currency !== selectedSymbol.quoteCurrency)) {
+        setCurrency(selectedSymbol.baseCurrency)
+      }
+    }
+  }, [selectedSymbol?.baseCurrency, selectedSymbol?.quoteCurrency])
+
   // Calculate costs based on size and selected symbol
+  // Size is always stored in the current currency mode (base or quote)
+  // We need to convert to base currency for calculations
   const costBreakdown = useMemo(() => {
     if (!selectedSymbol) {
       return {
@@ -36,16 +48,31 @@ export function RightTradingPanel() {
         margin: '0.00',
         liquidation: '-',
         usdValue: '0.00',
+        baseSize: '0.00',
+        quoteValue: '0.00',
       }
     }
 
     const sizeNum = parseFloat(size) || 0
     const price = selectedSymbol.numericPrice || 0
     const askPrice = selectedSymbol.numericPrice2 || price
-    const usdValue = sizeNum * price
+    
+    // Convert size to base currency for calculations
+    let baseSize = sizeNum
+    let quoteValue = sizeNum * price
+    
+    if (currency === selectedSymbol.quoteCurrency && price > 0) {
+      // Size is in quote currency, convert to base
+      baseSize = sizeNum / price
+      quoteValue = sizeNum
+    } else {
+      // Size is in base currency
+      quoteValue = sizeNum * price
+    }
+    
     const spread = Math.abs(askPrice - price)
     const fees = 0
-    const margin = usdValue * 0.02 // 2% margin
+    const margin = quoteValue * 0.02 // 2% margin
     const liquidation = '-'
 
     return {
@@ -53,19 +80,106 @@ export function RightTradingPanel() {
       fees: fees.toFixed(2),
       margin: margin.toFixed(2),
       liquidation,
-      usdValue: usdValue.toFixed(2),
+      usdValue: quoteValue.toFixed(2),
+      baseSize: baseSize.toFixed(8),
+      quoteValue: quoteValue.toFixed(2),
     }
-  }, [size, selectedSymbol])
+  }, [size, selectedSymbol, currency])
+
+  // Format live price for limit price placeholder
+  const livePricePlaceholder = useMemo(() => {
+    if (!selectedSymbol || selectedSymbol.numericPrice <= 0) {
+      return 'Enter limit price'
+    }
+    // Use bid price (numericPrice) as the reference
+    const price = selectedSymbol.numericPrice
+    // Determine precision based on price value
+    if (price >= 1000) {
+      return `Current: ${price.toFixed(2)}`
+    } else if (price >= 1) {
+      return `Current: ${price.toFixed(4)}`
+    } else {
+      return `Current: ${price.toFixed(8)}`
+    }
+  }, [selectedSymbol])
+
+  // Format live price for market size placeholder
+  const marketSizePlaceholder = useMemo(() => {
+    if (!selectedSymbol || selectedSymbol.numericPrice <= 0) {
+      return 'Enter size'
+    }
+    // Show current market price as reference
+    const price = selectedSymbol.numericPrice
+    const formattedPrice = price >= 1000 
+      ? price.toFixed(2) 
+      : price >= 1 
+        ? price.toFixed(4) 
+        : price.toFixed(8)
+    
+    if (currency === selectedSymbol.quoteCurrency) {
+      // In quote currency mode, show example value
+      return `e.g., 100 (Current: ${formattedPrice})`
+    } else {
+      // In base currency mode, show example quantity
+      return `e.g., 0.1 (Current: ${formattedPrice})`
+    }
+  }, [selectedSymbol, currency])
 
   const handleMaxSize = () => {
     if (!selectedSymbol || !selectedSymbol.numericPrice) {
       toast.error('Please select a symbol')
       return
     }
-    // Set to 1% of balance
-    const maxSize = (2495.56 * 0.01) / selectedSymbol.numericPrice
-    setSize(maxSize.toFixed(6))
+    // Set to 1% of balance (in quote currency)
+    const maxQuoteValue = 2495.56 * 0.01
+    if (currency === selectedSymbol.quoteCurrency) {
+      // If in quote currency mode, set directly
+      setSize(maxQuoteValue.toFixed(2))
+    } else {
+      // If in base currency mode, convert to base
+      const maxBaseSize = maxQuoteValue / selectedSymbol.numericPrice
+      setSize(maxBaseSize.toFixed(8))
+    }
     toast.success('Size set to maximum')
+  }
+
+  // Handle currency change with conversion
+  const handleCurrencyChange = (newCurrency: string) => {
+    if (!selectedSymbol || !selectedSymbol.numericPrice || currency === newCurrency) {
+      setCurrency(newCurrency)
+      return
+    }
+
+    const sizeNum = parseFloat(size) || 0
+    if (sizeNum <= 0) {
+      setCurrency(newCurrency)
+      return
+    }
+
+    const price = selectedSymbol.numericPrice || 0
+    if (price <= 0) {
+      setCurrency(newCurrency)
+      return
+    }
+
+    let newSize = sizeNum
+
+    if (currency === selectedSymbol.baseCurrency && newCurrency === selectedSymbol.quoteCurrency) {
+      // Converting from base to quote: baseSize * price = quoteValue
+      newSize = sizeNum * price
+    } else if (currency === selectedSymbol.quoteCurrency && newCurrency === selectedSymbol.baseCurrency) {
+      // Converting from quote to base: quoteValue / price = baseSize
+      newSize = sizeNum / price
+    }
+
+    // Format based on currency type
+    if (newCurrency === selectedSymbol.quoteCurrency) {
+      setSize(newSize.toFixed(2))
+    } else {
+      setSize(newSize.toFixed(8))
+    }
+
+    setCurrency(newCurrency)
   }
 
   // Use shared WebSocket client for order updates
@@ -144,11 +258,20 @@ export function RightTradingPanel() {
     setIsSubmitting(true)
 
     try {
+      // Convert size to base currency (API always expects base currency)
+      const price = selectedSymbol.numericPrice || 0
+      let baseSize = sizeNum
+      
+      if (currency === selectedSymbol.quoteCurrency && price > 0) {
+        // Size is in quote currency, convert to base
+        baseSize = sizeNum / price
+      }
+
       const payload: PlaceOrderRequest = {
         symbol: selectedSymbol.code,
         side,
         order_type: orderType.toUpperCase() as 'MARKET' | 'LIMIT',
-        size: sizeNum.toString(),
+        size: baseSize.toString(),
         limit_price: orderType === 'limit' && limitPrice ? limitPrice : undefined,
         sl: useSlTp && stopLoss ? stopLoss : undefined,
         tp: useSlTp && takeProfit ? takeProfit : undefined,
@@ -168,8 +291,11 @@ export function RightTradingPanel() {
       setPendingOrders(prev => new Set(prev).add(orderId))
       
       // Show "submitted" message - actual execution happens asynchronously
+      const displaySize = currency === selectedSymbol.quoteCurrency 
+        ? `${size} ${selectedSymbol.quoteCurrency} (${baseSize.toFixed(8)} ${selectedSymbol.baseCurrency})`
+        : `${size} ${selectedSymbol.baseCurrency}`
       toast.success(
-        `${side} order submitted: ${size} ${selectedSymbol.code} (Order ID: ${orderId.slice(0, 8)}...)`,
+        `${side} order submitted: ${displaySize} @ ${selectedSymbol.code} (Order ID: ${orderId.slice(0, 8)}...)`,
         { duration: 3000 }
       )
 
@@ -320,7 +446,7 @@ export function RightTradingPanel() {
                 step="0.01"
                 value={limitPrice}
                 onChange={(e) => setLimitPrice(e.target.value)}
-                placeholder="Enter limit price"
+                placeholder={livePricePlaceholder}
                 className="w-full"
               />
             </div>
@@ -344,18 +470,36 @@ export function RightTradingPanel() {
                 step="0.000001"
                 value={size}
                 onChange={(e) => setSize(e.target.value)}
+                placeholder={orderType === 'market' ? marketSizePlaceholder : 'Enter size'}
                 className="flex-1"
               />
               <select
                 value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
+                onChange={(e) => handleCurrencyChange(e.target.value)}
                 className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
+                disabled={!selectedSymbol}
               >
-                <option>BTC</option>
-                <option>USD</option>
+                {selectedSymbol ? (
+                  <>
+                    <option value={selectedSymbol.baseCurrency}>{selectedSymbol.baseCurrency}</option>
+                    <option value={selectedSymbol.quoteCurrency}>{selectedSymbol.quoteCurrency}</option>
+                  </>
+                ) : (
+                  <option value="">Select Symbol</option>
+                )}
               </select>
             </div>
-            <div className="text-xs text-muted mt-1">≈ {costBreakdown.usdValue} USD</div>
+            <div className="text-xs text-muted mt-1">
+              {selectedSymbol && currency ? (
+                currency === selectedSymbol.baseCurrency ? (
+                  <>≈ {costBreakdown.quoteValue} {selectedSymbol.quoteCurrency}</>
+                ) : (
+                  <>≈ {costBreakdown.baseSize} {selectedSymbol.baseCurrency}</>
+                )
+              ) : (
+                <>≈ 0.00 USD</>
+              )}
+            </div>
           </div>
 
           {/* Free Margin */}
