@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
 
     // Subscribe to initial symbols (example)
-    let initial_symbols = vec!["BTCUSDT", "ETHUSDT", "EURUSD", "BNBUSDT"];
+    let initial_symbols = vec!["BTCUSDT", "ETHUSDT", "EURUSD", "BNBUSDT", "DOGEUSDT"];
     for symbol in initial_symbols {
         feed.subscribe_symbol(symbol).await?;
         validator.enable_symbol(symbol.to_string());

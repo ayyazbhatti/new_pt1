@@ -6,7 +6,6 @@ import { RiskPage } from '@/features/risk'
 import { AdminTradingPage } from '@/features/adminTrading'
 import { SymbolsPage } from '@/features/symbols'
 import { SwapRulesPage } from '@/features/swap'
-import { AdminFinancePage } from '@/features/adminFinance'
 import { BonusPage } from '@/features/bonus'
 import { AffiliatePage } from '@/features/affiliate'
 import { PermissionsPage } from '@/features/permissions'
@@ -16,7 +15,7 @@ import { SettingsPage } from '@/features/settings'
 import { ReportsPage } from '@/features/reports'
 import { LeverageProfilesPage } from '@/features/leverageProfiles'
 import { AdminMarkupPage } from '@/features/adminMarkup'
-import { AdminDepositsPage } from '@/features/admin/deposits/pages/AdminDepositsPage'
+import { AdminTransactionsPage } from '@/features/admin/transactions'
 
 export const adminRoutes: RouteObject[] = [
   {
@@ -56,12 +55,17 @@ export const adminRoutes: RouteObject[] = [
     element: <SwapRulesPage />,
   },
   {
+    path: '/admin/transactions',
+    element: <AdminTransactionsPage />,
+  },
+  // Legacy routes - redirect to new transactions page
+  {
     path: '/admin/finance',
-    element: <AdminFinancePage />,
+    element: <AdminTransactionsPage />,
   },
   {
     path: '/admin/deposits',
-    element: <AdminDepositsPage />,
+    element: <AdminTransactionsPage />,
   },
   {
     path: '/admin/bonus',

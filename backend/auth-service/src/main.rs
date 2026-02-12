@@ -25,11 +25,13 @@ use routes::admin_symbols::create_admin_symbols_router;
 use routes::admin_markup::create_admin_markup_router;
 use routes::admin_users::create_admin_users_router;
 use routes::deposits::create_deposits_router;
+use routes::withdrawals::create_withdrawals_router;
 use routes::orders::create_orders_router;
 use routes::admin_trading::create_admin_trading_router;
 use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
 use routes::symbols::create_symbols_router;
+use routes::finance::create_finance_router;
 use services::order_event_handler::OrderEventHandler;
 
 #[tokio::main]
@@ -129,6 +131,12 @@ async fn main() -> anyhow::Result<()> {
         nats: Arc::new(nats_client.clone()),
     };
 
+    // Build application state for withdrawals
+    let withdrawals_state = routes::withdrawals::WithdrawalsState {
+        redis: Arc::new(redis.clone()),
+        nats: Arc::new(nats_client.clone()),
+    };
+
     // Build application state for orders
     let orders_state = routes::orders::OrdersState {
         redis: Arc::new(redis.clone()),
@@ -157,8 +165,10 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/symbols", create_admin_symbols_router(pool.clone()))
         .nest("/api/admin/markup", create_admin_markup_router(pool.clone()))
         .nest("/api/admin/users", create_admin_users_router(pool.clone()))
+        .nest("/api/admin/finance", create_finance_router(pool.clone()))
         .nest("/api/admin/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
         .nest("/api/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/withdrawals", create_withdrawals_router(pool.clone(), withdrawals_state.redis.clone(), withdrawals_state.nats.clone()))
         .nest("/api/wallet", routes::deposits::create_wallet_router(pool.clone(), deposits_state.clone()))
         .nest("/api/notifications", routes::deposits::create_notifications_router(pool.clone(), deposits_state.clone()))
         .nest("/v1/users", routes::deposits::create_positions_router(pool.clone(), deposits_state.clone()))

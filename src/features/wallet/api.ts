@@ -1,7 +1,13 @@
 import { http } from '@/shared/api/http'
-import { CreateDepositRequestInput } from './types'
+import { CreateDepositRequestInput, CreateWithdrawalRequestInput } from './types'
 
 export interface CreateDepositRequestResponse {
+  requestId: string // This is actually transaction_id now, kept for backward compatibility
+  status: string
+  message?: string
+}
+
+export interface CreateWithdrawalRequestResponse {
   requestId: string
   status: string
   message?: string
@@ -22,6 +28,18 @@ export async function createDepositRequest(
   input: CreateDepositRequestInput
 ): Promise<CreateDepositRequestResponse> {
   return http<CreateDepositRequestResponse>('/api/deposits/request', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: input.amount,
+      note: input.note,
+    }),
+  })
+}
+
+export async function createWithdrawalRequest(
+  input: CreateWithdrawalRequestInput
+): Promise<CreateWithdrawalRequestResponse> {
+  return http<CreateWithdrawalRequestResponse>('/api/withdrawals/request', {
     method: 'POST',
     body: JSON.stringify({
       amount: input.amount,

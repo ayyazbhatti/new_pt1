@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
+use crate::services::ledger_service;
 
 #[derive(Clone)]
 pub struct DepositsState {
@@ -69,32 +70,42 @@ async fn create_deposit_request(
         }
     }
 
-    let request_id = Uuid::new_v4();
+    let transaction_id = Uuid::new_v4();
     let now = Utc::now();
-
+    let reference = format!("DEP-{}", transaction_id.to_string().replace("-", "").chars().take(12).collect::<String>());
+    
+    // Create transaction record directly (no deposit_requests table needed)
     sqlx::query(
         r#"
-        INSERT INTO deposit_requests (id, user_id, amount, currency, note, status, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO transactions (id, user_id, type, amount, currency, fee, net_amount, method, status, reference, method_details, created_at, updated_at)
+        VALUES ($1, $2, $3::transaction_type, $4, $5, $6, $7, $8::transaction_method, $9::transaction_status, $10, $11, $12, $13)
         "#,
     )
-    .bind(request_id)
+    .bind(transaction_id)
     .bind(user_id)
+    .bind("deposit")
     .bind(amount)
     .bind("USD")
-    .bind(&req.note)
-    .bind("PENDING")
+    .bind(Decimal::ZERO) // No fee for manual deposits
+    .bind(amount) // net_amount = amount (no fees)
+    .bind("manual")
+    .bind("pending")
+    .bind(&reference)
+    .bind(serde_json::json!({ "note": req.note })) // Store note in method_details
     .bind(now)
     .bind(now)
     .execute(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to create deposit request: {}", e);
+        error!("Failed to create transaction for deposit: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    info!("Created deposit transaction: transaction_id={}, user_id={}, amount={}", 
+          transaction_id, user_id, amount);
+
     let event = serde_json::json!({
-        "requestId": request_id.to_string(),
+        "transactionId": transaction_id.to_string(),
         "userId": user_id.to_string(),
         "amount": req.amount,
         "currency": "USD",
@@ -142,7 +153,7 @@ async fn create_deposit_request(
             .bind(false)
             .bind(now)
             .bind(serde_json::json!({
-                "requestId": request_id.to_string(),
+                "transactionId": transaction_id.to_string(),
                 "userId": user_id.to_string(),
                 "amount": req.amount,
             }))
@@ -158,7 +169,7 @@ async fn create_deposit_request(
                 "createdAt": now.to_rfc3339(),
                 "read": false,
                 "meta": {
-                    "requestId": request_id.to_string(),
+                    "transactionId": transaction_id.to_string(),
                     "userId": user_id.to_string(),
                     "amount": req.amount,
                 }
@@ -181,10 +192,10 @@ async fn create_deposit_request(
         }
     }
 
-    info!("Deposit request created: request_id={}, user_id={}, amount={}", request_id, user_id, amount);
+    info!("Deposit transaction created: transaction_id={}, user_id={}, amount={}", transaction_id, user_id, amount);
 
     Ok(Json(CreateDepositRequestResponse {
-        request_id: request_id.to_string(),
+        request_id: transaction_id.to_string(), // Return transaction_id as request_id for compatibility
         status: "PENDING".to_string(),
         message: None,
     }))
@@ -209,97 +220,139 @@ pub struct WalletBalanceResponse {
 
 async fn get_wallet_balance(
     State(pool): State<PgPool>,
-    Extension(deposits_state): Extension<DepositsState>,
+    Extension(_deposits_state): Extension<DepositsState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<WalletBalanceResponse>, StatusCode> {
     let user_id = claims.sub;
 
-    let mut conn = deposits_state.redis.get_async_connection().await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let balance_key = Keys::balance(user_id, "USD");
-    let balance_data: std::collections::HashMap<String, String> = conn.hgetall(&balance_key).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !balance_data.is_empty() {
-        let available = balance_data.get("available")
-            .and_then(|s| Decimal::from_str(s).ok())
-            .unwrap_or(Decimal::ZERO);
-        let locked = balance_data.get("locked")
-            .and_then(|s| Decimal::from_str(s).ok())
-            .unwrap_or(Decimal::ZERO);
-        let equity = balance_data.get("equity")
-            .and_then(|s| Decimal::from_str(s).ok())
-            .unwrap_or(Decimal::ZERO);
-        let margin_used = balance_data.get("margin_used")
-            .and_then(|s| Decimal::from_str(s).ok())
-            .unwrap_or(Decimal::ZERO);
-        let free_margin = balance_data.get("free_margin")
-            .and_then(|s| Decimal::from_str(s).ok())
-            .unwrap_or(Decimal::ZERO);
-        let updated_at = balance_data.get("updated_at")
-            .and_then(|s| s.parse::<i64>().ok())
-            .and_then(|ts| chrono::DateTime::from_timestamp_millis(ts))
-            .unwrap_or_else(Utc::now);
-
-        return Ok(Json(WalletBalanceResponse {
-            user_id: user_id.to_string(),
-            currency: "USD".to_string(),
-            available: available.to_string().parse::<f64>().unwrap_or(0.0),
-            locked: locked.to_string().parse::<f64>().unwrap_or(0.0),
-            equity: equity.to_string().parse::<f64>().unwrap_or(0.0),
-            margin_used: margin_used.to_string().parse::<f64>().unwrap_or(0.0),
-            free_margin: free_margin.to_string().parse::<f64>().unwrap_or(0.0),
-            updated_at: updated_at.to_rfc3339(),
-        }));
-    }
-
-    let row = sqlx::query(
+    // Calculate balance using formula: Balance = deposits - withdrawals + total realised net profit and loss
+    
+    // 1. Calculate total deposits (completed deposits only)
+    let total_deposits: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
         r#"
-        SELECT available, locked, equity, margin_used, free_margin, updated_at
-        FROM balances
-        WHERE user_id = $1 AND currency = $2
-        "#,
+        SELECT COALESCE(SUM(net_amount), 0)
+        FROM transactions
+        WHERE user_id = $1 
+          AND type = 'deposit'::transaction_type
+          AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+          AND currency = 'USD'
+        "#
     )
     .bind(user_id)
-    .bind("USD")
     .fetch_optional(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to fetch balance: {}", e);
+        error!("Failed to calculate total deposits: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    let deposits = total_deposits.unwrap_or(Decimal::ZERO);
 
-    if let Some(row) = row {
-        let available: Decimal = row.get(0);
-        let locked: Decimal = row.get(1);
-        let equity: Decimal = row.get(2);
-        let margin_used: Decimal = row.get(3);
-        let free_margin: Decimal = row.get(4);
-        let updated_at: chrono::DateTime<chrono::Utc> = row.get(5);
+    // 2. Calculate total withdrawals (completed withdrawals only)
+    let total_withdrawals: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"
+        SELECT COALESCE(SUM(net_amount), 0)
+        FROM transactions
+        WHERE user_id = $1 
+          AND type = 'withdrawal'::transaction_type
+          AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+          AND currency = 'USD'
+        "#
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate total withdrawals: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let withdrawals = total_withdrawals.unwrap_or(Decimal::ZERO);
 
-        Ok(Json(WalletBalanceResponse {
-            user_id: user_id.to_string(),
-            currency: "USD".to_string(),
-            available: available.to_string().parse::<f64>().unwrap_or(0.0),
-            locked: locked.to_string().parse::<f64>().unwrap_or(0.0),
-            equity: equity.to_string().parse::<f64>().unwrap_or(0.0),
-            margin_used: margin_used.to_string().parse::<f64>().unwrap_or(0.0),
-            free_margin: free_margin.to_string().parse::<f64>().unwrap_or(0.0),
-            updated_at: updated_at.to_rfc3339(),
-        }))
+    // 3. Calculate total realized PnL (from closed positions)
+    let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"
+        SELECT COALESCE(SUM(pnl), 0)
+        FROM positions
+        WHERE user_id = $1 
+          AND status = 'closed'::position_status
+        "#
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate total realized PnL: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let realized_pnl = total_realized_pnl.unwrap_or(Decimal::ZERO);
+
+    // 4. Calculate balance: deposits - withdrawals + realized_pnl
+    let balance = deposits - withdrawals + realized_pnl;
+
+    // 5. Calculate unrealized PnL (from open positions)
+    let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"
+        SELECT COALESCE(SUM(pnl), 0)
+        FROM positions
+        WHERE user_id = $1 
+          AND status = 'open'::position_status
+        "#
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate unrealized PnL: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let unrealized_pnl = total_unrealized_pnl.unwrap_or(Decimal::ZERO);
+
+    // 6. Calculate margin used (from open positions)
+    let total_margin_used: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"
+        SELECT COALESCE(SUM(margin_used), 0)
+        FROM positions
+        WHERE user_id = $1 
+          AND status = 'open'::position_status
+        "#
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate margin used: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let margin_used = total_margin_used.unwrap_or(Decimal::ZERO);
+
+    // 7. Calculate equity = balance + unrealized_pnl
+    let equity = balance + unrealized_pnl;
+
+    // 8. Calculate available balance = balance - margin_used (locked in positions)
+    let available = if balance >= margin_used {
+        balance - margin_used
     } else {
-        Ok(Json(WalletBalanceResponse {
-            user_id: user_id.to_string(),
-            currency: "USD".to_string(),
-            available: 0.0,
-            locked: 0.0,
-            equity: 0.0,
-            margin_used: 0.0,
-            free_margin: 0.0,
-            updated_at: Utc::now().to_rfc3339(),
-        }))
-    }
+        Decimal::ZERO
+    };
+
+    // 9. Calculate free margin = available balance
+    let free_margin = available;
+
+    // 10. Locked = margin_used
+    let locked = margin_used;
+
+    info!("Balance calculated for user {}: deposits={}, withdrawals={}, realized_pnl={}, balance={}, equity={}, margin_used={}",
+          user_id, deposits, withdrawals, realized_pnl, balance, equity, margin_used);
+
+    Ok(Json(WalletBalanceResponse {
+        user_id: user_id.to_string(),
+        currency: "USD".to_string(),
+        available: available.to_string().parse::<f64>().unwrap_or(0.0),
+        locked: locked.to_string().parse::<f64>().unwrap_or(0.0),
+        equity: equity.to_string().parse::<f64>().unwrap_or(0.0),
+        margin_used: margin_used.to_string().parse::<f64>().unwrap_or(0.0),
+        free_margin: free_margin.to_string().parse::<f64>().unwrap_or(0.0),
+        updated_at: Utc::now().to_rfc3339(),
+    }))
 }
 
 // ============================================================================
@@ -316,13 +369,18 @@ pub struct ListDepositsQuery {
 pub struct DepositRequestResponse {
     pub request_id: String,
     pub user_id: String,
+    pub user_first_name: Option<String>,
+    pub user_last_name: Option<String>,
+    pub user_email: Option<String>,
     pub amount: f64,
     pub currency: String,
     pub note: Option<String>,
     pub status: String,
     pub created_at: String,
     pub approved_at: Option<String>,
+    pub rejected_at: Option<String>,
     pub admin_id: Option<String>,
+    pub transaction_id: Option<String>,
 }
 
 async fn list_deposits(
@@ -337,17 +395,69 @@ async fn list_deposits(
 
     let status = params.status.unwrap_or_else(|| "pending".to_string());
 
-    let rows = sqlx::query(
-        r#"
-        SELECT id, user_id, amount::text, currency, note, status, created_at, approved_at, admin_id
-        FROM deposit_requests
-        WHERE status = $1
-        ORDER BY created_at DESC
-        "#,
-    )
-    .bind(&status.to_uppercase())
-    .fetch_all(&pool)
-    .await
+    let status_filter = if status.to_lowercase() == "all" {
+        None
+    } else {
+        Some(status.to_uppercase())
+    };
+
+    let rows = if let Some(status_val) = status_filter {
+        // Map deposit_requests status to transaction status
+        let tx_status = match status_val.as_str() {
+            "PENDING" => "pending",
+            "APPROVED" => "approved",
+            "REJECTED" => "rejected",
+            _ => "pending",
+        };
+        sqlx::query(
+            r#"
+            SELECT 
+                t.id, t.user_id, t.amount::text, t.currency, 
+                t.method_details->>'note' as note, 
+                CASE 
+                    WHEN t.status = 'pending' THEN 'PENDING'
+                    WHEN t.status = 'approved' THEN 'APPROVED'
+                    WHEN t.status = 'rejected' THEN 'REJECTED'
+                    ELSE 'PENDING'
+                END as status,
+                t.created_at, t.completed_at as approved_at, t.cancelled_at as rejected_at, t.created_by as admin_id,
+                t.id as transaction_id,
+                u.first_name, u.last_name, u.email
+            FROM transactions t
+            LEFT JOIN users u ON u.id = t.user_id
+            WHERE t.type = 'deposit'::transaction_type AND t.status = $1::transaction_status
+            ORDER BY t.created_at DESC
+            LIMIT 1000
+            "#,
+        )
+        .bind(tx_status)
+        .fetch_all(&pool)
+        .await
+    } else {
+        sqlx::query(
+            r#"
+            SELECT 
+                t.id, t.user_id, t.amount::text, t.currency, 
+                t.method_details->>'note' as note, 
+                CASE 
+                    WHEN t.status = 'pending' THEN 'PENDING'
+                    WHEN t.status = 'approved' THEN 'APPROVED'
+                    WHEN t.status = 'rejected' THEN 'REJECTED'
+                    ELSE 'PENDING'
+                END as status,
+                t.created_at, t.completed_at as approved_at, t.cancelled_at as rejected_at, t.created_by as admin_id,
+                t.id as transaction_id,
+                u.first_name, u.last_name, u.email
+            FROM transactions t
+            LEFT JOIN users u ON u.id = t.user_id
+            WHERE t.type = 'deposit'::transaction_type
+            ORDER BY t.created_at DESC
+            LIMIT 1000
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+    }
     .map_err(|e| {
         error!("Failed to fetch deposits: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
@@ -366,6 +476,9 @@ async fn list_deposits(
             DepositRequestResponse {
                 request_id: row.get::<Uuid, _>(0).to_string(),
                 user_id: row.get::<Uuid, _>(1).to_string(),
+                user_first_name: row.get::<Option<String>, _>(11),
+                user_last_name: row.get::<Option<String>, _>(12),
+                user_email: row.get::<Option<String>, _>(13),
                 amount,
                 currency: row.get::<String, _>(3),
                 note: row.get::<Option<String>, _>(4),
@@ -373,7 +486,11 @@ async fn list_deposits(
                 created_at: row.get::<chrono::DateTime<chrono::Utc>, _>(6).to_rfc3339(),
                 approved_at: row.get::<Option<chrono::DateTime<chrono::Utc>>, _>(7)
                     .map(|dt| dt.to_rfc3339()),
-                admin_id: row.get::<Option<Uuid>, _>(8)
+                rejected_at: row.get::<Option<chrono::DateTime<chrono::Utc>>, _>(8)
+                    .map(|dt| dt.to_rfc3339()),
+                admin_id: row.get::<Option<Uuid>, _>(9)
+                    .map(|id| id.to_string()),
+                transaction_id: row.get::<Option<Uuid>, _>(10)
                     .map(|id| id.to_string()),
             }
         })
@@ -396,7 +513,7 @@ async fn approve_deposit(
     State(pool): State<PgPool>,
     Extension(deposits_state): Extension<DepositsState>,
     Extension(claims): Extension<Claims>,
-    Path(request_id): Path<Uuid>,
+    Path(transaction_id): Path<Uuid>,
 ) -> Result<Json<ApproveDepositResponse>, StatusCode> {
     if claims.role != "admin" {
         return Err(StatusCode::FORBIDDEN);
@@ -406,29 +523,34 @@ async fn approve_deposit(
 
     let row = sqlx::query(
         r#"
-        SELECT user_id, amount::text, status
-        FROM deposit_requests
-        WHERE id = $1
+        SELECT user_id, amount::text, status, reference
+        FROM transactions
+        WHERE id = $1 AND type = 'deposit'::transaction_type
         "#,
     )
-    .bind(request_id)
+    .bind(transaction_id)
     .fetch_optional(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to fetch deposit request: {}", e);
+        error!("Failed to fetch transaction: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let (user_id, amount_str, current_status) = match row {
+    let (user_id, amount_str, current_status, transaction_ref) = match row {
         Some(row) => (
             row.get::<Uuid, _>(0),
             row.get::<String, _>(1),
             row.get::<String, _>(2),
+            row.get::<String, _>(3),
         ),
-        None => return Err(StatusCode::NOT_FOUND),
+        None => {
+            error!("Deposit transaction not found: {}", transaction_id);
+            return Err(StatusCode::NOT_FOUND);
+        }
     };
 
-    if current_status != "PENDING" {
+    if current_status != "pending" {
+        error!("Cannot approve transaction {}: status is '{}', expected 'pending'", transaction_id, current_status);
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -437,112 +559,160 @@ async fn approve_deposit(
 
     let now = Utc::now();
 
+    // Update transaction status to 'approved'
     sqlx::query(
         r#"
-        UPDATE deposit_requests
-        SET status = $1, admin_id = $2, approved_at = $3, updated_at = $4
-        WHERE id = $5
+        UPDATE transactions
+        SET status = $1::transaction_status, created_by = $2, completed_at = $3, updated_at = $4
+        WHERE id = $5 AND status = 'pending'::transaction_status
         "#,
     )
-    .bind("APPROVED")
+    .bind("approved")
     .bind(admin_id)
     .bind(now)
     .bind(now)
-    .bind(request_id)
+    .bind(transaction_id)
     .execute(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to update deposit request: {}", e);
+        error!("Failed to update transaction: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let mut conn = deposits_state.redis.get_async_connection().await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Get or create wallet
+    let wallet_id = ledger_service::get_or_create_wallet(&pool, user_id, "USD", "spot")
+        .await
+        .map_err(|e| {
+            error!("Failed to get or create wallet: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    let balance_key = Keys::balance(user_id, "USD");
-    let balance_data: std::collections::HashMap<String, String> = conn.hgetall(&balance_key).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Create ledger entry
+    let description = format!("Deposit approved for transaction {}", transaction_id);
+    ledger_service::create_ledger_entry(
+        &pool,
+        wallet_id,
+        "deposit",
+        amount,
+        &transaction_ref,
+        Some(&description),
+    )
+    .await
+    .map_err(|e| {
+        error!("Failed to create ledger entry: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    let mut balance = if balance_data.is_empty() {
-        BalanceModel {
-            available: Decimal::ZERO,
-            locked: Decimal::ZERO,
-            equity: Decimal::ZERO,
-            margin_used: Decimal::ZERO,
-            free_margin: Decimal::ZERO,
-            updated_at: now.timestamp_millis(),
-        }
-    } else {
-        BalanceModel {
-            available: balance_data.get("available")
-                .and_then(|s| Decimal::from_str(s).ok())
-                .unwrap_or(Decimal::ZERO),
-            locked: balance_data.get("locked")
-                .and_then(|s| Decimal::from_str(s).ok())
-                .unwrap_or(Decimal::ZERO),
-            equity: balance_data.get("equity")
-                .and_then(|s| Decimal::from_str(s).ok())
-                .unwrap_or(Decimal::ZERO),
-            margin_used: balance_data.get("margin_used")
-                .and_then(|s| Decimal::from_str(s).ok())
-                .unwrap_or(Decimal::ZERO),
-            free_margin: balance_data.get("free_margin")
-                .and_then(|s| Decimal::from_str(s).ok())
-                .unwrap_or(Decimal::ZERO),
-            updated_at: balance_data.get("updated_at")
-                .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or(now.timestamp_millis()),
-        }
-    };
+    info!("Created ledger entry: transaction_id={}, wallet_id={}, amount={}", 
+          transaction_id, wallet_id, amount);
 
-    balance.available += amount;
-    balance.equity += amount;
-    balance.free_margin += amount;
-    balance.updated_at = now.timestamp_millis();
-
-    let _: () = conn.hset(&balance_key, "available", balance.available.to_string()).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let _: () = conn.hset(&balance_key, "locked", balance.locked.to_string()).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let _: () = conn.hset(&balance_key, "equity", balance.equity.to_string()).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let _: () = conn.hset(&balance_key, "margin_used", balance.margin_used.to_string()).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let _: () = conn.hset(&balance_key, "free_margin", balance.free_margin.to_string()).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let _: () = conn.hset(&balance_key, "updated_at", balance.updated_at.to_string()).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    sqlx::query(
+    // Calculate balance using formula: Balance = deposits - withdrawals + total realised net profit and loss
+    // 1. Calculate total deposits (approved or completed deposits only)
+    let total_deposits: Decimal = sqlx::query_scalar(
         r#"
-        INSERT INTO balances (user_id, currency, available, locked, equity, margin_used, free_margin, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (user_id, currency) DO UPDATE SET
-            available = EXCLUDED.available,
-            equity = EXCLUDED.equity,
-            free_margin = EXCLUDED.free_margin,
-            updated_at = EXCLUDED.updated_at
-        "#,
+        SELECT COALESCE(SUM(net_amount), 0) FROM transactions
+        WHERE user_id = $1 AND type = 'deposit'::transaction_type AND status IN ('approved'::transaction_status, 'completed'::transaction_status) AND currency = $2
+        "#
     )
     .bind(user_id)
     .bind("USD")
-    .bind(balance.available)
-    .bind(balance.locked)
-    .bind(balance.equity)
-    .bind(balance.margin_used)
-    .bind(balance.free_margin)
-    .bind(now)
-    .execute(&pool)
+    .fetch_one(&pool)
     .await
-    .ok();
+    .map_err(|e| {
+        error!("Failed to calculate total deposits for user {}: {}", user_id, e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // 2. Calculate total withdrawals (approved or completed withdrawals only)
+    let total_withdrawals: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(net_amount), 0) FROM transactions
+        WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status IN ('approved'::transaction_status, 'completed'::transaction_status) AND currency = $2
+        "#
+    )
+    .bind(user_id)
+    .bind("USD")
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate total withdrawals for user {}: {}", user_id, e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // 3. Calculate total realized PnL (from closed positions)
+    let total_realized_pnl: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(pnl), 0) FROM positions
+        WHERE user_id = $1 AND status = 'closed'::position_status
+        "#
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate total realized PnL for user {}: {}", user_id, e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Calculate main balance
+    let main_balance = total_deposits - total_withdrawals + total_realized_pnl;
+
+    // Fetch current wallet data
+    let wallet_row = sqlx::query(
+        r#"
+        SELECT available_balance, locked_balance FROM wallets
+        WHERE user_id = $1 AND currency = $2 AND wallet_type = 'spot'::wallet_type
+        "#
+    )
+    .bind(user_id)
+    .bind("USD")
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to fetch wallet for user {}: {}", user_id, e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let (available_balance, locked_balance) = if let Some(row) = wallet_row {
+        (
+            row.get::<Decimal, _>(0),
+            row.get::<Decimal, _>(1),
+        )
+    } else {
+        (Decimal::ZERO, Decimal::ZERO)
+    };
+
+    // Fetch current open positions for margin calculation
+    let open_positions: Vec<(Decimal, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT size, margin_used FROM positions
+        WHERE user_id = $1 AND status = 'open'::position_status
+        "#
+    )
+    .bind(user_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to fetch open positions for user {}: {}", user_id, e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let total_margin_used: Decimal = open_positions.iter().map(|(_, margin)| margin).sum();
+    let total_unrealized_pnl: Decimal = Decimal::ZERO; // Simplified for now, actual PnL calculation is more complex
+
+    // Calculate other wallet metrics
+    let available = main_balance - total_margin_used;
+    let locked = total_margin_used;
+    let equity = main_balance + total_unrealized_pnl;
+    let free_margin = available;
 
     let approved_event = serde_json::json!({
-        "requestId": request_id.to_string(),
+        "transactionId": transaction_id.to_string(),
         "userId": user_id.to_string(),
         "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
         "currency": "USD",
         "approvedAt": now.to_rfc3339(),
-        "newBalance": balance.equity.to_string().parse::<f64>().unwrap_or(0.0),
+        "newBalance": main_balance.to_string().parse::<f64>().unwrap_or(0.0),
         "adminId": admin_id.to_string(),
     });
 
@@ -562,11 +732,14 @@ async fn approve_deposit(
     let balance_event = serde_json::json!({
         "userId": user_id.to_string(),
         "currency": "USD",
-        "available": balance.available.to_string().parse::<f64>().unwrap_or(0.0),
-        "locked": balance.locked.to_string().parse::<f64>().unwrap_or(0.0),
-        "equity": balance.equity.to_string().parse::<f64>().unwrap_or(0.0),
-        "marginUsed": balance.margin_used.to_string().parse::<f64>().unwrap_or(0.0),
-        "freeMargin": balance.free_margin.to_string().parse::<f64>().unwrap_or(0.0),
+        "balance": main_balance.to_string().parse::<f64>().unwrap_or(0.0), // Main balance from formula
+        "available": available.to_string().parse::<f64>().unwrap_or(0.0),
+        "locked": locked.to_string().parse::<f64>().unwrap_or(0.0),
+        "equity": equity.to_string().parse::<f64>().unwrap_or(0.0),
+        "marginUsed": total_margin_used.to_string().parse::<f64>().unwrap_or(0.0),
+        "margin_used": total_margin_used.to_string().parse::<f64>().unwrap_or(0.0), // snake_case for compatibility
+        "freeMargin": free_margin.to_string().parse::<f64>().unwrap_or(0.0),
+        "free_margin": free_margin.to_string().parse::<f64>().unwrap_or(0.0), // snake_case for compatibility
         "updatedAt": now.to_rfc3339(),
     });
 
@@ -580,9 +753,27 @@ async fn approve_deposit(
         .ok();
 
     // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = deposits_state.redis.get_async_connection().await.ok();
-    if let Some(mut conn) = redis_conn {
-        let _: Result<(), _> = conn.publish("wallet:balance:updated", serde_json::to_string(&balance_event).unwrap_or_default()).await;
+    let mut redis_conn = deposits_state.redis.get_async_connection().await;
+    match redis_conn {
+        Ok(mut conn) => {
+            let event_json = serde_json::to_string(&balance_event)
+                .unwrap_or_else(|e| {
+                    error!("Failed to serialize balance event: {}", e);
+                    "{}".to_string()
+                });
+            match conn.publish::<_, _, i32>("wallet:balance:updated", event_json.clone()).await {
+                Ok(count) => {
+                    info!("✅ Published wallet.balance.updated to Redis ({} subscribers), user_id={}, balance={}", 
+                          count, user_id, main_balance);
+                }
+                Err(e) => {
+                    error!("❌ Failed to publish wallet.balance.updated to Redis: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("❌ Failed to get Redis connection for wallet.balance.updated: {}", e);
+        }
     }
 
     let notification_id = Uuid::new_v4();
@@ -596,11 +787,11 @@ async fn approve_deposit(
     .bind(user_id)
     .bind("DEPOSIT_APPROVED")
     .bind("Deposit Approved")
-    .bind(format!("Your deposit of ${:.2} has been approved. New balance: ${:.2}", amount, balance.equity))
+    .bind(format!("Your deposit of ${:.2} has been approved. New balance: ${:.2}", amount, main_balance))
     .bind(false)
     .bind(now)
     .bind(serde_json::json!({
-        "requestId": request_id.to_string(),
+        "transactionId": transaction_id.to_string(),
         "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
     }))
     .execute(&pool)
@@ -611,11 +802,11 @@ async fn approve_deposit(
         "id": notification_id.to_string(),
         "kind": "DEPOSIT_APPROVED",
         "title": "Deposit Approved",
-        "message": format!("Your deposit of ${:.2} has been approved. New balance: ${:.2}", amount, balance.equity),
+        "message": format!("Your deposit of ${:.2} has been approved. New balance: ${:.2}", amount, main_balance),
         "createdAt": now.to_rfc3339(),
         "read": false,
         "meta": {
-            "requestId": request_id.to_string(),
+            "transactionId": transaction_id.to_string(),
             "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
         }
     });
@@ -635,12 +826,181 @@ async fn approve_deposit(
         let _: Result<(), _> = conn.publish("notifications:push", serde_json::to_string(&notification_event).unwrap_or_default()).await;
     }
 
-    info!("Deposit approved: request_id={}, user_id={}, amount={}, new_balance={}", 
-          request_id, user_id, amount, balance.equity);
+    info!("Deposit approved: transaction_id={}, user_id={}, amount={}, new_balance={}", 
+          transaction_id, user_id, amount, main_balance);
 
     Ok(Json(ApproveDepositResponse {
         status: "approved".to_string(),
-        message: format!("Deposit request approved. New balance: ${:.2}", balance.equity),
+        message: format!("Deposit request approved. New balance: ${:.2}", main_balance),
+    }))
+}
+
+// ============================================================================
+// REJECT DEPOSIT (ADMIN)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct RejectDepositRequest {
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RejectDepositResponse {
+    pub status: String,
+    pub message: String,
+}
+
+async fn reject_deposit(
+    State(pool): State<PgPool>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
+    Path(transaction_id): Path<Uuid>,
+    Json(req): Json<RejectDepositRequest>,
+) -> Result<Json<RejectDepositResponse>, StatusCode> {
+    if claims.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let admin_id = claims.sub;
+
+    let row = sqlx::query(
+        r#"
+        SELECT user_id, amount::text, status
+        FROM transactions
+        WHERE id = $1 AND type = 'deposit'::transaction_type
+        "#,
+    )
+    .bind(transaction_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to fetch transaction: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let (user_id, amount_str, current_status) = match row {
+        Some(row) => (
+            row.get::<Uuid, _>(0),
+            row.get::<String, _>(1),
+            row.get::<String, _>(2),
+        ),
+        None => return Err(StatusCode::NOT_FOUND),
+    };
+
+    if current_status != "pending" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let amount = Decimal::from_str(&amount_str)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let now = Utc::now();
+
+    // Update transaction status to 'rejected'
+    sqlx::query(
+        r#"
+        UPDATE transactions
+        SET status = $1::transaction_status, created_by = $2, rejection_reason = $3, cancelled_at = $4, updated_at = $5
+        WHERE id = $6 AND status = 'pending'::transaction_status
+        "#,
+    )
+    .bind("rejected")
+    .bind(admin_id)
+    .bind(&req.reason)
+    .bind(now)
+    .bind(now)
+    .bind(transaction_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to update transaction: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    info!("Updated transaction status to rejected: transaction_id={}, reason={:?}", 
+          transaction_id, req.reason);
+
+    let rejected_event = serde_json::json!({
+        "transactionId": transaction_id.to_string(),
+        "userId": user_id.to_string(),
+        "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
+        "currency": "USD",
+        "rejectedAt": now.to_rfc3339(),
+        "reason": req.reason,
+        "adminId": admin_id.to_string(),
+    });
+
+    let msg = VersionedMessage::new("deposit.request.rejected", &rejected_event)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let payload = serde_json::to_vec(&msg)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    deposits_state.nats.publish("deposit.request.rejected".to_string(), payload.into()).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Also publish to Redis for WebSocket gateway
+    let mut redis_conn = deposits_state.redis.get_async_connection().await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _: Result<(), _> = redis_conn.publish("deposits:rejected", serde_json::to_string(&rejected_event).unwrap_or_default()).await;
+
+    let notification_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO notifications (id, user_id, kind, title, message, read, created_at, meta)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(notification_id)
+    .bind(user_id)
+    .bind("DEPOSIT_REJECTED")
+    .bind("Deposit Rejected")
+    .bind(format!("Your deposit request of ${:.2} has been rejected.{}", amount, req.reason.as_ref().map(|r| format!(" Reason: {}", r)).unwrap_or_default()))
+    .bind(false)
+    .bind(now)
+    .bind(serde_json::json!({
+        "transactionId": transaction_id.to_string(),
+        "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
+        "reason": req.reason,
+    }))
+    .execute(&pool)
+    .await
+    .ok();
+
+    let notification_event = serde_json::json!({
+        "id": notification_id.to_string(),
+        "kind": "DEPOSIT_REJECTED",
+        "title": "Deposit Rejected",
+        "message": format!("Your deposit request of ${:.2} has been rejected.{}", amount, req.reason.as_ref().map(|r| format!(" Reason: {}", r)).unwrap_or_default()),
+        "createdAt": now.to_rfc3339(),
+        "read": false,
+        "meta": {
+            "transactionId": transaction_id.to_string(),
+            "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
+            "reason": req.reason,
+        }
+    });
+
+    // Publish to NATS
+    let notif_msg = VersionedMessage::new("notification.push", &notification_event)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let notif_payload = serde_json::to_vec(&notif_msg)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    deposits_state.nats.publish("notification.push".to_string(), notif_payload.into()).await
+        .ok();
+
+    // Also publish to Redis for WebSocket gateway
+    let mut redis_conn = deposits_state.redis.get_async_connection().await.ok();
+    if let Some(mut conn) = redis_conn {
+        let _: Result<(), _> = conn.publish("notifications:push", serde_json::to_string(&notification_event).unwrap_or_default()).await;
+    }
+
+    info!("Deposit rejected: transaction_id={}, user_id={}, amount={}, reason={:?}", 
+          transaction_id, user_id, amount, req.reason);
+
+    Ok(Json(RejectDepositResponse {
+        status: "rejected".to_string(),
+        message: "Deposit request rejected".to_string(),
     }))
 }
 
@@ -831,6 +1191,7 @@ pub fn create_deposits_router(
         .route("/request", post(create_deposit_request))
         .route("/", get(list_deposits))
         .route("/:id/approve", post(approve_deposit))
+        .route("/:id/reject", post(reject_deposit))
         .layer(axum::middleware::from_fn(auth_middleware))
         .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
             let state = deposits_state.clone();

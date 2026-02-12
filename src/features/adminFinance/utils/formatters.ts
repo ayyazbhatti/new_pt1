@@ -10,8 +10,14 @@ export function formatCurrency(value: number, currency: string = 'USD'): string 
   }).format(value)
 }
 
-export function formatDateTime(dateString: string): string {
+export function formatDateTime(dateString: string | null | undefined): string {
+  if (!dateString) {
+    return '—'
+  }
   const date = new Date(dateString)
+  if (isNaN(date.getTime())) {
+    return '—'
+  }
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
@@ -22,8 +28,14 @@ export function formatDateTime(dateString: string): string {
   }).format(date)
 }
 
-export function formatDate(dateString: string): string {
+export function formatDate(dateString: string | null | undefined): string {
+  if (!dateString) {
+    return '—'
+  }
   const date = new Date(dateString)
+  if (isNaN(date.getTime())) {
+    return '—'
+  }
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: '2-digit',

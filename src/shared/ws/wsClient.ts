@@ -205,8 +205,8 @@ class WebSocketClient {
 
 // Singleton instance
 // @ts-ignore - Vite env types
-// ws-gateway runs on port 3003, data-provider on 9003
-const WS_URL = import.meta.env?.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
+// ws-gateway runs on port 9001 (default), data-provider on 9003
+const WS_URL = import.meta.env?.VITE_WS_URL || 'ws://localhost:9001/ws?group=default'
 export const wsClient = new WebSocketClient(WS_URL)
 
 // Auto-connect on import (lazy)

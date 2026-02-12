@@ -8,11 +8,12 @@ use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::engine::{OrderCache, LuaScripts, Validator};
-use crate::models::{Order, OrderCommand, OrderAcceptedEvent, OrderRejectedEvent};
+use crate::models::{Order, OrderCommand, OrderAcceptedEvent, OrderRejectedEvent, OrderFilledEvent};
 use crate::nats::NatsClient;
 use crate::observability::Metrics;
 use crate::subjects::subjects as nats_subjects;
 use crate::utils::{generate_order_id, now};
+use rust_decimal::Decimal;
 
 pub struct OrderHandler {
     cache: Arc<OrderCache>,
@@ -20,6 +21,7 @@ pub struct OrderHandler {
     nats: Arc<NatsClient>,
     validator: Arc<Validator>,
     metrics: Arc<Metrics>,
+    lua: Arc<LuaScripts>,
 }
 
 impl OrderHandler {
@@ -29,6 +31,7 @@ impl OrderHandler {
         nats: Arc<NatsClient>,
         validator: Arc<Validator>,
         metrics: Arc<Metrics>,
+        lua: Arc<LuaScripts>,
     ) -> Self {
         Self {
             cache,
@@ -36,6 +39,7 @@ impl OrderHandler {
             nats,
             validator,
             metrics,
+            lua,
         }
     }
     
@@ -201,9 +205,69 @@ impl OrderHandler {
                             contracts::enums::Side::Sell => tick.bid,
                         };
                         
-                        // Use tick handler's execute_fill logic
-                        // For now, just log - tick handler will process on next tick
-                        debug!("Market order {} will execute on next tick", order_id);
+                        info!("🚀 Executing market order {} immediately at price {}", order_id, fill_price);
+                        
+                        // Execute fill immediately using Lua script
+                        let mut conn = self.redis.get_connection().await;
+                        match self.lua.atomic_fill_order(&mut conn, &order_id, fill_price, order.size).await {
+                            Ok(result) => {
+                                if result.get("error").is_some() {
+                                    let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                    warn!("Failed to fill market order {} immediately: {}", order_id, error_msg);
+                                    // Order will be processed on next tick
+                                } else {
+                                    info!("✅ Market order {} filled immediately at {}", order_id, fill_price);
+                                    self.metrics.inc_orders_filled();
+                                    
+                                    // Get position_id from result
+                                    let position_id = result
+                                        .get("position_id")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| Uuid::parse_str(s).ok());
+                                    
+                                    // Publish order filled event
+                                    let filled_event = OrderFilledEvent {
+                                        order_id,
+                                        user_id: cmd.user_id,
+                                        symbol: cmd.symbol.clone(),
+                                        side: cmd.side,
+                                        filled_size: order.size,
+                                        average_fill_price: fill_price,
+                                        position_id,
+                                        correlation_id: correlation_id.clone(),
+                                        ts: now(),
+                                    };
+                                    
+                                    if let Err(e) = self.nats.publish_event(nats_subjects::EVENT_ORDER_FILLED, &filled_event).await {
+                                        error!("Failed to publish order filled event: {}", e);
+                                    }
+                                    
+                                    // Also publish evt.order.updated for PostgreSQL persistence
+                                    let order_updated_event = contracts::events::OrderUpdatedEvent {
+                                        order_id,
+                                        user_id: cmd.user_id,
+                                        status: contracts::enums::OrderStatus::Filled,
+                                        filled_size: order.size,
+                                        avg_fill_price: Some(fill_price),
+                                        reason: None,
+                                        ts: now(),
+                                    };
+                                    
+                                    if let Err(e) = self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event).await {
+                                        error!("Failed to publish order updated event: {}", e);
+                                    } else {
+                                        info!("📤 Published evt.order.updated for market order: order_id={}, status=FILLED", order_id);
+                                    }
+                                    
+                                    // Remove from pending orders cache
+                                    self.cache.remove_pending_order(&cmd.symbol, order_id);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to execute immediate fill for market order {}: {}", order_id, e);
+                                // Order will be processed on next tick
+                            }
+                        }
                     } else {
                         debug!("Market order {} accepted, waiting for first tick", order_id);
                     }

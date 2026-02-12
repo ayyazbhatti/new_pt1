@@ -1,5 +1,5 @@
 export type TransactionType = 'deposit' | 'withdrawal' | 'adjustment' | 'fee' | 'rebate'
-export type TransactionStatus = 'pending' | 'completed' | 'rejected' | 'failed'
+export type TransactionStatus = 'pending' | 'approved' | 'rejected' | 'failed'
 export type TransactionMethod = 'card' | 'bank' | 'crypto' | 'manual'
 export type Currency = 'USD' | 'EUR' | 'BTC' | 'USDT'
 export type WalletType = 'spot' | 'margin' | 'funding'
@@ -10,6 +10,8 @@ export interface User {
   id: string
   email: string
   name?: string
+  firstName?: string
+  lastName?: string
 }
 
 export interface Transaction {

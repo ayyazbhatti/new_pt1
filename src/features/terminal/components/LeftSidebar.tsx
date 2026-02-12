@@ -4,12 +4,17 @@ import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
 import { useTerminalStore } from '../store'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { useWalletStore } from '@/shared/store/walletStore'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-hot-toast'
 import { cn } from '@/shared/utils'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { PriceDisplay } from './PriceDisplay'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
+import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
+import { fetchBalance } from '@/features/wallet/api'
+import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
+import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
 export function LeftSidebar() {
   const {
@@ -27,12 +32,81 @@ export function LeftSidebar() {
 
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
+  const { balance, equity, margin_used, currency, isLoading: balanceLoading, setWalletData, setLoading } = useWalletStore()
   const [cryptoExpanded, setCryptoExpanded] = useState(true)
   const [isScrolling, setIsScrolling] = useState(false)
   const [depositModalOpen, setDepositModalOpen] = useState(false)
+  const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const symbols = getFilteredSymbols()
+
+  // Fetch balance on mount (only once, no polling)
+  useEffect(() => {
+    if (!user?.id) return
+
+    const loadBalance = async () => {
+      try {
+        setLoading(true)
+        const balanceData = await fetchBalance()
+        setWalletData({
+          balance: balanceData.available, // Main balance (available)
+          currency: balanceData.currency,
+          available: balanceData.available,
+          locked: balanceData.locked,
+          equity: balanceData.equity,
+          margin_used: balanceData.marginUsed,
+          free_margin: balanceData.freeMargin,
+        })
+      } catch (error: any) {
+        console.error('Failed to load balance:', error)
+        if (error?.response?.status !== 404) {
+          toast.error('Failed to load balance')
+        }
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadBalance()
+  }, [user?.id, setWalletData, setLoading])
+
+  // Subscribe to WebSocket events for real-time balance updates
+  useWebSocketSubscription(
+    useCallback(
+      (event: WsInboundEvent) => {
+        if (event.type === 'wallet.balance.updated') {
+          const { payload } = event
+          console.log('🔔 Received wallet.balance.updated event:', { 
+            eventUserId: payload.userId, 
+            currentUserId: user?.id?.toString(),
+            payload 
+          })
+          
+          // Check if this event is for the current user
+          const eventUserId = payload.userId?.toString() || payload.user_id?.toString()
+          const currentUserId = user?.id?.toString()
+          
+          if (eventUserId === currentUserId) {
+            console.log('✅ Updating wallet balance from WebSocket:', payload)
+            setWalletData({
+              balance: payload.balance ?? payload.available ?? 0,
+              currency: payload.currency ?? 'USD',
+              available: payload.available ?? payload.balance ?? 0,
+              locked: payload.locked ?? 0,
+              equity: payload.equity ?? payload.balance ?? 0,
+              margin_used: payload.margin_used ?? payload.marginUsed ?? 0,
+              free_margin: payload.free_margin ?? payload.freeMargin ?? 0,
+            })
+            toast.success(`Balance updated: $${(payload.balance ?? payload.available ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, { duration: 3000 })
+          } else {
+            console.log('⏭️ Skipping wallet.balance.updated event (different user)')
+          }
+        }
+      },
+      [user?.id, setWalletData]
+    )
+  )
 
   // Handle scroll detection to show scrollbar while scrolling
   useEffect(() => {
@@ -129,22 +203,51 @@ export function LeftSidebar() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider">Balance</span>
-              <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
+              {balanceLoading ? (
+                <div className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse"></div>
+              ) : (
+                <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
+              )}
             </div>
-            <div className="text-xs font-medium text-text-muted/60">USD</div>
+            <div className="text-xs font-medium text-text-muted/60">{currency || 'USD'}</div>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-xl font-bold text-text tracking-tight">$2,495.56</span>
-            <span className="text-xs font-medium text-success">+$0.12</span>
-          </div>
+          {balanceLoading ? (
+            <div className="flex items-baseline gap-2">
+              <Skeleton className="h-7 w-32" />
+            </div>
+          ) : (
+            <div className="flex items-baseline gap-2">
+              <span className="text-xl font-bold text-text tracking-tight">
+                ${(balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              {equity !== undefined && equity !== balance && (
+                <span className={`text-xs font-medium ${equity >= (balance ?? 0) ? 'text-success' : 'text-danger'}`}>
+                  {equity >= (balance ?? 0) ? '+' : ''}
+                  ${(equity - (balance ?? 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-text-muted/60">Equity</span>
-              <span className="text-xs font-semibold text-text/80">$2,495.68</span>
+              {balanceLoading ? (
+                <Skeleton className="h-4 w-20" />
+              ) : (
+                <span className="text-xs font-semibold text-text/80">
+                  ${(equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-text-muted/60">Margin</span>
-              <span className="text-xs font-semibold text-text/80">$0.00</span>
+              {balanceLoading ? (
+                <Skeleton className="h-4 w-16" />
+              ) : (
+                <span className="text-xs font-semibold text-text/80">
+                  ${(margin_used ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -315,7 +418,7 @@ export function LeftSidebar() {
           <Button
             variant="primary"
             className="w-full h-9 text-xs font-semibold shadow-lg shadow-accent/20 hover:shadow-accent/30 transition-all"
-            onClick={() => toast.info('Withdraw feature coming soon')}
+            onClick={() => setWithdrawModalOpen(true)}
           >
             Withdraw
           </Button>
@@ -347,6 +450,9 @@ export function LeftSidebar() {
 
       {/* Deposit Modal */}
       <DepositModal open={depositModalOpen} onOpenChange={setDepositModalOpen} />
+      
+      {/* Withdraw Modal */}
+      <WithdrawModal open={withdrawModalOpen} onOpenChange={setWithdrawModalOpen} />
     </div>
   )
 }

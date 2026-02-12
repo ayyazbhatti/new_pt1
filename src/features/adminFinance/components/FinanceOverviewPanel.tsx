@@ -2,72 +2,91 @@ import { Card } from '@/shared/ui/card'
 import { Badge } from '@/shared/ui/badge'
 import { DataTable, ColumnDef } from '@/shared/ui/table'
 import { Transaction } from '../types/finance'
-import { mockTransactions } from '../mocks/finance.mock'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
-import { ArrowUp, ArrowDown, TrendingUp } from 'lucide-react'
-import { useMemo } from 'react'
+import { ArrowUp, ArrowDown, TrendingUp, Loader2 } from 'lucide-react'
+import { useMemo, useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { fetchFinanceOverview, fetchTransactions, Transaction as ApiTransaction } from '../api/finance.api'
 
 export function FinanceOverviewPanel() {
-  const today = new Date().toDateString()
-  
+  const { data: overview, isLoading: overviewLoading } = useQuery({
+    queryKey: ['finance-overview'],
+    queryFn: fetchFinanceOverview,
+    refetchInterval: 30000, // Refetch every 30 seconds
+  })
+
+  const { data: recentTransactions, isLoading: transactionsLoading } = useQuery({
+    queryKey: ['finance-recent-transactions'],
+    queryFn: () => fetchTransactions({ page: 1, pageSize: 10 }),
+    refetchInterval: 30000,
+  })
+
   const stats = useMemo(() => {
-    const totalBalances = 2418320.55
-    const pendingDeposits = mockTransactions.filter(
-      (t) => t.type === 'deposit' && t.status === 'pending'
-    ).length
-    const pendingWithdrawals = mockTransactions.filter(
-      (t) => t.type === 'withdrawal' && t.status === 'pending'
-    ).length
-    const netFeesToday = mockTransactions
-      .filter((t) => {
-        const txDate = new Date(t.createdAt).toDateString()
-        return txDate === today && (t.type === 'fee' || t.type === 'rebate')
-      })
-      .reduce((sum, t) => sum + (t.type === 'fee' ? -t.amount : t.amount), 0)
-
-    const depositsToday = mockTransactions.filter(
-      (t) => {
-        const txDate = new Date(t.createdAt).toDateString()
-        return txDate === today && t.type === 'deposit' && t.status === 'completed'
+    if (!overview) {
+      return {
+        totalBalances: 0,
+        pendingDeposits: 0,
+        pendingWithdrawals: 0,
+        netFeesToday: 0,
+        depositsToday: { count: 0, amount: 0 },
+        withdrawalsToday: { count: 0, amount: 0 },
       }
-    )
-    const withdrawalsToday = mockTransactions.filter(
-      (t) => {
-        const txDate = new Date(t.createdAt).toDateString()
-        return txDate === today && t.type === 'withdrawal' && t.status === 'completed'
-      }
-    )
-
+    }
     return {
-      totalBalances,
-      pendingDeposits,
-      pendingWithdrawals,
-      netFeesToday,
+      totalBalances: Number(overview.totalBalances),
+      pendingDeposits: overview.pendingDeposits,
+      pendingWithdrawals: overview.pendingWithdrawals,
+      netFeesToday: Number(overview.netFeesToday),
       depositsToday: {
-        count: depositsToday.length,
-        amount: depositsToday.reduce((sum, t) => sum + t.netAmount, 0),
+        count: overview.depositsToday?.count ?? 0,
+        amount: Number(overview.depositsToday?.amount ?? 0),
       },
       withdrawalsToday: {
-        count: withdrawalsToday.length,
-        amount: withdrawalsToday.reduce((sum, t) => sum + t.netAmount, 0),
+        count: overview.withdrawalsToday?.count ?? 0,
+        amount: Number(overview.withdrawalsToday?.amount ?? 0),
       },
     }
-  }, [])
+  }, [overview])
 
   const recentActivity = useMemo(() => {
-    return mockTransactions
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 10)
-  }, [])
+    if (!recentTransactions) return []
+    return recentTransactions.map((tx) => ({
+      id: tx.id,
+      user: {
+        id: tx.userId,
+        email: tx.userEmail,
+        name: tx.userFirstName && tx.userLastName 
+          ? `${tx.userFirstName} ${tx.userLastName}` 
+          : undefined,
+        firstName: tx.userFirstName,
+        lastName: tx.userLastName,
+      },
+      type: tx.type,
+      amount: Number(tx.amount),
+      currency: tx.currency as any,
+      method: tx.method,
+      fee: Number(tx.fee),
+      netAmount: Number(tx.netAmount),
+      status: tx.status,
+      createdAt: tx.createdAt,
+      reference: tx.reference,
+      methodDetails: tx.methodDetails,
+      adminNotes: tx.adminNotes,
+      rejectionReason: tx.rejectionReason,
+    })) as Transaction[]
+  }, [recentTransactions])
 
   const getStatusBadge = (status: string) => {
     const variants: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
-      completed: 'success',
+      approved: 'success',
+      completed: 'success', // Backward compatibility
       pending: 'warning',
       rejected: 'danger',
       failed: 'danger',
     }
-    return <Badge variant={variants[status] || 'neutral'}>{status}</Badge>
+    // Map 'completed' to 'approved' for display (backward compatibility)
+    const displayStatus = status === 'completed' ? 'approved' : status
+    return <Badge variant={variants[status] || 'neutral'}>{displayStatus}</Badge>
   }
 
   const getTypeLabel = (type: string) => {
@@ -79,19 +98,30 @@ export function FinanceOverviewPanel() {
       accessorKey: 'createdAt',
       header: 'Time',
       cell: ({ row }) => {
-        return <span className="text-sm text-text-muted">{formatDateTime(row.getValue('createdAt'))}</span>
+        const dateValue = row.getValue('createdAt') as string | null | undefined
+        return <span className="text-sm text-text-muted">{formatDateTime(dateValue)}</span>
       },
     },
     {
-      id: 'user',
-      header: 'User',
+      id: 'userName',
+      header: 'Name',
+      cell: ({ row }) => {
+        const tx = row.original
+        const name = tx.user.name || (tx.user.firstName && tx.user.lastName
+          ? `${tx.user.firstName} ${tx.user.lastName}`
+          : tx.user.firstName || tx.user.lastName || '-')
+        return (
+          <span className="text-sm text-text">{name}</span>
+        )
+      },
+    },
+    {
+      id: 'userEmail',
+      header: 'Email',
       cell: ({ row }) => {
         const tx = row.original
         return (
-          <div>
-            <div className="text-sm text-text">{tx.user.name || tx.user.email}</div>
-            <div className="text-xs text-text-muted">{tx.user.email}</div>
-          </div>
+          <span className="text-sm text-text-muted">{tx.user.email}</span>
         )
       },
     },
@@ -99,7 +129,13 @@ export function FinanceOverviewPanel() {
       accessorKey: 'type',
       header: 'Type',
       cell: ({ row }) => {
-        return <span className="capitalize">{getTypeLabel(row.getValue('type'))}</span>
+        const type = row.getValue('type') as string
+        const isWithdrawal = type.toLowerCase() === 'withdrawal'
+        return (
+          <span className={`capitalize ${isWithdrawal ? 'text-danger font-semibold' : ''}`}>
+            {getTypeLabel(type)}
+          </span>
+        )
       },
     },
     {
@@ -107,11 +143,15 @@ export function FinanceOverviewPanel() {
       header: 'Amount',
       cell: ({ row }) => {
         const tx = row.original
-        const color = tx.netAmount >= 0 ? 'text-success' : 'text-danger'
+        const isWithdrawal = tx.type.toLowerCase() === 'withdrawal'
+        // Withdrawals should be red, otherwise use normal logic (positive=green, negative=red)
+        const color = isWithdrawal ? 'text-danger' : (tx.netAmount >= 0 ? 'text-success' : 'text-danger')
+        // Withdrawals should show minus sign, deposits/adjustments show plus for positive
+        const sign = isWithdrawal ? '-' : (tx.netAmount >= 0 ? '+' : '')
         return (
           <span className={`font-mono font-semibold ${color}`}>
-            {tx.netAmount >= 0 ? '+' : ''}
-            {formatCurrency(tx.netAmount, tx.currency)}
+            {sign}
+            {formatCurrency(Math.abs(tx.netAmount), tx.currency)}
           </span>
         )
       },
@@ -136,6 +176,14 @@ export function FinanceOverviewPanel() {
       },
     },
   ]
+
+  if (overviewLoading || transactionsLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-accent" />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">

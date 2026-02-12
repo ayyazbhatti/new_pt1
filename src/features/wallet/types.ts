@@ -15,3 +15,8 @@ export interface CreateDepositRequestInput {
   note?: string
 }
 
+export interface CreateWithdrawalRequestInput {
+  amount: number
+  note?: string
+}
+

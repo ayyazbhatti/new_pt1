@@ -452,15 +452,29 @@ impl Broadcaster {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing userId in wallet balance"))?;
 
+        info!("📡 Broadcasting wallet.balance.updated for user_id={}, payload={:?}", user_id, payload);
+
         let message = ServerMessage::WalletBalanceUpdated {
             payload: payload.clone(),
         };
 
         // Send to the user
         let connections = registry.get_user_connections(user_id);
+        let connection_count = connections.len();
+        
+        if connection_count == 0 {
+            warn!("⚠️ No WebSocket connections found for user_id={}", user_id);
+        } else {
+            info!("📤 Sending wallet.balance.updated to {} connection(s) for user_id={}", connection_count, user_id);
+        }
+
         for conn_id in connections {
             if let Some(tx) = connection_txs.get(&conn_id) {
-                let _ = tx.send(message.clone());
+                if let Err(e) = tx.send(message.clone()) {
+                    warn!("Failed to send wallet.balance.updated to connection {}: {}", conn_id, e);
+                } else {
+                    info!("✅ Sent wallet.balance.updated to connection {}", conn_id);
+                }
             }
         }
 

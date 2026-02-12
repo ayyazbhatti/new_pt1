@@ -8,13 +8,13 @@ import { Wallet, WalletType, Currency } from '../types/finance'
 import { useModalStore } from '@/app/store'
 import { WalletDetailsModal } from '../modals/WalletDetailsModal'
 import { ManualAdjustmentModal } from '../modals/ManualAdjustmentModal'
-import { mockWallets } from '../mocks/finance.mock'
-import { Eye, Plus } from 'lucide-react'
+import { Eye, Plus, Loader2 } from 'lucide-react'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
+import { useQuery } from '@tanstack/react-query'
+import { fetchWallets, Wallet as ApiWallet } from '../api/finance.api'
 
 export function FinanceWalletsPanel() {
   const openModal = useModalStore((state) => state.openModal)
-  const [wallets] = useState<Wallet[]>(mockWallets)
   const [filters, setFilters] = useState({
     search: '',
     walletType: 'all' as 'all' | WalletType,
@@ -22,6 +22,33 @@ export function FinanceWalletsPanel() {
     balanceMin: '',
     balanceMax: '',
   })
+
+  const { data: apiWallets, isLoading, refetch } = useQuery({
+    queryKey: ['finance-wallets', filters],
+    queryFn: () => fetchWallets({
+      search: filters.search || undefined,
+      walletType: filters.walletType !== 'all' ? filters.walletType : undefined,
+      currency: filters.currency !== 'all' ? filters.currency : undefined,
+      balanceMin: filters.balanceMin ? parseFloat(filters.balanceMin) : undefined,
+      balanceMax: filters.balanceMax ? parseFloat(filters.balanceMax) : undefined,
+    }),
+    refetchInterval: 30000,
+  })
+
+  const wallets = useMemo(() => {
+    if (!apiWallets) return []
+    return apiWallets.map((w) => ({
+      id: w.id,
+      userId: w.userId,
+      userEmail: w.userEmail,
+      walletType: w.walletType,
+      currency: w.currency as any,
+      available: Number(w.availableBalance),
+      locked: Number(w.lockedBalance),
+      equity: Number(w.equity),
+      updatedAt: w.updatedAt,
+    })) as Wallet[]
+  }, [apiWallets])
 
   const filteredWallets = useMemo(() => {
     return wallets.filter((wallet) => {
@@ -163,6 +190,14 @@ export function FinanceWalletsPanel() {
       },
     },
   ]
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-accent" />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">

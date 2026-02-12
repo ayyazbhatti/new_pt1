@@ -60,6 +60,7 @@ async fn main() -> Result<()> {
         nats.clone(),
         validator.clone(),
         metrics.clone(),
+        lua.clone(),
     ));
     
     let cancel_handler = Arc::new(CancelHandler::new(

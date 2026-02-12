@@ -6,9 +6,9 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { wsClient } from '@/shared/ws/wsClient'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
-import { createDepositRequest, fetchBalance } from '../api'
+import { createWithdrawalRequest, fetchBalance } from '../api'
 
-export function useDepositFlow() {
+export function useWithdrawalFlow() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const { user } = useAuthStore()
   const { setWalletData } = useWalletStore()
@@ -25,8 +25,8 @@ export function useDepositFlow() {
           available: balanceData.available,
           locked: balanceData.locked,
           equity: balanceData.equity,
-          margin_used: balanceData.margin_used,
-          free_margin: balanceData.free_margin,
+          margin_used: balanceData.marginUsed,
+          free_margin: balanceData.freeMargin,
         })
       } catch (error: any) {
         // Gracefully handle 404 - endpoint not implemented yet
@@ -49,10 +49,9 @@ export function useDepositFlow() {
   useWebSocketSubscription(
     useCallback(
       (event: WsInboundEvent) => {
-        if (event.type === 'deposit.request.approved') {
+        if (event.type === 'withdrawal.request.approved') {
           const { payload } = event
-          const userId = payload.userId || (payload as any).userId
-          if (userId === user?.id?.toString()) {
+          if (payload.userId === user?.id) {
             // Update balance from server
             setWalletData({
               balance: payload.newBalance,
@@ -65,22 +64,21 @@ export function useDepositFlow() {
             })
 
             // Push notification
-            const transactionId = (payload as any).transactionId || payload.requestId
             pushNotification({
               id: crypto.randomUUID(),
-              kind: 'DEPOSIT_APPROVED',
-              title: 'Deposit Approved',
-              message: `Your deposit of $${payload.amount} has been approved. New balance: $${payload.newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              kind: 'WITHDRAWAL_APPROVED',
+              title: 'Withdrawal Approved',
+              message: `Your withdrawal of $${payload.amount} has been approved. New balance: $${payload.newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
               createdAt: payload.approvedAt,
               read: false,
               meta: {
-                transactionId: transactionId,
+                requestId: payload.requestId,
                 amount: payload.amount,
               },
             })
 
             toast.success(
-              `Deposit approved (ID: ${transactionId.slice(0, 8)}...). Balance updated to $${payload.newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              `Withdrawal approved (ID: ${payload.requestId.slice(0, 8)}...). Balance updated to $${payload.newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
               { duration: 6000 }
             )
           }
@@ -104,10 +102,10 @@ export function useDepositFlow() {
     )
   )
 
-  const submitDeposit = useCallback(
+  const submitWithdrawal = useCallback(
     async (amount: number, note?: string) => {
       if (!user?.id) {
-        toast.error('You must be logged in to deposit')
+        toast.error('You must be logged in to withdraw')
         return
       }
 
@@ -115,17 +113,17 @@ export function useDepositFlow() {
 
       try {
         // Call backend API - server will handle WebSocket broadcasting
-        const response = await createDepositRequest({ amount, note })
+        const response = await createWithdrawalRequest({ amount, note })
 
         toast.success(
-          `Deposit request sent (ID: ${response.requestId.slice(0, 8)}...)`,
+          `Withdrawal request sent (ID: ${response.requestId.slice(0, 8)}...)`,
           { duration: 5000 }
         )
       } catch (error: any) {
         const errorMessage =
           error?.response?.data?.error?.message ||
           error?.message ||
-          'Failed to submit deposit request'
+          'Failed to submit withdrawal request'
         toast.error(errorMessage, { duration: 5000 })
       } finally {
         setIsSubmitting(false)
@@ -135,7 +133,8 @@ export function useDepositFlow() {
   )
 
   return {
-    submitDeposit,
+    submitWithdrawal,
     isSubmitting,
   }
 }
+

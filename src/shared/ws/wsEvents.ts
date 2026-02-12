@@ -1,7 +1,8 @@
 // WebSocket Event Types for Deposit System
 
 export type DepositRequestCreatePayload = {
-  requestId: string
+  transactionId: string // Changed from requestId
+  requestId?: string // Kept for backward compatibility
   userId: string
   amount: number
   currency: 'USD'
@@ -10,7 +11,8 @@ export type DepositRequestCreatePayload = {
 }
 
 export type DepositRequestApprovePayload = {
-  requestId: string
+  transactionId: string // Changed from requestId
+  requestId?: string // Kept for backward compatibility
   adminId: string
   approvedAt: string
 }
@@ -18,7 +20,8 @@ export type DepositRequestApprovePayload = {
 export type DepositRequestCreatedPayload = DepositRequestCreatePayload
 
 export type DepositRequestApprovedPayload = {
-  requestId: string
+  transactionId: string // Changed from requestId
+  requestId?: string // Kept for backward compatibility
   userId: string
   amount: number
   currency: 'USD'

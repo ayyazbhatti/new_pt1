@@ -5,28 +5,52 @@ import { Input } from '@/shared/ui/input'
 import { Transaction } from '../types/finance'
 import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
+import { approveTransaction, rejectTransaction } from '../api/finance.api'
+import { Loader2 } from 'lucide-react'
 
 interface ApproveRejectModalProps {
   transaction: Transaction
   action: 'approve' | 'reject'
+  onSuccess?: () => void
 }
 
-export function ApproveRejectModal({ transaction, action }: ApproveRejectModalProps) {
+export function ApproveRejectModal({ transaction, action, onSuccess }: ApproveRejectModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const [rejectionReason, setRejectionReason] = useState('')
   const [rejectionNote, setRejectionNote] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (action === 'approve') {
-      toast.success(`Transaction ${transaction.id} approved`)
-      closeModal(`approve-tx-${transaction.id}`)
+      setIsSubmitting(true)
+      try {
+        await approveTransaction(transaction.id)
+        toast.success(`Transaction ${transaction.id} approved successfully`)
+        onSuccess?.()
+        closeModal(`approve-tx-${transaction.id}`)
+      } catch (error: any) {
+        const errorMessage = error?.response?.data?.error?.message || 'Failed to approve transaction'
+        toast.error(errorMessage)
+      } finally {
+        setIsSubmitting(false)
+      }
     } else {
       if (!rejectionReason) {
         toast.error('Please select a rejection reason')
         return
       }
-      toast.success(`Transaction ${transaction.id} rejected`)
-      closeModal(`reject-tx-${transaction.id}`)
+      setIsSubmitting(true)
+      try {
+        await rejectTransaction(transaction.id, rejectionReason, rejectionNote || undefined)
+        toast.success(`Transaction ${transaction.id} rejected`)
+        onSuccess?.()
+        closeModal(`reject-tx-${transaction.id}`)
+      } catch (error: any) {
+        const errorMessage = error?.response?.data?.error?.message || 'Failed to reject transaction'
+        toast.error(errorMessage)
+      } finally {
+        setIsSubmitting(false)
+      }
     }
   }
 
@@ -77,8 +101,16 @@ export function ApproveRejectModal({ transaction, action }: ApproveRejectModalPr
         <Button
           variant={action === 'approve' ? 'primary' : 'danger'}
           onClick={handleConfirm}
+          disabled={isSubmitting}
         >
-          {action === 'approve' ? 'Approve' : 'Reject'}
+          {isSubmitting ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {action === 'approve' ? 'Approving...' : 'Rejecting...'}
+            </>
+          ) : (
+            action === 'approve' ? 'Approve' : 'Reject'
+          )}
         </Button>
       </div>
     </div>
