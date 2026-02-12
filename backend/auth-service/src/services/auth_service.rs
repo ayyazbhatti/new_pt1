@@ -64,14 +64,30 @@ impl AuthService {
         // Generate referral code for new user
         let user_referral_code = format!("REF{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
 
+        // Get default user group ID (or create it if it doesn't exist)
+        let default_group_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
+            .map_err(|_| anyhow::anyhow!("Invalid default group ID"))?;
+        
+        // Ensure default group exists
+        sqlx::query!(
+            r#"
+            INSERT INTO user_groups (id, name, description)
+            VALUES ($1, 'Default', 'Default user group')
+            ON CONFLICT (id) DO NOTHING
+            "#,
+            default_group_id
+        )
+        .execute(&self.pool)
+        .await?;
+
         // Insert user
         let user = sqlx::query_as::<_, User>(
             r#"
             INSERT INTO users (
                 email, password_hash, first_name, last_name, country,
-                role, status, email_verified, referral_code, referred_by_user_id
+                role, status, email_verified, referral_code, referred_by_user_id, group_id
             )
-            VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9)
             RETURNING *
             "#,
         )
@@ -83,6 +99,7 @@ impl AuthService {
         .bind(UserStatus::Active)
         .bind(&user_referral_code)
         .bind(referred_by_user_id)
+        .bind(default_group_id)
         .fetch_one(&self.pool)
         .await?;
 

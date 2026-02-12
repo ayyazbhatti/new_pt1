@@ -1,0 +1,21 @@
+[package]
+name = "common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+config = { workspace = true }
+sqlx = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
+
+[features]
+default = []
+full = ["sqlx", "redis"]
+

@@ -1,20 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useWebSocket, PriceTick } from '@/shared/hooks/useWebSocket'
 
-// Clean URL to remove trailing slash and ensure /ws path
+// Clean URL - Use gateway-ws on port 3003 (which forwards ticks from NATS)
+// Fallback to data-provider on 9003 if VITE_DATA_PROVIDER_WS_URL is explicitly set
 const getCleanWsUrl = () => {
-  let url = import.meta.env.VITE_DATA_PROVIDER_WS_URL || 'ws://localhost:9001'
-  // Remove trailing slash
-  url = url.replace(/\/$/, '')
-  // Ensure /ws path is included
-  if (!url.endsWith('/ws')) {
-    url = url + '/ws'
+  // Check if explicitly set, otherwise use gateway-ws
+  if (import.meta.env.VITE_DATA_PROVIDER_WS_URL) {
+    let url = import.meta.env.VITE_DATA_PROVIDER_WS_URL
+    // Only remove trailing slash, keep /ws path for gateway-ws
+    url = url.replace(/\/$/, '')
+    return url
   }
-  // Add default group parameter (server uses "default" group)
-  if (!url.includes('?')) {
-    url = url + '?group=default'
-  }
-  return url
+  // Default to gateway-ws which forwards ticks from NATS (requires /ws path)
+  return 'ws://localhost:3003/ws'
 }
 
 const DATA_PROVIDER_WS_URL = getCleanWsUrl()
@@ -243,6 +241,8 @@ export function usePriceStream(symbols: string[]) {
   // WebSocket connection
   const wsEnabled = symbols.length > 0
   console.log('🔌 usePriceStream: WebSocket enabled:', wsEnabled, '| symbols.length:', symbols.length, '| URL:', DATA_PROVIDER_WS_URL)
+  console.log('🔌 usePriceStream: Symbols to subscribe:', symbols)
+  console.log('🔌 usePriceStream: DATA_PROVIDER_WS_URL:', DATA_PROVIDER_WS_URL)
   
   const { isConnected, subscribe, unsubscribe } = useWebSocket({
     url: DATA_PROVIDER_WS_URL,

@@ -1,0 +1,33 @@
+[package]
+name = "order-engine"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "order-engine"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+axum = { workspace = true }
+async-nats = { workspace = true }
+redis = { workspace = true, features = ["tokio-comp", "connection-manager", "aio", "streams"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+rust_decimal = { workspace = true, features = ["serde-with-str"] }
+rust_decimal_macros = "1.33"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+anyhow = { workspace = true }
+thiserror = "1.0"
+uuid = { workspace = true, features = ["v4", "serde"] }
+dashmap = "5.5"
+parking_lot = "0.12"
+futures-util = "0.3"
+dotenv = "0.15"
+
+common = { path = "../../crates/common" }
+contracts = { path = "../../crates/contracts" }
+redis-model = { path = "../../crates/redis-model" }
+risk = { path = "../../crates/risk" }

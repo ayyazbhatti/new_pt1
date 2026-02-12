@@ -1,6 +1,7 @@
-import { Bell, Search, User } from 'lucide-react'
+import { Search, User } from 'lucide-react'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
+import { NotificationBell } from '@/shared/components/NotificationBell'
 
 export function Topbar() {
   return (
@@ -16,10 +17,7 @@ export function Topbar() {
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" className="relative">
-          <Bell className="h-5 w-5" />
-          <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-danger" />
-        </Button>
+        <NotificationBell />
         <Button variant="ghost" size="sm">
           <User className="h-5 w-5" />
         </Button>

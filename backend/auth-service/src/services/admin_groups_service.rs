@@ -137,8 +137,8 @@ impl AdminGroupsService {
         .bind(priority)
         .bind(min_leverage)
         .bind(max_leverage)
-        .bind(max_open_positions)
-        .bind(max_open_orders)
+        .bind(Some(max_open_positions)) // Convert to Option
+        .bind(Some(max_open_orders)) // Convert to Option
         .bind(risk_mode)
         .fetch_one(&self.pool)
         .await?;
@@ -204,8 +204,8 @@ impl AdminGroupsService {
         .bind(priority)
         .bind(min_leverage)
         .bind(max_leverage)
-        .bind(max_open_positions)
-        .bind(max_open_orders)
+        .bind(Some(max_open_positions)) // Convert to Option
+        .bind(Some(max_open_orders)) // Convert to Option
         .bind(risk_mode)
         .fetch_optional(&self.pool)
         .await?

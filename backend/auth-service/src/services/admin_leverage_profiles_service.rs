@@ -117,7 +117,7 @@ impl AdminLeverageProfilesService {
             r#"
             INSERT INTO leverage_profiles (name, description, status)
             VALUES ($1, $2, $3::user_status)
-            RETURNING *
+            RETURNING id, name, description, status::text as status, created_at, updated_at
             "#,
         )
         .bind(name)
@@ -145,7 +145,7 @@ impl AdminLeverageProfilesService {
             UPDATE leverage_profiles
             SET name = $2, description = $3, status = $4::user_status, updated_at = NOW()
             WHERE id = $1
-            RETURNING *
+            RETURNING id, name, description, status::text as status, created_at, updated_at
             "#,
         )
         .bind(id)

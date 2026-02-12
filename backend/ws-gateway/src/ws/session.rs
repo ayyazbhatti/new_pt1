@@ -26,8 +26,10 @@ impl Session {
         jwt_auth: Arc<JwtAuth>,
         broadcaster: Arc<Broadcaster>,
     ) -> Self {
+        let conn_id = Uuid::new_v4();
+        info!("New WebSocket connection established: {}", conn_id);
         Self {
-            conn_id: Uuid::new_v4(),
+            conn_id,
             registry,
             validator,
             jwt_auth,
@@ -92,8 +94,10 @@ impl Session {
             while let Some(Ok(msg)) = receiver.next().await {
                 match msg {
                     Message::Text(text) => {
+                        info!("Received message from connection {}: {}", conn_id, text);
                         // Validate message size
                         if let Err(e) = validator.validate_message_size(text.len()) {
+                            warn!("Message too large from connection {}: {}", conn_id, e);
                             let error_msg = ServerMessage::Error {
                                 code: "MESSAGE_TOO_LARGE".to_string(),
                                 message: e.to_string(),
@@ -106,8 +110,12 @@ impl Session {
 
                         // Parse message
                         let client_msg: ClientMessage = match serde_json::from_str(&text) {
-                            Ok(msg) => msg,
+                            Ok(msg) => {
+                                info!("Parsed message from connection {}: {:?}", conn_id, msg);
+                                msg
+                            },
                             Err(e) => {
+                                warn!("Failed to parse message from connection {}: {} - Raw: {}", conn_id, e, text);
                                 let error_msg = ServerMessage::Error {
                                     code: "INVALID_JSON".to_string(),
                                     message: format!("Failed to parse message: {}", e),
@@ -134,9 +142,11 @@ impl Session {
                         // Handle message
                         match client_msg {
                             ClientMessage::Auth { token } => {
+                                info!("Auth message received from connection {}, validating token...", conn_id);
                                 match jwt_auth.validate_token(&token) {
                                     Ok(claims) => {
                                         if jwt_auth.is_expired(&claims) {
+                                            warn!("Token expired for connection {}", conn_id);
                                             let error_msg = ServerMessage::AuthError {
                                                 error: "Token expired".to_string(),
                                             };
@@ -162,12 +172,14 @@ impl Session {
                                             group_id: claims.group_id.clone(),
                                         };
                                         if let Ok(json) = success_msg.to_json() {
+                                            info!("Sending auth_success to connection {}", conn_id);
                                             let _ = response_tx_clone.send(Message::Text(json));
                                         }
 
                                         info!("Connection {} authenticated as user {}", conn_id, claims.sub);
                                     }
                                     Err(e) => {
+                                        warn!("Token validation failed for connection {}: {}", conn_id, e);
                                         let error_msg = ServerMessage::AuthError {
                                             error: format!("Invalid token: {}", e),
                                         };

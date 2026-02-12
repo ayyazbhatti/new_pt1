@@ -8,7 +8,7 @@ pub struct LeverageProfile {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    pub status: String, // 'active' or 'disabled'
+    pub status: String, // 'active' or 'disabled' - stored as user_status enum in DB, cast to text in queries
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

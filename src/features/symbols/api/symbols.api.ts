@@ -38,7 +38,8 @@ export async function listSymbols(params?: ListSymbolsParams): Promise<ListSymbo
   if (params?.sort) queryParams.append('sort', params.sort)
 
   const queryString = queryParams.toString()
-  const endpoint = `/api/admin/symbols${queryString ? `?${queryString}` : ''}`
+  // Use public endpoint for listing symbols (no admin role required)
+  const endpoint = `/api/symbols${queryString ? `?${queryString}` : ''}`
 
   const response = await http<ListSymbolsResponse>(endpoint, {
     method: 'GET',

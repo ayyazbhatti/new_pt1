@@ -9,8 +9,8 @@ pub struct MarkupEngine {
 }
 
 impl MarkupEngine {
-    pub fn new(redis: RedisClient) -> Self {
-        Self { redis: Arc::new(redis) }
+    pub fn new(redis: Arc<RedisClient>) -> Self {
+        Self { redis }
     }
 
     pub async fn apply_markup(

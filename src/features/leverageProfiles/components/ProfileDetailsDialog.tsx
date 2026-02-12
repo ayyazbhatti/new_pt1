@@ -99,26 +99,11 @@ export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDet
         description="Manage profile settings, tiers, and symbol assignments"
         size="xl"
       >
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="flex border-b border-border">
-            <TabsTrigger
-              value="overview"
-              className="px-4 py-2 text-sm font-medium text-text-muted data-[state=active]:text-text data-[state=active]:border-b-2 data-[state=active]:border-accent"
-            >
-              Overview
-            </TabsTrigger>
-            <TabsTrigger
-              value="tiers"
-              className="px-4 py-2 text-sm font-medium text-text-muted data-[state=active]:text-text data-[state=active]:border-b-2 data-[state=active]:border-accent"
-            >
-              Tiers ({tiers?.length || 0})
-            </TabsTrigger>
-            <TabsTrigger
-              value="symbols"
-              className="px-4 py-2 text-sm font-medium text-text-muted data-[state=active]:text-text data-[state=active]:border-b-2 data-[state=active]:border-accent"
-            >
-              Assign Symbols ({symbols?.assigned.length || 0})
-            </TabsTrigger>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="tiers">Tiers ({tiers?.length || 0})</TabsTrigger>
+            <TabsTrigger value="symbols">Assign Symbols ({symbols?.assigned.length || 0})</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">

@@ -4,6 +4,7 @@ use axum::{
     Router,
 };
 use std::env;
+use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber;
@@ -22,6 +23,12 @@ use routes::admin_leverage_profiles::create_admin_leverage_profiles_router;
 use routes::admin_symbols::create_admin_symbols_router;
 use routes::admin_markup::create_admin_markup_router;
 use routes::admin_users::create_admin_users_router;
+use routes::deposits::create_deposits_router;
+use routes::orders::create_orders_router;
+use routes::admin_trading::create_admin_trading_router;
+use routes::admin_positions::create_admin_positions_router;
+use routes::admin_audit::create_admin_audit_router;
+use routes::symbols::create_symbols_router;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -40,8 +47,38 @@ async fn main() -> anyhow::Result<()> {
     let database_url = env::var("DATABASE_URL")
         .expect("DATABASE_URL must be set");
 
+    // Get Redis URL
+    let redis_url = env::var("REDIS_URL")
+        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+
+    // Get NATS URL
+    let nats_url = env::var("NATS_URL")
+        .unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
     // Create database connection pool
     let pool = create_pool(&database_url).await?;
+
+    // Connect to Redis
+    tracing::info!("Connecting to Redis at {}", redis_url);
+    let redis = redis::Client::open(redis_url)?;
+    redis.get_async_connection().await?;
+    tracing::info!("Connected to Redis");
+
+    // Connect to NATS (try to connect, but don't fail if unavailable in dev)
+    tracing::info!("Connecting to NATS at {}", nats_url);
+    let nats_result = async_nats::connect(&nats_url).await;
+    
+    let nats = match nats_result {
+        Ok(client) => {
+            tracing::info!("✅ Connected to NATS");
+            Some(client)
+        }
+        Err(e) => {
+            tracing::warn!("⚠️  Failed to connect to NATS: {}. Server will start but event publishing will be disabled.", e);
+            tracing::warn!("💡 To enable full functionality, start NATS: docker-compose up nats");
+            None
+        }
+    };
 
     // Run migrations (if migrations directory exists)
     // Note: For production, use sqlx-cli to run migrations separately
@@ -70,15 +107,58 @@ async fn main() -> anyhow::Result<()> {
         ])
         .allow_credentials(true);
 
+    // Use NATS client if available, otherwise the server will still start
+    // but event publishing will fail gracefully
+    let nats_client = if let Some(client) = nats {
+        client
+    } else {
+        tracing::error!("❌ NATS connection failed. Server will start but event publishing will not work.");
+        tracing::error!("💡 To fix: Start NATS server or Docker Compose services");
+        // We need to provide a client, so we'll try to connect again with a longer timeout
+        // or just panic with a helpful message
+        return Err(anyhow::anyhow!(
+            "NATS connection failed. Please start NATS server:\n  docker-compose up nats\n  or\n  nats-server"
+        ));
+    };
+
+    // Build application state for deposits
+    let deposits_state = routes::deposits::DepositsState {
+        redis: Arc::new(redis.clone()),
+        nats: Arc::new(nats_client.clone()),
+    };
+
+    // Build application state for orders
+    let orders_state = routes::orders::OrdersState {
+        redis: Arc::new(redis.clone()),
+        nats: Arc::new(nats_client.clone()),
+    };
+
+    // Build application state for admin trading
+    let admin_trading_state = routes::admin_trading::AdminTradingState {
+        redis: Arc::new(redis.clone()),
+        nats: Arc::new(nats_client.clone()),
+    };
+
     // Build application
     let app = Router::new()
         .route("/health", get(health_check))
         .nest("/api/auth", create_auth_router(pool.clone()))
+        .nest("/api/symbols", create_symbols_router(pool.clone())) // Public endpoint for all users
+        .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))
+        .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))
+        .nest("/api/admin/audit", create_admin_audit_router(pool.clone()))
         .nest("/api/admin/groups", create_admin_groups_router(pool.clone()))
         .nest("/api/admin/leverage-profiles", create_admin_leverage_profiles_router(pool.clone()))
         .nest("/api/admin/symbols", create_admin_symbols_router(pool.clone()))
         .nest("/api/admin/markup", create_admin_markup_router(pool.clone()))
         .nest("/api/admin/users", create_admin_users_router(pool.clone()))
+        .nest("/api/admin/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/wallet", routes::deposits::create_wallet_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/notifications", routes::deposits::create_notifications_router(pool.clone(), deposits_state.clone()))
+        .nest("/v1/users", routes::deposits::create_positions_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/orders", create_orders_router(pool.clone(), orders_state.clone()))
+        .nest("/v1/orders", create_orders_router(pool.clone(), orders_state.clone())) // Keep v1 for backward compatibility
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(pool);

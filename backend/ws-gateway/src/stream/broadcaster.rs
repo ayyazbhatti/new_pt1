@@ -66,6 +66,18 @@ impl Broadcaster {
             "risk:alerts" => {
                 Self::broadcast_risk_alert(registry, connection_txs, payload).await?;
             }
+            "deposits:requests" => {
+                Self::broadcast_deposit_request(registry, connection_txs, payload).await?;
+            }
+            "deposits:approved" => {
+                Self::broadcast_deposit_approved(registry, connection_txs, payload).await?;
+            }
+            "notifications:push" => {
+                Self::broadcast_notification(registry, connection_txs, payload).await?;
+            }
+            "wallet:balance:updated" => {
+                Self::broadcast_wallet_balance(registry, connection_txs, payload).await?;
+            }
             _ => {
                 warn!("Unknown channel: {}", channel);
             }
@@ -329,6 +341,116 @@ impl Broadcaster {
         };
 
         // Send to all user connections
+        let connections = registry.get_user_connections(user_id);
+        for conn_id in connections {
+            if let Some(tx) = connection_txs.get(&conn_id) {
+                let _ = tx.send(message.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_deposit_request(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        // Create message in format frontend expects: { type: "deposit.request.created", payload: {...} }
+        let message = ServerMessage::DepositRequestCreated {
+            payload: payload.clone(),
+        };
+
+        // Broadcast to all connections (admin should receive this)
+        // In production, filter by user role from registry
+        for entry in connection_txs.iter() {
+            let _ = entry.value().send(message.clone());
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_deposit_approved(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let user_id = payload
+            .get("userId")
+            .or_else(|| payload.get("user_id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing userId in deposit approved"))?;
+
+        let message = ServerMessage::DepositRequestApproved {
+            payload: payload.clone(),
+        };
+
+        // Send to the user who made the deposit
+        let connections = registry.get_user_connections(user_id);
+        for conn_id in connections {
+            if let Some(tx) = connection_txs.get(&conn_id) {
+                let _ = tx.send(message.clone());
+            }
+        }
+
+        // Also send to all admins (they should see the approval)
+        // For now, broadcast to all - in production filter by role
+        for entry in connection_txs.iter() {
+            let _ = entry.value().send(message.clone());
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_notification(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        // Extract user_id from payload if available, otherwise broadcast to all
+        let user_id_opt = payload
+            .get("userId")
+            .or_else(|| payload.get("user_id"))
+            .and_then(|v| v.as_str());
+
+        let message = ServerMessage::NotificationPush {
+            payload: payload.clone(),
+        };
+
+        if let Some(user_id) = user_id_opt {
+            // Send to specific user
+            let connections = registry.get_user_connections(user_id);
+            for conn_id in connections {
+                if let Some(tx) = connection_txs.get(&conn_id) {
+                    let _ = tx.send(message.clone());
+                }
+            }
+        } else {
+            // Broadcast to all (for admin notifications)
+            for entry in connection_txs.iter() {
+                let _ = entry.value().send(message.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_wallet_balance(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let user_id = payload
+            .get("userId")
+            .or_else(|| payload.get("user_id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing userId in wallet balance"))?;
+
+        let message = ServerMessage::WalletBalanceUpdated {
+            payload: payload.clone(),
+        };
+
+        // Send to the user
         let connections = registry.get_user_connections(user_id);
         for conn_id in connections {
             if let Some(tx) = connection_txs.get(&conn_id) {

@@ -77,9 +77,11 @@ export function useWebSocket(options: UseWebSocketOptions) {
         return
       }
       
-      // Remove trailing slash from URL if present
+      // Remove only trailing slash, keep /ws path (gateway-ws requires it)
       const cleanUrl = url.replace(/\/$/, '')
       console.log('🔌 [useWebSocket] Attempting to connect to:', cleanUrl)
+      console.log('🔌 [useWebSocket] Original URL:', url)
+      console.log('🔌 [useWebSocket] Cleaned URL:', cleanUrl)
       console.log('🔌 [useWebSocket] enabled:', enabled, '| isUnmounting:', isUnmountingRef.current)
       const ws = new WebSocket(cleanUrl)
       // Set ref immediately
@@ -106,19 +108,23 @@ export function useWebSocket(options: UseWebSocketOptions) {
       }
 
       ws.onmessage = (event) => {
+        console.log('📨 [useWebSocket] Raw WebSocket message received. Type:', typeof event.data, '| Length:', event.data?.length || 0)
+        console.log('📨 [useWebSocket] Raw message data (first 200 chars):', typeof event.data === 'string' ? event.data.substring(0, 200) : String(event.data).substring(0, 200))
+        
         try {
           const data = JSON.parse(event.data)
-          console.log('📨 WebSocket message received:', data)
+          console.log('📨 [useWebSocket] Parsed JSON message:', data)
+          console.log('📨 [useWebSocket] Message type:', data.type, '| Symbol:', data.symbol, '| Has bid:', data.bid !== undefined, '| Has ask:', data.ask !== undefined)
           
           // Handle error messages from server
           if (data.error) {
-            console.warn('⚠️ Server error:', data.error, '| Code:', data.code)
+            console.warn('⚠️ [useWebSocket] Server error:', data.error, '| Code:', data.code)
             // Don't return - might still process if it has price data
           }
           
           // Handle welcome message
           if (data.type === 'welcome' || (data.message && !data.error)) {
-            console.log('👋', data.message || 'Welcome message received')
+            console.log('👋 [useWebSocket]', data.message || 'Welcome message received')
             return
           }
           
@@ -126,31 +132,49 @@ export function useWebSocket(options: UseWebSocketOptions) {
           // Check for type === 'tick' and that bid/ask are defined (not null/undefined, but can be 0)
           if (data.type === 'tick' && data.symbol && data.bid !== undefined && data.bid !== null && data.ask !== undefined && data.ask !== null) {
             const symbolUpper = data.symbol.toUpperCase().trim() // Ensure uppercase to match subscription
-            console.log(`💰 Processing price tick for ${symbolUpper}: bid=${data.bid} (type: ${typeof data.bid}), ask=${data.ask} (type: ${typeof data.ask})`)
-            console.log(`💰 Full tick data:`, JSON.stringify(data))
-            onMessage?.({
-              symbol: symbolUpper,
-              bid: String(data.bid),
-              ask: String(data.ask),
-              ts: data.ts || Date.now(),
-            })
+            console.log(`💰 [useWebSocket] Processing price tick for ${symbolUpper}: bid=${data.bid} (type: ${typeof data.bid}), ask=${data.ask} (type: ${typeof data.ask})`)
+            console.log(`💰 [useWebSocket] Full tick data:`, JSON.stringify(data))
+            console.log(`💰 [useWebSocket] Calling onMessage callback. onMessage exists:`, typeof onMessage === 'function')
+            if (onMessage) {
+              onMessage({
+                symbol: symbolUpper,
+                bid: String(data.bid),
+                ask: String(data.ask),
+                ts: data.ts || Date.now(),
+              })
+              console.log(`✅ [useWebSocket] onMessage callback executed for ${symbolUpper}`)
+            } else {
+              console.error(`❌ [useWebSocket] onMessage callback is not defined!`)
+            }
           } else if (data.symbol && data.bid !== undefined && data.bid !== null && data.ask !== undefined && data.ask !== null && !data.type && !data.error) {
             // Fallback: direct format without type field (and no error)
             const symbolUpper = data.symbol.toUpperCase()
-            console.log(`💰 Processing price (no type) for ${symbolUpper}: bid=${data.bid}, ask=${data.ask}`)
-            onMessage?.({
-              symbol: symbolUpper,
-              bid: String(data.bid),
-              ask: String(data.ask),
-              ts: data.ts || Date.now(),
+            console.log(`💰 [useWebSocket] Processing price (no type) for ${symbolUpper}: bid=${data.bid}, ask=${data.ask}`)
+            if (onMessage) {
+              onMessage({
+                symbol: symbolUpper,
+                bid: String(data.bid),
+                ask: String(data.ask),
+                ts: data.ts || Date.now(),
+              })
+              console.log(`✅ [useWebSocket] onMessage callback executed (fallback) for ${symbolUpper}`)
+            }
+          } else {
+            // Log all non-price messages for debugging
+            console.log('⚠️ [useWebSocket] Received message but not a price tick:', {
+              type: data.type,
+              symbol: data.symbol,
+              hasBid: data.bid !== undefined,
+              hasAsk: data.ask !== undefined,
+              error: data.error,
+              fullData: data
             })
-          } else if (!data.error) {
-            // Only log if it's not an error message (errors are already logged above)
-            console.log('⚠️ Received message but not a price tick:', data)
           }
           // Ignore other non-price messages
         } catch (error) {
-          console.error('❌ Error parsing WebSocket message:', error, 'Raw:', event.data)
+          console.error('❌ [useWebSocket] Error parsing WebSocket message:', error)
+          console.error('❌ [useWebSocket] Raw message that failed to parse:', event.data)
+          console.error('❌ [useWebSocket] Error stack:', error instanceof Error ? error.stack : 'No stack trace')
         }
       }
 

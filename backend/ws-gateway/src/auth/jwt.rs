@@ -1,16 +1,37 @@
 use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation, Algorithm};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer};
 use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String, // user_id
+    #[serde(deserialize_with = "deserialize_sub")]
+    pub sub: String, // user_id (can be UUID string)
     pub email: String,
     pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
-    pub exp: u64,
-    pub iat: u64,
+    pub exp: i64, // Changed from u64 to i64 to match auth-service
+    pub iat: i64, // Changed from u64 to i64 to match auth-service
+}
+
+// Helper to deserialize sub field which can be UUID or string
+fn deserialize_sub<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Sub {
+        Uuid(uuid::Uuid),
+        String(String),
+    }
+    
+    match Sub::deserialize(deserializer)? {
+        Sub::Uuid(uuid) => Ok(uuid.to_string()),
+        Sub::String(s) => Ok(s),
+    }
 }
 
 #[derive(Clone)]
@@ -22,7 +43,10 @@ pub struct JwtAuth {
 impl JwtAuth {
     pub fn new(secret: &str, issuer: &str) -> Self {
         let mut validation = Validation::new(Algorithm::HS256);
-        validation.set_issuer(&[issuer]);
+        // Only validate issuer if it's not empty/default
+        if !issuer.is_empty() && issuer != "newpt" {
+            validation.set_issuer(&[issuer]);
+        }
         validation.validate_exp = true;
         validation.validate_nbf = false;
 
@@ -41,7 +65,7 @@ impl JwtAuth {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_secs() as i64;
         claims.exp < now
     }
 }

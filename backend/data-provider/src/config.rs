@@ -24,13 +24,13 @@ impl Config {
                 .parse()
                 .unwrap_or(200000),
             ws_port: env::var("WS_PORT")
-                .unwrap_or_else(|_| "9001".to_string())
+                .unwrap_or_else(|_| "9003".to_string())
                 .parse()
-                .unwrap_or(9001),
+                .unwrap_or(9003),
             http_port: env::var("HTTP_PORT")
-                .unwrap_or_else(|_| "9002".to_string())
+                .unwrap_or_else(|_| "9004".to_string())
                 .parse()
-                .unwrap_or(9002),
+                .unwrap_or(9004),
             admin_secret_key: env::var("ADMIN_SECRET_KEY")
                 .unwrap_or_else(|_| "change-me-in-production".to_string()),
             binance_ws_url: env::var("BINANCE_WS_URL")

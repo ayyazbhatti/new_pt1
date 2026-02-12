@@ -55,12 +55,12 @@ async fn main() -> anyhow::Result<()> {
             r#"
             INSERT INTO users (
                 id, email, password_hash, first_name, last_name,
-                role, status, email_verified
+                role, status, email_verified, group_id
             )
             VALUES (
                 '00000000-0000-0000-0000-000000000001',
                 $1, $2, 'Admin', 'User',
-                'admin', 'active', true
+                'admin', 'active', true, '00000000-0000-0000-0000-000000000001'
             )
             "#
         )

@@ -16,6 +16,7 @@ import { SettingsPage } from '@/features/settings'
 import { ReportsPage } from '@/features/reports'
 import { LeverageProfilesPage } from '@/features/leverageProfiles'
 import { AdminMarkupPage } from '@/features/adminMarkup'
+import { AdminDepositsPage } from '@/features/admin/deposits/pages/AdminDepositsPage'
 
 export const adminRoutes: RouteObject[] = [
   {
@@ -57,6 +58,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/finance',
     element: <AdminFinancePage />,
+  },
+  {
+    path: '/admin/deposits',
+    element: <AdminDepositsPage />,
   },
   {
     path: '/admin/bonus',

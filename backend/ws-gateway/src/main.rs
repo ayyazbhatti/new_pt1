@@ -50,6 +50,10 @@ async fn main() -> Result<()> {
         "orders:updates".to_string(),
         "positions:updates".to_string(),
         "risk:alerts".to_string(),
+        "deposits:requests".to_string(),
+        "deposits:approved".to_string(),
+        "notifications:push".to_string(),
+        "wallet:balance:updated".to_string(),
     ];
 
     // Create Redis subscriber

@@ -22,6 +22,8 @@ interface AuthState {
   setTokens: (accessToken: string, refreshToken: string) => void
   setUser: (user: User) => void
   hydrateFromStorage: () => Promise<void>
+  refreshUser: () => Promise<void>
+  refreshAccessToken: () => Promise<void>
 }
 
 export interface RegisterData {
@@ -136,6 +138,47 @@ export const useAuthStore = create<AuthState>()(
           }
         } else {
           set({ isHydrated: true })
+        }
+      },
+
+      refreshUser: async () => {
+        const state = get()
+        if (!state.accessToken) {
+          throw new Error('Not authenticated')
+        }
+        try {
+          const { me } = await import('@/shared/api/auth.api')
+          const user = await me()
+          set({
+            user: {
+              id: user.id,
+              email: user.email,
+              firstName: user.firstName,
+              lastName: user.lastName,
+              role: user.role,
+              status: user.status,
+            },
+          })
+        } catch (error) {
+          console.error('Failed to refresh user:', error)
+          throw error
+        }
+      },
+
+      refreshAccessToken: async () => {
+        const state = get()
+        if (!state.refreshToken) {
+          throw new Error('No refresh token available')
+        }
+        try {
+          const { refresh } = await import('@/shared/api/auth.api')
+          const newAccessToken = await refresh(state.refreshToken)
+          set({ accessToken: newAccessToken })
+          // Also refresh user data to get updated role
+          await get().refreshUser()
+        } catch (error) {
+          console.error('Failed to refresh access token:', error)
+          throw error
         }
       },
     }),

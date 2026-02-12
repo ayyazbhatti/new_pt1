@@ -80,6 +80,23 @@ pub enum ServerMessage {
     Unsubscribed {
         symbols: Vec<String>,
     },
+    // Deposit and notification events - payload is kept as nested object
+    #[serde(rename = "deposit.request.created")]
+    DepositRequestCreated {
+        payload: serde_json::Value,
+    },
+    #[serde(rename = "deposit.request.approved")]
+    DepositRequestApproved {
+        payload: serde_json::Value,
+    },
+    #[serde(rename = "notification.push")]
+    NotificationPush {
+        payload: serde_json::Value,
+    },
+    #[serde(rename = "wallet.balance.updated")]
+    WalletBalanceUpdated {
+        payload: serde_json::Value,
+    },
 }
 
 impl ServerMessage {

@@ -9,6 +9,7 @@ import { toast } from 'react-hot-toast'
 import { cn } from '@/shared/utils'
 import { useState, useRef, useEffect } from 'react'
 import { PriceDisplay } from './PriceDisplay'
+import { DepositModal } from '@/features/wallet/components/DepositModal'
 
 export function LeftSidebar() {
   const {
@@ -28,6 +29,7 @@ export function LeftSidebar() {
   const navigate = useNavigate()
   const [cryptoExpanded, setCryptoExpanded] = useState(true)
   const [isScrolling, setIsScrolling] = useState(false)
+  const [depositModalOpen, setDepositModalOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const symbols = getFilteredSymbols()
@@ -306,7 +308,7 @@ export function LeftSidebar() {
           <Button
             variant="success"
             className="w-full h-9 text-xs font-semibold shadow-lg shadow-success/20 hover:shadow-success/30 transition-all"
-            onClick={() => toast.success('Deposit feature coming soon')}
+            onClick={() => setDepositModalOpen(true)}
           >
             Deposit
           </Button>
@@ -342,6 +344,9 @@ export function LeftSidebar() {
           Log Out
         </button>
       </div>
+
+      {/* Deposit Modal */}
+      <DepositModal open={depositModalOpen} onOpenChange={setDepositModalOpen} />
     </div>
   )
 }

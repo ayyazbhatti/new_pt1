@@ -1,0 +1,15 @@
+[package]
+name = "redis-model"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+redis = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+contracts = { path = "../contracts" }
+common = { path = "../common" }
+

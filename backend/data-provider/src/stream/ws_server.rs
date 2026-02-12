@@ -67,7 +67,9 @@ async fn handle_connection(
     feed: Option<Arc<crate::feeds::binance_feed::BinanceFeed>>,
     global_subscribed_symbols: Option<Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>>,
 ) -> anyhow::Result<()> {
+    info!("🔌 Accepting WebSocket connection...");
     let ws_stream = accept_async(stream).await?;
+    info!("✅ WebSocket handshake successful");
     let (mut sender, mut receiver) = ws_stream.split();
 
     let mut subscribed_symbols: HashSet<String> = HashSet::new();
@@ -88,7 +90,8 @@ async fn handle_connection(
             msg = receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if let Err(e) = handle_message(
+                        info!("📨 Received WebSocket message: {}", text);
+                        match handle_message(
                             &text,
                             &mut subscribed_symbols,
                             &mut receivers,
@@ -101,27 +104,46 @@ async fn handle_connection(
                         )
                         .await
                         {
-                            let error = ErrorResponse {
-                                error: e,
-                                code: "INVALID_MESSAGE".to_string(),
-                            };
-                            let _ = sender
-                                .send(Message::Text(serde_json::to_string(&error).unwrap()))
-                                .await;
+                            Ok(response_opt) => {
+                                // Send response if provided
+                                if let Some(response) = response_opt {
+                                    let _ = sender
+                                        .send(Message::Text(serde_json::to_string(&response).unwrap()))
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                let error = ErrorResponse {
+                                    error: e,
+                                    code: "INVALID_MESSAGE".to_string(),
+                                };
+                                let _ = sender
+                                    .send(Message::Text(serde_json::to_string(&error).unwrap()))
+                                    .await;
+                            }
                         }
                     }
-                    Some(Ok(Message::Close(_))) => {
-                        info!("WebSocket closed");
+                    Some(Ok(Message::Close(close_frame))) => {
+                        if let Some(frame) = close_frame {
+                            info!("🔌 WebSocket closed by client. Code: {:?}, Reason: {:?}", 
+                                frame.code, 
+                                &frame.reason);
+                        } else {
+                            info!("🔌 WebSocket closed by client (no close frame)");
+                        }
                         break;
                     }
                     Some(Ok(Message::Ping(data))) => {
                         let _ = sender.send(Message::Pong(data)).await;
                     }
                     Some(Err(e)) => {
-                        error!("WebSocket error: {}", e);
+                        error!("❌ WebSocket error: {}", e);
                         break;
                     }
-                    None => break,
+                    None => {
+                        info!("🔌 WebSocket stream ended (None received)");
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -172,9 +194,14 @@ async fn handle_message(
     default_group: &mut Option<String>,
     feed: Option<&Arc<crate::feeds::binance_feed::BinanceFeed>>,
     subscribed_symbols_global: Option<&Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>>,
-) -> Result<(), String> {
+) -> Result<Option<serde_json::Value>, String> {
+    info!("🔍 Parsing subscription message: {}", text);
     let msg: SubscribeMessage = serde_json::from_str(text)
-        .map_err(|_| "Invalid message format".to_string())?;
+        .map_err(|e| {
+            warn!("❌ Failed to parse message: {} - Error: {}", text, e);
+            format!("Invalid message format: {}", e)
+        })?;
+    info!("✅ Parsed message - action: {}, symbols: {:?}", msg.action, msg.symbols);
 
     match msg.action.as_str() {
         "subscribe" => {
@@ -238,13 +265,19 @@ async fn handle_message(
             }
 
             info!("✅ Subscribed to {} symbols: {:?}", msg.symbols.len(), msg.symbols);
-            Ok(())
+            
+            // Send confirmation response
+            let response = serde_json::json!({
+                "type": "subscribed",
+                "symbols": msg.symbols
+            });
+            Ok(Some(response))
         }
         "unsubscribe" => {
             for symbol in &msg.symbols {
                 subscribed_symbols.remove(symbol);
             }
-            Ok(())
+            Ok(None)
         }
         _ => Err("Unknown action".to_string()),
     }

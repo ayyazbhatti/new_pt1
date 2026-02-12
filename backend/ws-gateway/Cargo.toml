@@ -3,6 +3,8 @@ name = "ws-gateway"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["macros", "ws"] }

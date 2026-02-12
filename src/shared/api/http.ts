@@ -104,7 +104,7 @@ export async function http<T>(
     } catch {
       error = {
         error: {
-          code: response.status === 401 ? 'UNAUTHORIZED' : response.status === 400 ? 'BAD_REQUEST' : 'UNKNOWN_ERROR',
+          code: response.status === 401 ? 'UNAUTHORIZED' : response.status === 400 ? 'BAD_REQUEST' : response.status === 404 ? 'NOT_FOUND' : 'UNKNOWN_ERROR',
           message: `HTTP ${response.status}: ${response.statusText}`,
         },
       }

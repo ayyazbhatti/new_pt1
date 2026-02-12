@@ -65,6 +65,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       )
     }
 
+    // Sort by price (high to low)
+    filtered = [...filtered].sort((a, b) => {
+      const priceA = a.numericPrice || 0
+      const priceB = b.numericPrice || 0
+      return priceB - priceA // High to low
+    })
+
     return filtered
   },
 }))

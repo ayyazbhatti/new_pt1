@@ -1,13 +1,17 @@
-import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity } from 'lucide-react'
+import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity, Loader2 } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Segmented } from '@/shared/ui'
 import { Checkbox } from '@/shared/ui'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { cn } from '@/shared/utils'
 import { useTerminalStore } from '../store'
 import { toast } from 'react-hot-toast'
 import { SinglePriceDisplay } from './SinglePriceDisplay'
+import { placeOrder, PlaceOrderRequest } from '../api/orders.api'
+import { useAuthStore } from '@/shared/store/auth.store'
+import { wsClient } from '@/shared/ws/wsClient'
+import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
 export function RightTradingPanel() {
   const { selectedSymbol, setSelectedSymbol, symbols } = useTerminalStore()
@@ -20,6 +24,8 @@ export function RightTradingPanel() {
   const [takeProfit, setTakeProfit] = useState('')
   const [limitPrice, setLimitPrice] = useState('')
   const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
 
   // Calculate costs based on size and selected symbol
   const costBreakdown = useMemo(() => {
@@ -62,20 +68,133 @@ export function RightTradingPanel() {
     toast.success('Size set to maximum')
   }
 
-  const handleBuy = () => {
+  // Use shared WebSocket client for order updates
+  const [wsConnected, setWsConnected] = useState(false)
+  
+  useEffect(() => {
+    // Ensure WebSocket is connected
+    if (wsClient.getState() === 'disconnected') {
+      wsClient.connect()
+    }
+    
+    // Update connection status
+    const updateStatus = () => {
+      const state = wsClient.getState()
+      setWsConnected(state === 'authenticated')
+    }
+    updateStatus()
+    
+    // Subscribe to state changes
+    const unsubscribeState = wsClient.onStateChange((state) => {
+      setWsConnected(state === 'authenticated')
+    })
+
+    // Subscribe to order update events
+    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
+      // Handle order update events (when backend sends them via WebSocket)
+      if (event.type === 'admin.order.updated' || event.type === 'admin.order.filled' || event.type === 'admin.order.canceled' || event.type === 'admin.order.rejected') {
+        const order = (event as any).payload.order || (event as any).payload
+        const orderId = order?.orderId || order?.id || (event as any).payload.orderId
+        
+        if (orderId && typeof orderId === 'string' && pendingOrders.has(orderId)) {
+          setPendingOrders(prev => {
+            const next = new Set(prev)
+            next.delete(orderId)
+            return next
+          })
+          
+          const status = order?.status || (event as any).payload.status
+          if (status === 'Filled' || status === 'FILLED' || status === 'filled') {
+            toast.success(`Order ${orderId.slice(0, 8)}... filled successfully`, { duration: 4000 })
+          } else if (status === 'Rejected' || status === 'REJECTED' || status === 'rejected') {
+            toast.error(
+              `Order ${orderId.slice(0, 8)}... rejected: ${order?.reason || (event as any).payload.reason || 'Unknown reason'}`,
+              { duration: 5000 }
+            )
+          } else if (status === 'Cancelled' || status === 'CANCELLED' || status === 'cancelled') {
+            toast.info(`Order ${orderId.slice(0, 8)}... cancelled`, { duration: 3000 })
+          }
+        }
+      }
+    })
+
+    return () => {
+      unsubscribe()
+      unsubscribeState()
+    }
+  }, [pendingOrders])
+
+  const handlePlaceOrder = async (side: 'BUY' | 'SELL') => {
     if (!selectedSymbol) {
       toast.error('Please select a symbol')
       return
     }
-    toast.success(`Buy order placed: ${size} ${currency} ${selectedSymbol.code} at ${orderType} price`)
+
+    const sizeNum = parseFloat(size)
+    if (!sizeNum || sizeNum <= 0) {
+      toast.error('Please enter a valid size')
+      return
+    }
+
+    if (orderType === 'limit' && !limitPrice) {
+      toast.error('Please enter a limit price for limit orders')
+      return
+    }
+
+    setIsSubmitting(true)
+
+    try {
+      const payload: PlaceOrderRequest = {
+        symbol: selectedSymbol.code,
+        side,
+        order_type: orderType.toUpperCase() as 'MARKET' | 'LIMIT',
+        size: sizeNum.toString(),
+        limit_price: orderType === 'limit' && limitPrice ? limitPrice : undefined,
+        sl: useSlTp && stopLoss ? stopLoss : undefined,
+        tp: useSlTp && takeProfit ? takeProfit : undefined,
+        tif: 'GTC',
+        idempotency_key: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      }
+
+      const response = await placeOrder(payload)
+      
+      // Handle both camelCase (API) and snake_case (legacy) for compatibility
+      const orderId = response.orderId || (response as any).order_id
+      
+      if (!orderId) {
+        throw new Error('Order ID not returned from server')
+      }
+      
+      setPendingOrders(prev => new Set(prev).add(orderId))
+      
+      // Show "submitted" message - actual execution happens asynchronously
+      toast.success(
+        `${side} order submitted: ${size} ${selectedSymbol.code} (Order ID: ${orderId.slice(0, 8)}...)`,
+        { duration: 3000 }
+      )
+
+      // Reset form for market orders (keep limit orders for potential modifications)
+      if (orderType === 'market') {
+        setSize('0.003457')
+        setStopLoss('')
+        setTakeProfit('')
+        setUseSlTp(false)
+      }
+    } catch (error: any) {
+      const errorMessage = error?.response?.data?.error?.message || error?.message || 'Failed to place order'
+      toast.error(`Order failed: ${errorMessage}`)
+      console.error('Order placement error:', error)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleBuy = () => {
+    handlePlaceOrder('BUY')
   }
 
   const handleSell = () => {
-    if (!selectedSymbol) {
-      toast.error('Please select a symbol')
-      return
-    }
-    toast.success(`Sell order placed: ${size} ${currency} ${selectedSymbol.code} at ${orderType} price`)
+    handlePlaceOrder('SELL')
   }
 
   return (
@@ -344,9 +463,14 @@ export function RightTradingPanel() {
               variant="success" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-success/20 hover:shadow-success/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleBuy}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected}
             >
               <div className="flex items-center justify-center gap-2">
-                <TrendingUp className="h-4 w-4" />
+                {isSubmitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <TrendingUp className="h-4 w-4" />
+                )}
                 <span>Buy / Long</span>
               </div>
             </Button>
@@ -354,13 +478,23 @@ export function RightTradingPanel() {
               variant="danger" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-danger/20 hover:shadow-danger/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleSell}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected}
             >
               <div className="flex items-center justify-center gap-2">
-                <TrendingDown className="h-4 w-4" />
+                {isSubmitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <TrendingDown className="h-4 w-4" />
+                )}
                 <span>Sell / Short</span>
               </div>
             </Button>
           </div>
+          {!wsConnected && (
+            <div className="mt-2 text-xs text-warning text-center">
+              ⚠️ WebSocket disconnected - order updates may be delayed
+            </div>
+          )}
         </div>
 
         {/* Symbol Details - Enhanced */}
