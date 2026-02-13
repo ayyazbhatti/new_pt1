@@ -218,13 +218,8 @@ pub struct WalletBalanceResponse {
     pub updated_at: String,
 }
 
-async fn get_wallet_balance(
-    State(pool): State<PgPool>,
-    Extension(_deposits_state): Extension<DepositsState>,
-    Extension(claims): Extension<Claims>,
-) -> Result<Json<WalletBalanceResponse>, StatusCode> {
-    let user_id = claims.sub;
-
+// Helper function to calculate wallet balance (reusable)
+pub async fn calculate_wallet_balance(pool: &PgPool, user_id: Uuid) -> anyhow::Result<WalletBalanceResponse> {
     // Calculate balance using formula: Balance = deposits - withdrawals + total realised net profit and loss
     
     // 1. Calculate total deposits (completed deposits only)
@@ -239,12 +234,8 @@ async fn get_wallet_balance(
         "#
     )
     .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!("Failed to calculate total deposits: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    .fetch_optional(pool)
+    .await?;
     let deposits = total_deposits.unwrap_or(Decimal::ZERO);
 
     // 2. Calculate total withdrawals (completed withdrawals only)
@@ -259,12 +250,8 @@ async fn get_wallet_balance(
         "#
     )
     .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!("Failed to calculate total withdrawals: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    .fetch_optional(pool)
+    .await?;
     let withdrawals = total_withdrawals.unwrap_or(Decimal::ZERO);
 
     // 3. Calculate total realized PnL (from closed positions)
@@ -277,12 +264,8 @@ async fn get_wallet_balance(
         "#
     )
     .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!("Failed to calculate total realized PnL: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    .fetch_optional(pool)
+    .await?;
     let realized_pnl = total_realized_pnl.unwrap_or(Decimal::ZERO);
 
     // 4. Calculate balance: deposits - withdrawals + realized_pnl
@@ -298,12 +281,8 @@ async fn get_wallet_balance(
         "#
     )
     .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!("Failed to calculate unrealized PnL: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    .fetch_optional(pool)
+    .await?;
     let unrealized_pnl = total_unrealized_pnl.unwrap_or(Decimal::ZERO);
 
     // 6. Calculate margin used (from open positions)
@@ -316,12 +295,8 @@ async fn get_wallet_balance(
         "#
     )
     .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!("Failed to calculate margin used: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    .fetch_optional(pool)
+    .await?;
     let margin_used = total_margin_used.unwrap_or(Decimal::ZERO);
 
     // 7. Calculate equity = balance + unrealized_pnl
@@ -340,10 +315,7 @@ async fn get_wallet_balance(
     // 10. Locked = margin_used
     let locked = margin_used;
 
-    info!("Balance calculated for user {}: deposits={}, withdrawals={}, realized_pnl={}, balance={}, equity={}, margin_used={}",
-          user_id, deposits, withdrawals, realized_pnl, balance, equity, margin_used);
-
-    Ok(Json(WalletBalanceResponse {
+    Ok(WalletBalanceResponse {
         user_id: user_id.to_string(),
         currency: "USD".to_string(),
         available: available.to_string().parse::<f64>().unwrap_or(0.0),
@@ -352,7 +324,27 @@ async fn get_wallet_balance(
         margin_used: margin_used.to_string().parse::<f64>().unwrap_or(0.0),
         free_margin: free_margin.to_string().parse::<f64>().unwrap_or(0.0),
         updated_at: Utc::now().to_rfc3339(),
-    }))
+    })
+}
+
+async fn get_wallet_balance(
+    State(pool): State<PgPool>,
+    Extension(_deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<WalletBalanceResponse>, StatusCode> {
+    let user_id = claims.sub;
+    
+    match calculate_wallet_balance(&pool, user_id).await {
+        Ok(balance) => {
+            info!("Balance calculated for user {}: available={}, equity={}, margin_used={}",
+                  user_id, balance.available, balance.equity, balance.margin_used);
+            Ok(Json(balance))
+        }
+        Err(e) => {
+            error!("Failed to calculate balance for user {}: {}", user_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 // ============================================================================

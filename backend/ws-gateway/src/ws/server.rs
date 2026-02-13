@@ -18,6 +18,7 @@ pub struct AppState {
     pub validator: Arc<MessageValidator>,
     pub jwt_auth: Arc<JwtAuth>,
     pub broadcaster: Arc<Broadcaster>,
+    pub redis_url: String,
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -36,6 +37,7 @@ async fn ws_handler(
             state.validator.clone(),
             state.jwt_auth.clone(),
             state.broadcaster.clone(),
+            state.redis_url.clone(),
         );
         session.handle(socket).await;
     })

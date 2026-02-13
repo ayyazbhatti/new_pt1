@@ -3,7 +3,7 @@ use crate::ws::protocol::ServerMessage;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use dashmap::DashMap;
 
 pub struct Broadcaster {
@@ -142,10 +142,10 @@ impl Broadcaster {
         }
 
         if sent > 0 {
-            // Log only if significant activity
-            if sent % 1000 == 0 {
-                info!("Broadcast tick {} to {} connections ({} failed)", symbol, sent, failed);
-            }
+            // Log every tick broadcast for debugging (can be reduced later)
+            debug!("📡 Broadcast tick {} to {} connections ({} failed)", symbol, sent, failed);
+        } else {
+            debug!("⚠️ No subscribers for tick {}", symbol);
         }
 
         Ok(())

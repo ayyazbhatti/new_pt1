@@ -4,7 +4,6 @@ import { Input } from '@/shared/ui/input/Input'
 import { Button } from '@/shared/ui/button/Button'
 import { useDepositFlow } from '../hooks/useDepositFlow'
 import { useWalletStore } from '@/shared/store/walletStore'
-import { fetchBalance } from '../api'
 import { Loader2 } from 'lucide-react'
 
 interface DepositModalProps {

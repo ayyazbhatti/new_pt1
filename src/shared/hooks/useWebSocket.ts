@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useAuthStore } from '@/shared/store/auth.store'
 
 export interface PriceTick {
   symbol: string
@@ -34,6 +35,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const shouldReconnectRef = useRef(true)
   const isIntentionallyClosingRef = useRef(false)
   const isUnmountingRef = useRef(false)
+  const isAuthenticatedRef = useRef(false)
 
   const connect = useCallback(() => {
     console.log('🔌 [useWebSocket] connect() called. enabled:', enabled, '| isUnmounting:', isUnmountingRef.current, '| wsRef.current?.readyState:', wsRef.current?.readyState)
@@ -96,15 +98,47 @@ export function useWebSocket(options: UseWebSocketOptions) {
           wsRef.current = ws
         }
         console.log('🔌 [useWebSocket] wsRef.current in onopen:', !!wsRef.current, '| ReadyState:', wsRef.current?.readyState)
+        
+        // Authenticate first if we have a token (for ws-gateway)
+        // Get token from auth store
+        const authState = useAuthStore.getState()
+        const token = authState.accessToken
+        
+        if (token) {
+          console.log('🔐 [useWebSocket] Authenticating with token from store...')
+          try {
+            ws.send(JSON.stringify({
+              type: 'auth',
+              token: token,
+            }))
+            console.log('✅ [useWebSocket] Auth message sent')
+          } catch (error) {
+            console.error('❌ [useWebSocket] Failed to send auth message:', error)
+          }
+        } else {
+          // Fallback to localStorage
+          const localToken = localStorage.getItem('token') || sessionStorage.getItem('token')
+          if (localToken) {
+            console.log('🔐 [useWebSocket] Authenticating with token from localStorage...')
+            try {
+              ws.send(JSON.stringify({
+                type: 'auth',
+                token: localToken,
+              }))
+              console.log('✅ [useWebSocket] Auth message sent')
+            } catch (error) {
+              console.error('❌ [useWebSocket] Failed to send auth message:', error)
+            }
+          } else {
+            console.warn('⚠️ [useWebSocket] No token found in store or localStorage, skipping authentication')
+          }
+        }
+        
         // Set connected immediately - WebSocket is ready
         setIsConnected(true)
+        isAuthenticatedRef.current = false // Reset auth state
         console.log('✅ [useWebSocket] Connection state set to true | ReadyState:', ws.readyState)
-        // Use setTimeout to ensure ref is stable before calling onOpen
-        setTimeout(() => {
-          console.log('🔌 [useWebSocket] Calling onOpen callback, wsRef.current:', !!wsRef.current)
-          onOpen?.()
-          console.log('✅ [useWebSocket] onOpen callback executed')
-        }, 0)
+        // Don't call onOpen here - wait for auth_success message
       }
 
       ws.onmessage = (event) => {
@@ -122,9 +156,35 @@ export function useWebSocket(options: UseWebSocketOptions) {
             // Don't return - might still process if it has price data
           }
           
+          // Handle auth success
+          if (data.type === 'auth_success') {
+            console.log('✅ [useWebSocket] Authentication successful:', data)
+            isAuthenticatedRef.current = true
+            setIsConnected(true) // Ensure connected state is set
+            // Trigger onOpen callback after successful auth so subscriptions can happen
+            setTimeout(() => {
+              console.log('🔌 [useWebSocket] Calling onOpen after auth success')
+              onOpen?.()
+            }, 200) // Increased delay to ensure state is stable
+            return
+          }
+          
+          // Handle auth error
+          if (data.type === 'auth_error') {
+            console.error('❌ [useWebSocket] Authentication failed:', (data as any).error)
+            isAuthenticatedRef.current = false
+            // Don't return - might still receive messages
+          }
+          
           // Handle welcome message
           if (data.type === 'welcome' || (data.message && !data.error)) {
             console.log('👋 [useWebSocket]', data.message || 'Welcome message received')
+            return
+          }
+          
+          // Handle subscribed confirmation
+          if (data.type === 'subscribed') {
+            console.log('✅ [useWebSocket] Subscription confirmed for symbols:', (data as any).symbols)
             return
           }
           
@@ -294,7 +354,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       
       // Get current WebSocket from ref (always access fresh)
       const ws = wsRef.current
-      console.log('🔍 subscribe() called with:', validSymbols, '| ws exists:', !!ws, '| readyState:', ws?.readyState)
+      console.log('🔍 subscribe() called with:', validSymbols, '| ws exists:', !!ws, '| readyState:', ws?.readyState, '| authenticated:', isAuthenticatedRef.current)
       
       if (!ws) {
         console.warn('⚠️ Cannot subscribe: WebSocket is null')
@@ -313,10 +373,25 @@ export function useWebSocket(options: UseWebSocketOptions) {
         return false
       }
       
+      // Check if authenticated (ws-gateway requires auth before subscribe)
+      if (!isAuthenticatedRef.current) {
+        console.warn('⚠️ Cannot subscribe: Not authenticated yet. Waiting for auth_success...')
+        // Retry after a short delay - use a longer delay to ensure auth completes
+        setTimeout(() => {
+          if (isAuthenticatedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+            console.log('🔄 Retrying subscription after authentication...')
+            subscribe(validSymbols)
+          } else {
+            console.warn('⚠️ Still not authenticated or WebSocket not open. Auth state:', isAuthenticatedRef.current, '| WS state:', wsRef.current?.readyState)
+          }
+        }, 1000) // Increased delay to 1 second
+        return false
+      }
+      
       const subscribeMsg = {
-        action: 'subscribe',
+        type: 'subscribe',
         symbols: validSymbols,
-        group: 'default', // Default group (matches server broadcast group)
+        channels: ['tick'], // Subscribe to price tick channel (valid channels: "tick", "positions", "orders", "risk")
       }
       const msgStr = JSON.stringify(subscribeMsg)
       console.log('📤 [SUBSCRIBE] Preparing to send subscription message:', msgStr)
@@ -347,7 +422,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
     if (wsRef.current?.readyState === WebSocket.OPEN && symbols.length > 0) {
       wsRef.current.send(
         JSON.stringify({
-          action: 'unsubscribe',
+          type: 'unsubscribe',
           symbols,
         })
       )

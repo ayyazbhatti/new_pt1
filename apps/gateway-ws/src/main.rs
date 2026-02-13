@@ -31,7 +31,7 @@ struct AppState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-        .with_env_filter("gateway-ws=info")
+        .with_env_filter("gateway-ws=debug")
         .json()
         .init();
 
@@ -245,8 +245,14 @@ async fn forward_events(state: AppState) {
         .expect("Failed to subscribe to evt.* events");
     let mut sub_event = state.nats.subscribe("event.*".to_string()).await
         .expect("Failed to subscribe to event.* events");
+    // Subscribe to deposit request events
+    let mut sub_deposit = state.nats.subscribe("deposit.request.*".to_string()).await
+        .expect("Failed to subscribe to deposit.request.* events");
+    // Subscribe to wallet balance updates
+    let mut sub_wallet = state.nats.subscribe("wallet.balance.updated".to_string()).await
+        .expect("Failed to subscribe to wallet.balance.updated events");
 
-    info!("Event forwarder started - subscribed to evt.* and event.*");
+    info!("Event forwarder started - subscribed to evt.*, event.*, deposit.request.*, and wallet.balance.updated");
 
     loop {
         tokio::select! {
@@ -260,6 +266,16 @@ async fn forward_events(state: AppState) {
                     process_event_message(msg, &state).await;
                 }
             }
+            msg_opt = sub_deposit.next() => {
+                if let Some(msg) = msg_opt {
+                    process_event_message(msg, &state).await;
+                }
+            }
+            msg_opt = sub_wallet.next() => {
+                if let Some(msg) = msg_opt {
+                    process_event_message(msg, &state).await;
+                }
+            }
         }
     }
 }
@@ -268,9 +284,14 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
     use contracts::enums::OrderStatus;
     
     let bytes = msg.payload.to_vec();
+    info!("📥 process_event_message: Received NATS message, subject: {}, payload size: {} bytes", msg.subject, bytes.len());
+    
     if let Ok(versioned) = serde_json::from_slice::<VersionedMessage>(&bytes) {
+        info!("📥 process_event_message: Parsed VersionedMessage, type: {}", versioned.r#type);
         let sessions = state.sessions.read().await;
         let senders = state.senders.read().await;
+        
+        info!("📥 process_event_message: Checking {} sessions", sessions.len());
         
         for (session_id, session) in sessions.iter() {
             if let Some(user_id) = session.user_id {
@@ -346,6 +367,80 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
                             }
                         }
                     }
+                    "wallet.balance.updated" => {
+                        // Wallet balance updates should go to the specific user
+                        // The payload is a JSON object with userId
+                        info!("📨 Received wallet.balance.updated event from NATS");
+                        if let Ok(payload_json) = serde_json::from_value::<serde_json::Value>(versioned.payload.clone()) {
+                            // Extract userId from payload to match with session user
+                            if let Some(event_user_id_str) = payload_json.get("userId").and_then(|v| v.as_str()) {
+                                info!("📨 wallet.balance.updated event userId: {}", event_user_id_str);
+                                if let Ok(event_user_id) = Uuid::parse_str(event_user_id_str) {
+                                    // Send to user if they match and are subscribed to balances
+                                    let has_subscription = session.subscriptions.contains("balances") 
+                                        || session.subscriptions.contains("wallet") 
+                                        || session.subscriptions.contains("notifications");
+                                    info!("📨 Checking session {} (user: {:?}): event_user_id={}, session_user_id={:?}, has_subscription={}, subscriptions={:?}", 
+                                          session_id, user_id, event_user_id, user_id, has_subscription, session.subscriptions);
+                                    
+                                    if event_user_id == user_id && has_subscription {
+                                        // Send as wallet.balance.updated event matching frontend format
+                                        let event_json = serde_json::json!({
+                                            "type": "wallet.balance.updated",
+                                            "payload": payload_json
+                                        });
+                                        // Send directly to this session
+                                        if let Some(tx) = senders.get(session_id) {
+                                            if let Ok(json) = serde_json::to_string(&event_json) {
+                                                let _ = tx.send(axum::extract::ws::Message::Text(json));
+                                                info!("✅ Forwarded wallet.balance.updated to session {} (user: {})", session_id, user_id);
+                                            } else {
+                                                error!("❌ Failed to serialize wallet.balance.updated message");
+                                            }
+                                        } else {
+                                            warn!("⚠️ No sender channel found for session {}", session_id);
+                                        }
+                                    } else {
+                                        if event_user_id != user_id {
+                                            info!("⏭️ Skipping wallet.balance.updated - user mismatch: event_user_id={}, session_user_id={:?}", event_user_id, user_id);
+                                        } else if !has_subscription {
+                                            info!("⏭️ Skipping wallet.balance.updated - user not subscribed to balances/wallet. Session subscriptions: {:?}", session.subscriptions);
+                                        }
+                                    }
+                                } else {
+                                    error!("❌ Failed to parse userId from wallet.balance.updated event: {}", event_user_id_str);
+                                }
+                            } else {
+                                error!("❌ wallet.balance.updated event missing userId field");
+                            }
+                        } else {
+                            error!("❌ Failed to parse wallet.balance.updated payload as JSON");
+                        }
+                    }
+                    "deposit.request.created" => {
+                        // Deposit request events should go to all admin users
+                        // Send to all sessions that have "deposits" or "notifications" subscription
+                        // (Admins should subscribe to these channels)
+                        if session.subscriptions.contains("deposits") || session.subscriptions.contains("notifications") {
+                            // The payload is a JSON object, not a struct - extract it directly
+                            if let Ok(payload_json) = serde_json::from_value::<serde_json::Value>(versioned.payload.clone()) {
+                                // Send as a generic event message matching frontend format
+                                let event_json = serde_json::json!({
+                                    "type": "deposit.request.created",
+                                    "payload": payload_json
+                                });
+                                // Send directly to this session
+                                if let Some(tx) = senders.get(session_id) {
+                                    if let Ok(json) = serde_json::to_string(&event_json) {
+                                        let _ = tx.send(axum::extract::ws::Message::Text(json));
+                                        info!("✅ Forwarded deposit.request.created to session {} (user: {:?})", session_id, user_id);
+                                    }
+                                }
+                            } else {
+                                warn!("Failed to parse deposit.request.created payload for session {}", session_id);
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 
@@ -366,10 +461,11 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
 async fn forward_ticks(state: AppState) {
     use futures_util::StreamExt;
     
+    info!("Starting tick forwarder - subscribing to ticks.*");
     let mut sub = state.nats.subscribe("ticks.*".to_string()).await
         .expect("Failed to subscribe to ticks");
 
-    info!("Tick forwarder started");
+    info!("Tick forwarder started and subscribed to ticks.*");
 
     while let Some(msg) = sub.next().await {
         let bytes = msg.payload.to_vec();
@@ -379,19 +475,32 @@ async fn forward_ticks(state: AppState) {
                 let senders = state.senders.read().await;
                 
                 // Forward to all sessions subscribed to this symbol's tick
-                let tick_topic = format!("ticks:{}", tick.symbol);
-                info!("Received tick for {} (topic: {}), checking {} sessions", tick.symbol, tick_topic, sessions.len());
+                // Handle both formats: BTCUSDT (from Binance) and BTCUSD (internal format)
+                let tick_topic_binance = format!("ticks:{}", tick.symbol);
+                // Convert BTCUSDT -> BTCUSD for matching
+                let tick_topic_internal = if tick.symbol.ends_with("USDT") {
+                    format!("ticks:{}", tick.symbol.replace("USDT", "USD"))
+                } else {
+                    tick_topic_binance.clone()
+                };
+                info!("Received tick for {} (topics: {} / {}), checking {} sessions", tick.symbol, tick_topic_binance, tick_topic_internal, sessions.len());
                 
                 let mut forwarded_count = 0;
                 for (session_id, session) in sessions.iter() {
                     info!("Session {} subscriptions: {:?}", session_id, session.subscriptions);
-                    if session.subscriptions.contains(&tick_topic) {
+                    // Check both formats
+                    if session.subscriptions.contains(&tick_topic_binance) || session.subscriptions.contains(&tick_topic_internal) {
                         if let Some(tx) = senders.get(session_id) {
                             // Frontend expects: {"type":"tick","symbol":"BTCUSD","bid":...,"ask":...,"ts":...}
-                            // Not the wrapped payload format
+                            // Convert BTCUSDT -> BTCUSD for frontend
+                            let frontend_symbol = if tick.symbol.ends_with("USDT") {
+                                tick.symbol.replace("USDT", "USD")
+                            } else {
+                                tick.symbol.clone()
+                            };
                             let tick_msg = serde_json::json!({
                                 "type": "tick",
-                                "symbol": tick.symbol,
+                                "symbol": frontend_symbol,
                                 "bid": tick.bid.to_string(),
                                 "ask": tick.ask.to_string(),
                                 "ts": tick.ts.timestamp_millis(),
@@ -412,7 +521,7 @@ async fn forward_ticks(state: AppState) {
                     }
                 }
                 if forwarded_count == 0 {
-                    info!("No active subscriptions for tick topic: {}", tick_topic);
+                    info!("No active subscriptions for tick topics: {} / {}", tick_topic_binance, tick_topic_internal);
                 }
             } else {
                 error!("Failed to deserialize tick from versioned message");

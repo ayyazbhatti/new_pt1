@@ -56,13 +56,52 @@ class WebSocketClient {
             this.setState('authenticated')
             this.flushMessageQueue()
             console.log('✅ WebSocket authenticated')
+            
+            // Auto-subscribe to channels based on user role
+            const authState = useAuthStore.getState()
+            const user = authState.user
+            if (user && this.ws?.readyState === WebSocket.OPEN) {
+              setTimeout(() => {
+                if (this.ws?.readyState === WebSocket.OPEN) {
+                  if (user.role === 'admin') {
+                    // Subscribe to deposits and notifications for admin users
+                    this.ws.send(JSON.stringify({
+                      type: 'subscribe',
+                      channels: ['deposits', 'notifications'],
+                      symbols: []
+                    }))
+                    console.log('📡 Auto-subscribed admin to deposits and notifications channels')
+                  } else {
+                    // Subscribe to balances and wallet updates for regular users
+                    const subscribeMsg = {
+                      type: 'subscribe',
+                      channels: ['balances', 'wallet'],
+                      symbols: []
+                    }
+                    this.ws.send(JSON.stringify(subscribeMsg))
+                    console.log('📡 [wsClient] Auto-subscribed user to balances and wallet channels:', subscribeMsg)
+                  }
+                }
+              }, 200)
+            }
           } else if (data.type === 'auth_error') {
             this.isAuthenticated = false
             console.error('❌ WebSocket authentication failed:', (data as any).error)
             // Don't disconnect, but mark as unauthenticated
           }
           
-          this.handlers.forEach((handler) => handler(data))
+          // Log all messages for debugging (filter important ones)
+          if (data.type === 'wallet.balance.updated' || data.type === 'deposit.request.approved' || data.type === 'auth_success') {
+            console.log('📨 [wsClient] Received message:', data.type, data)
+          }
+          
+          this.handlers.forEach((handler) => {
+            try {
+              handler(data)
+            } catch (error) {
+              console.error('❌ [wsClient] Error in handler for', data.type, ':', error)
+            }
+          })
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error)
         }
@@ -205,8 +244,8 @@ class WebSocketClient {
 
 // Singleton instance
 // @ts-ignore - Vite env types
-// ws-gateway runs on port 9001 (default), data-provider on 9003
-const WS_URL = import.meta.env?.VITE_WS_URL || 'ws://localhost:9001/ws?group=default'
+// ws-gateway runs on port 3003 (default), data-provider on 9003
+const WS_URL = import.meta.env?.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
 export const wsClient = new WebSocketClient(WS_URL)
 
 // Auto-connect on import (lazy)

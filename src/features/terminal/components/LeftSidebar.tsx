@@ -12,7 +12,6 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { PriceDisplay } from './PriceDisplay'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
-import { fetchBalance } from '@/features/wallet/api'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
@@ -41,35 +40,12 @@ export function LeftSidebar() {
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const symbols = getFilteredSymbols()
 
-  // Fetch balance on mount (only once, no polling)
+  // Set loading state initially while waiting for WebSocket balance update
   useEffect(() => {
-    if (!user?.id) return
-
-    const loadBalance = async () => {
-      try {
-        setLoading(true)
-        const balanceData = await fetchBalance()
-        setWalletData({
-          balance: balanceData.available, // Main balance (available)
-          currency: balanceData.currency,
-          available: balanceData.available,
-          locked: balanceData.locked,
-          equity: balanceData.equity,
-          margin_used: balanceData.marginUsed,
-          free_margin: balanceData.freeMargin,
-        })
-      } catch (error: any) {
-        console.error('Failed to load balance:', error)
-        if (error?.response?.status !== 404) {
-          toast.error('Failed to load balance')
-        }
-      } finally {
-        setLoading(false)
-      }
+    if (user?.id) {
+      setLoading(true)
     }
-
-    loadBalance()
-  }, [user?.id, setWalletData, setLoading])
+  }, [user?.id, setLoading])
 
   // Subscribe to WebSocket events for real-time balance updates
   useWebSocketSubscription(
@@ -89,8 +65,14 @@ export function LeftSidebar() {
           
           if (eventUserId === currentUserId) {
             console.log('✅ Updating wallet balance from WebSocket:', payload)
+            // Check balance before updating to determine if this is initial load or update
+            const currentBalance = useWalletStore.getState().balance
+            const newBalance = payload.balance ?? payload.available ?? 0
+            const isInitialLoad = currentBalance === 0
+            
+            setLoading(false) // Clear loading state when we receive balance data
             setWalletData({
-              balance: payload.balance ?? payload.available ?? 0,
+              balance: newBalance,
               currency: payload.currency ?? 'USD',
               available: payload.available ?? payload.balance ?? 0,
               locked: payload.locked ?? 0,
@@ -98,7 +80,11 @@ export function LeftSidebar() {
               margin_used: payload.margin_used ?? payload.marginUsed ?? 0,
               free_margin: payload.free_margin ?? payload.freeMargin ?? 0,
             })
-            toast.success(`Balance updated: $${(payload.balance ?? payload.available ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, { duration: 3000 })
+            
+            // Only show toast if balance changed (not on initial load)
+            if (!isInitialLoad && currentBalance !== newBalance) {
+              toast.success(`Balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, { duration: 3000 })
+            }
           } else {
             console.log('⏭️ Skipping wallet.balance.updated event (different user)')
           }

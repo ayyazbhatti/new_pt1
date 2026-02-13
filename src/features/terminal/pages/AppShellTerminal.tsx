@@ -11,15 +11,40 @@ import { MockSymbol } from '@/shared/mock/terminalMock'
 
 // Map AdminSymbol to MockSymbol format
 function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: string; ask: string; ts: number }>): MockSymbol {
-  // Use providerSymbol if available, otherwise use symbolCode
-  const symbolKey = (symbol.providerSymbol || symbol.symbolCode).toUpperCase()
-  const priceData = prices.get(symbolKey)
+  // Normalize symbol key - try multiple formats to match price map
+  // Gateway sends BTCUSD (after converting from BTCUSDT)
+  // Symbol might have providerSymbol="BTCUSDT" or symbolCode="BTC-USD" or "BTCUSD"
+  const normalizeKey = (key: string) => {
+    return key
+      .toUpperCase()
+      .replace(/-/g, '') // Remove dashes: BTC-USD -> BTCUSD
+      .replace('USDT', 'USD') // Convert USDT to USD: BTCUSDT -> BTCUSD
+  }
+  
+  // Try multiple lookup keys
+  const possibleKeys = [
+    normalizeKey(symbol.providerSymbol || ''),
+    normalizeKey(symbol.symbolCode),
+    symbol.providerSymbol?.toUpperCase().replace('USDT', 'USD'),
+    symbol.symbolCode.toUpperCase().replace(/-/g, ''),
+  ].filter(k => k && k.length > 0)
+  
+  let priceData: { bid: string; ask: string; ts: number } | undefined
+  let matchedKey: string | undefined
+  
+  for (const key of possibleKeys) {
+    priceData = prices.get(key)
+    if (priceData) {
+      matchedKey = key
+      break
+    }
+  }
   
   // Debug: Log symbol matching
   if (!priceData) {
-    console.log(`⚠️ No price data for symbol: ${symbol.symbolCode} | Key: ${symbolKey} | Available keys:`, Array.from(prices.keys()))
+    console.log(`⚠️ No price data for symbol: ${symbol.symbolCode} | Tried keys: ${possibleKeys.join(', ')} | Available keys:`, Array.from(prices.keys()))
   } else {
-    console.log(`✅ Found price for ${symbol.symbolCode}: bid=${priceData.bid}, ask=${priceData.ask}`)
+    console.log(`✅ Found price for ${symbol.symbolCode} (matched key: ${matchedKey}): bid=${priceData.bid}, ask=${priceData.ask}`)
   }
   
   const bid = priceData ? parseFloat(priceData.bid) : 0

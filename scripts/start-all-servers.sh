@@ -252,6 +252,8 @@ cd - > /dev/null
 # Start Data Provider (port 3001)
 cd "$(dirname "$0")/.." || exit 1
 export PORT=$DATA_PROVIDER_PORT
+export WS_PORT=9003
+export HTTP_PORT=9002
 start_service "Data Provider" "cargo run -p data-provider" $DATA_PROVIDER_PORT "http://localhost:$DATA_PROVIDER_PORT/health"
 
 # Start Order Engine (port 3002)

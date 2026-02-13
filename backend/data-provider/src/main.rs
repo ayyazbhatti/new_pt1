@@ -86,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
     let markup_engine_clone = Arc::new(MarkupEngine::new(redis.clone()));
     let subscribed_symbols_clone = subscribed_symbols.clone();
     let nats_for_ticks_clone = nats_for_ticks.clone();
+    let redis_for_pubsub_clone = redis_for_pubsub.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
         loop {
@@ -132,8 +133,10 @@ async fn main() -> anyhow::Result<()> {
                         "ask": price_state.ask.to_string(),
                         "ts": chrono::Utc::now().timestamp_millis(),
                     });
-                    if let Err(e) = redis_for_pubsub.publish_price_update("price:ticks", &tick_json.to_string()).await {
+                    if let Err(e) = redis_for_pubsub_clone.publish_price_update("price:ticks", &tick_json.to_string()).await {
                         warn!("Failed to publish price to Redis: {}", e);
+                    } else {
+                        debug!("✅ Published price tick to Redis for {}", symbol);
                     }
 
                     // Publish to NATS for order-engine (if connected)

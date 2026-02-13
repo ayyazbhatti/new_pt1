@@ -38,7 +38,6 @@ export function FinanceTransactionsPanel() {
       dateFrom: filters.dateFrom || undefined,
       dateTo: filters.dateTo || undefined,
     }),
-    refetchInterval: 30000,
   })
 
   // Subscribe to WebSocket events for real-time updates

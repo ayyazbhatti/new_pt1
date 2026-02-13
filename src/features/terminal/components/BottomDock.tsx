@@ -339,23 +339,7 @@ export function BottomDock() {
     }
   }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
-  // Refresh data periodically (only after WebSocket is connected)
-  useEffect(() => {
-    if (wsConnected) {
-      const interval = setInterval(() => {
-      if (activeTab === 'positions') {
-        fetchPositions() // Only fetch positions for positions tab
-      } else if (activeTab === 'orders') {
-        fetchOrders()
-      } else if (activeTab === 'order-history') {
-        fetchFilledOrders() // Refresh filled orders for order history tab
-      } else if (activeTab === 'position-history') {
-        fetchPositions() // Fetch all positions (includes closed ones)
-      }
-      }, 5000) // Refresh every 5 seconds
-      return () => clearInterval(interval)
-    }
-  }, [activeTab, wsConnected, fetchPositions, fetchOrders, fetchFilledOrders])
+  // WebSocket handles real-time updates, no polling needed
 
   return (
     <div className="h-[300px] min-h-0 overflow-hidden flex flex-col border-t border-white/5 bg-gradient-to-b from-surface to-surface-2/30 shadow-lg shadow-black/10">

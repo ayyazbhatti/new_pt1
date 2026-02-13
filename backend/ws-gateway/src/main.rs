@@ -93,6 +93,7 @@ async fn main() -> Result<()> {
         validator: validator.clone(),
         jwt_auth: jwt_auth.clone(),
         broadcaster: broadcaster.clone(),
+        redis_url: config.redis.url.clone(),
     };
 
     // Create WebSocket router

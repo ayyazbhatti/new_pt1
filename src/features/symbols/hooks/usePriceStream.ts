@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useWebSocket, PriceTick } from '@/shared/hooks/useWebSocket'
 
-// Clean URL - Use gateway-ws on port 3003 (which forwards ticks from NATS)
+// Clean URL - Use ws-gateway on port 3003 (which forwards ticks from NATS)
 // Fallback to data-provider on 9003 if VITE_DATA_PROVIDER_WS_URL is explicitly set
 const getCleanWsUrl = () => {
-  // Check if explicitly set, otherwise use gateway-ws
+  // Check if explicitly set, otherwise use ws-gateway
   if (import.meta.env.VITE_DATA_PROVIDER_WS_URL) {
     let url = import.meta.env.VITE_DATA_PROVIDER_WS_URL
-    // Only remove trailing slash, keep /ws path for gateway-ws
+    // Only remove trailing slash, keep /ws path for ws-gateway
     url = url.replace(/\/$/, '')
-  return url
+    return url
   }
-  // Default to gateway-ws which forwards ticks from NATS (requires /ws path)
-  return 'ws://localhost:3003/ws'
+  // Default to ws-gateway which forwards ticks from NATS (requires /ws path and group)
+  return 'ws://localhost:3003/ws?group=default'
 }
 
 const DATA_PROVIDER_WS_URL = getCleanWsUrl()
@@ -30,31 +30,45 @@ const priceStore = new Map<string, PriceData>()
 const subscribers = new Map<string, Set<(price: PriceData) => void>>()
 
 // Notify all subscribers for a symbol
+// Normalize symbol key - convert USDT to USD to match gateway format
+function normalizeSymbolKey(symbol: string): string {
+  return symbol.toUpperCase().trim().replace('USDT', 'USD')
+}
+
 function notifySubscribers(symbol: string, price: PriceData) {
-  const symbolUpper = symbol.toUpperCase()
-  console.log(`📥 Received price update for ${symbolUpper}:`, price)
+  const symbolUpper = symbol.toUpperCase().trim()
+  const normalizedKey = normalizeSymbolKey(symbolUpper)
+  
+  console.log(`📥 Received price update for ${symbolUpper} (normalized: ${normalizedKey}):`, price)
   console.log(`📥 Price store before update - keys:`, Array.from(priceStore.keys()))
-  priceStore.set(symbolUpper, price)
+  priceStore.set(normalizedKey, price)
   console.log(`📥 Price store after update - keys:`, Array.from(priceStore.keys()))
   
-  const callbacks = subscribers.get(symbolUpper)
-  console.log(`📥 Subscribers for ${symbolUpper}:`, callbacks ? callbacks.size : 0, '| All subscriber keys:', Array.from(subscribers.keys()))
+  // Try both the original format and normalized format for subscribers
+  // Subscribers might be registered as SOLUSDT but prices come as SOLUSD
+  let callbacks = subscribers.get(normalizedKey)
+  if (!callbacks) {
+    // Try original format in case subscriber was registered with USDT
+    callbacks = subscribers.get(symbolUpper)
+  }
+  
+  console.log(`📥 Subscribers for ${normalizedKey}:`, callbacks ? callbacks.size : 0, '| All subscriber keys:', Array.from(subscribers.keys()))
   
   if (callbacks && callbacks.size > 0) {
-    console.log(`📊 Notifying ${callbacks.size} subscribers for ${symbolUpper}:`, price)
+    console.log(`📊 Notifying ${callbacks.size} subscribers for ${normalizedKey}:`, price)
     // Create a copy of callbacks to avoid issues if callbacks are modified during iteration
     const callbacksArray = Array.from(callbacks)
     callbacksArray.forEach((callback, index) => {
       try {
-        console.log(`📊 Calling callback ${index + 1}/${callbacksArray.length} for ${symbolUpper}`)
+        console.log(`📊 Calling callback ${index + 1}/${callbacksArray.length} for ${normalizedKey}`)
         callback(price)
-        console.log(`✅ Callback ${index + 1} completed for ${symbolUpper}`)
+        console.log(`✅ Callback ${index + 1} completed for ${normalizedKey}`)
       } catch (error) {
-        console.error(`❌ Error in subscriber callback ${index + 1} for ${symbolUpper}:`, error)
+        console.error(`❌ Error in subscriber callback ${index + 1} for ${normalizedKey}:`, error)
       }
     })
   } else {
-    console.warn(`⚠️ No subscribers found for symbol: ${symbolUpper}. Available subscribers:`, Array.from(subscribers.keys()))
+    console.warn(`⚠️ No subscribers found for symbol: ${normalizedKey} (or ${symbolUpper}). Available subscribers:`, Array.from(subscribers.keys()))
     console.warn(`⚠️ Price was received but no one is listening. Price stored for later.`)
   }
 }
@@ -184,27 +198,32 @@ export function usePriceStream(symbols: string[]) {
     const wrappedCallbacks = new Map<string, (price: PriceData) => void>()
     
     symbolsUpper.forEach((symbol) => {
-      if (!subscribers.has(symbol)) {
-        subscribers.set(symbol, new Set())
+      // Normalize symbol key to match incoming price format (USDT -> USD)
+      const normalizedSymbol = normalizeSymbolKey(symbol)
+      if (!subscribers.has(normalizedSymbol)) {
+        subscribers.set(normalizedSymbol, new Set())
       }
-      const callbacks = subscribers.get(symbol)!
+      const callbacks = subscribers.get(normalizedSymbol)!
       
       // Create a wrapped callback that includes the symbol
       // Use updatePrice directly (it's stable from useCallback) instead of relying on ref
       const wrappedCallback = (price: PriceData) => {
-        console.log(`📞 Wrapped callback called for ${symbol} with price:`, price)
+        // Use normalized symbol for callback but original symbol for updatePrice
+        const normalizedSymbol = normalizeSymbolKey(symbol)
+        console.log(`📞 Wrapped callback called for ${symbol} (normalized: ${normalizedSymbol}) with price:`, price)
         console.log(`📞 updatePrice function exists:`, typeof updatePrice === 'function')
         // Always use updatePrice directly - it's stable from useCallback
+        // Use normalized symbol for the price map key
         if (updatePrice) {
-          console.log(`✅ Calling updatePrice for ${symbol}`)
+          console.log(`✅ Calling updatePrice for ${normalizedSymbol}`)
           try {
-            updatePrice(symbol, price)
-            console.log(`✅ Successfully updated price for ${symbol}`)
+            updatePrice(normalizedSymbol, price)
+            console.log(`✅ Successfully updated price for ${normalizedSymbol}`)
           } catch (error) {
-            console.error(`❌ Error updating price for ${symbol}:`, error)
+            console.error(`❌ Error updating price for ${normalizedSymbol}:`, error)
           }
         } else {
-          console.error(`❌ updatePrice is not available for ${symbol}`)
+          console.error(`❌ updatePrice is not available for ${normalizedSymbol}`)
         }
       }
       wrappedCallbacks.set(symbol, wrappedCallback)
@@ -226,12 +245,13 @@ export function usePriceStream(symbols: string[]) {
 
     return () => {
       symbolsUpper.forEach((symbol) => {
-        const callbacks = subscribers.get(symbol)
-        const wrappedCallback = wrappedCallbacks.get(symbol)
+        const normalizedSymbol = normalizeSymbolKey(symbol)
+        const callbacks = subscribers.get(normalizedSymbol)
+        const wrappedCallback = wrappedCallbacks.get(normalizedSymbol)
         if (callbacks && wrappedCallback) {
           callbacks.delete(wrappedCallback)
           if (callbacks.size === 0) {
-            subscribers.delete(symbol)
+            subscribers.delete(normalizedSymbol)
           }
         }
       })
@@ -261,9 +281,9 @@ export function usePriceStream(symbols: string[]) {
       })
     },
     onOpen: () => {
-      console.log('🎉 usePriceStream: WebSocket opened')
-      // When WebSocket opens, subscribe to current symbols
-      // Use a longer delay to ensure WebSocket ref is fully set and stable
+      console.log('🎉 usePriceStream: WebSocket opened (this fires after auth_success)')
+      // When WebSocket opens (after auth), subscribe to current symbols
+      // Use a longer delay to ensure authentication is fully complete
       setTimeout(() => {
         console.log('🔄 WebSocket opened, subscribing to symbols:', symbolsRef.current)
         if (performSubscriptionRef.current) {
@@ -271,7 +291,7 @@ export function usePriceStream(symbols: string[]) {
         } else {
           console.warn('⚠️ performSubscription not available yet')
         }
-      }, 300)
+      }, 500) // Increased delay to ensure auth completes
     },
     onError: (error) => {
       console.error('❌ usePriceStream: WebSocket error:', error)
@@ -293,7 +313,13 @@ export function usePriceStream(symbols: string[]) {
     console.log('🔄 Subscription effect triggered. isConnected:', isConnected, '| symbols:', symbols.length)
     if (isConnected && performSubscriptionRef.current) {
       console.log('✅ WebSocket connected, executing subscription...')
-      performSubscriptionRef.current()
+      // Add a small delay to ensure authentication has completed
+      setTimeout(() => {
+        if (performSubscriptionRef.current) {
+          console.log('🔄 Executing subscription after delay...')
+          performSubscriptionRef.current()
+        }
+      }, 500) // Wait 500ms for auth to complete
     } else if (!isConnected) {
       console.log('⏳ Waiting for WebSocket connection before subscribing...')
     } else if (!performSubscriptionRef.current) {
@@ -347,30 +373,33 @@ export function useSymbolPrice(symbol: string | null) {
       }
     }
 
+    // Normalize symbol key to match incoming price format
+    const normalizedSymbol = normalizeSymbolKey(symbolUpper)
+    
     // Subscribe FIRST before checking for initial price
-    if (!subscribers.has(symbolUpper)) {
-      subscribers.set(symbolUpper, new Set())
-      console.log(`🆕 Created subscriber set for ${symbolUpper}`)
+    if (!subscribers.has(normalizedSymbol)) {
+      subscribers.set(normalizedSymbol, new Set())
+      console.log(`🆕 Created subscriber set for ${symbolUpper} (normalized: ${normalizedSymbol})`)
     }
-    const callbacks = subscribers.get(symbolUpper)!
+    const callbacks = subscribers.get(normalizedSymbol)!
     callbacks.add(priceCallback)
-    console.log(`✅ Added price subscriber for ${symbolUpper}, total subscribers: ${callbacks.size}`)
+    console.log(`✅ Added price subscriber for ${symbolUpper} (normalized: ${normalizedSymbol}), total subscribers: ${callbacks.size}`)
 
-    // Set initial price if available (check AFTER subscribing)
-    const initialPrice = priceStore.get(symbolUpper)
+    // Set initial price if available (check AFTER subscribing, use normalized key)
+    const initialPrice = priceStore.get(normalizedSymbol)
     if (initialPrice) {
-      console.log(`💰 Initial price found for ${symbolUpper}:`, initialPrice)
+      console.log(`💰 Initial price found for ${normalizedSymbol}:`, initialPrice)
       setPrice(initialPrice)
     } else {
-      console.log(`⚠️ No initial price found for ${symbolUpper}. Price store has:`, Array.from(priceStore.keys()))
+      console.log(`⚠️ No initial price found for ${normalizedSymbol}. Price store has:`, Array.from(priceStore.keys()))
       console.log(`⚠️ Will wait for price update from WebSocket...`)
     }
 
     return () => {
-      const callbacks = subscribers.get(symbolUpper)
+      const callbacks = subscribers.get(normalizedSymbol)
       if (callbacks) {
         const removed = callbacks.delete(priceCallback)
-        console.log(`🗑️ Cleanup: Removed subscriber for ${symbolUpper}, removed: ${removed}, remaining: ${callbacks.size}`)
+        console.log(`🗑️ Cleanup: Removed subscriber for ${normalizedSymbol}, removed: ${removed}, remaining: ${callbacks.size}`)
         if (callbacks.size === 0) {
           subscribers.delete(symbolUpper)
           console.log(`🗑️ Cleanup: Deleted empty subscriber set for ${symbolUpper}`)

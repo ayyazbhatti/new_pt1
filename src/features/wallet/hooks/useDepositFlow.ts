@@ -6,7 +6,7 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { wsClient } from '@/shared/ws/wsClient'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
-import { createDepositRequest, fetchBalance } from '../api'
+import { createDepositRequest } from '../api'
 
 export function useDepositFlow() {
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -14,38 +14,7 @@ export function useDepositFlow() {
   const { setWalletData } = useWalletStore()
   const { push: pushNotification } = useNotificationsStore()
 
-  // Load initial balance on mount
-  useEffect(() => {
-    const loadBalance = async () => {
-      try {
-        const balanceData = await fetchBalance()
-        setWalletData({
-          balance: balanceData.balance,
-          currency: balanceData.currency,
-          available: balanceData.available,
-          locked: balanceData.locked,
-          equity: balanceData.equity,
-          margin_used: balanceData.margin_used,
-          free_margin: balanceData.free_margin,
-        })
-      } catch (error: any) {
-        // Gracefully handle 404 - endpoint not implemented yet
-        if (error?.response?.status === 404) {
-          console.warn('Wallet balance endpoint not available yet (404). Backend implementation pending.')
-          // Keep default values from store
-        } else {
-          console.error('Failed to load balance:', error)
-        }
-        // Don't show toast on initial load failure
-      }
-    }
-
-    if (user?.id) {
-      loadBalance()
-    }
-  }, [user?.id, setWalletData])
-
-  // Subscribe to WebSocket events
+  // Subscribe to WebSocket events for balance updates (no API calls)
   useWebSocketSubscription(
     useCallback(
       (event: WsInboundEvent) => {
@@ -86,16 +55,43 @@ export function useDepositFlow() {
           }
         } else if (event.type === 'wallet.balance.updated') {
           const { payload } = event
-          if (payload.userId === user?.id) {
+          // Compare userId (can be string or UUID) with user.id (string)
+          const payloadUserId = payload.userId || (payload as any).user_id
+          const currentUserId = user?.id
+          
+          // Normalize both to strings for comparison
+          const payloadUserIdStr = payloadUserId?.toString() || ''
+          const currentUserIdStr = currentUserId?.toString() || ''
+          
+          if (payloadUserIdStr && currentUserIdStr && payloadUserIdStr === currentUserIdStr) {
+            console.log('💰 Received wallet.balance.updated:', payload)
+            // Check balance before updating to determine if this is initial load or update
+            const currentBalance = useWalletStore.getState().balance
+            const newBalance = payload.balance || 0
+            const isInitialLoad = currentBalance === 0
+            
             // Update wallet from server event
             setWalletData({
-              balance: payload.balance,
-              currency: payload.currency,
-              available: payload.available,
-              locked: payload.locked,
-              equity: payload.equity,
-              margin_used: payload.margin_used,
-              free_margin: payload.free_margin,
+              balance: newBalance,
+              currency: payload.currency || 'USD',
+              available: payload.available || payload.balance || 0,
+              locked: payload.locked || 0,
+              equity: payload.equity || payload.balance || 0,
+              margin_used: payload.margin_used || payload.marginUsed || 0,
+              free_margin: payload.free_margin || payload.freeMargin || payload.available || payload.balance || 0,
+            })
+            
+            // Only show toast if balance changed (not on initial load)
+            if (!isInitialLoad && currentBalance !== newBalance) {
+              toast.success(
+                `Balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                { duration: 3000 }
+              )
+            }
+          } else {
+            console.log('💰 wallet.balance.updated received but userId mismatch:', {
+              payloadUserId: payloadUserIdStr,
+              currentUserId: currentUserIdStr
             })
           }
         }

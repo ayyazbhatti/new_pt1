@@ -32,7 +32,6 @@ export function FinanceWalletsPanel() {
       balanceMin: filters.balanceMin ? parseFloat(filters.balanceMin) : undefined,
       balanceMax: filters.balanceMax ? parseFloat(filters.balanceMax) : undefined,
     }),
-    refetchInterval: 30000,
   })
 
   const wallets = useMemo(() => {

@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 use tracing::{error, info, warn};
 use anyhow::Result;
+use redis::Client as RedisClient;
+use redis::AsyncCommands;
 
 pub struct Session {
     conn_id: Uuid,
@@ -17,6 +19,7 @@ pub struct Session {
     validator: Arc<MessageValidator>,
     jwt_auth: Arc<JwtAuth>,
     broadcaster: Arc<Broadcaster>,
+    redis_url: String,
 }
 
 impl Session {
@@ -25,6 +28,7 @@ impl Session {
         validator: Arc<MessageValidator>,
         jwt_auth: Arc<JwtAuth>,
         broadcaster: Arc<Broadcaster>,
+        redis_url: String,
     ) -> Self {
         let conn_id = Uuid::new_v4();
         info!("New WebSocket connection established: {}", conn_id);
@@ -34,10 +38,13 @@ impl Session {
             validator,
             jwt_auth,
             broadcaster,
+            redis_url,
         }
     }
 
     pub async fn handle(&mut self, socket: WebSocket) {
+        // Clone redis_url before we move self
+        let redis_url = self.redis_url.clone();
         let (mut sender, mut receiver) = socket.split();
 
         // Create channel for this connection
@@ -89,6 +96,7 @@ impl Session {
         let jwt_auth = self.jwt_auth.clone();
         let broadcaster = self.broadcaster.clone();
         let response_tx_clone = response_tx.clone();
+        let redis_url_for_balance = redis_url.clone();
 
         let mut recv_task = tokio::spawn(async move {
             while let Some(Ok(msg)) = receiver.next().await {
@@ -175,6 +183,27 @@ impl Session {
                                             info!("Sending auth_success to connection {}", conn_id);
                                             let _ = response_tx_clone.send(Message::Text(json));
                                         }
+
+                                        // Request initial wallet balance via Redis
+                                        let user_id_str = claims.sub.to_string();
+                                        let redis_url_clone = redis_url_for_balance.clone();
+                                        tokio::spawn(async move {
+                                            if let Ok(client) = RedisClient::open(redis_url_clone) {
+                                                if let Ok(mut conn) = client.get_async_connection().await {
+                                                    let request = serde_json::json!({
+                                                        "user_id": user_id_str,
+                                                        "request_type": "initial_balance"
+                                                    });
+                                                    if let Ok(json_str) = serde_json::to_string(&request) {
+                                                        if let Err(e) = conn.publish::<_, _, i32>("wallet:balance:request", json_str).await {
+                                                            warn!("Failed to publish wallet balance request: {}", e);
+                                                        } else {
+                                                            info!("Published wallet balance request for user {}", user_id_str);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        });
 
                                         info!("Connection {} authenticated as user {}", conn_id, claims.sub);
                                     }

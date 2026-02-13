@@ -9,6 +9,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 use tracing_subscriber;
+use uuid::Uuid;
+use futures::stream::StreamExt;
 
 mod db;
 mod middleware;
@@ -149,8 +151,9 @@ async fn main() -> anyhow::Result<()> {
         nats: Arc::new(nats_client.clone()),
     };
 
-    // Clone pool for event handler before passing to router
+    // Clone pool for event handler and balance listener before passing to router
     let pool_for_events = Arc::new(pool.clone());
+    let pool_for_balance = pool.clone();
 
     // Build application
     let app = Router::new()
@@ -192,6 +195,79 @@ async fn main() -> anyhow::Result<()> {
             }
             Err(e) => {
                 error!("Failed to subscribe to evt.order.updated: {}", e);
+            }
+        }
+    });
+
+    // Start Redis listener for wallet balance requests
+    let redis_for_balance = redis.clone();
+    tokio::spawn(async move {
+        use redis::AsyncCommands;
+        use routes::deposits::calculate_wallet_balance;
+        
+        loop {
+            match redis_for_balance.get_async_connection().await {
+                Ok(mut conn) => {
+                    let mut pubsub = conn.into_pubsub();
+                    if let Err(e) = pubsub.subscribe("wallet:balance:request").await {
+                        error!("Failed to subscribe to wallet:balance:request: {}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    
+                    info!("✅ Subscribed to wallet:balance:request channel");
+                    let mut stream = pubsub.into_on_message();
+                    
+                    while let Some(msg) = stream.next().await {
+                        if let Ok(payload) = msg.get_payload::<String>() {
+                            if let Ok(request) = serde_json::from_str::<serde_json::Value>(&payload) {
+                                if let Some(user_id_str) = request.get("user_id").and_then(|v| v.as_str()) {
+                                    if let Ok(user_id) = Uuid::parse_str(user_id_str) {
+                                        info!("📥 Received wallet balance request for user {}", user_id);
+                                        
+                                        // Calculate balance
+                                        match calculate_wallet_balance(&pool_for_balance, user_id).await {
+                                            Ok(balance) => {
+                                                // Publish balance update to Redis
+                                                let balance_event = serde_json::json!({
+                                                    "userId": user_id.to_string(),
+                                                    "user_id": user_id.to_string(),
+                                                    "balance": balance.available,
+                                                    "available": balance.available,
+                                                    "locked": balance.locked,
+                                                    "equity": balance.equity,
+                                                    "margin_used": balance.margin_used,
+                                                    "marginUsed": balance.margin_used,
+                                                    "free_margin": balance.free_margin,
+                                                    "freeMargin": balance.free_margin,
+                                                    "currency": balance.currency,
+                                                    "updated_at": balance.updated_at,
+                                                });
+                                                
+                                                if let Ok(event_json) = serde_json::to_string(&balance_event) {
+                                                    if let Ok(mut pub_conn) = redis_for_balance.get_async_connection().await {
+                                                        if let Ok(count) = pub_conn.publish::<_, _, i32>("wallet:balance:updated", event_json.clone()).await {
+                                                            info!("✅ Published initial wallet balance to Redis ({} subscribers) for user_id={}", count, user_id);
+                                                        } else {
+                                                            error!("❌ Failed to publish wallet balance to Redis for user_id={}", user_id);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to calculate balance for user {}: {}", user_id, e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to get Redis connection for balance listener: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
             }
         }
     });

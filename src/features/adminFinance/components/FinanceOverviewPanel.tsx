@@ -12,13 +12,11 @@ export function FinanceOverviewPanel() {
   const { data: overview, isLoading: overviewLoading } = useQuery({
     queryKey: ['finance-overview'],
     queryFn: fetchFinanceOverview,
-    refetchInterval: 30000, // Refetch every 30 seconds
   })
 
   const { data: recentTransactions, isLoading: transactionsLoading } = useQuery({
     queryKey: ['finance-recent-transactions'],
     queryFn: () => fetchTransactions({ page: 1, pageSize: 10 }),
-    refetchInterval: 30000,
   })
 
   const stats = useMemo(() => {
