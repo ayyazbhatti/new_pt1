@@ -42,6 +42,11 @@ export function BottomDock() {
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
 
+  // Normalize symbol key - convert USDT to USD to match price stream format
+  const normalizeSymbolKey = (symbol: string): string => {
+    return symbol.toUpperCase().trim().replace('USDT', 'USD')
+  }
+
   // Get symbols from positions for price streaming
   const positionSymbols = useMemo(() => {
     const symbols = positions
@@ -463,25 +468,26 @@ export function BottomDock() {
                       const marginNum = parseFloat(pos.margin || '0')
                       
                       // Get live price for this symbol
-                      const symbolKey = pos.symbol.toUpperCase()
-                      const priceData = livePrices.get(symbolKey)
+                      // Normalize symbol key to match price stream format (USDT -> USD)
+                      const symbolKey = normalizeSymbolKey(pos.symbol)
+                      // Try both normalized and original format for lookup
+                      let priceData = livePrices.get(symbolKey)
+                      if (!priceData) {
+                        // Fallback to original format in case price is stored with USDT
+                        priceData = livePrices.get(pos.symbol.toUpperCase())
+                      }
                       // Use bid for LONG positions, ask for SHORT positions
                       const livePrice = priceData 
                         ? (pos.side === 'LONG' ? parseFloat(priceData.bid) : parseFloat(priceData.ask))
                         : null
-                      
-                      // Fallback to calculated price if live price not available
-                      const currentPrice = livePrice !== null 
-                        ? livePrice 
-                        : entryPrice // Use entry price as fallback
                       
                       // Calculate unrealized P&L based on current price
                       // For LONG: (current_price - entry_price) × size
                       // For SHORT: (entry_price - current_price) × size
                       const unrealizedPnl = livePrice !== null
                         ? (pos.side === 'LONG' 
-                            ? (currentPrice - entryPrice) * sizeNum
-                            : (entryPrice - currentPrice) * sizeNum)
+                            ? (livePrice - entryPrice) * sizeNum
+                            : (entryPrice - livePrice) * sizeNum)
                         : parseFloat(pos.unrealized_pnl || '0') // Fallback to stored value if no live price
                       
                       return (
@@ -509,11 +515,11 @@ export function BottomDock() {
                           <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(2)}</td>
                           <td className={cn(
                             "px-4 py-3 font-mono font-bold",
-                            livePrice !== null ? "text-accent" : "text-text/70"
+                            livePrice !== null ? "text-accent" : "text-text/40"
                           )}>
                             {livePrice !== null 
-                              ? `$${currentPrice.toFixed(2)}` 
-                              : `$${currentPrice.toFixed(2)} (est)`
+                              ? `$${livePrice.toFixed(2)}` 
+                              : <span className="text-text/40">--</span>
                             }
                           </td>
                           <td className={cn(
