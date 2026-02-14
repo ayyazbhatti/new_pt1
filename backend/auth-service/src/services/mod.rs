@@ -4,5 +4,6 @@ pub mod admin_leverage_profiles_service;
 pub mod admin_symbols_service;
 pub mod admin_markup_service;
 pub mod order_event_handler;
+pub mod position_event_handler;
 pub mod ledger_service;
 

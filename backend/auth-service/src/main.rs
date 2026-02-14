@@ -179,13 +179,14 @@ async fn main() -> anyhow::Result<()> {
         .nest("/v1/orders", create_orders_router(pool.clone(), orders_state.clone())) // Keep v1 for backward compatibility
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(pool);
+        .with_state(pool.clone());
 
     // Start order event listener to sync filled orders to database
     let nats_for_events = nats_client.clone();
     let redis_for_events = redis.clone();
+    let pool_for_orders = pool_for_events.clone();
     tokio::spawn(async move {
-        let event_handler = OrderEventHandler::new(pool_for_events, redis_for_events);
+        let event_handler = OrderEventHandler::new(pool_for_orders, redis_for_events);
         match nats_for_events.subscribe("evt.order.updated".to_string()).await {
             Ok(subscriber) => {
                 info!("✅ Subscribed to evt.order.updated for database sync");
@@ -195,6 +196,25 @@ async fn main() -> anyhow::Result<()> {
             }
             Err(e) => {
                 error!("Failed to subscribe to evt.order.updated: {}", e);
+            }
+        }
+    });
+
+    // Start position event listener to sync positions to database
+    let nats_for_positions = nats_client.clone();
+    let pool_for_positions = pool_for_events.clone();
+    tokio::spawn(async move {
+        use services::position_event_handler::PositionEventHandler;
+        let position_handler = PositionEventHandler::new(pool_for_positions);
+        match nats_for_positions.subscribe("evt.position.updated".to_string()).await {
+            Ok(subscriber) => {
+                info!("✅ Subscribed to evt.position.updated for database sync");
+                if let Err(e) = position_handler.start_listener(subscriber).await {
+                    error!("Position event listener error: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Failed to subscribe to evt.position.updated: {}", e);
             }
         }
     });
