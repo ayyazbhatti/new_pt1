@@ -156,8 +156,21 @@ export const useAdminTradingStore = create<AdminTradingState>((set, get) => ({
   setGroups: (groups) => set({ groups }),
 
   // UI State
-  activeTab: 'orders',
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  activeTab: (() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('adminTradingActiveTab')
+      if (saved === 'orders' || saved === 'positions' || saved === 'audit') {
+        return saved
+      }
+    }
+    return 'orders'
+  })(),
+  setActiveTab: (tab) => {
+    set({ activeTab: tab })
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('adminTradingActiveTab', tab)
+    }
+  },
   selectedOrderId: null,
   setSelectedOrderId: (id) => set({ selectedOrderId: id }),
   selectedPositionId: null,

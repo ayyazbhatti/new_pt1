@@ -72,13 +72,23 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
         ),
       },
       {
-        accessorKey: 'userName',
-        header: 'User',
+        id: 'userName',
+        header: 'Name',
+        cell: ({ row }) => {
+          const order = row.original
+          const firstName = order.userFirstName || ''
+          const lastName = order.userLastName || ''
+          const fullName = `${firstName} ${lastName}`.trim() || order.userName || 'N/A'
+          return (
+            <div className="text-sm font-medium text-text">{fullName}</div>
+          )
+        },
+      },
+      {
+        accessorKey: 'userEmail',
+        header: 'Email',
         cell: ({ row }) => (
-          <div>
-            <div className="text-sm font-medium text-text">{row.original.userName}</div>
-            <div className="text-xs text-text-muted">{row.original.userEmail}</div>
-          </div>
+          <div className="text-sm text-text-muted">{row.original.userEmail || 'N/A'}</div>
         ),
       },
       {
@@ -211,7 +221,21 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
     <div className="rounded-lg border border-border overflow-hidden">
       {/* Header */}
       <div className="bg-surface-2 border-b border-border sticky top-0 z-10">
-        <table className="w-full">
+        <table className="w-full table-fixed">
+          <colgroup>
+            <col style={{ width: '10%' }} /> {/* Order ID */}
+            <col style={{ width: '12%' }} /> {/* Name */}
+            <col style={{ width: '15%' }} /> {/* Email */}
+            <col style={{ width: '8%' }} /> {/* Group */}
+            <col style={{ width: '8%' }} /> {/* Symbol */}
+            <col style={{ width: '6%' }} /> {/* Side */}
+            <col style={{ width: '6%' }} /> {/* Type */}
+            <col style={{ width: '8%' }} /> {/* Size */}
+            <col style={{ width: '8%' }} /> {/* Price */}
+            <col style={{ width: '8%' }} /> {/* Status */}
+            <col style={{ width: '10%' }} /> {/* Created */}
+            <col style={{ width: '5%' }} /> {/* Actions */}
+          </colgroup>
           <thead>
             <tr>
               {columns.map((column) => (
@@ -254,7 +278,21 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
                 )}
                 onClick={() => handleRowClick(order)}
               >
-                <table className="w-full">
+                <table className="w-full table-fixed">
+                  <colgroup>
+                    <col style={{ width: '10%' }} /> {/* Order ID */}
+                    <col style={{ width: '12%' }} /> {/* Name */}
+                    <col style={{ width: '15%' }} /> {/* Email */}
+                    <col style={{ width: '8%' }} /> {/* Group */}
+                    <col style={{ width: '8%' }} /> {/* Symbol */}
+                    <col style={{ width: '6%' }} /> {/* Side */}
+                    <col style={{ width: '6%' }} /> {/* Type */}
+                    <col style={{ width: '8%' }} /> {/* Size */}
+                    <col style={{ width: '8%' }} /> {/* Price */}
+                    <col style={{ width: '8%' }} /> {/* Status */}
+                    <col style={{ width: '10%' }} /> {/* Created */}
+                    <col style={{ width: '5%' }} /> {/* Actions */}
+                  </colgroup>
                   <tbody>
                     <tr>
                       {columns.map((column) => (

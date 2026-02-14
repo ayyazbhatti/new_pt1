@@ -12,6 +12,8 @@ export interface AdminOrder {
   userId: string
   userName: string
   userEmail?: string
+  userFirstName?: string
+  userLastName?: string
   groupId: string
   groupName: string
   symbolId: string
