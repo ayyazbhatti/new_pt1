@@ -61,6 +61,11 @@ export const useAuthStore = create<AuthState>()(
           },
           isAuthenticated: true,
         })
+        // Connect WebSocket after successful login
+        if (typeof window !== 'undefined') {
+          const { wsClient } = await import('@/shared/ws/wsClient')
+          wsClient.connect()
+        }
       },
 
       register: async (data: RegisterData) => {
@@ -79,6 +84,11 @@ export const useAuthStore = create<AuthState>()(
           },
           isAuthenticated: true,
         })
+        // Connect WebSocket after successful registration
+        if (typeof window !== 'undefined') {
+          const { wsClient } = await import('@/shared/ws/wsClient')
+          wsClient.connect()
+        }
       },
 
       logout: async () => {
@@ -126,6 +136,11 @@ export const useAuthStore = create<AuthState>()(
               isAuthenticated: true,
               isHydrated: true,
             })
+            // Connect WebSocket after hydration if user is authenticated
+            if (typeof window !== 'undefined') {
+              const { wsClient } = await import('@/shared/ws/wsClient')
+              wsClient.connect()
+            }
           } catch (error) {
             // Token invalid, clear state
             set({
@@ -138,6 +153,11 @@ export const useAuthStore = create<AuthState>()(
           }
         } else {
           set({ isHydrated: true })
+          // If user is already authenticated, ensure WebSocket is connected
+          if (state.accessToken && state.user && typeof window !== 'undefined') {
+            const { wsClient } = await import('@/shared/ws/wsClient')
+            wsClient.connect()
+          }
         }
       },
 

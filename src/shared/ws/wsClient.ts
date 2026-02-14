@@ -61,8 +61,9 @@ class WebSocketClient {
             const authState = useAuthStore.getState()
             const user = authState.user
             if (user && this.ws?.readyState === WebSocket.OPEN) {
+              // Increased delay to ensure connection is fully ready
               setTimeout(() => {
-                if (this.ws?.readyState === WebSocket.OPEN) {
+                if (this.ws?.readyState === WebSocket.OPEN && this.isAuthenticated) {
                   if (user.role === 'admin') {
                     // Subscribe to deposits and notifications for admin users
                     this.ws.send(JSON.stringify({
@@ -73,16 +74,24 @@ class WebSocketClient {
                     console.log('📡 Auto-subscribed admin to deposits and notifications channels')
                   } else {
                     // Subscribe to balances and wallet updates for regular users
+                    // Note: Wallet balance updates are sent to all authenticated connections,
+                    // but subscribing helps ensure we receive all updates
                     const subscribeMsg = {
                       type: 'subscribe',
                       channels: ['balances', 'wallet'],
                       symbols: []
                     }
-                    this.ws.send(JSON.stringify(subscribeMsg))
-                    console.log('📡 [wsClient] Auto-subscribed user to balances and wallet channels:', subscribeMsg)
+                    try {
+                      this.ws.send(JSON.stringify(subscribeMsg))
+                      console.log('📡 [wsClient] Auto-subscribed user to balances and wallet channels:', subscribeMsg)
+                    } catch (error) {
+                      console.error('❌ [wsClient] Failed to send subscription:', error)
+                    }
                   }
+                } else {
+                  console.warn('⚠️ [wsClient] WebSocket not ready for subscription, state:', this.ws?.readyState, 'authenticated:', this.isAuthenticated)
                 }
-              }, 200)
+              }, 500) // Increased from 200ms to 500ms for better reliability
             }
           } else if (data.type === 'auth_error') {
             this.isAuthenticated = false
@@ -95,11 +104,25 @@ class WebSocketClient {
             console.log('📨 [wsClient] Received message:', data.type, data)
           }
           
-          this.handlers.forEach((handler) => {
+          // Log wallet balance updates with more detail
+          if (data.type === 'wallet.balance.updated') {
+            console.log('💰 [wsClient] Wallet balance update received:', {
+              type: data.type,
+              payload: (data as any).payload,
+              handlerCount: this.handlers.size,
+              isAuthenticated: this.isAuthenticated,
+              state: this.state
+            })
+          }
+          
+          console.log(`📨 [wsClient] Dispatching to ${this.handlers.size} handler(s) for event type: ${data.type}`)
+          this.handlers.forEach((handler, index) => {
             try {
+              console.log(`📨 [wsClient] Calling handler ${index + 1}/${this.handlers.size} for ${data.type}`)
               handler(data)
+              console.log(`✅ [wsClient] Handler ${index + 1} completed for ${data.type}`)
             } catch (error) {
-              console.error('❌ [wsClient] Error in handler for', data.type, ':', error)
+              console.error(`❌ [wsClient] Error in handler ${index + 1} for ${data.type}:`, error)
             }
           })
         } catch (error) {
@@ -151,6 +174,24 @@ class WebSocketClient {
       return
     }
     
+    // Allow subscribe/unsubscribe messages if authenticated
+    if (event.type === 'subscribe' || event.type === 'unsubscribe') {
+      if (this.isAuthenticated && this.state === 'authenticated' && this.ws?.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify(event))
+        } catch (error) {
+          console.error('Failed to send subscribe/unsubscribe message:', error)
+          this.messageQueue.push(event)
+        }
+      } else {
+        this.messageQueue.push(event)
+        if (this.state === 'disconnected') {
+          this.connect()
+        }
+      }
+      return
+    }
+    
     // For other messages, require authentication
     if (this.isAuthenticated && this.state === 'authenticated' && this.ws?.readyState === WebSocket.OPEN) {
       try {
@@ -167,10 +208,23 @@ class WebSocketClient {
     }
   }
 
+  // Send subscribe/unsubscribe messages
+  sendSubscribe(symbols: string[], channels: string[] = []): void {
+    this.send({ type: 'subscribe', symbols, channels })
+  }
+
+  sendUnsubscribe(symbols: string[]): void {
+    this.send({ type: 'unsubscribe', symbols })
+  }
+
   subscribe(handler: MessageHandler): () => void {
+    console.log('📝 [wsClient] Adding handler, current count:', this.handlers.size)
     this.handlers.add(handler)
+    console.log('📝 [wsClient] Handler added, new count:', this.handlers.size)
     return () => {
+      console.log('📝 [wsClient] Removing handler, current count:', this.handlers.size)
       this.handlers.delete(handler)
+      console.log('📝 [wsClient] Handler removed, new count:', this.handlers.size)
     }
   }
 
@@ -248,8 +302,12 @@ class WebSocketClient {
 const WS_URL = import.meta.env?.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
 export const wsClient = new WebSocketClient(WS_URL)
 
-// Auto-connect on import (lazy)
+// Auto-connect on import (lazy) - but only if user is already logged in
 if (typeof window !== 'undefined') {
-  wsClient.connect()
+  // Check if user is already logged in before auto-connecting
+  const authState = useAuthStore.getState()
+  if (authState.accessToken && authState.user) {
+    wsClient.connect()
+  }
 }
 

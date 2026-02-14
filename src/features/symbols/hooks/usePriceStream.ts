@@ -1,21 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useWebSocket, PriceTick } from '@/shared/hooks/useWebSocket'
-
-// Clean URL - Use ws-gateway on port 3003 (which forwards ticks from NATS)
-// Fallback to data-provider on 9003 if VITE_DATA_PROVIDER_WS_URL is explicitly set
-const getCleanWsUrl = () => {
-  // Check if explicitly set, otherwise use ws-gateway
-  if (import.meta.env.VITE_DATA_PROVIDER_WS_URL) {
-    let url = import.meta.env.VITE_DATA_PROVIDER_WS_URL
-    // Only remove trailing slash, keep /ws path for ws-gateway
-    url = url.replace(/\/$/, '')
-    return url
-  }
-  // Default to ws-gateway which forwards ticks from NATS (requires /ws path and group)
-  return 'ws://localhost:3003/ws?group=default'
-}
-
-const DATA_PROVIDER_WS_URL = getCleanWsUrl()
+import { wsClient } from '@/shared/ws/wsClient'
+import { useWebSocketState, useWebSocketSubscription } from '@/shared/ws/wsHooks'
+import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
 interface PriceData {
   bid: string
@@ -102,7 +88,7 @@ export function usePriceStream(symbols: string[]) {
     callbackRef.current = updatePrice
   }, [updatePrice])
 
-  // Function to perform subscription (defined BEFORE useWebSocket to avoid closure issues)
+  // Function to perform subscription (using shared wsClient)
   // Use refs to avoid closure issues
   const performSubscriptionRef = useRef<() => void>()
   
@@ -258,64 +244,74 @@ export function usePriceStream(symbols: string[]) {
     }
   }, [symbols.join(','), updatePrice]) // Include updatePrice in dependencies
 
-  // WebSocket connection
-  const wsEnabled = symbols.length > 0
-  console.log('🔌 usePriceStream: WebSocket enabled:', wsEnabled, '| symbols.length:', symbols.length, '| URL:', DATA_PROVIDER_WS_URL)
-  console.log('🔌 usePriceStream: Symbols to subscribe:', symbols)
-  console.log('🔌 usePriceStream: DATA_PROVIDER_WS_URL:', DATA_PROVIDER_WS_URL)
+  // Use shared wsClient instead of creating separate connection
+  const wsState = useWebSocketState()
+  const isConnected = wsClient.isConnected()
   
-  const { isConnected, subscribe, unsubscribe } = useWebSocket({
-    url: DATA_PROVIDER_WS_URL,
-    onMessage: (tick: PriceTick) => {
-      console.log('📨 usePriceStream received tick:', tick)
-      console.log('📨 Tick symbol:', tick.symbol, '| Bid:', tick.bid, '| Ask:', tick.ask)
-      // Ensure symbol is uppercase to match subscription format
-      const symbolUpper = tick.symbol.toUpperCase().trim()
-      console.log('📨 Processing tick for symbol:', symbolUpper)
-      console.log('📨 Current subscribers:', Array.from(subscribers.keys()))
-      console.log('📨 Current price store:', Array.from(priceStore.keys()))
-      notifySubscribers(symbolUpper, {
-        bid: tick.bid,
-        ask: tick.ask,
-        ts: tick.ts,
-      })
-    },
-    onOpen: () => {
-      console.log('🎉 usePriceStream: WebSocket opened (this fires after auth_success)')
-      // When WebSocket opens (after auth), subscribe to current symbols
-      // Use a longer delay to ensure authentication is fully complete
-      setTimeout(() => {
-        console.log('🔄 WebSocket opened, subscribing to symbols:', symbolsRef.current)
-        if (performSubscriptionRef.current) {
-          performSubscriptionRef.current()
-        } else {
-          console.warn('⚠️ performSubscription not available yet')
-        }
-      }, 500) // Increased delay to ensure auth completes
-    },
-    onError: (error) => {
-      console.error('❌ usePriceStream: WebSocket error:', error)
-    },
-    onClose: () => {
-      console.warn('⚠️ usePriceStream: WebSocket closed')
-    },
-    enabled: wsEnabled,
-  })
+  console.log('🔌 usePriceStream: Using shared wsClient, state:', wsState, '| isConnected:', isConnected)
+  console.log('🔌 usePriceStream: Symbols to subscribe:', symbols)
+  
+  // Subscribe to tick events from wsClient
+  useWebSocketSubscription(
+    useCallback((event: WsInboundEvent) => {
+      if (event.type === 'tick') {
+        console.log('📨 usePriceStream received tick from wsClient:', event)
+        const symbolUpper = event.symbol.toUpperCase().trim()
+        console.log('📨 Processing tick for symbol:', symbolUpper)
+        notifySubscribers(symbolUpper, {
+          bid: event.bid,
+          ask: event.ask,
+          ts: event.ts,
+        })
+      }
+    }, [])
+  )
 
-  // Store subscribe/unsubscribe functions in refs to avoid closure issues
+  // Subscribe/unsubscribe functions using wsClient
+  const subscribeToSymbols = useCallback((symbolsToSubscribe: string[]) => {
+    if (!wsClient.isConnected()) {
+      console.warn('⚠️ [usePriceStream] WebSocket not ready for subscription')
+      return false
+    }
+    
+    try {
+      wsClient.sendSubscribe(symbolsToSubscribe, [])
+      console.log('✅ [usePriceStream] Subscribed to symbols via wsClient:', symbolsToSubscribe)
+      return true
+    } catch (error) {
+      console.error('❌ [usePriceStream] Failed to subscribe:', error)
+      return false
+    }
+  }, [])
+
+  const unsubscribeFromSymbols = useCallback((symbolsToUnsubscribe: string[]) => {
+    if (!wsClient.isConnected()) {
+      console.warn('⚠️ [usePriceStream] WebSocket not ready for unsubscription')
+      return
+    }
+    
+    try {
+      wsClient.sendUnsubscribe(symbolsToUnsubscribe)
+      console.log('✅ [usePriceStream] Unsubscribed from symbols via wsClient:', symbolsToUnsubscribe)
+    } catch (error) {
+      console.error('❌ [usePriceStream] Failed to unsubscribe:', error)
+    }
+  }, [])
+
+  // Store subscribe/unsubscribe functions in refs
   useEffect(() => {
-    subscribeFnRef.current = subscribe
-    unsubscribeFnRef.current = unsubscribe
-  }, [subscribe, unsubscribe])
+    subscribeFnRef.current = subscribeToSymbols
+    unsubscribeFnRef.current = unsubscribeFromSymbols
+  }, [subscribeToSymbols, unsubscribeFromSymbols])
 
   // Subscribe/unsubscribe when symbols change (if already connected)
   useEffect(() => {
-    console.log('🔄 Subscription effect triggered. isConnected:', isConnected, '| symbols:', symbols.length)
+    console.log('🔄 Subscription effect triggered. isConnected:', isConnected, '| wsState:', wsState, '| symbols:', symbols.length)
     if (isConnected && performSubscriptionRef.current) {
       console.log('✅ WebSocket connected, executing subscription...')
       // Add a small delay to ensure authentication has completed
       setTimeout(() => {
-        if (performSubscriptionRef.current) {
+        if (performSubscriptionRef.current && wsClient.isConnected()) {
           console.log('🔄 Executing subscription after delay...')
           performSubscriptionRef.current()
         }
@@ -325,7 +321,7 @@ export function usePriceStream(symbols: string[]) {
     } else if (!performSubscriptionRef.current) {
       console.warn('⚠️ performSubscriptionRef.current is not available')
     }
-  }, [isConnected, symbols.join(',')])
+  }, [isConnected, wsState, symbols.join(',')])
 
   return {
     prices,

@@ -21,14 +21,18 @@ export function useGlobalWalletBalance() {
           const { payload } = event
           
           // Compare userId (can be string or UUID) with user.id
-          const payloadUserId = payload.userId || (payload as any).user_id
-          const currentUserId = user?.id
+          // Normalize UUIDs to handle format differences (with/without dashes, case)
+          const normalizeUserId = (id: string | undefined | null): string => {
+            if (!id) return ''
+            const str = id.toString().trim().toLowerCase()
+            // Remove dashes and normalize UUID format
+            return str.replace(/-/g, '')
+          }
           
-          // Normalize both to strings for comparison
-          const payloadUserIdStr = payloadUserId?.toString() || ''
-          const currentUserIdStr = currentUserId?.toString() || ''
+          const payloadUserId = normalizeUserId(payload.userId || (payload as any).user_id)
+          const currentUserId = normalizeUserId(user?.id)
           
-          if (payloadUserIdStr && currentUserIdStr && payloadUserIdStr === currentUserIdStr) {
+          if (payloadUserId && currentUserId && payloadUserId === currentUserId) {
             console.log('💰 [Global] Received wallet.balance.updated:', payload)
             
             // Check balance before updating to determine if this is initial load or update

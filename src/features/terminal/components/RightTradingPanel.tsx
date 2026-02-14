@@ -13,19 +13,75 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
+// Local storage key for trading panel state
+const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
+
+interface TradingPanelState {
+  orderType: string
+  size: string
+  currency: string
+  marginPercent: number
+  useSlTp: boolean
+  stopLoss: string
+  takeProfit: string
+  limitPrice: string
+  symbolDetailsOpen: boolean
+}
+
+// Load state from localStorage
+const loadTradingPanelState = (): Partial<TradingPanelState> => {
+  try {
+    const saved = localStorage.getItem(TRADING_PANEL_STORAGE_KEY)
+    if (saved) {
+      return JSON.parse(saved)
+    }
+  } catch (error) {
+    console.error('Failed to load trading panel state:', error)
+  }
+  return {}
+}
+
+// Save state to localStorage
+const saveTradingPanelState = (state: Partial<TradingPanelState>) => {
+  try {
+    localStorage.setItem(TRADING_PANEL_STORAGE_KEY, JSON.stringify(state))
+  } catch (error) {
+    console.error('Failed to save trading panel state:', error)
+  }
+}
+
 export function RightTradingPanel() {
   const { selectedSymbol, setSelectedSymbol, symbols } = useTerminalStore()
-  const [orderType, setOrderType] = useState('market')
-  const [size, setSize] = useState('0.003457')
-  const [currency, setCurrency] = useState<string>('')
-  const [marginPercent, setMarginPercent] = useState(1.0)
-  const [useSlTp, setUseSlTp] = useState(false)
-  const [stopLoss, setStopLoss] = useState('')
-  const [takeProfit, setTakeProfit] = useState('')
-  const [limitPrice, setLimitPrice] = useState('')
-  const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(false)
+  
+  // Load initial state from localStorage
+  const savedState = loadTradingPanelState()
+  
+  const [orderType, setOrderType] = useState(savedState.orderType || 'market')
+  const [size, setSize] = useState(savedState.size || '0.003457')
+  const [currency, setCurrency] = useState<string>(savedState.currency || '')
+  const [marginPercent, setMarginPercent] = useState(savedState.marginPercent ?? 1.0)
+  const [useSlTp, setUseSlTp] = useState(savedState.useSlTp || false)
+  const [stopLoss, setStopLoss] = useState(savedState.stopLoss || '')
+  const [takeProfit, setTakeProfit] = useState(savedState.takeProfit || '')
+  const [limitPrice, setLimitPrice] = useState(savedState.limitPrice || '')
+  const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(savedState.symbolDetailsOpen || false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
+  
+  // Save state to localStorage whenever it changes
+  useEffect(() => {
+    saveTradingPanelState({
+      orderType,
+      size,
+      currency,
+      marginPercent,
+      useSlTp,
+      stopLoss,
+      takeProfit,
+      limitPrice,
+      symbolDetailsOpen,
+    })
+  }, [orderType, size, currency, marginPercent, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen])
 
   // Update currency to base currency when symbol changes
   useEffect(() => {

@@ -126,6 +126,15 @@ export type WsOutboundEvent =
       token: string
     }
   | {
+      type: 'subscribe'
+      symbols: string[]
+      channels: string[]
+    }
+  | {
+      type: 'unsubscribe'
+      symbols: string[]
+    }
+  | {
       type: 'deposit.request.create'
       payload: DepositRequestCreatePayload
     }
@@ -222,5 +231,12 @@ export type WsInboundEvent =
   | {
       type: 'admin.audit.appended'
       payload: AdminAuditAppendedPayload
+    }
+  | {
+      type: 'tick'
+      symbol: string
+      bid: string
+      ask: string
+      ts: number
     }
 

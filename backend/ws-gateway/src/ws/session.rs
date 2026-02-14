@@ -153,6 +153,10 @@ impl Session {
                                 info!("Auth message received from connection {}, validating token...", conn_id);
                                 match jwt_auth.validate_token(&token) {
                                     Ok(claims) => {
+                                        info!("✅ Token validated successfully for connection {}", conn_id);
+                                        info!("   Claims - sub (user_id): {}, email: {}, role: {}", 
+                                            claims.sub, claims.email, claims.role);
+                                        
                                         if jwt_auth.is_expired(&claims) {
                                             warn!("Token expired for connection {}", conn_id);
                                             let error_msg = ServerMessage::AuthError {
@@ -173,6 +177,7 @@ impl Session {
                                             last_heartbeat: std::time::Instant::now(),
                                         };
                                         registry.register(conn);
+                                        info!("✅ Connection {} registered with user_id: {}", conn_id, claims.sub);
 
                                         // Send auth success
                                         let success_msg = ServerMessage::AuthSuccess {
@@ -180,7 +185,7 @@ impl Session {
                                             group_id: claims.group_id.clone(),
                                         };
                                         if let Ok(json) = success_msg.to_json() {
-                                            info!("Sending auth_success to connection {}", conn_id);
+                                            info!("📤 Sending auth_success to connection {} with user_id: {}", conn_id, claims.sub);
                                             let _ = response_tx_clone.send(Message::Text(json));
                                         }
 
@@ -208,7 +213,8 @@ impl Session {
                                         info!("Connection {} authenticated as user {}", conn_id, claims.sub);
                                     }
                                     Err(e) => {
-                                        warn!("Token validation failed for connection {}: {}", conn_id, e);
+                                        error!("❌ Token validation failed for connection {}: {}", conn_id, e);
+                                        error!("   Token (first 50 chars): {}", token.chars().take(50).collect::<String>());
                                         let error_msg = ServerMessage::AuthError {
                                             error: format!("Invalid token: {}", e),
                                         };
