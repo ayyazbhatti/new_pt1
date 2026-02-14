@@ -277,6 +277,13 @@ impl Broadcaster {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        // Extract status - default to "OPEN" if not provided (for new positions)
+        let status = payload
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "OPEN".to_string());
+
         let ts = payload
             .get("ts")
             .or_else(|| payload.get("timestamp"))
@@ -289,6 +296,7 @@ impl Broadcaster {
             side,
             quantity,
             unrealized_pnl,
+            status,
             ts,
             trigger_reason,
         };

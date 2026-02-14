@@ -8,6 +8,8 @@ import { getPositions, Position, updatePositionSltp, closePosition } from '../ap
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
+import { wsClient } from '@/shared/ws/wsClient'
+import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
 export function BottomDock() {
   // Valid tab IDs
@@ -41,6 +43,8 @@ export function BottomDock() {
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const lastPositionCountRef = useRef<number>(0)
 
   // Normalize symbol key - convert USDT to USD to match price stream format
   const normalizeSymbolKey = (symbol: string): string => {
@@ -145,12 +149,58 @@ export function BottomDock() {
     }
   }, [activeTab])
 
-  // Initial fetch
+  // Initial fetch on mount - always load positions immediately on page load
+  // This ensures positions are available right away, even before user switches to positions tab
+  useEffect(() => {
+    console.log('🔄 BottomDock mounted, fetching positions immediately...')
+    fetchPositions().then(() => {
+      // Store initial position count after fetch completes
+      setTimeout(() => {
+        lastPositionCountRef.current = positions.length
+      }, 100)
+    })
+    // Also fetch orders on mount so they're ready
+    fetchOrders()
+  }, [fetchPositions, fetchOrders]) // Use callbacks in deps - they're stable (useCallback)
+
+  // Polling fallback: Check for new positions every 2 seconds when on positions tab
+  // This ensures positions appear even if WebSocket doesn't work
   useEffect(() => {
     if (activeTab === 'positions') {
+      pollingIntervalRef.current = setInterval(() => {
+        console.log('🔄 [BottomDock] Polling for new positions (every 2s)...')
+        fetchPositions().then(() => {
+          const currentCount = positions.filter(p => p.status === 'OPEN').length
+          if (currentCount !== lastPositionCountRef.current) {
+            console.log(`✅ [BottomDock] Position count changed: ${lastPositionCountRef.current} → ${currentCount}`)
+            lastPositionCountRef.current = currentCount
+          }
+        })
+      }, 2000) // Poll every 2 seconds
+    } else {
+      // Clear polling when not on positions tab
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
+      }
+    }
+  }, [activeTab, fetchPositions, positions.length])
+
+  // Fetch data when tab changes (for refreshing data when switching tabs)
+  useEffect(() => {
+    if (activeTab === 'positions') {
+      // Refresh positions when switching to positions tab
       fetchPositions()
       fetchFilledOrders() // Also fetch filled orders for positions tab
     } else if (activeTab === 'orders') {
+      // Refresh orders when switching to orders tab
       fetchOrders()
     } else if (activeTab === 'order-history') {
       fetchFilledOrders() // Fetch filled orders for order history tab
@@ -179,47 +229,140 @@ export function BottomDock() {
       } catch (error) {
         console.error('Failed to send auth message:', error)
       }
-      setTimeout(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'subscribe', symbols: [], channels: ['positions', 'orders'] }))
-        }
-      }, 100)
     }
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
-        console.log('📨 WebSocket message received:', data)
+        console.log('📨 [BottomDock] WebSocket message received:', {
+          type: data.type,
+          hasPayload: !!data.payload,
+          fullData: data
+        })
+        
+        // Log ALL messages to help debug
+        if (data.type !== 'pong' && data.type !== 'tick') {
+          console.log('📨 [BottomDock] Non-tick message:', JSON.stringify(data, null, 2))
+        }
         
         // Handle auth responses
         if (data.type === 'auth_success') {
           console.log('✅ WebSocket authenticated successfully:', data)
+          // Subscribe to positions and orders channels after successful authentication
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              const subscribeMsg = { type: 'subscribe', symbols: [], channels: ['positions', 'orders'] }
+              ws.send(JSON.stringify(subscribeMsg))
+              console.log('📡 [BottomDock] Subscribed to channels after auth:', subscribeMsg.channels)
+            }
+          }, 500) // Delay to ensure connection is fully ready
         } else if (data.type === 'auth_error') {
           console.error('❌ WebSocket authentication failed:', data.error)
           toast.error(`WebSocket auth failed: ${data.error}`)
         }
         
-        // Handle position update events
-        if (data.type === 'position_update' || (data.type === 'position' && data.payload)) {
-          const position = data.type === 'position_update' ? data : data.payload
-          console.log('📊 Position update received:', data)
-          console.log('📊 Position data:', position)
-          console.log('📊 Trigger reason:', data.trigger_reason || position?.trigger_reason)
+        // Handle position update events - check for position_update type
+        // The backend sends: { type: 'position_update', position_id, symbol, side, quantity, status, ... }
+        if (data.type === 'position_update') {
+          console.log('📊 [BottomDock] Position update received (position_update type):', data)
           
-          // Check if this is an SL/TP trigger
-          // For position_update type, trigger_reason is directly on data
-          // For position type with payload, it's on the payload
-          const triggerReason = data.type === 'position_update' 
-            ? (data.trigger_reason || null)
-            : (position?.trigger_reason || null)
+          // For position_update, all fields are directly on data
+          const positionId = data.position_id
+          if (!positionId) {
+            console.warn('⚠️ [BottomDock] Position update missing position_id:', data)
+            return
+          }
           
-          console.log('📊 Final trigger reason:', triggerReason)
+          const positionStatus = data.status || 'OPEN'
+          const isOpen = positionStatus === 'OPEN' || positionStatus === 'open'
           
-          if (triggerReason && (triggerReason === 'SL' || triggerReason === 'TP')) {
+          console.log('📊 [BottomDock] Processing position update:', {
+            positionId,
+            symbol: data.symbol,
+            side: data.side,
+            status: positionStatus,
+            isOpen,
+            quantity: data.quantity
+          })
+          
+          setPositions(prev => {
+            const existing = prev.findIndex(p => p.id === positionId)
+            
+            if (existing >= 0) {
+              // Update existing position
+              const updated = [...prev]
+              updated[existing] = {
+                ...updated[existing],
+                id: positionId,
+                symbol: data.symbol || updated[existing].symbol,
+                side: (data.side || updated[existing].side) as 'LONG' | 'SHORT',
+                size: data.quantity || updated[existing].size,
+                unrealized_pnl: data.unrealized_pnl || updated[existing].unrealized_pnl,
+                status: positionStatus as 'OPEN' | 'CLOSED',
+                updated_at: Date.now(),
+              }
+              console.log('✅ [BottomDock] Position updated in state:', updated[existing])
+              return updated
+            } else if (isOpen) {
+              // Add new position immediately
+              console.log('✅ [BottomDock] Adding NEW position immediately:', {
+                positionId,
+                symbol: data.symbol,
+                side: data.side,
+                status: positionStatus
+              })
+              
+              const newPosition: Position = {
+                id: positionId,
+                user_id: '',
+                symbol: data.symbol || '',
+                side: (data.side === 'LONG' || data.side === 'long' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
+                size: data.quantity || '0',
+                original_size: undefined,
+                entry_price: '0', // Will be filled by fetchPositions
+                avg_price: '0', // Will be filled by fetchPositions
+                exit_price: undefined,
+                sl: undefined,
+                tp: undefined,
+                leverage: '50',
+                margin: '0', // Will be filled by fetchPositions
+                unrealized_pnl: data.unrealized_pnl || '0',
+                realized_pnl: '0',
+                status: positionStatus as 'OPEN' | 'CLOSED',
+                opened_at: Date.now(),
+                updated_at: Date.now(),
+                closed_at: undefined,
+              }
+              
+              console.log('✅ [BottomDock] New position object created:', newPosition)
+              console.log('✅ [BottomDock] Current positions count:', prev.length, 'Adding new one, will be:', prev.length + 1)
+              
+              // Fetch full position data in background
+              setTimeout(() => {
+                console.log('🔄 [BottomDock] Fetching full position data in background...')
+                fetchPositions()
+              }, 500)
+              
+              return [...prev, newPosition]
+            } else if (positionStatus === 'CLOSED' || positionStatus === 'closed') {
+              // Position was closed, remove from list
+              console.log('📊 [BottomDock] Position closed, removing from list:', positionId)
+              return prev.filter(p => p.id !== positionId)
+            }
+            
+            console.warn('⚠️ [BottomDock] Position update not processed:', { positionId, positionStatus, isOpen })
+            return prev
+          })
+        }
+        
+        // Handle SL/TP trigger notifications
+        if (data.type === 'position_update' && data.trigger_reason) {
+          const triggerReason = data.trigger_reason
+          if (triggerReason === 'SL' || triggerReason === 'TP') {
             const triggerType = triggerReason === 'SL' ? 'Stop Loss' : 'Take Profit'
-            const symbol = position?.symbol || data.symbol || 'Unknown'
-            const side = position?.side || data.side || 'Unknown'
-            console.log('🎯 Showing toaster for', triggerType, 'on', side, symbol)
+            const symbol = data.symbol || 'Unknown'
+            const side = data.side || 'Unknown'
+            console.log('🎯 [BottomDock] Showing toaster for', triggerType, 'on', side, symbol)
             toast.success(
               `🎯 ${triggerType} Triggered!`,
               {
@@ -228,31 +371,6 @@ export function BottomDock() {
               }
             )
           }
-          
-          setPositions(prev => {
-            const existing = prev.findIndex(p => p.id === position.position_id || p.id === position.id)
-            if (existing >= 0) {
-              // Update existing position
-              const updated = [...prev]
-              updated[existing] = {
-                ...updated[existing],
-                ...position,
-                id: position.position_id || position.id,
-                side: position.side || updated[existing].side,
-                status: position.status || updated[existing].status,
-              }
-              console.log('✅ Position updated:', updated[existing])
-              return updated
-            } else if (position.status === 'OPEN' || position.status === 'open') {
-              // Add new position
-              console.log('✅ New position added:', position)
-              return [...prev, {
-                ...position,
-                id: position.position_id || position.id,
-              } as Position]
-            }
-            return prev
-          })
         }
         
         // Handle order update events
@@ -272,11 +390,36 @@ export function BottomDock() {
               }
               // Remove if filled or cancelled
               if (orderUpdate.status === 'FILLED' || orderUpdate.status === 'CANCELLED') {
-                console.log('✅ Order filled/cancelled, removing from list:', orderUpdate.order_id)
-                // If filled, trigger position refresh and fetch filled orders
-                if (orderUpdate.status === 'FILLED' && activeTab === 'positions') {
-                  fetchPositions()
+                console.log('✅ [BottomDock] Order filled/cancelled, removing from list:', orderUpdate.order_id)
+                // If filled, immediately fetch positions multiple times to ensure we catch the new position
+                // This is a fallback in case WebSocket position_update doesn't arrive immediately
+                if (orderUpdate.status === 'FILLED') {
+                  console.log('📊 [BottomDock] Order filled, fetching positions immediately to show new position...')
+                  
+                  // Fetch immediately
+                  fetchPositions().then(() => {
+                    const currentCount = positions.filter(p => p.status === 'OPEN').length
+                    lastPositionCountRef.current = currentCount
+                  })
                   fetchFilledOrders()
+                  
+                  // Aggressive polling after order fill - check every 500ms for 5 seconds
+                  let pollCount = 0
+                  const aggressivePoll = setInterval(() => {
+                    pollCount++
+                    if (pollCount > 10) { // 10 * 500ms = 5 seconds
+                      clearInterval(aggressivePoll)
+                      return
+                    }
+                    console.log(`🔄 [BottomDock] Aggressive poll #${pollCount} after order fill...`)
+                    fetchPositions().then(() => {
+                      const currentCount = positions.filter(p => p.status === 'OPEN').length
+                      if (currentCount > lastPositionCountRef.current) {
+                        console.log(`✅ [BottomDock] Found new position via aggressive polling! Count: ${lastPositionCountRef.current} → ${currentCount}`)
+                        lastPositionCountRef.current = currentCount
+                      }
+                    })
+                  }, 500) // Poll every 500ms
                 }
                 return updated.filter((_, i) => i !== existing)
               }

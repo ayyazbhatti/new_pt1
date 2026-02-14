@@ -56,6 +56,7 @@ pub enum ServerMessage {
         side: String,
         quantity: String,
         unrealized_pnl: String,
+        status: String, // "OPEN", "CLOSED", "open", "closed"
         ts: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         trigger_reason: Option<String>, // "SL" or "TP" for stop loss/take profit triggers
