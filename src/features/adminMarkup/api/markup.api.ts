@@ -42,7 +42,8 @@ export async function listMarkupProfiles(): Promise<MarkupProfile[]> {
   const response = await http<any>(`/api/admin/markup/profiles`, {
     method: 'GET',
   })
-  const arr = Array.isArray(response) ? response : (response?.items ?? response?.data ?? [])
+  if (response == null) return []
+  const arr = Array.isArray(response) ? response : (response?.items ?? response?.data ?? response?.profiles ?? [])
   if (!Array.isArray(arr)) return []
   return arr
     .map((item: any) => toCamelCaseProfile(item))

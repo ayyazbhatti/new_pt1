@@ -15,14 +15,9 @@ const groupSchema = z.object({
   description: z.string().optional().nullable(),
   status: z.enum(['active', 'disabled']),
   priority: z.number().min(-9999, 'Priority must be >= -9999').max(9999, 'Priority must be <= 9999'),
-  min_leverage: z.number().min(1, 'Min leverage must be at least 1'),
-  max_leverage: z.number().min(1, 'Max leverage must be at least 1'),
   max_open_positions: z.number().min(0, 'Max open positions must be >= 0'),
   max_open_orders: z.number().min(0, 'Max open orders must be >= 0'),
   risk_mode: z.enum(['standard', 'conservative', 'aggressive']),
-}).refine((data) => data.max_leverage >= data.min_leverage, {
-  message: 'Max leverage must be >= min leverage',
-  path: ['max_leverage'],
 })
 
 type GroupFormData = z.infer<typeof groupSchema>
@@ -53,8 +48,6 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           description: initial.description || '',
           status: initial.status,
           priority: initial.priority,
-          min_leverage: initial.minLeverage,
-          max_leverage: initial.maxLeverage,
           max_open_positions: initial.maxOpenPositions,
           max_open_orders: initial.maxOpenOrders,
           risk_mode: initial.riskMode,
@@ -64,8 +57,6 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           description: '',
           status: 'active',
           priority: 0,
-          min_leverage: 1,
-          max_leverage: 100,
           max_open_positions: 50,
           max_open_orders: 200,
           risk_mode: 'standard',
@@ -84,8 +75,8 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
         description: data.description || null,
         status: data.status,
         priority: data.priority,
-        min_leverage: data.min_leverage,
-        max_leverage: data.max_leverage,
+        min_leverage: initial?.minLeverage ?? 1,
+        max_leverage: initial?.maxLeverage ?? 100,
         max_open_positions: data.max_open_positions,
         max_open_orders: data.max_open_orders,
         risk_mode: data.risk_mode,
@@ -165,30 +156,6 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
               disabled={isLoading || isReadOnly}
             />
             {errors.priority && <p className="text-sm text-danger">{errors.priority.message}</p>}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="min_leverage">Min Leverage *</Label>
-            <Input
-              id="min_leverage"
-              type="number"
-              {...register('min_leverage', { valueAsNumber: true })}
-              disabled={isLoading || isReadOnly}
-            />
-            {errors.min_leverage && <p className="text-sm text-danger">{errors.min_leverage.message}</p>}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="max_leverage">Max Leverage *</Label>
-            <Input
-              id="max_leverage"
-              type="number"
-              {...register('max_leverage', { valueAsNumber: true })}
-              disabled={isLoading || isReadOnly}
-            />
-            {errors.max_leverage && <p className="text-sm text-danger">{errors.max_leverage.message}</p>}
           </div>
         </div>
 

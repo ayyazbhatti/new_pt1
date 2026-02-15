@@ -8,8 +8,14 @@ import {
   UsageResponse,
 } from '../types/group'
 
-// Helper to convert snake_case to camelCase
+// Helper to convert snake_case to camelCase (list item may include price_profile, leverage_profile)
 function toCamelCase(obj: any): UserGroup {
+  const priceProfile = obj.price_profile
+    ? { id: obj.price_profile.id, name: obj.price_profile.name }
+    : null
+  const leverageProfile = obj.leverage_profile
+    ? { id: obj.leverage_profile.id, name: obj.leverage_profile.name }
+    : null
   return {
     id: obj.id,
     name: obj.name,
@@ -23,6 +29,8 @@ function toCamelCase(obj: any): UserGroup {
     riskMode: obj.risk_mode,
     priceProfileId: obj.default_price_profile_id,
     leverageProfileId: obj.default_leverage_profile_id,
+    priceProfile: priceProfile ?? undefined,
+    leverageProfile: leverageProfile ?? undefined,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
   }
@@ -54,14 +62,19 @@ export async function listGroups(params?: ListGroupsParams): Promise<ListGroupsR
   const queryString = queryParams.toString()
   const endpoint = `/api/admin/groups${queryString ? `?${queryString}` : ''}`
 
-  const response = await http<ListGroupsResponse>(endpoint, {
+  const response = await http<any>(endpoint, {
     method: 'GET',
   })
 
-  // Convert items to camelCase
+  const rawProfiles = response.available_price_profiles ?? []
+  const availablePriceProfiles = Array.isArray(rawProfiles)
+    ? rawProfiles.map((p: any) => ({ id: p.id, name: p.name ?? '' }))
+    : []
+
   return {
     ...response,
     items: response.items.map(toCamelCase),
+    availablePriceProfiles,
   }
 }
 
@@ -105,15 +118,6 @@ export async function updateGroupPriceProfile(groupId: string, priceProfileId: s
     method: 'PUT',
     body: JSON.stringify({
       price_profile_id: priceProfileId,
-    }),
-  })
-}
-
-export async function updateGroupLeverageProfile(groupId: string, leverageProfileId: string | null): Promise<void> {
-  await http(`/api/admin/groups/${groupId}/leverage-profile`, {
-    method: 'PUT',
-    body: JSON.stringify({
-      leverage_profile_id: leverageProfileId,
     }),
   })
 }

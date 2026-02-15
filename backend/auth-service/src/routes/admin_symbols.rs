@@ -134,12 +134,14 @@ async fn list_symbols(
         )
         .await
         .map_err(|e| {
+            let msg = e.to_string();
+            tracing::error!(error = %msg, "admin symbols list failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: ErrorDetail {
                         code: "LIST_SYMBOLS_FAILED".to_string(),
-                        message: e.to_string(),
+                        message: msg,
                     },
                 }),
             )

@@ -20,12 +20,13 @@ const queryKeys = {
   overrides: (profileId: string) => [...queryKeys.all, 'overrides', profileId] as const,
 }
 
-export function useMarkupProfiles() {
+export function useMarkupProfiles(options?: { enabled?: boolean }) {
   const accessToken = useAuthStore((s) => s.accessToken)
+  const enabled = options?.enabled !== undefined ? options.enabled : !!accessToken
   return useQuery({
     queryKey: queryKeys.profiles(),
     queryFn: () => listMarkupProfiles(),
-    enabled: !!accessToken,
+    enabled,
     refetchOnMount: true,
     refetchOnWindowFocus: true,
     staleTime: 0,

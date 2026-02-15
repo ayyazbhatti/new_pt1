@@ -41,9 +41,29 @@ pub struct UpdateGroupRequest {
     pub risk_mode: String,
 }
 
+/// Reference to a profile (price stream or leverage) for embedding in group list.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileRef {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// Group list item with assigned price and leverage profile details (all-in-one for API consumers).
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupListItem {
+    #[serde(flatten)]
+    pub group: UserGroup,
+    /// Assigned price stream profile (id + name). Null if none assigned.
+    pub price_profile: Option<ProfileRef>,
+    /// Assigned leverage profile (id + name). Null if none assigned.
+    pub leverage_profile: Option<ProfileRef>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ListGroupsResponse {
-    pub items: Vec<UserGroup>,
+    pub items: Vec<GroupListItem>,
+    /// All price stream profiles for the Price Stream Profile dropdown (id + name).
+    pub available_price_profiles: Vec<ProfileRef>,
     pub page: i64,
     pub page_size: i64,
     pub total: i64,
@@ -109,8 +129,60 @@ async fn list_groups(
         Ok((groups, total)) => {
             let page = page.unwrap_or(1);
             let page_size = page_size.unwrap_or(20);
+
+            // Collect profile IDs to fetch names (all-in-one response)
+            let price_ids: Vec<Uuid> = groups
+                .iter()
+                .filter_map(|g| g.default_price_profile_id)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            let leverage_ids: Vec<Uuid> = groups
+                .iter()
+                .filter_map(|g| g.default_leverage_profile_id)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+
+            let price_names = service
+                .get_price_profile_names(&price_ids)
+                .await
+                .unwrap_or_default();
+            let leverage_names = service
+                .get_leverage_profile_names(&leverage_ids)
+                .await
+                .unwrap_or_default();
+
+            let items: Vec<GroupListItem> = groups
+                .into_iter()
+                .map(|group| {
+                    let price_profile = group.default_price_profile_id.map(|id| ProfileRef {
+                        name: price_names.get(&id).cloned().unwrap_or_else(|| "Unknown".to_string()),
+                        id,
+                    });
+                    let leverage_profile = group.default_leverage_profile_id.map(|id| ProfileRef {
+                        name: leverage_names.get(&id).cloned().unwrap_or_else(|| "Unknown".to_string()),
+                        id,
+                    });
+                    GroupListItem {
+                        group,
+                        price_profile,
+                        leverage_profile,
+                    }
+                })
+                .collect();
+
+            let available_price_profiles: Vec<ProfileRef> = service
+                .list_all_price_profiles()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, name)| ProfileRef { id, name })
+                .collect();
+
             Ok(Json(ListGroupsResponse {
-                items: groups,
+                items,
+                available_price_profiles,
                 page,
                 page_size,
                 total,

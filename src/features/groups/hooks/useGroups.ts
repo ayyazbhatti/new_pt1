@@ -6,17 +6,20 @@ import {
   updateGroup,
   deleteGroup,
   getGroupUsage,
+  updateGroupPriceProfile,
 } from '../api/groups.api'
-import { ListGroupsParams, CreateGroupPayload, UpdateGroupPayload } from '../types/group'
+import { ListGroupsParams, ListGroupsResponse, CreateGroupPayload, UpdateGroupPayload } from '../types/group'
 
-// Query key factory
-const queryKeys = {
+// Query key factory (exported for optimistic cache updates)
+export const groupsQueryKeys = {
   all: ['adminGroups'] as const,
-  lists: () => [...queryKeys.all, 'list'] as const,
-  list: (params?: ListGroupsParams) => [...queryKeys.lists(), params] as const,
-  detail: (id: string) => [...queryKeys.all, 'detail', id] as const,
-  usage: (id: string) => [...queryKeys.all, 'usage', id] as const,
+  lists: () => [...groupsQueryKeys.all, 'list'] as const,
+  list: (params?: ListGroupsParams) => [...groupsQueryKeys.lists(), params] as const,
+  detail: (id: string) => [...groupsQueryKeys.all, 'detail', id] as const,
+  usage: (id: string) => [...groupsQueryKeys.all, 'usage', id] as const,
 }
+
+const queryKeys = groupsQueryKeys
 
 export function useGroupsList(params?: ListGroupsParams) {
   return useQuery({
@@ -70,6 +73,23 @@ export function useUpdateGroup() {
     },
     onError: (error: any) => {
       const message = error?.response?.data?.error?.message || error?.message || 'Failed to update group'
+      toast.error(message)
+    },
+  })
+}
+
+export function useUpdateGroupPriceProfile() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ groupId, priceProfileId }: { groupId: string; priceProfileId: string | null }) =>
+      updateGroupPriceProfile(groupId, priceProfileId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      toast.success('Price profile updated')
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.error?.message || error?.message || 'Failed to update price profile'
       toast.error(message)
     },
   })

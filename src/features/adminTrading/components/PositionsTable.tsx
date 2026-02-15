@@ -12,6 +12,25 @@ import { closeAdminPosition, liquidatePosition } from '../api/positions'
 import { toast } from 'react-hot-toast'
 import { cn } from '@/shared/utils'
 
+/** Fixed column widths so header and body columns stay aligned when cells are empty */
+const COLUMN_WIDTHS = [
+  '90px',  // Position ID
+  '120px', // Name
+  '180px', // Email
+  '90px',  // Group
+  '100px', // Symbol
+  '80px',  // Side
+  '80px',  // Size
+  '95px',  // Entry
+  '90px',  // Mark
+  '100px', // PnL
+  '90px',  // Margin
+  '85px',  // SL
+  '85px',  // TP
+  '85px',  // Status
+  '160px', // Actions
+]
+
 interface PositionsTableProps {
   positions: AdminPosition[]
   onPositionClick?: (position: AdminPosition) => void
@@ -83,12 +102,16 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
       },
       {
         accessorKey: 'userName',
-        header: 'User',
+        header: 'Name',
         cell: ({ row }) => (
-          <div>
-            <div className="text-sm font-medium text-text">{row.original.userName}</div>
-            <div className="text-xs text-text-muted">{row.original.userEmail}</div>
-          </div>
+          <span className="text-sm text-text">{row.original.userName ?? '—'}</span>
+        ),
+      },
+      {
+        accessorKey: 'userEmail',
+        header: 'Email',
+        cell: ({ row }) => (
+          <span className="text-sm text-text-muted">{row.original.userEmail ?? '—'}</span>
         ),
       },
       {
@@ -262,13 +285,18 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
     <div className="rounded-lg border border-border overflow-hidden">
       {/* Header */}
       <div className="bg-surface-2 border-b border-border sticky top-0 z-10">
-        <table className="w-full">
+        <table className="w-full" style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            {COLUMN_WIDTHS.map((w, i) => (
+              <col key={i} style={{ width: w }} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               {columns.map((column) => (
                 <th
                   key={column.id || column.accessorKey}
-                  className="px-4 py-3 text-left text-xs font-semibold text-text-muted uppercase tracking-wider"
+                  className="px-4 py-3 text-left text-xs font-semibold text-text-muted uppercase tracking-wider truncate"
                 >
                   {typeof column.header === 'string' ? column.header : '—'}
                 </th>
@@ -305,13 +333,18 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
                 )}
                 onClick={() => handleRowClick(position)}
               >
-                <table className="w-full">
+                <table className="w-full" style={{ tableLayout: 'fixed' }}>
+                  <colgroup>
+                    {COLUMN_WIDTHS.map((w, i) => (
+                      <col key={i} style={{ width: w }} />
+                    ))}
+                  </colgroup>
                   <tbody>
                     <tr>
                       {columns.map((column) => (
                         <td
                           key={column.id || column.accessorKey}
-                          className="px-4 py-3"
+                          className="px-4 py-3 truncate"
                           onClick={(e) => {
                             if (column.id === 'actions') {
                               e.stopPropagation()

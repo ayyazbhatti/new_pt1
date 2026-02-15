@@ -5,6 +5,8 @@ import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useGroupsList } from '../hooks/useGroups'
+import { useMarkupProfiles } from '@/features/adminMarkup/hooks/useMarkup'
+import type { UserGroup } from '../types/group'
 import { Plus, RefreshCw, X } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -42,6 +44,28 @@ export function GroupsPage() {
     page_size: pageSize,
     sort,
   })
+
+  // Price profile dropdown: use list from groups API, or fallback to markup profiles (same source as Markup page)
+  const { data: markupProfiles } = useMarkupProfiles()
+  const availablePriceProfiles =
+    (data?.availablePriceProfiles?.length ? data.availablePriceProfiles : (markupProfiles ?? []).map((p) => ({ id: p.id, name: p.name }))) ?? []
+
+  // Local state for groups list (same pattern as Admin Users page) so price profile dropdown updates immediately
+  const [groupsState, setGroupsState] = useState<UserGroup[]>([])
+  const groupsFromApi = data?.items ?? []
+  useEffect(() => {
+    if (groupsFromApi.length > 0) {
+      setGroupsState(groupsFromApi)
+    }
+  }, [data?.items])
+
+  const displayGroups = groupsState.length > 0 ? groupsState : groupsFromApi
+
+  const handleGroupUpdate = (groupId: string, updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile'>>) => {
+    setGroupsState((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, ...updates } : g))
+    )
+  }
 
   // Debounced search
   const [searchInput, setSearchInput] = useState(search)
@@ -112,7 +136,6 @@ export function GroupsPage() {
     })
   }
 
-  const groups = data?.items || []
   const total = data?.total || 0
   const totalPages = Math.ceil(total / pageSize)
 
@@ -197,7 +220,7 @@ export function GroupsPage() {
           <p className="text-danger mb-2">Failed to load groups</p>
           <p className="text-sm text-text-muted">{error instanceof Error ? error.message : 'Unknown error'}</p>
         </div>
-      ) : groups.length === 0 ? (
+      ) : displayGroups.length === 0 ? (
         <EmptyState
           title="No groups found"
           description="Create your first user group to get started"
@@ -210,7 +233,12 @@ export function GroupsPage() {
         />
       ) : (
         <>
-          <GroupsTable groups={groups} onRefresh={() => refetch()} />
+          <GroupsTable
+            groups={displayGroups}
+            availablePriceProfiles={availablePriceProfiles}
+            onGroupUpdate={handleGroupUpdate}
+            onRefresh={() => refetch()}
+          />
 
           {/* Pagination */}
           {totalPages > 1 && (
