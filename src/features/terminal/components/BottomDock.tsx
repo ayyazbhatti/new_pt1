@@ -1,4 +1,4 @@
-import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Percent, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, Bot, AlertCircle } from 'lucide-react'
+import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Percent, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, Bot, AlertCircle, Maximize2, Minimize2 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { cn } from '@/shared/utils'
 import { toast } from 'react-hot-toast'
@@ -41,11 +41,32 @@ export function BottomDock() {
   const [editingPosition, setEditingPosition] = useState<Position | null>(null) // Store position being edited
   const [positions, setPositions] = useState<Position[]>([])
   const [orders, setOrders] = useState<Order[]>([])
+  const [isBottomDockFullscreen, setIsBottomDockFullscreen] = useState(false)
+  const bottomDockRef = useRef<HTMLDivElement>(null)
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const lastPositionCountRef = useRef<number>(0)
+
+  useEffect(() => {
+    const el = bottomDockRef.current
+    if (!el) return
+    const onFullscreenChange = () =>
+      setIsBottomDockFullscreen(!!document.fullscreenElement && document.fullscreenElement === el)
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [])
+
+  const toggleBottomDockFullscreen = useCallback(async () => {
+    const el = bottomDockRef.current
+    if (!el) return
+    if (document.fullscreenElement) {
+      await document.exitFullscreen()
+    } else {
+      await el.requestFullscreen()
+    }
+  }, [])
 
   // Normalize symbol key - convert USDT to USD to match price stream format
   const normalizeSymbolKey = (symbol: string): string => {
@@ -78,32 +99,19 @@ export function BottomDock() {
     localStorage.setItem('bottomDockActiveTab', tabId)
   }, [])
 
-  // Fetch positions from API
-  const fetchPositions = useCallback(async () => {
-    setIsLoading(true)
+  // Fetch positions from API. When silent is true, no loading state (no skeleton flash).
+  const fetchPositions = useCallback(async (silent?: boolean) => {
+    if (!silent) setIsLoading(true)
     try {
       const data = await getPositions()
-      console.log('📍 Positions fetched from API:', {
-        count: data.length,
-        open_positions: data.filter(p => p.status === 'OPEN').length,
-        positions: data.map(p => ({
-          id: p.id,
-          symbol: p.symbol,
-          side: p.side,
-          status: p.status,
-          size: p.size
-        }))
-      })
       setPositions(data)
       const openCount = data.filter(p => p.status === 'OPEN').length
-      if (openCount > 0) {
-        console.log(`✅ ${openCount} open position(s) loaded and will appear in positions tab`)
-      }
+      lastPositionCountRef.current = openCount
     } catch (error: any) {
       console.error('❌ Failed to fetch positions:', error)
-      toast.error('Failed to load positions')
+      if (!silent) toast.error('Failed to load positions')
     } finally {
-      setIsLoading(false)
+      if (!silent) setIsLoading(false)
     }
   }, [])
 
@@ -150,34 +158,27 @@ export function BottomDock() {
     }
   }, [activeTab])
 
-  // Initial fetch on mount - always load positions immediately on page load
-  // This ensures positions are available right away, even before user switches to positions tab
+  // Initial fetch on mount - show loading on first load only
   useEffect(() => {
-    console.log('🔄 BottomDock mounted, fetching positions immediately...')
     fetchPositions().then(() => {
-      // Store initial position count after fetch completes
       setTimeout(() => {
         lastPositionCountRef.current = positions.length
       }, 100)
     })
-    // Also fetch orders on mount so they're ready
     fetchOrders()
-  }, [fetchPositions, fetchOrders]) // Use callbacks in deps - they're stable (useCallback)
+  }, [fetchPositions, fetchOrders])
 
-  // Polling fallback: Check for new positions every 2 seconds when on positions tab
-  // This ensures positions appear even if WebSocket doesn't work
+  // Polling fallback: silent refresh every 2s when on positions tab
   useEffect(() => {
     if (activeTab === 'positions') {
       pollingIntervalRef.current = setInterval(() => {
-        console.log('🔄 [BottomDock] Polling for new positions (every 2s)...')
-        fetchPositions().then(() => {
+        fetchPositions(true).then(() => {
           const currentCount = positions.filter(p => p.status === 'OPEN').length
           if (currentCount !== lastPositionCountRef.current) {
-            console.log(`✅ [BottomDock] Position count changed: ${lastPositionCountRef.current} → ${currentCount}`)
             lastPositionCountRef.current = currentCount
           }
         })
-      }, 2000) // Poll every 2 seconds
+      }, 2000)
     } else {
       // Clear polling when not on positions tab
       if (pollingIntervalRef.current) {
@@ -194,12 +195,11 @@ export function BottomDock() {
     }
   }, [activeTab, fetchPositions, positions.length])
 
-  // Fetch data when tab changes (for refreshing data when switching tabs)
+  // Fetch data when tab changes - silent refresh so table doesn't flash
   useEffect(() => {
     if (activeTab === 'positions') {
-      // Refresh positions when switching to positions tab
-      fetchPositions()
-      fetchFilledOrders() // Also fetch filled orders for positions tab
+      fetchPositions(true)
+      fetchFilledOrders()
     } else if (activeTab === 'orders') {
       // Refresh orders when switching to orders tab
       fetchOrders()
@@ -338,11 +338,8 @@ export function BottomDock() {
               console.log('✅ [BottomDock] New position object created:', newPosition)
               console.log('✅ [BottomDock] Current positions count:', prev.length, 'Adding new one, will be:', prev.length + 1)
               
-              // Fetch full position data in background
-              setTimeout(() => {
-                console.log('🔄 [BottomDock] Fetching full position data in background...')
-                fetchPositions()
-              }, 500)
+              // Fetch full position data in background (silent)
+              setTimeout(() => fetchPositions(true), 500)
               
               return [...prev, newPosition]
             } else if (positionStatus === 'CLOSED' || positionStatus === 'closed') {
@@ -395,32 +392,25 @@ export function BottomDock() {
                 // If filled, immediately fetch positions multiple times to ensure we catch the new position
                 // This is a fallback in case WebSocket position_update doesn't arrive immediately
                 if (orderUpdate.status === 'FILLED') {
-                  console.log('📊 [BottomDock] Order filled, fetching positions immediately to show new position...')
-                  
-                  // Fetch immediately
-                  fetchPositions().then(() => {
+                  fetchPositions(true).then(() => {
                     const currentCount = positions.filter(p => p.status === 'OPEN').length
                     lastPositionCountRef.current = currentCount
                   })
                   fetchFilledOrders()
-                  
-                  // Aggressive polling after order fill - check every 500ms for 5 seconds
                   let pollCount = 0
                   const aggressivePoll = setInterval(() => {
                     pollCount++
-                    if (pollCount > 10) { // 10 * 500ms = 5 seconds
+                    if (pollCount > 10) {
                       clearInterval(aggressivePoll)
                       return
                     }
-                    console.log(`🔄 [BottomDock] Aggressive poll #${pollCount} after order fill...`)
-                    fetchPositions().then(() => {
+                    fetchPositions(true).then(() => {
                       const currentCount = positions.filter(p => p.status === 'OPEN').length
                       if (currentCount > lastPositionCountRef.current) {
-                        console.log(`✅ [BottomDock] Found new position via aggressive polling! Count: ${lastPositionCountRef.current} → ${currentCount}`)
                         lastPositionCountRef.current = currentCount
                       }
                     })
-                  }, 500) // Poll every 500ms
+                  }, 500)
                 }
                 return updated.filter((_, i) => i !== existing)
               }
@@ -474,24 +464,30 @@ export function BottomDock() {
     }
   }, [])
 
-  // Fetch data immediately when tab changes (don't wait for WebSocket)
+  // Fetch data when tab changes - silent for positions so no skeleton flash
   useEffect(() => {
     if (activeTab === 'positions') {
-      fetchPositions() // Only fetch positions (open positions will be filtered in render)
+      fetchPositions(true)
     } else if (activeTab === 'orders') {
       fetchOrders()
     } else if (activeTab === 'order-history') {
       setIsLoading(true)
-      fetchFilledOrders().finally(() => setIsLoading(false)) // Fetch filled orders for order history tab
+      fetchFilledOrders().finally(() => setIsLoading(false))
     } else if (activeTab === 'position-history') {
-      fetchPositions() // Fetch all positions (includes closed ones)
+      fetchPositions(true)
     }
   }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
   // WebSocket handles real-time updates, no polling needed
 
   return (
-    <div className="h-[300px] min-h-0 overflow-hidden flex flex-col border-t border-white/5 bg-gradient-to-b from-surface to-surface-2/30 shadow-lg shadow-black/10">
+    <div
+      ref={bottomDockRef}
+      className={cn(
+        'min-h-0 overflow-hidden flex flex-col border-t border-white/5 bg-gradient-to-b from-surface to-surface-2/30 shadow-lg shadow-black/10',
+        isBottomDockFullscreen ? 'h-screen' : 'h-[300px]'
+      )}
+    >
       {/* Tab Strip + Toolbar - Enhanced */}
       <div className="shrink-0 h-12 border-b border-white/5 flex items-center justify-between px-4 bg-gradient-to-r from-white/[0.02] to-transparent">
         <div className="flex items-center gap-1">
@@ -540,6 +536,18 @@ export function BottomDock() {
           >
             <Download className="h-3.5 w-3.5" />
             <span>Export</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleBottomDockFullscreen}
+            className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 shrink-0"
+            title={isBottomDockFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {isBottomDockFullscreen ? (
+              <Minimize2 className="h-4 w-4 text-muted hover:text-text" />
+            ) : (
+              <Maximize2 className="h-4 w-4 text-muted hover:text-text" />
+            )}
           </button>
         </div>
       </div>
@@ -1167,7 +1175,7 @@ export function BottomDock() {
                       toast.error(closed === 0 ? detail : detail)
                     }
                     setCloseAllDialogOpen(false)
-                    fetchPositions()
+                    fetchPositions(true)
                   } finally {
                     setCloseAllLoading(false)
                   }
@@ -1209,8 +1217,7 @@ export function BottomDock() {
                     toast.success(`Position ${closePositionId.slice(0, 8)}... closed successfully`)
                   setClosePositionDialogOpen(false)
                   setClosePositionId(null)
-                    // Refresh positions list
-                    fetchPositions()
+                    fetchPositions(true)
                   } catch (error: any) {
                     toast.error(`Failed to close position: ${error.message}`)
                   }
@@ -1449,8 +1456,7 @@ export function BottomDock() {
                       setEditSlAmount('')
                       setEditTpAmount('')
                       setEditingPosition(null)
-                      // Refresh positions
-                      fetchPositions()
+                      fetchPositions(true)
                     } catch (error: any) {
                       toast.error(`Failed to update position: ${error.message}`)
                     }

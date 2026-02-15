@@ -278,7 +278,7 @@ if check_port $FRONTEND_PORT; then
     print_warning "Port $FRONTEND_PORT is already in use. Frontend may already be running"
 else
     npm run dev > "/tmp/frontend.log" 2>&1 &
-    local frontend_pid=$!
+    frontend_pid=$!
     echo $frontend_pid >> "$PIDS_FILE"
     print_status "Frontend started with PID $frontend_pid"
     sleep 3  # Give Vite time to start

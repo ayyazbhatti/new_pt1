@@ -1,4 +1,4 @@
-import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity, Loader2 } from 'lucide-react'
+import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity, Loader2, Clock, Gauge, ArrowRight } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Segmented } from '@/shared/ui'
@@ -387,7 +387,85 @@ export function RightTradingPanel() {
 
   // Use shared WebSocket client for order updates
   const [wsConnected, setWsConnected] = useState(false)
-  
+  // Real-time ping (RTT to WS server health endpoint)
+  const [pingMs, setPingMs] = useState<number | null>(null)
+  // Promo carousel (static dummy slides)
+  const PROMO_SLIDES = [
+    {
+      image: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=400&h=180&fit=crop',
+      title: 'Premium Analytics',
+      subtitle: 'Real-time insights & advanced charts',
+    },
+    {
+      image: 'https://images.unsplash.com/photo-1642790106117-e829e14a795f?w=400&h=180&fit=crop',
+      title: 'Trading Signals',
+      subtitle: 'Smart alerts for key market moves',
+    },
+    {
+      image: 'https://images.unsplash.com/photo-1639762681485-074b7f938ba0?w=400&h=180&fit=crop',
+      title: 'Risk Management',
+      subtitle: 'Protect your portfolio with pro tools',
+    },
+  ]
+  const [promoSlideIndex, setPromoSlideIndex] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => {
+      setPromoSlideIndex((i) => (i + 1) % PROMO_SLIDES.length)
+    }, 4000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Live current time (local timezone)
+  const [currentTimeLabel, setCurrentTimeLabel] = useState(() => {
+    const now = new Date()
+    const offsetMin = -now.getTimezoneOffset()
+    const sign = offsetMin >= 0 ? '+' : '-'
+    const absHours = Math.floor(Math.abs(offsetMin) / 60)
+    const utcLabel = `UTC${sign}${absHours}`
+    const time = now.toTimeString().slice(0, 8)
+    const day = String(now.getDate()).padStart(2, '0')
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const year = now.getFullYear()
+    return `${utcLabel} ▼ ${time} ${day}.${month}.${year}`
+  })
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = new Date()
+      const offsetMin = -now.getTimezoneOffset()
+      const sign = offsetMin >= 0 ? '+' : '-'
+      const absHours = Math.floor(Math.abs(offsetMin) / 60)
+      const utcLabel = `UTC${sign}${absHours}`
+      const time = now.toTimeString().slice(0, 8)
+      const day = String(now.getDate()).padStart(2, '0')
+      const month = String(now.getMonth() + 1).padStart(2, '0')
+      const year = now.getFullYear()
+      setCurrentTimeLabel(`${utcLabel} ▼ ${time} ${day}.${month}.${year}`)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Measure ping by fetching WS server health and measuring round-trip time
+  useEffect(() => {
+    const wsUrl = import.meta.env?.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
+    const healthUrl = wsUrl.replace(/^ws/, 'http').replace(/\/ws.*$/, '') + '/health'
+
+    const measurePing = async () => {
+      const start = performance.now()
+      try {
+        const res = await fetch(healthUrl, { method: 'GET', cache: 'no-store' })
+        const end = performance.now()
+        if (res.ok) setPingMs(Math.round(end - start))
+      } catch {
+        setPingMs(null)
+      }
+    }
+
+    measurePing()
+    const interval = setInterval(measurePing, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
   useEffect(() => {
     // Ensure WebSocket is connected
     if (wsClient.getState() === 'disconnected') {
@@ -1044,25 +1122,93 @@ export function RightTradingPanel() {
               </div>
             </div>
           )}
+
+          {/* Promo carousel - trading imagery, static dummy slides */}
+          <div className="p-4">
+            <div className="relative rounded-xl border border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-black/10">
+              <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 px-2 py-1.5">
+                <span className="text-[10px] font-bold text-white/70 uppercase tracking-widest">Promoted</span>
+                <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent">New</span>
+              </div>
+              <div className="relative aspect-[400/180] w-full overflow-hidden bg-slate-800">
+                {PROMO_SLIDES.map((slide, idx) => (
+                  <div
+                    key={idx}
+                    className={cn(
+                      'absolute inset-0 transition-opacity duration-500',
+                      idx === promoSlideIndex ? 'opacity-100 z-0' : 'opacity-0 z-0 pointer-events-none'
+                    )}
+                  >
+                    <img
+                      src={slide.image}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                    <div className="absolute bottom-0 left-0 right-0 p-3 text-left">
+                      <h3 className="text-sm font-bold text-white drop-shadow-sm">{slide.title}</h3>
+                      <p className="text-[11px] text-white/80 mt-0.5">{slide.subtitle}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2 px-3 py-2.5 bg-surface-2/40 border-t border-white/5">
+                <div className="flex items-center gap-1.5">
+                  {PROMO_SLIDES.map((_, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      aria-label={`Go to slide ${idx + 1}`}
+                      onClick={() => setPromoSlideIndex(idx)}
+                      className={cn(
+                        'h-1.5 rounded-full transition-all',
+                        idx === promoSlideIndex ? 'w-4 bg-accent' : 'w-1.5 bg-white/30 hover:bg-white/50'
+                      )}
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 rounded-lg bg-accent/15 hover:bg-accent/25 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent transition-colors"
+                  onClick={() => toast.info('Coming soon')}
+                >
+                  Learn more
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Footer - Enhanced */}
-      <div className="shrink-0 border-t border-white/5 p-4 space-y-2.5 text-xs bg-gradient-to-t from-white/[0.02] to-transparent">
-        <div className="flex items-center justify-between py-1">
-          <span className="text-muted/70">Current time</span>
-          <span className="font-mono font-semibold text-text">UTC+5 ▼ 23:01:53 30.10.2025</span>
-        </div>
-        <div className="flex items-center justify-between py-1">
-          <span className="text-muted/70">Status</span>
-          <div className="flex items-center gap-2">
-            <div className="h-2 w-2 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
-            <span className="font-semibold text-success">ON</span>
+      {/* Footer - status strip */}
+      <div className="shrink-0 border-t border-white/5 px-3 py-3">
+        <div className="rounded-lg bg-surface-2/40 border border-white/5 p-3 space-y-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <Clock className="h-3.5 w-3.5 shrink-0" />
+            </span>
+            <span className="font-mono text-[11px] font-medium tabular-nums text-slate-100">{currentTimeLabel}</span>
           </div>
-        </div>
-        <div className="flex items-center justify-between py-1">
-          <span className="text-muted/70">Ping</span>
-          <span className="font-mono font-semibold text-text">87 ms / 87 ms</span>
+          <div className="h-px bg-white/5" />
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <Gauge className="h-3.5 w-3.5 shrink-0" />
+              <span>Ping</span>
+            </span>
+            <span
+              className={cn(
+                'font-mono text-[11px] font-medium tabular-nums',
+                pingMs == null
+                  ? 'text-muted-foreground'
+                  : pingMs <= 100
+                    ? 'text-success'
+                    : 'text-danger'
+              )}
+            >
+              {pingMs != null ? `${pingMs} ms` : '— ms'}
+            </span>
+          </div>
         </div>
       </div>
     </div>

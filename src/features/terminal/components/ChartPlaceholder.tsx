@@ -8,6 +8,12 @@ import type { ChartTypeKey, TimeframeKey } from '../utils/chartOptions'
 import type { ChartSettings, DrawingMagnetMode } from '../utils/chartOptions'
 import type { ChartIndicator } from '../utils/indicatorParams'
 import { Spinner } from '@/shared/ui/loading'
+import { priceStreamClient } from '@/shared/ws/priceStreamClient'
+
+/** Normalize symbol for matching WS ticks (e.g. BTC-USD / BTCUSDT -> BTCUSD) */
+function normalizeSymbolKey(symbol: string): string {
+  return symbol.toUpperCase().trim().replace(/-/g, '').replace('USDT', 'USD')
+}
 
 const CHART_CONTAINER_ID = 'terminal-kline-chart'
 
@@ -74,8 +80,12 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   const lastBarRef = useRef<KLineBar | null>(null)
   const currentBarRef = useRef<KLineBar | null>(null)
   const binanceSymbolRef = useRef<string>('BTCUSDT')
+  const selectedSymbolKeyRef = useRef<string>('')
   const [isLoading, setIsLoading] = useState(true)
   const setLoadingRef = useRef<(loading: boolean) => void>(() => {})
+
+  // Keep ref in sync so tick listener always sees current symbol
+  selectedSymbolKeyRef.current = selectedSymbol?.code ? normalizeSymbolKey(selectedSymbol.code) : ''
 
   useImperativeHandle(
     ref,
@@ -235,7 +245,44 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
   }, [])
 
-  // Live candle update: use bid from data-provider WebSocket (terminal store updates from same WS)
+  // Live candle: subscribe directly to price stream so chart updates on every bid tick
+  // (symbols section uses same WS; chart was only reacting to store which can lag or miss updates)
+  useEffect(() => {
+    const unsub = priceStreamClient.onTick((tick) => {
+      const tickKey = normalizeSymbolKey(tick.symbol)
+      if (tickKey !== selectedSymbolKeyRef.current) return
+
+      const bid = typeof tick.bid === 'string' ? parseFloat(tick.bid) : Number(tick.bid)
+      if (Number.isNaN(bid) || bid <= 0) return
+
+      const cb = subscribeBarCallbackRef.current
+      let bar = currentBarRef.current
+
+      if (!bar) {
+        const now = Date.now()
+        const dayMs = 24 * 60 * 60 * 1000
+        const timestamp = Math.floor(now / dayMs) * dayMs
+        bar = {
+          timestamp,
+          open: bid,
+          high: bid,
+          low: bid,
+          close: bid,
+          volume: 0,
+        }
+        currentBarRef.current = bar
+      } else {
+        bar.close = bid
+        bar.high = Math.max(bar.high, bid)
+        bar.low = Math.min(bar.low, bid)
+      }
+
+      if (cb) cb({ timestamp: bar.timestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume })
+    })
+    return unsub
+  }, [])
+
+  // Sync live price from store when symbol/price first loads (e.g. after symbol switch)
   useEffect(() => {
     const bid = selectedSymbol?.numericPrice
     if (bid == null || bid <= 0) return
