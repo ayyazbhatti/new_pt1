@@ -37,8 +37,25 @@ export interface ChartPlaceholderHandle {
   getPictureUrl: (type: 'png' | 'jpeg', includeOverlay?: boolean) => string | null
 }
 
-/** Chart styles aligned with app theme (background comes from wrapper; these are crosshair/tooltip) */
+/** Chart styles aligned with app theme (background from wrapper; grid slightly more visible than panel borders) */
 const APP_THEME_CHART_STYLES = {
+  grid: {
+    show: true,
+    horizontal: {
+      show: true,
+      size: 0.5,
+      color: 'rgba(255, 255, 255, 0.12)',
+      style: 'dashed',
+      dashedValue: [4, 4],
+    },
+    vertical: {
+      show: true,
+      size: 0.5,
+      color: 'rgba(255, 255, 255, 0.12)',
+      style: 'dashed',
+      dashedValue: [4, 4],
+    },
+  },
   crosshair: {
     horizontal: {
       text: {
