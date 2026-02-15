@@ -12,6 +12,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { PriceDisplay } from './PriceDisplay'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
+import { fetchBalance } from '@/features/wallet/api'
 import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
@@ -49,13 +50,42 @@ export function LeftSidebar() {
     console.log('🔍 [LeftSidebar] User ID:', user?.id)
   }, [wsState, user?.id])
 
-  // Ensure WebSocket is connected when user is available
+  // Ensure WebSocket is connected when user is on terminal (so balance push is received)
   useEffect(() => {
-    if (user?.id && wsState === 'disconnected') {
-      console.log('🔄 [LeftSidebar] User logged in but WebSocket disconnected, attempting to connect...')
+    if (!user?.id) return
+    if (wsState === 'disconnected') {
       wsClient.connect()
     }
   }, [user?.id, wsState])
+
+  // When user returns to this tab, refetch balance so we catch updates (e.g. deposit approved) even if push was missed
+  useEffect(() => {
+    if (!user?.id) return
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      fetchBalance()
+        .then((res) => {
+          const raw = res as Record<string, unknown>
+          const available = Number(res.available ?? raw.available ?? 0)
+          const locked = Number(res.locked ?? raw.locked ?? 0)
+          const equity = Number(res.equity ?? raw.equity ?? available)
+          const marginUsed = Number((res as any).marginUsed ?? raw.margin_used ?? raw.marginUsed ?? 0)
+          const freeMargin = Number((res as any).freeMargin ?? raw.free_margin ?? raw.freeMargin ?? 0)
+          setWalletData({
+            balance: available,
+            currency: res.currency ?? 'USD',
+            available,
+            locked,
+            equity,
+            margin_used: marginUsed,
+            free_margin: freeMargin,
+          })
+        })
+        .catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [user?.id, setWalletData])
 
   // Set loading state initially while waiting for WebSocket balance update
   useEffect(() => {
@@ -65,6 +95,42 @@ export function LeftSidebar() {
     }
   }, [user?.id, setLoading, wsState])
 
+  // REST fallback: fetch balance so it always shows (WS may be slow or not fire)
+  useEffect(() => {
+    if (!user?.id) return
+    let cancelled = false
+    const delayMs = 800
+    const timer = setTimeout(() => {
+      fetchBalance()
+        .then((res) => {
+          if (cancelled) return
+          const raw = res as Record<string, unknown>
+          const available = Number(res.available ?? raw.available ?? 0)
+          const locked = Number(res.locked ?? raw.locked ?? 0)
+          const equity = Number(res.equity ?? raw.equity ?? available)
+          const marginUsed = Number((res as any).marginUsed ?? raw.margin_used ?? raw.marginUsed ?? 0)
+          const freeMargin = Number((res as any).freeMargin ?? raw.free_margin ?? raw.freeMargin ?? 0)
+          setWalletData({
+            balance: available,
+            currency: res.currency ?? 'USD',
+            available,
+            locked,
+            equity,
+            margin_used: marginUsed,
+            free_margin: freeMargin,
+          })
+          setLoading(false)
+        })
+        .catch(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, delayMs)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [user?.id, setWalletData, setLoading])
+
   // Subscribe to WebSocket events for real-time balance updates
   useWebSocketSubscription(
     useCallback(
@@ -72,75 +138,62 @@ export function LeftSidebar() {
         console.log('📨 [LeftSidebar] Received WebSocket event:', event.type)
         
         if (event.type === 'wallet.balance.updated') {
-          const { payload } = event
-          console.log('🔔 [LeftSidebar] wallet.balance.updated event received:', { 
-            eventUserId: payload.userId, 
+          const payload = (event as { payload?: unknown }).payload
+          if (!payload || typeof payload !== 'object') {
+            setLoading(false)
+            return
+          }
+          const pl = payload as Record<string, unknown>
+          console.log('🔔 [LeftSidebar] wallet.balance.updated event received:', {
+            eventUserId: pl.userId,
             currentUserId: user?.id?.toString(),
-            payload,
+            payload: pl,
             wsState,
             isConnected: wsClient.isConnected()
           })
-          
-          // Check if this event is for the current user
-          // Handle both userId and user_id formats
-          // Normalize UUIDs to handle format differences (with/without dashes, case)
+
           const normalizeUserId = (id: string | undefined | null): string => {
             if (!id) return ''
-            const str = id.toString().trim().toLowerCase()
-            // Remove dashes and normalize UUID format
+            const str = String(id).trim().toLowerCase()
             return str.replace(/-/g, '')
           }
-          
-          const eventUserId = normalizeUserId(payload.userId || payload.user_id)
-          const currentUserId = normalizeUserId(user?.id)
-          
+
+          const eventUserId = normalizeUserId((pl.userId ?? pl.user_id) as string | undefined)
+          const currentUserId = normalizeUserId(user?.id as string | undefined)
+
           console.log('🔍 [LeftSidebar] User ID comparison:', {
-            eventUserIdRaw: payload.userId || payload.user_id,
+            eventUserIdRaw: pl.userId ?? pl.user_id,
             currentUserIdRaw: user?.id,
             eventUserId,
             currentUserId,
-            match: eventUserId === currentUserId,
-            eventUserIdType: typeof eventUserId,
-            currentUserIdType: typeof currentUserId
+            match: eventUserId === currentUserId
           })
-          
-          // More flexible user ID matching with normalized UUIDs
+
           if (eventUserId && currentUserId && eventUserId === currentUserId) {
-            console.log('✅ [LeftSidebar] Updating wallet balance from WebSocket:', payload)
-            // Check balance before updating to determine if this is initial load or update
+            const newBalance = Number(pl.balance ?? pl.available ?? 0)
             const currentBalance = useWalletStore.getState().balance
-            const newBalance = payload.balance ?? payload.available ?? 0
             const isInitialLoad = currentBalance === 0
-            
-            setLoading(false) // Clear loading state when we receive balance data
+
+            setLoading(false)
             setWalletData({
               balance: newBalance,
-              currency: payload.currency ?? 'USD',
-              available: payload.available ?? payload.balance ?? 0,
-              locked: payload.locked ?? 0,
-              equity: payload.equity ?? payload.balance ?? 0,
-              margin_used: payload.margin_used ?? payload.marginUsed ?? 0,
-              free_margin: payload.free_margin ?? payload.freeMargin ?? 0,
+              currency: (pl.currency as string) ?? 'USD',
+              available: Number(pl.available ?? pl.balance ?? 0),
+              locked: Number(pl.locked ?? 0),
+              equity: Number(pl.equity ?? pl.balance ?? 0),
+              margin_used: Number(pl.margin_used ?? pl.marginUsed ?? 0),
+              free_margin: Number(pl.free_margin ?? pl.freeMargin ?? 0),
             })
-            
-            console.log('✅ [LeftSidebar] Balance updated successfully:', {
-              newBalance,
-              currency: payload.currency ?? 'USD',
-              isInitialLoad
-            })
-            
-            // Only show toast if balance changed (not on initial load)
+
             if (!isInitialLoad && currentBalance !== newBalance) {
-              toast.success(`Balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, { duration: 3000 })
+              const isIncrease = newBalance > currentBalance
+              const msg = isIncrease
+                ? `Deposit approved – balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : `Balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              toast.success(msg, { duration: 3000 })
             }
           } else {
-            console.warn('⏭️ [LeftSidebar] Skipping wallet.balance.updated event (different user)', {
-              eventUserId,
-              currentUserId,
-              match: eventUserId === currentUserId,
-              eventUserIdType: typeof eventUserId,
-              currentUserIdType: typeof currentUserId
-            })
+            console.warn('⏭️ [LeftSidebar] Skipping wallet.balance.updated (different user)', { eventUserId, currentUserId })
           }
         } else {
           // Log other events for debugging

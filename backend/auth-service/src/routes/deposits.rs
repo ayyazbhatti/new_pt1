@@ -327,6 +327,47 @@ pub async fn calculate_wallet_balance(pool: &PgPool, user_id: Uuid) -> anyhow::R
     })
 }
 
+/// Recalculates wallet balance and publishes to Redis for real-time WebSocket updates.
+/// Call this after any operation that changes balance (deposit/withdrawal approval, etc.).
+pub async fn publish_wallet_balance_updated(
+    pool: &PgPool,
+    redis: &redis::Client,
+    user_id: Uuid,
+) {
+    match calculate_wallet_balance(pool, user_id).await {
+        Ok(balance) => {
+            let main_balance = balance.available + balance.locked;
+            let balance_event = serde_json::json!({
+                "userId": balance.user_id,
+                "user_id": balance.user_id,
+                "balance": main_balance,
+                "available": balance.available,
+                "locked": balance.locked,
+                "equity": balance.equity,
+                "marginUsed": balance.margin_used,
+                "margin_used": balance.margin_used,
+                "freeMargin": balance.free_margin,
+                "free_margin": balance.free_margin,
+                "currency": balance.currency,
+                "updated_at": balance.updated_at,
+                "updatedAt": balance.updated_at,
+            });
+            if let Ok(event_json) = serde_json::to_string(&balance_event) {
+                if let Ok(mut conn) = redis.get_async_connection().await {
+                    if let Ok(count) = conn.publish::<_, _, i32>("wallet:balance:updated", event_json).await {
+                        info!("✅ Published wallet.balance.updated to Redis ({} subscribers) for user_id={}", count, user_id);
+                    } else {
+                        error!("❌ Failed to publish wallet.balance.updated to Redis for user_id={}", user_id);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to calculate balance for publish (user {}): {}", user_id, e);
+        }
+    }
+}
+
 async fn get_wallet_balance(
     State(pool): State<PgPool>,
     Extension(_deposits_state): Extension<DepositsState>,
@@ -744,29 +785,8 @@ async fn approve_deposit(
     deposits_state.nats.publish("wallet.balance.updated".to_string(), balance_payload.into()).await
         .ok();
 
-    // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = deposits_state.redis.get_async_connection().await;
-    match redis_conn {
-        Ok(mut conn) => {
-            let event_json = serde_json::to_string(&balance_event)
-                .unwrap_or_else(|e| {
-                    error!("Failed to serialize balance event: {}", e);
-                    "{}".to_string()
-                });
-            match conn.publish::<_, _, i32>("wallet:balance:updated", event_json.clone()).await {
-                Ok(count) => {
-                    info!("✅ Published wallet.balance.updated to Redis ({} subscribers), user_id={}, balance={}", 
-                          count, user_id, main_balance);
-                }
-                Err(e) => {
-                    error!("❌ Failed to publish wallet.balance.updated to Redis: {}", e);
-                }
-            }
-        }
-        Err(e) => {
-            error!("❌ Failed to get Redis connection for wallet.balance.updated: {}", e);
-        }
-    }
+    // Publish to Redis for real-time WebSocket balance update (single source of truth)
+    publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), user_id).await;
 
     let notification_id = Uuid::new_v4();
     sqlx::query(

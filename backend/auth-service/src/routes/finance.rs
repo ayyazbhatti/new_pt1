@@ -17,6 +17,7 @@ use redis::AsyncCommands;
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
 use crate::services::ledger_service;
+use crate::routes::deposits::publish_wallet_balance_updated;
 
 #[derive(Debug, Serialize)]
 pub struct FinanceOverviewResponse {
@@ -296,87 +297,10 @@ async fn approve_transaction(
         })?;
     }
 
-    // Publish wallet.balance.updated event for real-time balance update
-    let balance_event = {
-        // Calculate balance using formula: deposits - withdrawals + realized PnL
-        let total_deposits: Decimal = sqlx::query_scalar(
-            r#"
-            SELECT COALESCE(SUM(net_amount), 0) FROM transactions
-            WHERE user_id = $1 AND type = 'deposit'::transaction_type AND status = 'approved'::transaction_status AND currency = $2
-            "#
-        )
-        .bind(user_id)
-        .bind(&currency)
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(Decimal::ZERO);
-
-        let total_withdrawals: Decimal = sqlx::query_scalar(
-            r#"
-            SELECT COALESCE(SUM(net_amount), 0) FROM transactions
-            WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status = 'approved'::transaction_status AND currency = $2
-            "#
-        )
-        .bind(user_id)
-        .bind(&currency)
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(Decimal::ZERO);
-
-        let total_realized_pnl: Decimal = sqlx::query_scalar(
-            r#"
-            SELECT COALESCE(SUM(pnl), 0) FROM positions
-            WHERE user_id = $1 AND status = 'closed'::position_status
-            "#
-        )
-        .bind(user_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(Decimal::ZERO);
-
-        let main_balance = total_deposits - total_withdrawals + total_realized_pnl;
-
-        let open_positions: Vec<(Decimal, Decimal)> = sqlx::query_as(
-            r#"
-            SELECT size, margin_used FROM positions
-            WHERE user_id = $1 AND status = 'open'::position_status
-            "#
-        )
-        .bind(user_id)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
-
-        let total_margin_used: Decimal = open_positions.iter().map(|(_, margin)| margin).sum();
-        let available = main_balance - total_margin_used;
-        let locked = total_margin_used;
-        let equity = main_balance;
-        let free_margin = available;
-
-        serde_json::json!({
-            "userId": user_id.to_string(),
-            "currency": currency,
-            "balance": main_balance.to_string().parse::<f64>().unwrap_or(0.0),
-            "available": available.to_string().parse::<f64>().unwrap_or(0.0),
-            "locked": locked.to_string().parse::<f64>().unwrap_or(0.0),
-            "equity": equity.to_string().parse::<f64>().unwrap_or(0.0),
-            "marginUsed": total_margin_used.to_string().parse::<f64>().unwrap_or(0.0),
-            "margin_used": total_margin_used.to_string().parse::<f64>().unwrap_or(0.0),
-            "freeMargin": free_margin.to_string().parse::<f64>().unwrap_or(0.0),
-            "free_margin": free_margin.to_string().parse::<f64>().unwrap_or(0.0),
-            "updatedAt": now.to_rfc3339(),
-        })
-    };
-
-    // Publish to Redis for WebSocket gateway
+    // Publish to Redis for real-time WebSocket balance update (single source of truth)
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     if let Ok(client) = redis::Client::open(redis_url.as_str()) {
-        if let Ok(mut conn) = client.get_async_connection().await {
-            let event_json = serde_json::to_string(&balance_event).unwrap_or_default();
-            if let Ok(count) = conn.publish::<_, _, i32>("wallet:balance:updated", event_json).await {
-                info!("✅ Published wallet.balance.updated to Redis ({} subscribers) for user_id={}", count, user_id);
-            }
-        }
+        publish_wallet_balance_updated(&pool, &client, user_id).await;
     }
 
     info!("Transaction approved: transaction_id={}, user_id={}, type={}, amount={}", 

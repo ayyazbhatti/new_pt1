@@ -2,6 +2,11 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Normalize user_id for consistent lookup (UUID with/without dashes, case).
+fn normalize_user_id(user_id: &str) -> String {
+    user_id.trim().to_lowercase().replace('-', "")
+}
+
 #[derive(Debug, Clone)]
 pub struct Connection {
     pub conn_id: Uuid,
@@ -33,25 +38,26 @@ impl ConnectionRegistry {
     pub fn register(&self, conn: Connection) {
         let conn_id = conn.conn_id;
         let user_id = conn.user_id.clone();
+        let key = normalize_user_id(&user_id);
 
         // Register connection
         self.connections.insert(conn_id, conn);
 
-        // Index by user
+        // Index by normalized user_id so wallet balance etc. find the connection
         self.user_connections
-            .entry(user_id)
+            .entry(key)
             .or_insert_with(Vec::new)
             .push(conn_id);
     }
 
     pub fn unregister(&self, conn_id: Uuid) {
         if let Some((_, conn)) = self.connections.remove(&conn_id) {
-            // Remove from user index
-            if let Some(mut conns) = self.user_connections.get_mut(&conn.user_id) {
+            let key = normalize_user_id(&conn.user_id);
+            if let Some(mut conns) = self.user_connections.get_mut(&key) {
                 conns.retain(|&id| id != conn_id);
                 if conns.is_empty() {
                     drop(conns);
-                    self.user_connections.remove(&conn.user_id);
+                    self.user_connections.remove(&key);
                 }
             }
 
@@ -109,8 +115,9 @@ impl ConnectionRegistry {
     }
 
     pub fn get_user_connections(&self, user_id: &str) -> Vec<Uuid> {
+        let key = normalize_user_id(user_id);
         self.user_connections
-            .get(user_id)
+            .get(&key)
             .map(|entry| entry.value().clone())
             .unwrap_or_default()
     }
