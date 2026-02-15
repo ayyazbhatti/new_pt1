@@ -28,11 +28,18 @@ export function GroupsTable({ groups, onRefresh }: GroupsTableProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [updatingProfiles, setUpdatingProfiles] = useState<Set<string>>(new Set())
 
-  // Fetch available profiles
-  const { data: priceProfilesData } = useMarkupProfiles()
+  // Fetch available profiles (price stream = markup profiles from /api/admin/markup/profiles)
+  const { data: priceProfilesData, isLoading: priceProfilesLoading, isError: priceProfilesError, refetch: refetchPriceProfiles } = useMarkupProfiles()
   const { data: leverageProfilesData } = useLeverageProfilesList({ page_size: 100 })
   
-  const priceProfiles = priceProfilesData || []
+  // Handle both array response and paginated { items: [...] } shape
+  const priceProfiles = (() => {
+    if (Array.isArray(priceProfilesData)) return priceProfilesData
+    const d = priceProfilesData as { items?: unknown[]; data?: unknown[] } | undefined
+    if (d?.items && Array.isArray(d.items)) return d.items
+    if (d?.data && Array.isArray(d.data)) return d.data
+    return []
+  })() as { id: string; name: string }[]
   const leverageProfiles = leverageProfilesData?.items || []
 
   const handlePriceProfileChange = async (groupId: string, groupName: string, profileId: string | null) => {
@@ -157,19 +164,34 @@ export function GroupsTable({ groups, onRefresh }: GroupsTableProps) {
         const currentProfileId = group.priceProfileId || ''
         const isUpdating = updatingProfiles.has(`${group.id}-price`)
         const currentProfileName = priceProfiles.find(p => p.id === currentProfileId)?.name || 'None'
+        const selectPlaceholder = isUpdating
+          ? 'Updating...'
+          : priceProfilesLoading
+            ? 'Loading...'
+            : priceProfilesError
+              ? 'Failed to load'
+              : currentProfileName
 
         return (
           <div className="min-w-[180px]">
             <Select
               value={currentProfileId || 'none'}
               onValueChange={(value) => handlePriceProfileChange(group.id, group.name, value === 'none' ? null : value)}
+              onOpenChange={(open) => open && refetchPriceProfiles()}
               disabled={isUpdating}
             >
               <SelectTrigger className="h-8 text-sm">
-                <SelectValue placeholder={isUpdating ? 'Updating...' : currentProfileName} />
+                {priceProfilesError ? (
+                  <span className="text-destructive">Failed to load</span>
+                ) : (
+                  <SelectValue placeholder={selectPlaceholder} />
+                )}
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">None</SelectItem>
+                {priceProfiles.length === 0 && !priceProfilesLoading && !priceProfilesError && (
+                  <SelectItem value="__empty" disabled>No profiles — add in Admin → Markup</SelectItem>
+                )}
                 {priceProfiles.map((profile) => (
                   <SelectItem key={profile.id} value={profile.id}>
                     {profile.name}

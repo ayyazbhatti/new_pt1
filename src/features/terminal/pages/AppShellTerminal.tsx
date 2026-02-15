@@ -82,41 +82,40 @@ export function AppShellTerminal() {
     page_size: 100,
   })
 
-  // Get symbol codes for price streaming
+  // Get symbol codes for price streaming - must match feed symbols (e.g. BTCUSDT from data-provider)
   const symbolCodes = useMemo(() => {
     if (!symbolsData?.items) return []
     const codes = symbolsData.items
       .map((s) => {
-        const code = (s.providerSymbol || s.symbolCode).toUpperCase()
-        console.log(`🔍 Symbol mapping: ${s.symbolCode} -> providerSymbol: ${s.providerSymbol} -> final: ${code}`)
-        return code
+        if (s.providerSymbol) {
+          return s.providerSymbol.toUpperCase()
+        }
+        const normalized = s.symbolCode.toUpperCase().replace(/-/g, '')
+        // Feed uses BTCUSDT etc.; for crypto USD pairs derive XXXUSDT so gateway receives matching ticks
+        if (s.assetClass === 'Crypto' && s.quoteCurrency === 'USD' && normalized.endsWith('USD') && !normalized.endsWith('USDT')) {
+          return normalized.slice(0, -3) + 'USDT'
+        }
+        return normalized
       })
       .filter((code) => code && code.length > 0)
-    console.log('📡 Final symbol codes to subscribe:', codes)
+    console.log('📡 Final symbol codes to subscribe (feed format):', codes)
     return codes
   }, [symbolsData])
 
   // Subscribe to price stream
-  const { prices: priceMap, isConnected } = usePriceStream(symbolCodes)
+  const { prices: priceMap, isConnected, triggerResubscribe } = usePriceStream(symbolCodes)
 
-  // Debug: Log connection status and prices
+  // Re-request price subscription when connected with symbols but no prices (in case first subscribe was lost)
   useEffect(() => {
-    console.log('🔌 Terminal: WebSocket connected:', isConnected)
-    console.log('📊 Terminal: Symbol codes to subscribe:', symbolCodes)
-    console.log('💰 Terminal: Current prices map size:', priceMap.size)
-    console.log('💰 Terminal: Current prices keys:', Array.from(priceMap.keys()))
-    console.log('💰 Terminal: Current prices entries:', Array.from(priceMap.entries()).slice(0, 5))
-    
-    // Check if we're receiving any price updates
-    if (priceMap.size === 0 && isConnected && symbolCodes.length > 0) {
-      console.warn('⚠️ WARNING: WebSocket is connected and symbols are subscribed, but price map is empty!')
-      console.warn('⚠️ This suggests prices are not being received or callbacks are not firing.')
-      console.warn('⚠️ Please check for these logs:')
-      console.warn('   - 📨 usePriceStream received tick')
-      console.warn('   - 📞 Wrapped callback called')
-      console.warn('   - 🔄 usePriceStream: Price map updated')
-    }
-  }, [isConnected, symbolCodes, priceMap])
+    if (priceMap.size > 0 || !isConnected || symbolCodes.length === 0) return
+    const t = setTimeout(() => {
+      if (triggerResubscribe) {
+        console.log('🔄 Terminal: Price map still empty after 3s, triggering re-subscribe')
+        triggerResubscribe()
+      }
+    }, 3000)
+    return () => clearTimeout(t)
+  }, [isConnected, symbolCodes.length, priceMap.size, triggerResubscribe])
 
   // Update symbols when data or prices change
   useEffect(() => {

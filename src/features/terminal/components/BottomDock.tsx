@@ -27,6 +27,7 @@ export function BottomDock() {
   })
   const [isLoading, setIsLoading] = useState(false)
   const [closeAllDialogOpen, setCloseAllDialogOpen] = useState(false)
+  const [closeAllLoading, setCloseAllLoading] = useState(false)
   const [closePositionDialogOpen, setClosePositionDialogOpen] = useState(false)
   const [closePositionId, setClosePositionId] = useState<string | null>(null)
   const [cancelOrderDialogOpen, setCancelOrderDialogOpen] = useState(false)
@@ -515,8 +516,9 @@ export function BottomDock() {
         <div className="flex items-center gap-2">
           {activeTab === 'positions' && (
             <button
-              onClick={() => toast.success('All positions closed successfully')}
-              className="px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5 border border-transparent"
+              onClick={() => setCloseAllDialogOpen(true)}
+              disabled={positions.filter(p => p.status === 'OPEN').length === 0}
+              className="px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5 border border-transparent disabled:opacity-50 disabled:pointer-events-none"
               title="Close All Positions"
             >
               <XCircle className="h-3.5 w-3.5" />
@@ -1114,7 +1116,7 @@ export function BottomDock() {
       </div>
 
       {/* Close All Positions Dialog */}
-      <Dialog.Root open={closeAllDialogOpen} onOpenChange={setCloseAllDialogOpen}>
+      <Dialog.Root open={closeAllDialogOpen} onOpenChange={(open) => !closeAllLoading && setCloseAllDialogOpen(open)}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
           <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-surface border border-border rounded-lg p-6 z-50 w-full max-w-md">
@@ -1123,23 +1125,57 @@ export function BottomDock() {
               Close All Positions
             </Dialog.Title>
             <Dialog.Description className="text-sm text-muted mb-6">
-              Are you sure you want to close all open positions? This action cannot be undone.
+              Are you sure you want to close all {positions.filter(p => p.status === 'OPEN').length} open position(s)? This action cannot be undone.
             </Dialog.Description>
             <div className="flex items-center justify-end gap-3">
               <button
                 onClick={() => setCloseAllDialogOpen(false)}
-                className="px-4 py-2 text-sm text-text hover:bg-surface-2 rounded transition-colors"
+                disabled={closeAllLoading}
+                className="px-4 py-2 text-sm text-text hover:bg-surface-2 rounded transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  toast.success('All positions closed successfully')
-                  setCloseAllDialogOpen(false)
+                onClick={async () => {
+                  const openPositions = positions.filter(p => p.status === 'OPEN')
+                  if (openPositions.length === 0) {
+                    setCloseAllDialogOpen(false)
+                    return
+                  }
+                  setCloseAllLoading(true)
+                  let closed = 0
+                  const failedPositions: { id: string; symbol: string; error: string }[] = []
+                  try {
+                    for (const pos of openPositions) {
+                      try {
+                        await closePosition(pos.id)
+                        closed++
+                      } catch (err: unknown) {
+                        const message = err instanceof Error ? err.message : 'Unknown error'
+                        failedPositions.push({ id: pos.id, symbol: pos.symbol, error: message })
+                      }
+                    }
+                    if (closed > 0) {
+                      toast.success(closed === openPositions.length
+                        ? `All ${closed} position(s) closed successfully`
+                        : `Closed ${closed} position(s)${failedPositions.length > 0 ? `, ${failedPositions.length} failed` : ''}`)
+                    }
+                    if (failedPositions.length > 0) {
+                      const detail = failedPositions.length === 1
+                        ? `${failedPositions[0].symbol}: ${failedPositions[0].error}`
+                        : `${failedPositions.length} position(s) failed to close`
+                      toast.error(closed === 0 ? detail : detail)
+                    }
+                    setCloseAllDialogOpen(false)
+                    fetchPositions()
+                  } finally {
+                    setCloseAllLoading(false)
+                  }
                 }}
-                className="px-4 py-2 text-sm bg-danger text-white hover:bg-danger/90 rounded transition-colors"
+                disabled={closeAllLoading}
+                className="px-4 py-2 text-sm bg-danger text-white hover:bg-danger/90 rounded transition-colors disabled:opacity-50"
               >
-                Close All
+                {closeAllLoading ? 'Closing...' : 'Close All'}
               </button>
             </div>
           </Dialog.Content>

@@ -13,8 +13,7 @@ impl AdminMarkupService {
     }
 
     pub async fn list_profiles(&self) -> Result<Vec<MarkupProfileWithGroup>> {
-        let profiles = sqlx::query_as::<_, MarkupProfileWithGroup>(
-            r#"
+        let query_with_group = r#"
             SELECT 
                 psp.id,
                 psp.name,
@@ -29,12 +28,35 @@ impl AdminMarkupService {
             FROM price_stream_profiles psp
             LEFT JOIN user_groups ug ON psp.group_id = ug.id
             ORDER BY psp.name
-            "#
-        )
-        .fetch_all(&self.pool)
-        .await?;
+            "#;
+        let query_without_group = r#"
+            SELECT 
+                psp.id,
+                psp.name,
+                psp.description,
+                NULL::uuid as group_id,
+                NULL::text as group_name,
+                psp.markup_type::text as markup_type,
+                psp.bid_markup::text as bid_markup,
+                psp.ask_markup::text as ask_markup,
+                psp.created_at,
+                psp.updated_at
+            FROM price_stream_profiles psp
+            ORDER BY psp.name
+            "#;
 
-        Ok(profiles)
+        match sqlx::query_as::<_, MarkupProfileWithGroup>(query_with_group)
+            .fetch_all(&self.pool)
+            .await
+        {
+            Ok(profiles) => Ok(profiles),
+            Err(_) => {
+                let profiles = sqlx::query_as::<_, MarkupProfileWithGroup>(query_without_group)
+                    .fetch_all(&self.pool)
+                    .await?;
+                Ok(profiles)
+            }
+        }
     }
 
     pub async fn create_profile(

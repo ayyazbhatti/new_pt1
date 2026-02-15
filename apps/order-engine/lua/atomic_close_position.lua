@@ -24,8 +24,11 @@ if redis.call('EXISTS', pos_key_new) == 1 then
     side = redis.call('HGET', pos_key_new, 'side')
     user_id = redis.call('HGET', pos_key_new, 'user_id')
     local status = redis.call('HGET', pos_key_new, 'status')
-    if status ~= "OPEN" then
+    if status and status:upper() ~= "OPEN" then
         return '{"error":"position_not_open","status":"' .. (status or "unknown") .. '"}'
+    end
+    if not status or status == "" then
+        return '{"error":"position_not_open","status":"unknown"}'
     end
     -- Convert Hash to table-like structure for compatibility
     position = {
@@ -50,8 +53,11 @@ end
 end
 
 -- Status already checked above for new format
-if not is_new_format and position.status ~= "OPEN" then
-    return '{"error":"position_not_open","status":"' .. position.status .. '"}'
+if not is_new_format then
+    local status_old = position.status or ""
+    if status_old:upper() ~= "OPEN" then
+        return '{"error":"position_not_open","status":"' .. status_old .. '"}'
+    end
 end
 
 local current_size = tonumber(position.size)

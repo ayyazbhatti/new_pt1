@@ -11,6 +11,12 @@ export interface AdminSymbol {
   pricePrecision: number
   volumePrecision: number
   contractSize: string
+  tickSize?: number | null
+  lotMin?: number | null
+  lotMax?: number | null
+  defaultPipPosition?: number | null
+  pipPositionMin?: number | null
+  pipPositionMax?: number | null
   isEnabled: boolean
   tradingEnabled: boolean
   leverageProfileId: string | null
@@ -28,6 +34,12 @@ export interface CreateSymbolPayload {
   price_precision: number
   volume_precision: number
   contract_size: string
+  tick_size?: string | null
+  lot_min?: string | null
+  lot_max?: string | null
+  default_pip_position?: string | null
+  pip_position_min?: string | null
+  pip_position_max?: string | null
   leverage_profile_id?: string | null
 }
 
@@ -40,6 +52,12 @@ export interface UpdateSymbolPayload {
   price_precision: number
   volume_precision: number
   contract_size: string
+  tick_size?: string | null
+  lot_min?: string | null
+  lot_max?: string | null
+  default_pip_position?: string | null
+  pip_position_min?: string | null
+  pip_position_max?: string | null
   is_enabled: boolean
   trading_enabled: boolean
   leverage_profile_id?: string | null

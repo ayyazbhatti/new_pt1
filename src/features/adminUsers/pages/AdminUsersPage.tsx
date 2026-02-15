@@ -5,7 +5,7 @@ import { useModalStore } from '@/app/store'
 import { CreateEditUserModal } from '../modals/CreateEditUserModal'
 import { Download, Plus } from 'lucide-react'
 import { toast } from 'react-hot-toast'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { listUsers, UserResponse } from '@/shared/api/users.api'
 import { User } from '../types/users'
@@ -57,13 +57,15 @@ export function AdminUsersPage() {
 
   const users = useMemo(() => {
     if (!usersData) return []
-    const mappedUsers = usersData.map(mapUserResponse)
-    // Update state when data changes
-    if (mappedUsers.length > 0 && usersState.length === 0) {
-      setUsersState(mappedUsers)
+    return usersData.map(mapUserResponse)
+  }, [usersData])
+
+  // Keep usersState in sync with refetched data (e.g. after group update) so Edit modal shows latest
+  useEffect(() => {
+    if (users.length > 0) {
+      setUsersState(users)
     }
-    return mappedUsers
-  }, [usersData, usersState.length])
+  }, [users])
 
   const handleUserUpdate = (userId: string, updates: Partial<User>) => {
     setUsersState((prev) =>

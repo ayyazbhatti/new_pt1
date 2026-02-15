@@ -37,6 +37,12 @@ impl AdminSymbolsService {
                 s.price_precision,
                 s.volume_precision,
                 s.contract_size::text as contract_size,
+                s.tick_size,
+                s.lot_min,
+                s.lot_max,
+                s.default_pip_position,
+                s.pip_position_min,
+                s.pip_position_max,
                 s.is_enabled,
                 s.trading_enabled,
                 s.leverage_profile_id,
@@ -117,7 +123,7 @@ impl AdminSymbolsService {
 
     pub async fn get_symbol_by_id(&self, id: Uuid) -> Result<Symbol> {
         let symbol = sqlx::query_as::<_, Symbol>(
-            "SELECT id, code as symbol_code, provider_symbol, asset_class::text as asset_class, base_currency, quote_currency, price_precision, volume_precision, contract_size::text as contract_size, is_enabled, trading_enabled, leverage_profile_id, created_at, updated_at FROM symbols WHERE id = $1",
+            "SELECT id, code as symbol_code, provider_symbol, asset_class::text as asset_class, base_currency, quote_currency, price_precision, volume_precision, contract_size::text as contract_size, tick_size, lot_min, lot_max, default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, leverage_profile_id, created_at, updated_at FROM symbols WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -137,22 +143,46 @@ impl AdminSymbolsService {
         price_precision: i32,
         volume_precision: i32,
         contract_size: &str,
+        tick_size: Option<&str>,
+        lot_min: Option<&str>,
+        lot_max: Option<&str>,
+        default_pip_position: Option<&str>,
+        pip_position_min: Option<&str>,
+        pip_position_max: Option<&str>,
         leverage_profile_id: Option<Uuid>,
     ) -> Result<Symbol> {
         if symbol_code.len() < 2 || symbol_code.len() > 50 {
             return Err(anyhow::anyhow!("Symbol code must be between 2 and 50 characters"));
         }
 
+        // Parse optional decimal fields
+        let tick_size_decimal = tick_size.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let lot_min_decimal = lot_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let lot_max_decimal = lot_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let default_pip_position_decimal = default_pip_position.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let pip_position_min_decimal = pip_position_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let pip_position_max_decimal = pip_position_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+
+        // Validate lot_min < lot_max if both provided
+        if let (Some(min), Some(max)) = (lot_min_decimal, lot_max_decimal) {
+            if min >= max {
+                return Err(anyhow::anyhow!("lot_min must be less than lot_max"));
+            }
+        }
+
         let symbol = sqlx::query_as::<_, Symbol>(
             r#"
             INSERT INTO symbols (
                 code, provider_symbol, asset_class, base_currency, quote_currency,
-                price_precision, volume_precision, contract_size, leverage_profile_id
+                price_precision, volume_precision, contract_size, tick_size, lot_min, lot_max, 
+                default_pip_position, pip_position_min, pip_position_max, leverage_profile_id
             )
-            VALUES ($1, $2, $3::asset_class, $4, $5, $6, $7, $8::numeric, $9)
+            VALUES ($1, $2, $3::asset_class, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11::numeric, 
+                $12::numeric, $13::numeric, $14::numeric, $15)
             RETURNING id, code as symbol_code, provider_symbol, asset_class::text as asset_class, 
                 base_currency, quote_currency, price_precision, volume_precision, 
-                contract_size::text as contract_size, is_enabled, trading_enabled, 
+                contract_size::text as contract_size, tick_size, lot_min, lot_max, 
+                default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
                 leverage_profile_id, created_at, updated_at
             "#,
         )
@@ -164,6 +194,12 @@ impl AdminSymbolsService {
         .bind(price_precision)
         .bind(volume_precision)
         .bind(contract_size)
+        .bind(tick_size_decimal)
+        .bind(lot_min_decimal)
+        .bind(lot_max_decimal)
+        .bind(default_pip_position_decimal)
+        .bind(pip_position_min_decimal)
+        .bind(pip_position_max_decimal)
         .bind(leverage_profile_id)
         .fetch_one(&self.pool)
         .await?;
@@ -182,10 +218,38 @@ impl AdminSymbolsService {
         price_precision: i32,
         volume_precision: i32,
         contract_size: &str,
+        tick_size: Option<&str>,
+        lot_min: Option<&str>,
+        lot_max: Option<&str>,
+        default_pip_position: Option<&str>,
+        pip_position_min: Option<&str>,
+        pip_position_max: Option<&str>,
         is_enabled: bool,
         trading_enabled: bool,
         leverage_profile_id: Option<Uuid>,
     ) -> Result<Symbol> {
+        // Parse optional decimal fields
+        let tick_size_decimal = tick_size.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let lot_min_decimal = lot_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let lot_max_decimal = lot_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let default_pip_position_decimal = default_pip_position.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let pip_position_min_decimal = pip_position_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        let pip_position_max_decimal = pip_position_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+
+        // Validate lot_min < lot_max if both provided
+        if let (Some(min), Some(max)) = (lot_min_decimal, lot_max_decimal) {
+            if min >= max {
+                return Err(anyhow::anyhow!("lot_min must be less than lot_max"));
+            }
+        }
+
+        // Validate pip_position_min < pip_position_max if both provided
+        if let (Some(min), Some(max)) = (pip_position_min_decimal, pip_position_max_decimal) {
+            if min >= max {
+                return Err(anyhow::anyhow!("pip_position_min must be less than pip_position_max"));
+            }
+        }
+
         let symbol = sqlx::query_as::<_, Symbol>(
             r#"
             UPDATE symbols
@@ -198,14 +262,21 @@ impl AdminSymbolsService {
                 price_precision = $7,
                 volume_precision = $8,
                 contract_size = $9::numeric,
-                is_enabled = $10,
-                trading_enabled = $11,
-                leverage_profile_id = $12,
+                tick_size = $10::numeric,
+                lot_min = $11::numeric,
+                lot_max = $12::numeric,
+                default_pip_position = $13::numeric,
+                pip_position_min = $14::numeric,
+                pip_position_max = $15::numeric,
+                is_enabled = $16,
+                trading_enabled = $17,
+                leverage_profile_id = $18,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, code as symbol_code, provider_symbol, asset_class::text as asset_class, 
                 base_currency, quote_currency, price_precision, volume_precision, 
-                contract_size::text as contract_size, is_enabled, trading_enabled, 
+                contract_size::text as contract_size, tick_size, lot_min, lot_max, 
+                default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
                 leverage_profile_id, created_at, updated_at
             "#,
         )
@@ -218,6 +289,12 @@ impl AdminSymbolsService {
         .bind(price_precision)
         .bind(volume_precision)
         .bind(contract_size)
+        .bind(tick_size_decimal)
+        .bind(lot_min_decimal)
+        .bind(lot_max_decimal)
+        .bind(default_pip_position_decimal)
+        .bind(pip_position_min_decimal)
+        .bind(pip_position_max_decimal)
         .bind(is_enabled)
         .bind(trading_enabled)
         .bind(leverage_profile_id)
@@ -250,7 +327,8 @@ impl AdminSymbolsService {
             WHERE id = $1
             RETURNING id, code as symbol_code, provider_symbol, asset_class::text as asset_class, 
                 base_currency, quote_currency, price_precision, volume_precision, 
-                contract_size::text as contract_size, is_enabled, trading_enabled, 
+                contract_size::text as contract_size, tick_size, lot_min, lot_max, 
+                default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
                 leverage_profile_id, created_at, updated_at
             "#,
         )

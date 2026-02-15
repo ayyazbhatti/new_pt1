@@ -25,7 +25,63 @@ const symbolSchema = z.object({
     const num = parseFloat(val)
     return !isNaN(num) && num > 0
   }, 'Contract size must be a positive number'),
+  tick_size: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Tick size must be a positive number'),
+  lot_min: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Lot min must be a positive number'),
+  lot_max: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Lot max must be a positive number'),
+  default_pip_position: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Default pip position must be a positive number'),
+  pip_position_min: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Pip position min must be a positive number'),
+  pip_position_max: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Pip position max must be a positive number'),
   leverage_profile_id: z.string().nullable().optional(),
+}).refine((data) => {
+  // Validate lot_min < lot_max if both are provided
+  if (data.lot_min && data.lot_max) {
+    const min = parseFloat(data.lot_min)
+    const max = parseFloat(data.lot_max)
+    if (!isNaN(min) && !isNaN(max)) {
+      return min < max
+    }
+  }
+  return true
+}, {
+  message: 'Lot min must be less than lot max',
+  path: ['lot_max'],
+}).refine((data) => {
+  // Validate pip_position_min < pip_position_max if both are provided
+  if (data.pip_position_min && data.pip_position_max) {
+    const min = parseFloat(data.pip_position_min)
+    const max = parseFloat(data.pip_position_max)
+    if (!isNaN(min) && !isNaN(max)) {
+      return min < max
+    }
+  }
+  return true
+}, {
+  message: 'Pip position min must be less than pip position max',
+  path: ['pip_position_max'],
 })
 
 type SymbolFormData = z.infer<typeof symbolSchema>
@@ -52,6 +108,12 @@ export function AddSymbolModal() {
       price_precision: 2,
       volume_precision: 2,
       contract_size: '1',
+      tick_size: null,
+      lot_min: null,
+      lot_max: null,
+      default_pip_position: null,
+      pip_position_min: null,
+      pip_position_max: null,
       leverage_profile_id: null,
     },
   })
@@ -181,6 +243,120 @@ export function AddSymbolModal() {
             <Input {...register('contract_size')} disabled={isSubmitting} />
             {errors.contract_size && (
               <p className="mt-1 text-sm text-danger">{errors.contract_size.message}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <Label>
+              Tick Size
+              <span className="ml-1 text-xs text-muted" title="Minimum price movement (pip size). For EUR/USD: 0.0001">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.00000001"
+              {...register('tick_size')}
+              disabled={isSubmitting}
+              placeholder="0.0001"
+            />
+            {errors.tick_size && (
+              <p className="mt-1 text-sm text-danger">{errors.tick_size.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Lot Min
+              <span className="ml-1 text-xs text-muted" title="Minimum lot size allowed (e.g., 0.01)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('lot_min')}
+              disabled={isSubmitting}
+              placeholder="0.01"
+            />
+            {errors.lot_min && (
+              <p className="mt-1 text-sm text-danger">{errors.lot_min.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Lot Max
+              <span className="ml-1 text-xs text-muted" title="Maximum lot size allowed (e.g., 100)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('lot_max')}
+              disabled={isSubmitting}
+              placeholder="100"
+            />
+            {errors.lot_max && (
+              <p className="mt-1 text-sm text-danger">{errors.lot_max.message}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <Label>
+              Default Pip Position
+              <span className="ml-1 text-xs text-muted" title="Default pip position value suggested for this symbol (USD per pip)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('default_pip_position')}
+              disabled={isSubmitting}
+              placeholder="5.00"
+            />
+            {errors.default_pip_position && (
+              <p className="mt-1 text-sm text-danger">{errors.default_pip_position.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Pip Position Min
+              <span className="ml-1 text-xs text-muted" title="Minimum allowed pip position for this symbol (USD per pip)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('pip_position_min')}
+              disabled={isSubmitting}
+              placeholder="0.01"
+            />
+            {errors.pip_position_min && (
+              <p className="mt-1 text-sm text-danger">{errors.pip_position_min.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Pip Position Max
+              <span className="ml-1 text-xs text-muted" title="Maximum allowed pip position for this symbol (USD per pip)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('pip_position_max')}
+              disabled={isSubmitting}
+              placeholder="1000.00"
+            />
+            {errors.pip_position_max && (
+              <p className="mt-1 text-sm text-danger">{errors.pip_position_max.message}</p>
             )}
           </div>
         </div>

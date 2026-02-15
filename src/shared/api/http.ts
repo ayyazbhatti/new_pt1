@@ -7,7 +7,10 @@ export interface ApiError {
   }
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+// In dev without VITE_API_URL, use relative /api so Vite proxy forwards to auth-service (3000)
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV ? '' : 'http://localhost:3000')
 
 let refreshPromise: Promise<string> | null = null
 

@@ -56,6 +56,7 @@ CREATE TABLE price_stream_profiles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
+    group_id UUID REFERENCES user_groups(id) ON DELETE SET NULL,
     markup_type markup_type NOT NULL DEFAULT 'pips',
     bid_markup NUMERIC(20, 8) NOT NULL DEFAULT 0,
     ask_markup NUMERIC(20, 8) NOT NULL DEFAULT 0,

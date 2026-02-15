@@ -122,13 +122,21 @@ impl Broadcaster {
             ts,
         };
 
-        // Get subscribers for this symbol
-        let subscribers = registry.get_symbol_subscribers(symbol);
+        // Get subscribers for this symbol and for USD variant (clients may subscribe "BTCUSD" while feed sends "BTCUSDT")
+        let mut subscriber_ids: Vec<Uuid> = registry.get_symbol_subscribers(symbol).into_iter().collect();
+        if symbol.ends_with("USDT") {
+            let symbol_usd = format!("{}USD", symbol.trim_end_matches("USDT"));
+            for id in registry.get_symbol_subscribers(&symbol_usd) {
+                if !subscriber_ids.contains(&id) {
+                    subscriber_ids.push(id);
+                }
+            }
+        }
 
         let mut sent = 0;
         let mut failed = 0;
 
-        for conn_id in subscribers {
+        for conn_id in subscriber_ids {
             if let Some(tx) = connection_txs.get(&conn_id) {
                 if tx.send(message.clone()).is_ok() {
                     sent += 1;

@@ -12,13 +12,29 @@ import { placeOrder, PlaceOrderRequest } from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
+import {
+  calculatePipValuePerLot,
+  calculateLotSizeFromPipPosition,
+  calculateUnitsFromLots,
+  calculateLotsFromUnits,
+  calculatePipPositionFromLots,
+  normalizeLotSize,
+  formatLotSize,
+  formatUnits,
+} from '../utils/positionCalculations'
+import { AdminSymbol } from '@/features/symbols/types/symbol'
+import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 
 // Local storage key for trading panel state
 const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
 
 interface TradingPanelState {
   orderType: string
+  sizeMode: 'units' | 'lots' | 'pipPosition'
   size: string
+  lotSize: string
+  pipPosition: string
+  pipPositionCurrency: string
   currency: string
   marginPercent: number
   useSlTp: boolean
@@ -26,6 +42,7 @@ interface TradingPanelState {
   takeProfit: string
   limitPrice: string
   symbolDetailsOpen: boolean
+  selectedSymbolCode: string
 }
 
 // Load state from localStorage
@@ -53,26 +70,44 @@ const saveTradingPanelState = (state: Partial<TradingPanelState>) => {
 export function RightTradingPanel() {
   const { selectedSymbol, setSelectedSymbol, symbols } = useTerminalStore()
   
-  // Load initial state from localStorage
-  const savedState = loadTradingPanelState()
+  // Fetch AdminSymbol data to get tickSize, lotMin, lotMax
+  const { data: symbolsData } = useSymbolsList({
+    is_enabled: 'true',
+    page_size: 100,
+  })
   
-  const [orderType, setOrderType] = useState(savedState.orderType || 'market')
-  const [size, setSize] = useState(savedState.size || '0.003457')
-  const [currency, setCurrency] = useState<string>(savedState.currency || '')
-  const [marginPercent, setMarginPercent] = useState(savedState.marginPercent ?? 1.0)
-  const [useSlTp, setUseSlTp] = useState(savedState.useSlTp || false)
-  const [stopLoss, setStopLoss] = useState(savedState.stopLoss || '')
-  const [takeProfit, setTakeProfit] = useState(savedState.takeProfit || '')
-  const [limitPrice, setLimitPrice] = useState(savedState.limitPrice || '')
-  const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(savedState.symbolDetailsOpen || false)
+  // Get AdminSymbol for selected symbol
+  const adminSymbol = useMemo(() => {
+    if (!selectedSymbol || !symbolsData?.items) return null
+    return symbolsData.items.find(s => s.id === selectedSymbol.id) || null
+  }, [selectedSymbol, symbolsData])
+  
+  // Load initial state from localStorage only on mount (lazy init) so reload restores tab and values
+  const [orderType, setOrderType] = useState(() => loadTradingPanelState().orderType || 'market')
+  const [sizeMode, setSizeMode] = useState<'units' | 'lots' | 'pipPosition'>(() => loadTradingPanelState().sizeMode || 'units')
+  const [size, setSize] = useState(() => loadTradingPanelState().size || '0.003457')
+  const [lotSize, setLotSize] = useState(() => loadTradingPanelState().lotSize || '0.5')
+  const [pipPosition, setPipPosition] = useState(() => loadTradingPanelState().pipPosition || '5')
+  const [pipPositionCurrency, setPipPositionCurrency] = useState(() => loadTradingPanelState().pipPositionCurrency || 'USD')
+  const [currency, setCurrency] = useState<string>(() => loadTradingPanelState().currency || '')
+  const [marginPercent, setMarginPercent] = useState(() => loadTradingPanelState().marginPercent ?? 1.0)
+  const [useSlTp, setUseSlTp] = useState(() => loadTradingPanelState().useSlTp || false)
+  const [stopLoss, setStopLoss] = useState(() => loadTradingPanelState().stopLoss || '')
+  const [takeProfit, setTakeProfit] = useState(() => loadTradingPanelState().takeProfit || '')
+  const [limitPrice, setLimitPrice] = useState(() => loadTradingPanelState().limitPrice || '')
+  const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(() => loadTradingPanelState().symbolDetailsOpen || false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
   
-  // Save state to localStorage whenever it changes
+  // Save state to localStorage whenever it changes (keeps tab and values after reload)
   useEffect(() => {
     saveTradingPanelState({
       orderType,
+      sizeMode,
       size,
+      lotSize,
+      pipPosition,
+      pipPositionCurrency,
       currency,
       marginPercent,
       useSlTp,
@@ -80,8 +115,18 @@ export function RightTradingPanel() {
       takeProfit,
       limitPrice,
       symbolDetailsOpen,
+      selectedSymbolCode: selectedSymbol?.code ?? '',
     })
-  }, [orderType, size, currency, marginPercent, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen])
+  }, [orderType, sizeMode, size, lotSize, pipPosition, pipPositionCurrency, currency, marginPercent, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen, selectedSymbol?.code])
+
+  // Restore selected symbol by code on load when store has symbols but no selection (e.g. after reload)
+  useEffect(() => {
+    const saved = loadTradingPanelState()
+    const code = (saved.selectedSymbolCode as string) || ''
+    if (!code || selectedSymbol || symbols.length === 0) return
+    const match = symbols.find((s) => s.code === code)
+    if (match) setSelectedSymbol(match)
+  }, [symbols, selectedSymbol, setSelectedSymbol])
 
   // Update currency to base currency when symbol changes
   useEffect(() => {
@@ -92,6 +137,108 @@ export function RightTradingPanel() {
       }
     }
   }, [selectedSymbol?.baseCurrency, selectedSymbol?.quoteCurrency])
+
+  // Helper to create AdminSymbol-like object from MockSymbol (with defaults)
+  const getSymbolForCalculations = useCallback((): AdminSymbol | null => {
+    if (!selectedSymbol) return null
+    
+    // If we have AdminSymbol data, use it
+    if (adminSymbol) return adminSymbol
+    
+    // Otherwise, create a minimal AdminSymbol with defaults
+    return {
+      id: selectedSymbol.id,
+      symbolCode: selectedSymbol.code,
+      providerSymbol: null,
+      assetClass: 'Crypto' as const,
+      baseCurrency: selectedSymbol.baseCurrency,
+      quoteCurrency: selectedSymbol.quoteCurrency,
+      pricePrecision: 2,
+      volumePrecision: 2,
+      contractSize: '1',
+      tickSize: 0.01,
+      lotMin: 0.01,
+      lotMax: 100,
+      isEnabled: selectedSymbol.enabled,
+      tradingEnabled: selectedSymbol.enabled,
+      leverageProfileId: null,
+      leverageProfileName: null,
+      createdAt: '',
+      updatedAt: '',
+    }
+  }, [selectedSymbol, adminSymbol])
+
+  // Real-time calculations for different modes
+  const sizeCalculations = useMemo(() => {
+    const symbolForCalc = getSymbolForCalculations()
+    if (!symbolForCalc || !selectedSymbol || selectedSymbol.numericPrice <= 0) {
+      return {
+        pipValuePerLot: 0,
+        currentLotSize: 0,
+        currentUnits: 0,
+        currentPipPosition: 0,
+      }
+    }
+
+    const price = selectedSymbol.numericPrice
+    const pipValuePerLot = calculatePipValuePerLot(symbolForCalc, price, pipPositionCurrency)
+
+    let currentLotSize = 0
+    let currentUnits = 0
+    let currentPipPosition = 0
+
+    if (sizeMode === 'units') {
+      const sizeNum = parseFloat(size) || 0
+      currentUnits = sizeNum
+      if (currency === selectedSymbol.quoteCurrency && price > 0) {
+        currentUnits = sizeNum / price
+      }
+      currentLotSize = calculateLotsFromUnits(currentUnits, symbolForCalc)
+      currentPipPosition = calculatePipPositionFromLots(currentLotSize, symbolForCalc, price, pipPositionCurrency)
+    } else if (sizeMode === 'lots') {
+      const lotSizeNum = parseFloat(lotSize) || 0
+      currentLotSize = normalizeLotSize(lotSizeNum, symbolForCalc)
+      currentUnits = calculateUnitsFromLots(currentLotSize, symbolForCalc)
+      currentPipPosition = calculatePipPositionFromLots(currentLotSize, symbolForCalc, price, pipPositionCurrency)
+    } else if (sizeMode === 'pipPosition') {
+      const pipPosNum = parseFloat(pipPosition) || 0
+      currentPipPosition = pipPosNum
+      currentLotSize = calculateLotSizeFromPipPosition(pipPosNum, symbolForCalc, price, pipPositionCurrency)
+      currentUnits = calculateUnitsFromLots(currentLotSize, symbolForCalc)
+    }
+
+    return {
+      pipValuePerLot,
+      currentLotSize,
+      currentUnits,
+      currentPipPosition,
+    }
+  }, [sizeMode, size, lotSize, pipPosition, selectedSymbol, currency, pipPositionCurrency, getSymbolForCalculations])
+
+  // Handle size mode change with conversion
+  const handleSizeModeChange = useCallback((newMode: 'units' | 'lots' | 'pipPosition') => {
+    if (newMode === sizeMode) return
+
+    const symbolForCalc = getSymbolForCalculations()
+    if (!symbolForCalc || !selectedSymbol || selectedSymbol.numericPrice <= 0) {
+      setSizeMode(newMode)
+      return
+    }
+
+    const price = selectedSymbol.numericPrice
+    const { currentLotSize, currentUnits, currentPipPosition } = sizeCalculations
+
+    // Convert current size to new mode
+    if (newMode === 'units') {
+      setSize(currentUnits.toFixed(symbolForCalc.volumePrecision || 2))
+    } else if (newMode === 'lots') {
+      setLotSize(formatLotSize(currentLotSize, symbolForCalc))
+    } else if (newMode === 'pipPosition') {
+      setPipPosition(currentPipPosition.toFixed(2))
+    }
+
+    setSizeMode(newMode)
+  }, [sizeMode, sizeCalculations, selectedSymbol, getSymbolForCalculations])
 
   // Calculate costs based on size and selected symbol
   // Size is always stored in the current currency mode (base or quote)
@@ -300,9 +447,56 @@ export function RightTradingPanel() {
       return
     }
 
-    const sizeNum = parseFloat(size)
-    if (!sizeNum || sizeNum <= 0) {
-      toast.error('Please enter a valid size')
+    const symbolForCalc = getSymbolForCalculations()
+    if (!symbolForCalc) {
+      toast.error('Symbol data not available')
+      return
+    }
+
+    // Get base size in units based on current mode
+    let baseSize = 0
+    let displaySize = ''
+
+    if (sizeMode === 'units') {
+      const sizeNum = parseFloat(size)
+      if (!sizeNum || sizeNum <= 0) {
+        toast.error('Please enter a valid size')
+        return
+      }
+      baseSize = sizeNum
+      if (currency === selectedSymbol.quoteCurrency && selectedSymbol.numericPrice > 0) {
+        baseSize = sizeNum / selectedSymbol.numericPrice
+      }
+      displaySize = currency === selectedSymbol.quoteCurrency 
+        ? `${size} ${selectedSymbol.quoteCurrency} (${baseSize.toFixed(8)} ${selectedSymbol.baseCurrency})`
+        : `${size} ${selectedSymbol.baseCurrency}`
+    } else if (sizeMode === 'lots') {
+      const lotSizeNum = parseFloat(lotSize)
+      if (!lotSizeNum || lotSizeNum <= 0) {
+        toast.error('Please enter a valid lot size')
+        return
+      }
+      const normalizedLots = normalizeLotSize(lotSizeNum, symbolForCalc)
+      baseSize = calculateUnitsFromLots(normalizedLots, symbolForCalc)
+      displaySize = `${formatLotSize(normalizedLots, symbolForCalc)} lots (${formatUnits(baseSize, symbolForCalc)} units)`
+    } else if (sizeMode === 'pipPosition') {
+      const pipPosNum = parseFloat(pipPosition)
+      if (!pipPosNum || pipPosNum <= 0) {
+        toast.error('Please enter a valid pip position')
+        return
+      }
+      const price = selectedSymbol.numericPrice || 0
+      if (price <= 0) {
+        toast.error('Price not available')
+        return
+      }
+      const calculatedLots = calculateLotSizeFromPipPosition(pipPosNum, symbolForCalc, price, pipPositionCurrency)
+      baseSize = calculateUnitsFromLots(calculatedLots, symbolForCalc)
+      displaySize = `$${pipPosNum.toFixed(2)}/pip (${formatLotSize(calculatedLots, symbolForCalc)} lots, ${formatUnits(baseSize, symbolForCalc)} units)`
+    }
+
+    if (baseSize <= 0) {
+      toast.error('Invalid position size')
       return
     }
 
@@ -314,15 +508,6 @@ export function RightTradingPanel() {
     setIsSubmitting(true)
 
     try {
-      // Convert size to base currency (API always expects base currency)
-      const price = selectedSymbol.numericPrice || 0
-      let baseSize = sizeNum
-      
-      if (currency === selectedSymbol.quoteCurrency && price > 0) {
-        // Size is in quote currency, convert to base
-        baseSize = sizeNum / price
-      }
-
       const payload: PlaceOrderRequest = {
         symbol: selectedSymbol.code,
         side,
@@ -347,9 +532,6 @@ export function RightTradingPanel() {
       setPendingOrders(prev => new Set(prev).add(orderId))
       
       // Show "submitted" message - actual execution happens asynchronously
-      const displaySize = currency === selectedSymbol.quoteCurrency 
-        ? `${size} ${selectedSymbol.quoteCurrency} (${baseSize.toFixed(8)} ${selectedSymbol.baseCurrency})`
-        : `${size} ${selectedSymbol.baseCurrency}`
       toast.success(
         `${side} order submitted: ${displaySize} @ ${selectedSymbol.code} (Order ID: ${orderId.slice(0, 8)}...)`,
         { duration: 3000 }
@@ -357,7 +539,13 @@ export function RightTradingPanel() {
 
       // Reset form for market orders (keep limit orders for potential modifications)
       if (orderType === 'market') {
-        setSize('0.003457')
+        if (sizeMode === 'units') {
+          setSize('0.003457')
+        } else if (sizeMode === 'lots') {
+          setLotSize('0.5')
+        } else if (sizeMode === 'pipPosition') {
+          setPipPosition('5')
+        }
         setStopLoss('')
         setTakeProfit('')
         setUseSlTp(false)
@@ -508,54 +696,167 @@ export function RightTradingPanel() {
             </div>
           )}
 
-          {/* Size */}
+          {/* Size Mode Selector */}
+          <div className="mb-3">
+            <label className="text-xs font-semibold text-muted uppercase tracking-wider mb-2 block">Size Mode</label>
+            <Segmented
+              options={[
+                { value: 'units', label: 'Units' },
+                { value: 'lots', label: 'Lots' },
+                { value: 'pipPosition', label: 'Pip Position' },
+              ]}
+              value={sizeMode}
+              onChange={(value) => handleSizeModeChange(value as 'units' | 'lots' | 'pipPosition')}
+              className="w-full"
+            />
+          </div>
+
+          {/* Size Input - Conditional based on mode */}
           <div className="mb-4">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-muted uppercase tracking-wider">Size</label>
-              <button
-                onClick={handleMaxSize}
-                className="text-xs font-bold text-accent hover:text-accent/80 transition-colors px-2 py-0.5 rounded hover:bg-accent/10"
-                title="Set maximum size (1% of balance)"
-              >
-                MAX
-              </button>
-            </div>
-            <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                step="0.000001"
-                value={size}
-                onChange={(e) => setSize(e.target.value)}
-                placeholder={orderType === 'market' ? marketSizePlaceholder : 'Enter size'}
-                className="flex-1"
-              />
-              <select
-                value={currency}
-                onChange={(e) => handleCurrencyChange(e.target.value)}
-                className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
-                disabled={!selectedSymbol}
-              >
-                {selectedSymbol ? (
-                  <>
-                    <option value={selectedSymbol.baseCurrency}>{selectedSymbol.baseCurrency}</option>
-                    <option value={selectedSymbol.quoteCurrency}>{selectedSymbol.quoteCurrency}</option>
-                  </>
-                ) : (
-                  <option value="">Select Symbol</option>
-                )}
-              </select>
-            </div>
-            <div className="text-xs text-muted mt-1">
-              {selectedSymbol && currency ? (
-                currency === selectedSymbol.baseCurrency ? (
-                  <>≈ {costBreakdown.quoteValue} {selectedSymbol.quoteCurrency}</>
-                ) : (
-                  <>≈ {costBreakdown.baseSize} {selectedSymbol.baseCurrency}</>
-                )
-              ) : (
-                <>≈ 0.00 USD</>
+              <label className="text-xs font-semibold text-muted uppercase tracking-wider">
+                {sizeMode === 'units' ? 'Size' : sizeMode === 'lots' ? 'Lot Size' : 'Pip Position'}
+              </label>
+              {sizeMode === 'units' && (
+                <button
+                  onClick={handleMaxSize}
+                  className="text-xs font-bold text-accent hover:text-accent/80 transition-colors px-2 py-0.5 rounded hover:bg-accent/10"
+                  title="Set maximum size (1% of balance)"
+                >
+                  MAX
+                </button>
               )}
             </div>
+
+            {/* Units Mode */}
+            {sizeMode === 'units' && (
+              <>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    step="0.000001"
+                    value={size}
+                    onChange={(e) => setSize(e.target.value)}
+                    placeholder={orderType === 'market' ? marketSizePlaceholder : 'Enter size'}
+                    className="flex-1"
+                  />
+                  <select
+                    value={currency}
+                    onChange={(e) => handleCurrencyChange(e.target.value)}
+                    className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
+                    disabled={!selectedSymbol}
+                  >
+                    {selectedSymbol ? (
+                      <>
+                        <option value={selectedSymbol.baseCurrency}>{selectedSymbol.baseCurrency}</option>
+                        <option value={selectedSymbol.quoteCurrency}>{selectedSymbol.quoteCurrency}</option>
+                      </>
+                    ) : (
+                      <option value="">Select Symbol</option>
+                    )}
+                  </select>
+                </div>
+                <div className="text-xs text-muted mt-1">
+                  {selectedSymbol && currency ? (
+                    currency === selectedSymbol.baseCurrency ? (
+                      <>≈ {costBreakdown.quoteValue} {selectedSymbol.quoteCurrency}</>
+                    ) : (
+                      <>≈ {costBreakdown.baseSize} {selectedSymbol.baseCurrency}</>
+                    )
+                  ) : (
+                    <>≈ 0.00 USD</>
+                  )}
+                  {sizeCalculations.currentLotSize > 0 && (
+                    <span className="ml-2">
+                      • {formatLotSize(sizeCalculations.currentLotSize, getSymbolForCalculations() || {} as AdminSymbol)} lots
+                    </span>
+                  )}
+                  {sizeCalculations.currentPipPosition > 0 && (
+                    <span className="ml-2">
+                      • ${sizeCalculations.currentPipPosition.toFixed(2)}/pip
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* Lots Mode */}
+            {sizeMode === 'lots' && (
+              <>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={lotSize}
+                    onChange={(e) => setLotSize(e.target.value)}
+                    placeholder="0.5"
+                    className="flex-1"
+                  />
+                  <div className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text">
+                    Lots
+                  </div>
+                </div>
+                <div className="text-xs text-muted mt-1">
+                  {sizeCalculations.currentUnits > 0 && (
+                    <>
+                      {formatUnits(sizeCalculations.currentUnits, getSymbolForCalculations() || {} as AdminSymbol)} units
+                    </>
+                  )}
+                  {sizeCalculations.currentPipPosition > 0 && (
+                    <span className="ml-2">
+                      • ${sizeCalculations.currentPipPosition.toFixed(2)}/pip
+                    </span>
+                  )}
+                  {getSymbolForCalculations() && (
+                    <span className="ml-2 text-muted/70">
+                      (Min: {getSymbolForCalculations()?.lotMin || 0.01}, Max: {getSymbolForCalculations()?.lotMax || 100})
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* Pip Position Mode */}
+            {sizeMode === 'pipPosition' && (
+              <>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={pipPosition}
+                    onChange={(e) => setPipPosition(e.target.value)}
+                    placeholder="5.00"
+                    className="flex-1"
+                  />
+                  <select
+                    value={pipPositionCurrency}
+                    onChange={(e) => setPipPositionCurrency(e.target.value)}
+                    className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
+                  >
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                    <option value="GBP">GBP</option>
+                  </select>
+                </div>
+                <div className="text-xs text-muted mt-1">
+                  {sizeCalculations.currentLotSize > 0 && (
+                    <>
+                      {formatLotSize(sizeCalculations.currentLotSize, getSymbolForCalculations() || {} as AdminSymbol)} lots
+                    </>
+                  )}
+                  {sizeCalculations.currentUnits > 0 && (
+                    <span className="ml-2">
+                      • {formatUnits(sizeCalculations.currentUnits, getSymbolForCalculations() || {} as AdminSymbol)} units
+                    </span>
+                  )}
+                  {sizeCalculations.pipValuePerLot > 0 && (
+                    <span className="ml-2 text-muted/70">
+                      (Pip value: ${sizeCalculations.pipValuePerLot.toFixed(2)}/lot)
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Free Margin */}

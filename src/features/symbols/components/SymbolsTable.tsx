@@ -8,14 +8,14 @@ import { AdminSymbol } from '../types/symbol'
 import { useModalStore } from '@/app/store'
 import { EditSymbolModal } from '../modals/EditSymbolModal'
 import { SymbolGroupMarkupsModal } from '../modals/SymbolGroupMarkupsModal'
-import { Eye, Edit, Trash2, TrendingUp } from 'lucide-react'
+import { Eye, Edit, Trash2, TrendingUp, Info } from 'lucide-react'
 import { useToggleSymbolEnabled, useDeleteSymbol } from '../hooks/useSymbols'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { useUpdateSymbol } from '../hooks/useSymbols'
 import { toast } from 'react-hot-toast'
 import { PriceCell } from './PriceCell'
 import { usePriceStream } from '../hooks/usePriceStream'
-import { useMemo, useEffect } from 'react'
+import { useMemo, useEffect, useCallback } from 'react'
 
 interface SymbolsTableProps {
   symbols: AdminSymbol[]
@@ -71,28 +71,29 @@ export function SymbolsTable({
     console.log('🔌 SymbolsTable: WebSocket connection status:', isConnected, '| Symbols:', symbolCodes)
   }, [isConnected, symbolCodes.join(',')])
 
-  const handleView = (symbol: AdminSymbol) => {
+  // Memoize handlers to prevent re-renders on price updates
+  const handleView = useCallback((symbol: AdminSymbol) => {
     openModal(`view-symbol-${symbol.id}`, <EditSymbolModal symbol={symbol} readOnly />, {
       title: `View Symbol - ${symbol.symbolCode}`,
       size: 'lg',
     })
-  }
+  }, [openModal])
 
-  const handleEdit = (symbol: AdminSymbol) => {
+  const handleEdit = useCallback((symbol: AdminSymbol) => {
     openModal(`edit-symbol-${symbol.id}`, <EditSymbolModal symbol={symbol} />, {
       title: 'Edit Symbol',
       size: 'lg',
     })
-  }
+  }, [openModal])
 
-  const handleGroupMarkups = (symbol: AdminSymbol) => {
+  const handleGroupMarkups = useCallback((symbol: AdminSymbol) => {
     openModal(`group-markups-${symbol.id}`, <SymbolGroupMarkupsModal symbol={symbol} />, {
       title: `Group Markups - ${symbol.symbolCode}`,
       size: 'xl',
     })
-  }
+  }, [openModal])
 
-  const handleToggleEnabled = async (symbol: AdminSymbol) => {
+  const handleToggleEnabled = useCallback(async (symbol: AdminSymbol) => {
     try {
       await toggleEnabled.mutateAsync({
         id: symbol.id,
@@ -101,9 +102,9 @@ export function SymbolsTable({
     } catch (error) {
       // Error handled by hook
     }
-  }
+  }, [toggleEnabled])
 
-  const handleLeverageProfileChange = async (symbol: AdminSymbol, profileId: string | null) => {
+  const handleLeverageProfileChange = useCallback(async (symbol: AdminSymbol, profileId: string | null) => {
     try {
       await updateSymbol.mutateAsync({
         id: symbol.id,
@@ -124,9 +125,9 @@ export function SymbolsTable({
     } catch (error) {
       // Error handled by hook
     }
-  }
+  }, [updateSymbol])
 
-  const handleDelete = async (symbol: AdminSymbol) => {
+  const handleDelete = useCallback(async (symbol: AdminSymbol) => {
     if (confirm(`Are you sure you want to delete symbol "${symbol.symbolCode}"?`)) {
       try {
         await deleteSymbol.mutateAsync(symbol.id)
@@ -134,9 +135,11 @@ export function SymbolsTable({
         // Error handled by hook
       }
     }
-  }
+  }, [deleteSymbol])
 
-  const columns: ColumnDef<AdminSymbol>[] = [
+
+  // Memoize columns to prevent re-renders when only prices change
+  const columns: ColumnDef<AdminSymbol>[] = useMemo(() => [
     {
       accessorKey: 'symbolCode',
       header: 'Symbol',
@@ -185,13 +188,17 @@ export function SymbolsTable({
           )}
         </div>
       ),
+      // Stable cell renderer - PriceCell is memoized internally
       cell: ({ row }) => {
         const symbol = row.original
         // Use provider symbol if available, otherwise use symbol code
         // Data provider expects uppercase symbols
         const symbolCode = (symbol.providerSymbol || symbol.symbolCode).toUpperCase()
+        // PriceCell is memoized, so it only re-renders when its own price updates
         return <PriceCell symbol={symbolCode} />
       },
+      // Enable cell-level memoization in TanStack Table
+      enableSorting: false,
     },
     {
       accessorKey: 'providerSymbol',
@@ -235,6 +242,114 @@ export function SymbolsTable({
       cell: ({ row }) => {
         const size = row.getValue('contractSize') as string
         return <span className="font-mono text-sm">{size}</span>
+      },
+    },
+    {
+      id: 'tickSize',
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Tick Size</span>
+          <Info className="h-3 w-3 text-text-muted" title="Minimum price movement (pip size)" />
+        </div>
+      ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        const tickSize = symbol.tickSize
+        return (
+          <span className="font-mono text-sm">
+            {tickSize !== null && tickSize !== undefined ? tickSize.toFixed(8).replace(/\.?0+$/, '') : '-'}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'lotMin',
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Lot Min</span>
+          <Info className="h-3 w-3 text-text-muted" title="Minimum lot size allowed" />
+        </div>
+      ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        const lotMin = symbol.lotMin
+        return (
+          <span className="font-mono text-sm">
+            {lotMin !== null && lotMin !== undefined ? lotMin.toFixed(2) : '-'}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'lotMax',
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Lot Max</span>
+          <Info className="h-3 w-3 text-text-muted" title="Maximum lot size allowed" />
+        </div>
+      ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        const lotMax = symbol.lotMax
+        return (
+          <span className="font-mono text-sm">
+            {lotMax !== null && lotMax !== undefined ? lotMax.toFixed(2) : '-'}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'defaultPipPosition',
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Default Pip Pos</span>
+          <Info className="h-3 w-3 text-text-muted" title="Default pip position value suggested for this symbol (USD per pip)" />
+        </div>
+      ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        const defaultPipPosition = symbol.defaultPipPosition
+        return (
+          <span className="font-mono text-sm">
+            {defaultPipPosition !== null && defaultPipPosition !== undefined ? `$${defaultPipPosition.toFixed(2)}` : '-'}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'pipPositionMin',
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Pip Pos Min</span>
+          <Info className="h-3 w-3 text-text-muted" title="Minimum allowed pip position for this symbol (USD per pip)" />
+        </div>
+      ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        const pipPositionMin = symbol.pipPositionMin
+        return (
+          <span className="font-mono text-sm">
+            {pipPositionMin !== null && pipPositionMin !== undefined ? `$${pipPositionMin.toFixed(2)}` : '-'}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'pipPositionMax',
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Pip Pos Max</span>
+          <Info className="h-3 w-3 text-text-muted" title="Maximum allowed pip position for this symbol (USD per pip)" />
+        </div>
+      ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        const pipPositionMax = symbol.pipPositionMax
+        return (
+          <span className="font-mono text-sm">
+            {pipPositionMax !== null && pipPositionMax !== undefined ? `$${pipPositionMax.toFixed(2)}` : '-'}
+          </span>
+        )
       },
     },
     {
@@ -314,7 +429,18 @@ export function SymbolsTable({
         )
       },
     },
-  ]
+  ], [
+    isConnected,
+    handleView,
+    handleEdit,
+    handleGroupMarkups,
+    handleDelete,
+    handleToggleEnabled,
+    handleLeverageProfileChange,
+    leverageProfiles,
+    updateSymbol.isPending,
+    toggleEnabled.isPending,
+  ])
 
   return (
     <DataTable

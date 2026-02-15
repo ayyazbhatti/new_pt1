@@ -1,6 +1,8 @@
+import { useState, useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
@@ -8,6 +10,8 @@ import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
 import { User, UserStatus } from '../types/users'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
+import { updateUserGroup } from '../api/users.api'
+import type { UserResponse } from '@/shared/api/users.api'
 
 const userSchema = z.object({
   firstName: z.string().min(1, 'First name is required'),
@@ -27,45 +31,99 @@ interface CreateEditUserModalProps {
 
 export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
+  const queryClient = useQueryClient()
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Fetch groups dynamically - fetch all groups to include disabled ones when editing
   const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
     page_size: 100, // Get a reasonable number of groups
   })
 
-  const nameParts = user?.name.split(' ') || ['', '']
+  // Subscribe to users list so we get latest cache (e.g. after optimistic group update)
+  const { data: usersList } = useQuery({ queryKey: ['users'] })
+  // When editing, prefer user from cache so re-opened modal shows latest group
+  const displayUser = useMemo(() => {
+    if (!user) return null
+    const found = (usersList as UserResponse[] | undefined)?.find((u) => u.id === user.id)
+    if (!found) return user
+    return {
+      ...user,
+      group: found.group_id || '',
+      groupName: found.group_name || user.groupName,
+    }
+  }, [user, usersList])
+
+  const nameParts = displayUser?.name?.split(' ') || user?.name?.split(' ') || ['', '']
   const firstName = nameParts[0] || ''
   const lastName = nameParts.slice(1).join(' ') || ''
+
+  const formUser = displayUser ?? user
+  const defaultGroup = formUser?.group || ''
+  const defaultStatus = (formUser?.status === 'suspended' ? 'disabled' : formUser?.status) || 'active'
 
   const {
     register,
     handleSubmit,
     setValue,
     watch,
+    reset,
     formState: { errors },
   } = useForm<UserFormData>({
     resolver: zodResolver(userSchema),
     defaultValues: {
-      firstName: firstName,
-      lastName: lastName,
-      email: user?.email || '',
-      phone: user?.phone || '',
-      country: user?.country || '',
-      group: user?.group || '',
-      status: (user?.status === 'suspended' ? 'disabled' : user?.status) || 'active',
+      firstName,
+      lastName,
+      email: formUser?.email || '',
+      phone: formUser?.phone || '',
+      country: formUser?.country || '',
+      group: defaultGroup,
+      status: defaultStatus,
     },
   })
+
+  // When modal re-opens with updated user (e.g. after group save), reset form to show latest
+  useEffect(() => {
+    if (!formUser) return
+    reset({
+      firstName,
+      lastName,
+      email: formUser.email || '',
+      phone: formUser.phone || '',
+      country: formUser.country || '',
+      group: defaultGroup,
+      status: defaultStatus,
+    })
+  }, [formUser?.id, defaultGroup, defaultStatus, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country])
 
   const group = watch('group')
   const groups = groupsData?.items || []
 
-  const onSubmit = (data: UserFormData) => {
+  const onSubmit = async (data: UserFormData) => {
     if (user) {
-      toast.success(`User ${data.firstName} ${data.lastName} updated`)
+      setIsSubmitting(true)
+      try {
+        await updateUserGroup(user.id, { group_id: data.group })
+        const groupName = groups.find((g) => g.id === data.group)?.name ?? ''
+        // Optimistic update: write new group into cache so list and re-opened modal show it immediately
+        queryClient.setQueryData<UserResponse[]>(['users'], (old) => {
+          if (!old) return old
+          return old.map((u) =>
+            u.id === user.id ? { ...u, group_id: data.group, group_name: groupName } : u
+          )
+        })
+        await queryClient.invalidateQueries({ queryKey: ['users'] })
+        toast.success(`User ${data.firstName} ${data.lastName} updated`)
+        closeModal(`edit-user-${user.id}`)
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Failed to update user'
+        toast.error(message)
+      } finally {
+        setIsSubmitting(false)
+      }
     } else {
       toast.success(`User ${data.firstName} ${data.lastName} created`)
+      closeModal('create-user')
     }
-    closeModal(user ? `edit-user-${user.id}` : 'create-user')
   }
 
   return (
@@ -148,7 +206,7 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
         >
           Cancel
         </Button>
-        <Button type="submit">{user ? 'Save Changes' : 'Create User'}</Button>
+        <Button type="submit" disabled={isSubmitting}>{user ? (isSubmitting ? 'Saving...' : 'Save Changes') : 'Create User'}</Button>
       </div>
     </form>
   )

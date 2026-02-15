@@ -6,12 +6,13 @@ import { Button } from '@/shared/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Switch } from '@/shared/ui/Switch'
 import { Label } from '@/shared/ui/label'
-import { ModalShell } from '@/shared/ui/modal'
+// ModalShell is not needed here - ModalHost wraps the component
 import { useModalStore } from '@/app/store'
 import { AdminSymbol, AssetClass } from '../types/symbol'
 import { useUpdateSymbol } from '../hooks/useSymbols'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { Spinner } from '@/shared/ui/loading'
+import { useEffect } from 'react'
 
 const symbolSchema = z.object({
   symbol_code: z.string().min(2, 'Symbol code must be at least 2 characters').max(50),
@@ -25,9 +26,65 @@ const symbolSchema = z.object({
     const num = parseFloat(val)
     return !isNaN(num) && num > 0
   }, 'Contract size must be a positive number'),
+  tick_size: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Tick size must be a positive number'),
+  lot_min: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Lot min must be a positive number'),
+  lot_max: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Lot max must be a positive number'),
+  default_pip_position: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Default pip position must be a positive number'),
+  pip_position_min: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Pip position min must be a positive number'),
+  pip_position_max: z.string().nullable().optional().refine((val) => {
+    if (!val || val === '') return true // Optional
+    const num = parseFloat(val)
+    return !isNaN(num) && num > 0
+  }, 'Pip position max must be a positive number'),
   is_enabled: z.boolean(),
   trading_enabled: z.boolean(),
   leverage_profile_id: z.string().nullable().optional(),
+}).refine((data) => {
+  // Validate lot_min < lot_max if both are provided
+  if (data.lot_min && data.lot_max) {
+    const min = parseFloat(data.lot_min)
+    const max = parseFloat(data.lot_max)
+    if (!isNaN(min) && !isNaN(max)) {
+      return min < max
+    }
+  }
+  return true
+}, {
+  message: 'Lot min must be less than lot max',
+  path: ['lot_max'],
+}).refine((data) => {
+  // Validate pip_position_min < pip_position_max if both are provided
+  if (data.pip_position_min && data.pip_position_max) {
+    const min = parseFloat(data.pip_position_min)
+    const max = parseFloat(data.pip_position_max)
+    if (!isNaN(min) && !isNaN(max)) {
+      return min < max
+    }
+  }
+  return true
+}, {
+  message: 'Pip position min must be less than pip position max',
+  path: ['pip_position_max'],
 })
 
 type SymbolFormData = z.infer<typeof symbolSchema>
@@ -42,6 +99,18 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
   const updateSymbol = useUpdateSymbol()
   const { data: leverageProfiles } = useLeverageProfilesList()
 
+  // Defensive check: ensure symbol data exists
+  if (!symbol) {
+    return (
+      <div className="p-4">
+        <p className="text-danger">Error: Symbol data not available</p>
+        <button onClick={() => closeModal(`edit-symbol-${symbol?.id || 'unknown'}`)} className="mt-2 px-4 py-2 bg-surface-2 rounded">
+          Close
+        </button>
+      </div>
+    )
+  }
+
   const {
     register,
     handleSubmit,
@@ -51,17 +120,23 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
   } = useForm<SymbolFormData>({
     resolver: zodResolver(symbolSchema),
     defaultValues: {
-      symbol_code: symbol.symbolCode,
-      provider_symbol: symbol.providerSymbol || symbol.symbolCode.toLowerCase(),
-      asset_class: (symbol.assetClass || 'FX') as AssetClass,
-      base_currency: symbol.baseCurrency,
-      quote_currency: symbol.quoteCurrency,
-      price_precision: symbol.pricePrecision,
-      volume_precision: symbol.volumePrecision,
-      contract_size: symbol.contractSize,
-      is_enabled: symbol.isEnabled,
-      trading_enabled: symbol.tradingEnabled,
-      leverage_profile_id: symbol.leverageProfileId || null,
+      symbol_code: symbol?.symbolCode || '',
+      provider_symbol: symbol?.providerSymbol || symbol?.symbolCode?.toLowerCase() || '',
+      asset_class: (symbol?.assetClass || 'FX') as AssetClass,
+      base_currency: symbol?.baseCurrency || '',
+      quote_currency: symbol?.quoteCurrency || '',
+      price_precision: symbol?.pricePrecision || 2,
+      volume_precision: symbol?.volumePrecision || 2,
+      contract_size: symbol?.contractSize || '1',
+      tick_size: symbol?.tickSize?.toString() || null,
+      lot_min: symbol?.lotMin?.toString() || null,
+      lot_max: symbol?.lotMax?.toString() || null,
+      default_pip_position: symbol?.defaultPipPosition?.toString() || null,
+      pip_position_min: symbol?.pipPositionMin?.toString() || null,
+      pip_position_max: symbol?.pipPositionMax?.toString() || null,
+      is_enabled: symbol?.isEnabled ?? true,
+      trading_enabled: symbol?.tradingEnabled ?? true,
+      leverage_profile_id: symbol?.leverageProfileId || null,
     },
   })
 
@@ -77,13 +152,42 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
     }
   }
 
-  const modalKey = readOnly ? `view-symbol-${symbol.id}` : `edit-symbol-${symbol.id}`
+  const modalKey = readOnly ? `view-symbol-${symbol?.id || 'unknown'}` : `edit-symbol-${symbol?.id || 'unknown'}`
 
+  // Debug: Log symbol data
+  useEffect(() => {
+    console.log('🔍 EditSymbolModal - Symbol data:', symbol)
+    console.log('🔍 EditSymbolModal - Symbol fields:', {
+      id: symbol?.id,
+      symbolCode: symbol?.symbolCode,
+      tickSize: symbol?.tickSize,
+      lotMin: symbol?.lotMin,
+      lotMax: symbol?.lotMax,
+      contractSize: symbol?.contractSize,
+    })
+  }, [symbol])
+
+  // Early return if symbol is missing critical data
+  if (!symbol || !symbol.id || !symbol.symbolCode) {
+    console.error('❌ EditSymbolModal - Missing symbol data:', symbol)
+    return (
+      <div className="p-4">
+        <p className="text-danger mb-2">Error: Symbol data is incomplete</p>
+        <p className="text-sm text-muted mb-4">
+          Symbol ID: {symbol?.id || 'missing'}<br />
+          Symbol Code: {symbol?.symbolCode || 'missing'}
+        </p>
+        <Button onClick={() => closeModal(modalKey)} variant="outline">
+          Close
+        </Button>
+      </div>
+    )
+  }
+
+  // ModalHost already wraps with ModalShell, so we just return the form content
+  // The title is passed via props in openModal call
   return (
-    <ModalShell
-      title={readOnly ? `View Symbol - ${symbol.symbolCode}` : 'Edit Symbol'}
-      onClose={() => closeModal(modalKey)}
-    >
+    <div className="space-y-4">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -196,6 +300,120 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
           </div>
         </div>
 
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <Label>
+              Tick Size
+              <span className="ml-1 text-xs text-muted" title="Minimum price movement (pip size). For EUR/USD: 0.0001">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.00000001"
+              {...register('tick_size')}
+              disabled={readOnly || isSubmitting}
+              placeholder="0.0001"
+            />
+            {errors.tick_size && (
+              <p className="mt-1 text-sm text-danger">{errors.tick_size.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Lot Min
+              <span className="ml-1 text-xs text-muted" title="Minimum lot size allowed (e.g., 0.01)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('lot_min')}
+              disabled={readOnly || isSubmitting}
+              placeholder="0.01"
+            />
+            {errors.lot_min && (
+              <p className="mt-1 text-sm text-danger">{errors.lot_min.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Lot Max
+              <span className="ml-1 text-xs text-muted" title="Maximum lot size allowed (e.g., 100)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('lot_max')}
+              disabled={readOnly || isSubmitting}
+              placeholder="100"
+            />
+            {errors.lot_max && (
+              <p className="mt-1 text-sm text-danger">{errors.lot_max.message}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <Label>
+              Default Pip Position
+              <span className="ml-1 text-xs text-muted" title="Default pip position value suggested for this symbol (USD per pip)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('default_pip_position')}
+              disabled={readOnly || isSubmitting}
+              placeholder="5.00"
+            />
+            {errors.default_pip_position && (
+              <p className="mt-1 text-sm text-danger">{errors.default_pip_position.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Pip Position Min
+              <span className="ml-1 text-xs text-muted" title="Minimum allowed pip position for this symbol (USD per pip)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('pip_position_min')}
+              disabled={readOnly || isSubmitting}
+              placeholder="0.01"
+            />
+            {errors.pip_position_min && (
+              <p className="mt-1 text-sm text-danger">{errors.pip_position_min.message}</p>
+            )}
+          </div>
+          <div>
+            <Label>
+              Pip Position Max
+              <span className="ml-1 text-xs text-muted" title="Maximum allowed pip position for this symbol (USD per pip)">
+                (ℹ️)
+              </span>
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              {...register('pip_position_max')}
+              disabled={readOnly || isSubmitting}
+              placeholder="1000.00"
+            />
+            {errors.pip_position_max && (
+              <p className="mt-1 text-sm text-danger">{errors.pip_position_max.message}</p>
+            )}
+          </div>
+        </div>
+
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
             <Switch
@@ -231,6 +449,6 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
           </div>
         )}
       </form>
-    </ModalShell>
+    </div>
   )
 }

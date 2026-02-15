@@ -11,6 +11,7 @@ import {
   UpdateProfilePayload,
   UpsertSymbolOverridePayload,
 } from '../api/markup.api'
+import { useAuthStore } from '@/shared/store/auth.store'
 
 const queryKeys = {
   all: ['markup'] as const,
@@ -20,9 +21,14 @@ const queryKeys = {
 }
 
 export function useMarkupProfiles() {
+  const accessToken = useAuthStore((s) => s.accessToken)
   return useQuery({
     queryKey: queryKeys.profiles(),
     queryFn: () => listMarkupProfiles(),
+    enabled: !!accessToken,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
     retry: (failureCount, error: any) => {
       if (error?.response?.status === 401 || error?.response?.status === 403) {
         return false

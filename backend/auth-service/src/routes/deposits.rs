@@ -1041,14 +1041,8 @@ async fn get_notifications(
     {
         Ok(rows) => rows,
         Err(e) => {
-            // If table doesn't exist, return empty list instead of error
-            if e.to_string().contains("does not exist") {
-                warn!("Notifications table does not exist yet, returning empty list");
-                vec![]
-            } else {
-                error!("Failed to fetch notifications: {}", e);
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
+            warn!("Notifications fetch failed (table may not exist): {}, returning empty list", e);
+            vec![]
         }
     };
 
@@ -1437,7 +1431,8 @@ async fn close_position(
     }
 
     let pos_status: Option<String> = pos_data.get("status").cloned();
-    if pos_status.as_deref() != Some("OPEN") {
+    let is_open = pos_status.as_deref().map_or(false, |s| s.eq_ignore_ascii_case("OPEN"));
+    if !is_open {
         error!("Position {} is not open (status: {:?})", position_id, pos_status);
         return Err(StatusCode::BAD_REQUEST);
     }

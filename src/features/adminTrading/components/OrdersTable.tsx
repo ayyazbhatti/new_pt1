@@ -223,18 +223,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
       <div className="bg-surface-2 border-b border-border sticky top-0 z-10">
         <table className="w-full table-fixed">
           <colgroup>
-            <col style={{ width: '10%' }} /> {/* Order ID */}
-            <col style={{ width: '12%' }} /> {/* Name */}
-            <col style={{ width: '15%' }} /> {/* Email */}
-            <col style={{ width: '8%' }} /> {/* Group */}
-            <col style={{ width: '8%' }} /> {/* Symbol */}
-            <col style={{ width: '6%' }} /> {/* Side */}
-            <col style={{ width: '6%' }} /> {/* Type */}
-            <col style={{ width: '8%' }} /> {/* Size */}
-            <col style={{ width: '8%' }} /> {/* Price */}
-            <col style={{ width: '8%' }} /> {/* Status */}
-            <col style={{ width: '10%' }} /> {/* Created */}
-            <col style={{ width: '5%' }} /> {/* Actions */}
+            <col style={{ width: '10%' }} /><col style={{ width: '12%' }} /><col style={{ width: '15%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} /><col style={{ width: '6%' }} /><col style={{ width: '6%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} /><col style={{ width: '10%' }} /><col style={{ width: '5%' }} />
           </colgroup>
           <thead>
             <tr>
@@ -280,18 +269,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
               >
                 <table className="w-full table-fixed">
                   <colgroup>
-                    <col style={{ width: '10%' }} /> {/* Order ID */}
-                    <col style={{ width: '12%' }} /> {/* Name */}
-                    <col style={{ width: '15%' }} /> {/* Email */}
-                    <col style={{ width: '8%' }} /> {/* Group */}
-                    <col style={{ width: '8%' }} /> {/* Symbol */}
-                    <col style={{ width: '6%' }} /> {/* Side */}
-                    <col style={{ width: '6%' }} /> {/* Type */}
-                    <col style={{ width: '8%' }} /> {/* Size */}
-                    <col style={{ width: '8%' }} /> {/* Price */}
-                    <col style={{ width: '8%' }} /> {/* Status */}
-                    <col style={{ width: '10%' }} /> {/* Created */}
-                    <col style={{ width: '5%' }} /> {/* Actions */}
+                    <col style={{ width: '10%' }} /><col style={{ width: '12%' }} /><col style={{ width: '15%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} /><col style={{ width: '6%' }} /><col style={{ width: '6%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} /><col style={{ width: '10%' }} /><col style={{ width: '5%' }} />
                   </colgroup>
                   <tbody>
                     <tr>

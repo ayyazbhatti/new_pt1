@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'react-hot-toast'
 import {
   listSymbols,
+  listAdminSymbols,
   getSymbol,
   createSymbol,
   updateSymbol,
@@ -16,6 +17,8 @@ const queryKeys = {
   all: ['symbols'] as const,
   lists: () => [...queryKeys.all, 'list'] as const,
   list: (params?: ListSymbolsParams) => [...queryKeys.lists(), params] as const,
+  adminLists: () => [...queryKeys.all, 'admin', 'list'] as const,
+  adminList: (params?: ListSymbolsParams) => [...queryKeys.adminLists(), params] as const,
   details: () => [...queryKeys.all, 'detail'] as const,
   detail: (id: string) => [...queryKeys.details(), id] as const,
 }
@@ -24,6 +27,20 @@ export function useSymbolsList(params?: ListSymbolsParams) {
   return useQuery({
     queryKey: queryKeys.list(params),
     queryFn: () => listSymbols(params),
+    retry: (failureCount, error: any) => {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        return false
+      }
+      return failureCount < 2
+    },
+  })
+}
+
+/** Use on admin symbols page so list includes tick_size, lot_min, lot_max, pip position columns. */
+export function useAdminSymbolsList(params?: ListSymbolsParams) {
+  return useQuery({
+    queryKey: queryKeys.adminList(params),
+    queryFn: () => listAdminSymbols(params),
     retry: (failureCount, error: any) => {
       if (error?.response?.status === 401 || error?.response?.status === 403) {
         return false
@@ -48,6 +65,7 @@ export function useCreateSymbol() {
     mutationFn: (payload: CreateSymbolPayload) => createSymbol(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminLists() })
       toast.success('Symbol created successfully')
     },
     onError: (error: any) => {
@@ -65,6 +83,7 @@ export function useUpdateSymbol() {
       updateSymbol(id, payload),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminLists() })
       queryClient.invalidateQueries({ queryKey: queryKeys.detail(variables.id) })
       toast.success('Symbol updated successfully')
     },
@@ -82,6 +101,7 @@ export function useDeleteSymbol() {
     mutationFn: (id: string) => deleteSymbol(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminLists() })
       toast.success('Symbol deleted successfully')
     },
     onError: (error: any) => {
@@ -99,6 +119,7 @@ export function useToggleSymbolEnabled() {
       toggleSymbolEnabled(id, isEnabled),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminLists() })
       queryClient.invalidateQueries({ queryKey: queryKeys.detail(variables.id) })
       toast.success(`Symbol ${variables.isEnabled ? 'enabled' : 'disabled'} successfully`)
     },

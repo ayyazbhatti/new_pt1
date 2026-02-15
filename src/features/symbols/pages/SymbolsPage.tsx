@@ -7,7 +7,7 @@ import { useModalStore } from '@/app/store'
 import { Plus, Upload, RefreshCw } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useSymbolsList } from '../hooks/useSymbols'
+import { useAdminSymbolsList } from '../hooks/useSymbols'
 import { Skeleton } from '@/shared/ui/loading'
 import { EmptyState } from '@/shared/ui/empty'
 
@@ -37,7 +37,7 @@ export function SymbolsPage() {
   const sort = searchParams.get('sort') || 'updated_desc'
 
   // Fetch symbols
-  const { data, isLoading, error, refetch } = useSymbolsList({
+  const { data, isLoading, error, refetch } = useAdminSymbolsList({
     search: search || undefined,
     asset_class: assetClass !== 'all' ? assetClass : undefined,
     is_enabled: isEnabled !== 'all' ? isEnabled : undefined,

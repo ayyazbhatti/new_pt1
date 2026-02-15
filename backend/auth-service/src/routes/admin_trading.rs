@@ -110,6 +110,7 @@ pub struct ListOrdersQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListPositionsQuery {
     pub status: Option<String>,
     pub symbol: Option<String>,

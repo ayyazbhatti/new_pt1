@@ -1,4 +1,4 @@
-import { memo, useEffect } from 'react'
+import { memo, useMemo } from 'react'
 import { useSymbolPrice } from '../hooks/usePriceStream'
 import { cn } from '@/shared/utils'
 
@@ -11,21 +11,25 @@ function PriceCellComponent({ symbol, className }: PriceCellProps) {
   const symbolUpper = symbol?.toUpperCase().trim() || ''
   const price = useSymbolPrice(symbolUpper)
 
-  // Debug: Log when price changes
-  useEffect(() => {
-    if (symbolUpper) {
-      if (price) {
-        console.log(`✅ PriceCell("${symbol}" -> "${symbolUpper}"): Price available`, price)
-        console.log(`✅ PriceCell: Bid=${price.bid}, Ask=${price.ask}`)
-      } else {
-        console.log(`⚠️ PriceCell("${symbol}" -> "${symbolUpper}"): No price data`)
-      }
-    } else {
-      console.warn(`⚠️ PriceCell: Empty symbol provided`)
-    }
-  }, [symbol, symbolUpper, price])
+  // Memoize formatted prices to prevent unnecessary re-renders
+  const formattedPrices = useMemo(() => {
+    if (!price) return null
 
-  if (!price) {
+    // Format numbers with appropriate precision
+    const formatPrice = (value: string) => {
+      const num = parseFloat(value)
+      if (isNaN(num)) return value
+      // Use up to 8 decimal places, remove trailing zeros
+      return num.toFixed(8).replace(/\.?0+$/, '')
+    }
+
+    return {
+      bid: formatPrice(price.bid),
+      ask: formatPrice(price.ask),
+    }
+  }, [price?.bid, price?.ask])
+
+  if (!price || !formattedPrices) {
     return (
       <div className={cn('text-sm text-text-muted font-mono', className)}>
         <div className="flex flex-col gap-0.5">
@@ -36,24 +40,17 @@ function PriceCellComponent({ symbol, className }: PriceCellProps) {
     )
   }
 
-  // Format numbers with appropriate precision
-  const formatPrice = (value: string) => {
-    const num = parseFloat(value)
-    if (isNaN(num)) return value
-    // Use up to 8 decimal places, remove trailing zeros
-    return num.toFixed(8).replace(/\.?0+$/, '')
-  }
-
   return (
     <div className={cn('text-sm font-mono', className)}>
       <div className="flex flex-col gap-0.5">
-        <span className="text-success">{formatPrice(price.bid)}</span>
-        <span className="text-danger">{formatPrice(price.ask)}</span>
+        <span className="text-success">{formattedPrices.bid}</span>
+        <span className="text-danger">{formattedPrices.ask}</span>
       </div>
     </div>
   )
 }
 
-// Don't memoize - we want re-renders when price changes
-export const PriceCell = PriceCellComponent
+// Memoize PriceCell - prevents re-renders when parent re-renders with same props
+// Internal price updates (from useSymbolPrice hook) will still trigger re-renders
+export const PriceCell = memo(PriceCellComponent)
 

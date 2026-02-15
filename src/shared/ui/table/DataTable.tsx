@@ -6,10 +6,12 @@ import {
   getFilteredRowModel,
   ColumnDef,
   flexRender,
+  Row,
 } from '@tanstack/react-table'
 import { cn } from '@/shared/utils'
 import { Button } from '../button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../select'
+import { memo } from 'react'
 
 interface DataTableProps<TData> {
   data: TData[]
@@ -25,6 +27,68 @@ interface DataTableProps<TData> {
   }
 }
 
+// Memoized table cell component to prevent re-renders
+// For price cells (livePrice column), we allow re-renders since they update internally
+const TableCell = memo(({ cell, onRowClick }: { cell: any; onRowClick?: (row: any) => void }) => {
+  return (
+    <td key={cell.id} className="p-4 align-middle text-sm text-text whitespace-nowrap">
+      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+    </td>
+  )
+}, (prev, next) => {
+  // For price cells, always allow re-renders (they update internally via hooks)
+  const isPriceCell = prev.cell.column.id === 'livePrice' || next.cell.column.id === 'livePrice'
+  if (isPriceCell) {
+    // Price cells can re-render - don't block them
+    return false
+  }
+  
+  // For other cells, only re-render if cell ID or value changes
+  return prev.cell.id === next.cell.id && 
+         prev.cell.getValue() === next.cell.getValue() &&
+         prev.onRowClick === next.onRowClick
+})
+
+TableCell.displayName = 'TableCell'
+
+// Memoized table row component
+// Rows should only re-render when row data changes, not when individual cells update
+const TableRow = memo(({ 
+  row, 
+  onRowClick 
+}: { 
+  row: Row<any>; 
+  onRowClick?: (row: any) => void 
+}) => {
+  return (
+    <tr
+      key={row.id}
+      className={`hover:bg-surface-2/50 transition-colors ${onRowClick ? 'cursor-pointer' : ''}`}
+      onClick={() => onRowClick?.(row.original)}
+    >
+      {row.getVisibleCells().map((cell) => (
+        <TableCell key={cell.id} cell={cell} onRowClick={onRowClick} />
+      ))}
+    </tr>
+  )
+}, (prev, next) => {
+  // Only re-render if row ID or row data reference changes
+  // Individual cells (like PriceCell) will handle their own re-renders
+  // This prevents the entire row from re-rendering when only one cell updates
+  const rowDataChanged = prev.row.original !== next.row.original
+  const rowIdChanged = prev.row.id !== next.row.id
+  const onRowClickChanged = prev.onRowClick !== next.onRowClick
+  
+  // If nothing changed, don't re-render
+  if (!rowDataChanged && !rowIdChanged && !onRowClickChanged) {
+    return true // props are equal, skip re-render
+  }
+  
+  return false // props changed, allow re-render
+})
+
+TableRow.displayName = 'TableRow'
+
 export function DataTable<TData>({ data, columns, className, onRowClick, pagination }: DataTableProps<TData>) {
   const table = useReactTable({
     data,
@@ -35,6 +99,14 @@ export function DataTable<TData>({ data, columns, className, onRowClick, paginat
     getFilteredRowModel: getFilteredRowModel(),
     manualPagination: !!pagination,
     pageCount: pagination ? Math.ceil(pagination.total / pagination.pageSize) : undefined,
+    // Provide stable row IDs to help with memoization
+    getRowId: (row, index) => {
+      // Try to use an ID field if available, otherwise use index
+      if (typeof row === 'object' && row !== null && 'id' in row) {
+        return String((row as any).id)
+      }
+      return String(index)
+    },
   })
 
   return (
@@ -61,17 +133,7 @@ export function DataTable<TData>({ data, columns, className, onRowClick, paginat
             <tbody className="divide-y divide-border">
               {table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className={`hover:bg-surface-2/50 transition-colors ${onRowClick ? 'cursor-pointer' : ''}`}
-                    onClick={() => onRowClick?.(row.original)}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="p-4 align-middle text-sm text-text whitespace-nowrap">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    ))}
-                  </tr>
+                  <TableRow key={row.id} row={row} onRowClick={onRowClick} />
                 ))
               ) : (
                 <tr>

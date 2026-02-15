@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { wsClient } from '@/shared/ws/wsClient'
-import { useWebSocketState, useWebSocketSubscription } from '@/shared/ws/wsHooks'
-import { WsInboundEvent } from '@/shared/ws/wsEvents'
+import { priceStreamClient } from '@/shared/ws/priceStreamClient'
 
 interface PriceData {
   bid: string
@@ -24,38 +22,12 @@ function normalizeSymbolKey(symbol: string): string {
 function notifySubscribers(symbol: string, price: PriceData) {
   const symbolUpper = symbol.toUpperCase().trim()
   const normalizedKey = normalizeSymbolKey(symbolUpper)
-  
-  console.log(`📥 Received price update for ${symbolUpper} (normalized: ${normalizedKey}):`, price)
-  console.log(`📥 Price store before update - keys:`, Array.from(priceStore.keys()))
   priceStore.set(normalizedKey, price)
-  console.log(`📥 Price store after update - keys:`, Array.from(priceStore.keys()))
-  
-  // Try both the original format and normalized format for subscribers
-  // Subscribers might be registered as SOLUSDT but prices come as SOLUSD
-  let callbacks = subscribers.get(normalizedKey)
-  if (!callbacks) {
-    // Try original format in case subscriber was registered with USDT
-    callbacks = subscribers.get(symbolUpper)
-  }
-  
-  console.log(`📥 Subscribers for ${normalizedKey}:`, callbacks ? callbacks.size : 0, '| All subscriber keys:', Array.from(subscribers.keys()))
-  
-  if (callbacks && callbacks.size > 0) {
-    console.log(`📊 Notifying ${callbacks.size} subscribers for ${normalizedKey}:`, price)
-    // Create a copy of callbacks to avoid issues if callbacks are modified during iteration
-    const callbacksArray = Array.from(callbacks)
-    callbacksArray.forEach((callback, index) => {
-      try {
-        console.log(`📊 Calling callback ${index + 1}/${callbacksArray.length} for ${normalizedKey}`)
-        callback(price)
-        console.log(`✅ Callback ${index + 1} completed for ${normalizedKey}`)
-      } catch (error) {
-        console.error(`❌ Error in subscriber callback ${index + 1} for ${normalizedKey}:`, error)
-      }
-    })
-  } else {
-    console.warn(`⚠️ No subscribers found for symbol: ${normalizedKey} (or ${symbolUpper}). Available subscribers:`, Array.from(subscribers.keys()))
-    console.warn(`⚠️ Price was received but no one is listening. Price stored for later.`)
+
+  let callbacks = subscribers.get(normalizedKey) ?? subscribers.get(symbolUpper)
+  if (callbacks?.size) {
+    const copy = Array.from(callbacks)
+    copy.forEach((cb) => { try { cb(price) } catch (_) {} })
   }
 }
 
@@ -74,11 +46,9 @@ export function usePriceStream(symbols: string[]) {
 
   // Create callback that updates only the specific symbol - use useCallback to ensure stability
   const updatePrice = useCallback((symbol: string, price: PriceData) => {
-    console.log(`🔄 usePriceStream callback: Updating price for ${symbol}:`, price)
     setPrices((prev) => {
       const next = new Map(prev)
       next.set(symbol, price)
-      console.log(`🔄 usePriceStream: Price map updated. New size: ${next.size}, Keys:`, Array.from(next.keys()))
       return next
     })
   }, [])
@@ -88,8 +58,7 @@ export function usePriceStream(symbols: string[]) {
     callbackRef.current = updatePrice
   }, [updatePrice])
 
-  // Function to perform subscription (using shared wsClient)
-  // Use refs to avoid closure issues
+  // Function to perform subscription (data-provider WS, no auth)
   const performSubscriptionRef = useRef<() => void>()
   
   performSubscriptionRef.current = () => {
@@ -97,143 +66,51 @@ export function usePriceStream(symbols: string[]) {
     const subscribeFn = subscribeFnRef.current
     const unsubscribeFn = unsubscribeFnRef.current
     
-    if (symbolsUpper.length === 0) {
-      console.log('⏳ No symbols to subscribe to')
-      return
-    }
+    if (symbolsUpper.length === 0) return
+    if (!subscribeFn || !unsubscribeFn) return
 
-    if (!subscribeFn || !unsubscribeFn) {
-      console.warn('⚠️ Subscribe/unsubscribe functions not available yet')
-      return
-    }
-
-    console.log('🔄 Processing subscription for:', symbolsUpper)
-    
-    // Check which symbols need to be subscribed (not already subscribed)
     const symbolsToSubscribe = symbolsUpper.filter(s => !subscribedSymbolsRef.current.has(s))
     const symbolsToUnsubscribe = Array.from(subscribedSymbolsRef.current).filter(s => !symbolsUpper.includes(s))
-    
-    console.log('🔍 Subscription analysis:', {
-      allSymbols: symbolsUpper,
-      toSubscribe: symbolsToSubscribe,
-      toUnsubscribe: symbolsToUnsubscribe,
-      currentlySubscribed: Array.from(subscribedSymbolsRef.current),
-    })
-    
-    // Unsubscribe from symbols that are no longer needed
+
     if (symbolsToUnsubscribe.length > 0) {
-      console.log('📥 Unsubscribing from symbols:', symbolsToUnsubscribe)
       unsubscribeFn(symbolsToUnsubscribe)
       symbolsToUnsubscribe.forEach(s => subscribedSymbolsRef.current.delete(s))
     }
-    
-    // Subscribe to new symbols - batch into chunks of 50 (server limit)
+
     if (symbolsToSubscribe.length > 0) {
-      console.log('📡 EXECUTING subscription for symbols:', symbolsToSubscribe)
-      
-      const MAX_SYMBOLS_PER_BATCH = 50
-      const batches: string[][] = []
-      
-      // Split symbols into batches of 50
-      for (let i = 0; i < symbolsToSubscribe.length; i += MAX_SYMBOLS_PER_BATCH) {
-        batches.push(symbolsToSubscribe.slice(i, i + MAX_SYMBOLS_PER_BATCH))
+      const MAX = 50
+      for (let i = 0; i < symbolsToSubscribe.length; i += MAX) {
+        const batch = symbolsToSubscribe.slice(i, i + MAX)
+        if (subscribeFn(batch)) batch.forEach(s => subscribedSymbolsRef.current.add(s))
       }
-      
-      console.log(`📦 Split ${symbolsToSubscribe.length} symbols into ${batches.length} batches of max ${MAX_SYMBOLS_PER_BATCH} symbols each`)
-      
-      // Subscribe to each batch
-      let allSucceeded = true
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i]
-        console.log(`📡 Subscribing to batch ${i + 1}/${batches.length} (${batch.length} symbols):`, batch)
-        
-        const success = subscribeFn(batch)
-        console.log(`📡 subscribe() returned for batch ${i + 1}:`, success)
-        
-        if (success) {
-          // If subscribe succeeded, track the symbols
-          batch.forEach(s => subscribedSymbolsRef.current.add(s))
-          console.log(`✅ Subscription successful for batch ${i + 1}:`, batch)
-        } else {
-          console.warn(`⚠️ Subscription failed for batch ${i + 1} - WebSocket may not be ready yet`)
-          allSucceeded = false
-        }
-      }
-      
-      if (allSucceeded) {
-        console.log('✅ All batches subscribed successfully')
-        console.log('✅ Updated subscribed symbols:', Array.from(subscribedSymbolsRef.current))
-        console.log('✅ Waiting for price ticks from server...')
-      } else {
-        console.warn('⚠️ Some batches failed - will retry when WebSocket is ready')
-      }
-    } else {
-      console.log('ℹ️ All symbols already subscribed, no action needed')
     }
   }
 
-  // Subscribe to symbols - IMPORTANT: Include updatePrice in dependencies
+  // Register subscribers for each symbol so we can push prices into React state
   useEffect(() => {
     const symbolsUpper = symbols.map(s => s.toUpperCase().trim()).filter(s => s.length > 0)
-    console.log('🔔 Subscribing to symbols:', symbolsUpper)
-    console.log('🔔 Current price store keys before subscription:', Array.from(priceStore.keys()))
-    console.log('🔔 updatePrice function exists:', typeof updatePrice === 'function')
-    console.log('🔔 updatePrice function:', updatePrice)
-    
-    // Create a wrapper callback that matches the subscriber signature (price: PriceData) => void
     const wrappedCallbacks = new Map<string, (price: PriceData) => void>()
-    
+
     symbolsUpper.forEach((symbol) => {
-      // Normalize symbol key to match incoming price format (USDT -> USD)
       const normalizedSymbol = normalizeSymbolKey(symbol)
-      if (!subscribers.has(normalizedSymbol)) {
-        subscribers.set(normalizedSymbol, new Set())
-      }
+      if (!subscribers.has(normalizedSymbol)) subscribers.set(normalizedSymbol, new Set())
       const callbacks = subscribers.get(normalizedSymbol)!
-      
-      // Create a wrapped callback that includes the symbol
-      // Use updatePrice directly (it's stable from useCallback) instead of relying on ref
+
       const wrappedCallback = (price: PriceData) => {
-        // Use normalized symbol for callback but original symbol for updatePrice
-        const normalizedSymbol = normalizeSymbolKey(symbol)
-        console.log(`📞 Wrapped callback called for ${symbol} (normalized: ${normalizedSymbol}) with price:`, price)
-        console.log(`📞 updatePrice function exists:`, typeof updatePrice === 'function')
-        // Always use updatePrice directly - it's stable from useCallback
-        // Use normalized symbol for the price map key
-        if (updatePrice) {
-          console.log(`✅ Calling updatePrice for ${normalizedSymbol}`)
-          try {
-            updatePrice(normalizedSymbol, price)
-            console.log(`✅ Successfully updated price for ${normalizedSymbol}`)
-          } catch (error) {
-            console.error(`❌ Error updating price for ${normalizedSymbol}:`, error)
-          }
-        } else {
-          console.error(`❌ updatePrice is not available for ${normalizedSymbol}`)
-        }
+        updatePrice(normalizedSymbol, price)
       }
       wrappedCallbacks.set(symbol, wrappedCallback)
-      
       callbacks.add(wrappedCallback)
-      console.log(`✅ Added subscriber for ${symbol}, total: ${callbacks.size}`)
 
-      // Set initial price if available
-      const initialPrice = priceStore.get(symbol)
-      if (initialPrice) {
-        console.log(`💰 Initial price found for ${symbol}:`, initialPrice)
-        wrappedCallback(initialPrice)
-      } else {
-        console.log(`⏳ No initial price for ${symbol}, waiting for price update...`)
-      }
+      const initialPrice = priceStore.get(normalizedSymbol)
+      if (initialPrice) wrappedCallback(initialPrice)
     })
-    
-    console.log('🔔 All subscribers after setup:', Array.from(subscribers.keys()))
 
     return () => {
       symbolsUpper.forEach((symbol) => {
         const normalizedSymbol = normalizeSymbolKey(symbol)
         const callbacks = subscribers.get(normalizedSymbol)
-        const wrappedCallback = wrappedCallbacks.get(normalizedSymbol)
+        const wrappedCallback = wrappedCallbacks.get(symbol)
         if (callbacks && wrappedCallback) {
           callbacks.delete(wrappedCallback)
           if (callbacks.size === 0) {
@@ -244,58 +121,37 @@ export function usePriceStream(symbols: string[]) {
     }
   }, [symbols.join(','), updatePrice]) // Include updatePrice in dependencies
 
-  // Use shared wsClient instead of creating separate connection
-  const wsState = useWebSocketState()
-  const isConnected = wsClient.isConnected()
-  
-  console.log('🔌 usePriceStream: Using shared wsClient, state:', wsState, '| isConnected:', isConnected)
-  console.log('🔌 usePriceStream: Symbols to subscribe:', symbols)
-  
-  // Subscribe to tick events from wsClient
-  useWebSocketSubscription(
-    useCallback((event: WsInboundEvent) => {
-      if (event.type === 'tick') {
-        console.log('📨 usePriceStream received tick from wsClient:', event)
-        const symbolUpper = event.symbol.toUpperCase().trim()
-        console.log('📨 Processing tick for symbol:', symbolUpper)
-        notifySubscribers(symbolUpper, {
-          bid: event.bid,
-          ask: event.ask,
-          ts: event.ts,
-        })
-      }
-    }, [])
-  )
+  // Use data-provider WebSocket directly for prices (no auth, port 9003)
+  const [isConnected, setIsConnected] = useState(priceStreamClient.isConnected())
 
-  // Subscribe/unsubscribe functions using wsClient
+  // Sync connection state
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setIsConnected((prev) => {
+        const next = priceStreamClient.isConnected()
+        return next !== prev ? next : prev
+      })
+    }, 500)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Listen to ticks from data-provider
+  useEffect(() => {
+    const unsub = priceStreamClient.onTick((tick) => {
+      notifySubscribers(tick.symbol, { bid: tick.bid, ask: tick.ask, ts: tick.ts })
+    })
+    return unsub
+  }, [])
+
+  // Subscribe/unsubscribe via data-provider client
   const subscribeToSymbols = useCallback((symbolsToSubscribe: string[]) => {
-    if (!wsClient.isConnected()) {
-      console.warn('⚠️ [usePriceStream] WebSocket not ready for subscription')
-      return false
-    }
-    
-    try {
-      wsClient.sendSubscribe(symbolsToSubscribe, [])
-      console.log('✅ [usePriceStream] Subscribed to symbols via wsClient:', symbolsToSubscribe)
-      return true
-    } catch (error) {
-      console.error('❌ [usePriceStream] Failed to subscribe:', error)
-      return false
-    }
+    priceStreamClient.subscribe(symbolsToSubscribe)
+    setIsConnected(priceStreamClient.isConnected())
+    return true
   }, [])
 
   const unsubscribeFromSymbols = useCallback((symbolsToUnsubscribe: string[]) => {
-    if (!wsClient.isConnected()) {
-      console.warn('⚠️ [usePriceStream] WebSocket not ready for unsubscription')
-      return
-    }
-    
-    try {
-      wsClient.sendUnsubscribe(symbolsToUnsubscribe)
-      console.log('✅ [usePriceStream] Unsubscribed from symbols via wsClient:', symbolsToUnsubscribe)
-    } catch (error) {
-      console.error('❌ [usePriceStream] Failed to unsubscribe:', error)
-    }
+    priceStreamClient.unsubscribe(symbolsToUnsubscribe)
   }, [])
 
   // Store subscribe/unsubscribe functions in refs
@@ -304,28 +160,24 @@ export function usePriceStream(symbols: string[]) {
     unsubscribeFnRef.current = unsubscribeFromSymbols
   }, [subscribeToSymbols, unsubscribeFromSymbols])
 
-  // Subscribe/unsubscribe when symbols change (if already connected)
+  // Subscribe to data-provider when symbols are available (no auth delay)
   useEffect(() => {
-    console.log('🔄 Subscription effect triggered. isConnected:', isConnected, '| wsState:', wsState, '| symbols:', symbols.length)
-    if (isConnected && performSubscriptionRef.current) {
-      console.log('✅ WebSocket connected, executing subscription...')
-      // Add a small delay to ensure authentication has completed
-      setTimeout(() => {
-        if (performSubscriptionRef.current && wsClient.isConnected()) {
-          console.log('🔄 Executing subscription after delay...')
-          performSubscriptionRef.current()
-        }
-      }, 500) // Wait 500ms for auth to complete
-    } else if (!isConnected) {
-      console.log('⏳ Waiting for WebSocket connection before subscribing...')
-    } else if (!performSubscriptionRef.current) {
-      console.warn('⚠️ performSubscriptionRef.current is not available')
+    if (symbols.length === 0) return
+    if (performSubscriptionRef.current) {
+      performSubscriptionRef.current()
     }
-  }, [isConnected, wsState, symbols.join(',')])
+  }, [symbols.join(',')])
+
+  const triggerResubscribe = useCallback(() => {
+    if (performSubscriptionRef.current && symbolsRef.current.length > 0) {
+      performSubscriptionRef.current()
+    }
+  }, [])
 
   return {
     prices,
     isConnected,
+    triggerResubscribe,
   }
 }
 

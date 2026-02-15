@@ -18,6 +18,7 @@ import { ModifySltpModal } from '../components/ModifySltpModal'
 import { useAdminWebSocket } from '../hooks/useAdminWebSocket'
 import { useDebouncedCallback } from '@/shared/hooks/useDebounce'
 import { cn } from '@/shared/utils'
+import { toast } from 'react-hot-toast'
 
 export function AdminTradingPage() {
   const {
@@ -69,24 +70,20 @@ export function AdminTradingPage() {
     setPositionsLoading(true)
     try {
       const response = await fetchAdminPositions(filters)
-      setPositions(response.items || [], response.cursor, response.hasMore)
+      const items = response?.items ?? []
+      setPositions(items, response?.cursor, response?.hasMore ?? false)
     } catch (error: any) {
-      // Handle 404 gracefully - endpoint not implemented yet
-      if (error?.response?.status === 404) {
-        // Only log in development
-        if (import.meta.env.DEV) {
-          console.debug('Positions endpoint not available yet (404). Backend implementation pending.')
-        }
-        setPositions([], undefined, false)
-      } else {
-        console.error('Failed to fetch positions:', error)
+      console.error('Failed to fetch positions:', error)
+      setPositions([], undefined, false)
+      if (error?.response?.status !== 404) {
+        toast.error(error?.response?.data?.error?.message || error?.message || 'Failed to load positions')
       }
     } finally {
       setPositionsLoading(false)
     }
   }, [filters, setPositions, setPositionsLoading])
 
-  // Initial load and on tab/filter change
+  // Load data when tab or filters change
   useEffect(() => {
     if (activeTab === 'orders') {
       loadOrders()
@@ -95,6 +92,12 @@ export function AdminTradingPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, filters.status, filters.symbol, filters.userId, filters.groupId, filters.search])
+
+  // Load positions on mount so data is ready when user switches to Positions tab
+  useEffect(() => {
+    loadPositions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const ordersArray = useMemo(() => getOrdersArray(), [orders])
   const positionsArray = useMemo(() => getPositionsArray(), [positions])
@@ -115,6 +118,14 @@ export function AdminTradingPage() {
               <Circle className={cn('h-2 w-2', wsStatusColor)} fill="currentColor" />
               <span className="text-xs font-medium text-text-muted">{wsStatusText}</span>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => (activeTab === 'positions' ? loadPositions() : loadOrders())}
+              disabled={activeTab === 'orders' ? ordersLoading : positionsLoading}
+            >
+              Refresh
+            </Button>
             <Button variant="primary" onClick={() => setOpenModal('create-order')}>
               <Plus className="h-4 w-4 mr-2" />
               Create Order

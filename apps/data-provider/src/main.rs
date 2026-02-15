@@ -1,5 +1,6 @@
-use axum::{routing::get, Router};
+use axum::{extract::State, response::Json, routing::get, Router};
 use chrono::Utc;
+use serde::Serialize;
 use contracts::{TickEvent, VersionedMessage};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromStr;
@@ -27,6 +28,21 @@ struct BinanceTicker {
     bid_price: String,
     #[serde(rename = "askPrice")]
     ask_price: String,
+}
+
+/// Response for GET /ticks - last bid/ask per symbol
+#[derive(Serialize)]
+struct TicksResponse {
+    ticks: std::collections::HashMap<String, contracts::TickEvent>,
+}
+
+async fn get_ticks(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let ticks = state.last_ticks.read().await;
+    let map: std::collections::HashMap<String, _> = ticks
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
+        .collect();
+    Json(serde_json::json!({ "ticks": map }))
 }
 
 // Symbol mapping: our symbol -> Binance symbol
@@ -83,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start HTTP server
     let app = Router::new()
         .route("/health", get(health::health))
+        .route("/ticks", get(get_ticks))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

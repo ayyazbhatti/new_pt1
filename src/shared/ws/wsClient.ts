@@ -103,6 +103,9 @@ class WebSocketClient {
           if (data.type === 'wallet.balance.updated' || data.type === 'deposit.request.approved' || data.type === 'auth_success') {
             console.log('📨 [wsClient] Received message:', data.type, data)
           }
+          if (data.type === 'tick') {
+            console.log('📨 [wsClient] Tick received:', (data as any).symbol, 'handlers=', this.handlers.size)
+          }
           
           // Log wallet balance updates with more detail
           if (data.type === 'wallet.balance.updated') {
@@ -298,7 +301,7 @@ class WebSocketClient {
 
 // Singleton instance
 // @ts-ignore - Vite env types
-// ws-gateway runs on port 3003 (default), data-provider on 9003
+// ws-gateway runs on port 3003 (apps/gateway-ws). Override with VITE_WS_URL if needed.
 const WS_URL = import.meta.env?.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
 export const wsClient = new WebSocketClient(WS_URL)
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
@@ -24,12 +24,37 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const [updatingGroups, setUpdatingGroups] = useState<Set<string>>(new Set())
 
-  // Fetch groups for the dropdown
+  // Fetch all groups for the dropdown
   const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
-    page_size: 100, // Get a reasonable number of groups
+    page: 1,
+    page_size: 500,
   })
 
-  const groups = groupsData?.items || []
+  const apiGroups = groupsData?.items ?? []
+
+  // Fallback: build list from groups assigned to users on this page (so dropdown always has options even if API fails)
+  const groupsFromUsers = useMemo(() => {
+    const seen = new Set<string>()
+    const list: { id: string; name: string }[] = []
+    for (const u of users) {
+      if (u.group && u.groupName && !seen.has(u.group)) {
+        seen.add(u.group)
+        list.push({ id: u.group, name: u.groupName })
+      }
+    }
+    return list
+  }, [users])
+
+  // Merge API groups with groups-from-users so we always show all options (API may return empty)
+  const groups = useMemo(() => {
+    const merged = apiGroups.length > 0 ? [...apiGroups] : []
+    for (const g of groupsFromUsers) {
+      if (!merged.some((m) => m.id === g.id)) {
+        merged.push(g as (typeof merged)[0])
+      }
+    }
+    return merged.length > 0 ? merged : groupsFromUsers
+  }, [apiGroups, groupsFromUsers])
 
   const handleGroupChange = async (userId: string, userName: string, newGroupId: string) => {
     const selectedGroup = groups.find((g) => g.id === newGroupId)
@@ -155,22 +180,37 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const currentGroupId = user.group || ''
         const currentGroupName = user.groupName || ''
         const isUpdating = updatingGroups.has(user.id)
+        // Always show ALL groups in the dropdown; add current group at top only if missing from the list
+        const groupOptions =
+          currentGroupId && !groups.some((g) => g.id === currentGroupId)
+            ? [{ id: currentGroupId, name: currentGroupName || 'Unknown group' }, ...groups]
+            : groups
+        const displayLabel =
+          currentGroupName ||
+          (currentGroupId ? groupOptions.find((g) => g.id === currentGroupId)?.name : null) ||
+          null
 
         return (
           <div className="whitespace-nowrap min-w-[150px]">
             <Select
-              value={currentGroupId}
+              value={currentGroupId || undefined}
               onValueChange={(value) => handleGroupChange(user.id, user.name, value)}
-              disabled={groupsLoading || isUpdating}
+              disabled={isUpdating}
             >
               <SelectTrigger className="h-8 text-sm">
-                <SelectValue placeholder={groupsLoading ? 'Loading...' : isUpdating ? 'Updating...' : currentGroupName || 'Select group'} />
+                <SelectValue
+                  placeholder={
+                    isUpdating ? 'Updating...' : groupsLoading ? 'Loading...' : 'Select group'
+                  }
+                >
+                  {displayLabel ?? undefined}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {groups.length === 0 && !groupsLoading && (
+                {groupOptions.length === 0 && !groupsLoading && (
                   <SelectItem value="no-groups" disabled>No groups available</SelectItem>
                 )}
-                {groups.map((group) => (
+                {groupOptions.map((group) => (
                   <SelectItem key={group.id} value={group.id}>
                     {group.name}
                   </SelectItem>
