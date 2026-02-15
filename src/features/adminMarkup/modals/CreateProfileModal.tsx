@@ -3,18 +3,15 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Label } from '@/shared/ui/label'
 import { useModalStore } from '@/app/store'
 import { useCreateMarkupProfile } from '../hooks/useMarkup'
-import { useGroupsList } from '@/features/groups/hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Profile name is required'),
   description: z.string().optional(),
-  group_id: z.string().nullable().optional(),
-  markup_type: z.enum(['points', 'percent', 'pips']),
+  markup_type: z.literal('percent'),
   bid_markup: z.string().refine((val) => {
     const num = parseFloat(val)
     return !isNaN(num)
@@ -30,7 +27,6 @@ type ProfileFormData = z.infer<typeof profileSchema>
 export function CreateProfileModal() {
   const closeModal = useModalStore((state) => state.closeModal)
   const createProfile = useCreateMarkupProfile()
-  const { data: groups } = useGroupsList()
 
   const {
     register,
@@ -43,10 +39,9 @@ export function CreateProfileModal() {
     defaultValues: {
       name: '',
       description: '',
-      group_id: null,
-      markup_type: 'points',
-      bid_markup: '0.5',
-      ask_markup: '0.7',
+      markup_type: 'percent',
+      bid_markup: '0',
+      ask_markup: '0',
     },
   })
 
@@ -77,51 +72,17 @@ export function CreateProfileModal() {
         />
       </div>
 
-      <div>
-        <Label>User Group (Optional)</Label>
-        <Select
-          value={watch('group_id') || 'none'}
-          onValueChange={(value) => setValue('group_id', value === 'none' ? null : value)}
-          disabled={isSubmitting}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="No group" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">No Group</SelectItem>
-            {groups?.items.map((group) => (
-              <SelectItem key={group.id} value={group.id}>
-                {group.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div>
-        <Label>Markup Type</Label>
-        <Select
-          value={watch('markup_type')}
-          onValueChange={(value) => setValue('markup_type', value as 'points' | 'percent' | 'pips')}
-          disabled={isSubmitting}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="points">Points</SelectItem>
-            <SelectItem value="percent">Percent</SelectItem>
-            <SelectItem value="pips">Pips</SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="rounded-lg border border-border bg-surface-2/50 p-3">
+        <p className="text-sm text-text-muted">Markup is applied as a <strong className="text-text">percentage (%)</strong> of the price.</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label>Bid Markup *</Label>
+          <Label>Bid Markup (%) *</Label>
           <Input
             type="number"
-            step="0.0001"
+            step="0.01"
+            placeholder="0"
             {...register('bid_markup')}
             disabled={isSubmitting}
           />
@@ -130,10 +91,11 @@ export function CreateProfileModal() {
           )}
         </div>
         <div>
-          <Label>Ask Markup *</Label>
+          <Label>Ask Markup (%) *</Label>
           <Input
             type="number"
-            step="0.0001"
+            step="0.01"
+            placeholder="0"
             {...register('ask_markup')}
             disabled={isSubmitting}
           />

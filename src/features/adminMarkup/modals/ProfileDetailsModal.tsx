@@ -72,10 +72,9 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
     debouncedSave(symbolId, symbol.bidMarkup, value)
   }
 
-  const formatMarkup = (value: string, type: string) => {
+  const formatMarkup = (value: string) => {
     const num = parseFloat(value)
-    const suffix = type === 'pips' ? ' pips' : type === 'points' ? ' pts' : '%'
-    return `${num >= 0 ? '+' : ''}${num.toFixed(type === 'pips' ? 2 : 4)}${suffix}`
+    return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`
   }
 
   const columns: ColumnDef<SymbolWithMarkup>[] = [
@@ -118,15 +117,13 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              step="0.0001"
+              step="0.01"
               value={symbol.bidMarkup}
               onChange={(e) => handleBidMarkupChange(symbol.symbolId, e.target.value)}
               className="w-24 font-mono text-sm"
               disabled={isSaving}
             />
-            <span className="text-xs text-text-muted">
-              {profile.markupType === 'percent' ? '%' : 'pts'}
-            </span>
+            <span className="text-xs text-text-muted">%</span>
           </div>
         )
       },
@@ -141,15 +138,13 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              step="0.0001"
+              step="0.01"
               value={symbol.askMarkup}
               onChange={(e) => handleAskMarkupChange(symbol.symbolId, e.target.value)}
               className="w-24 font-mono text-sm"
               disabled={isSaving}
             />
-            <span className="text-xs text-text-muted">
-              {profile.markupType === 'percent' ? '%' : 'pts'}
-            </span>
+            <span className="text-xs text-text-muted">%</span>
           </div>
         )
       },
@@ -176,8 +171,7 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
           ) : symbolsWithMarkup.length > 0 ? (
             <>
               <div className="text-sm text-text-muted">
-                Default: Bid {formatMarkup(profile.bidMarkup, profile.markupType)} | Ask{' '}
-                {formatMarkup(profile.askMarkup, profile.markupType)} ({profile.markupType})
+                Default: Bid {formatMarkup(profile.bidMarkup)} | Ask {formatMarkup(profile.askMarkup)} (%)
               </div>
               {upsertOverride.isPending && (
                 <div className="flex items-center gap-2 text-sm text-text-muted">

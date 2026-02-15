@@ -122,13 +122,12 @@ async fn create_profile(
     check_admin(&claims)?;
 
     let service = AdminMarkupService::new(pool);
-    let group_id = payload.group_id.as_ref().and_then(|s| Uuid::parse_str(s).ok());
-
+    // Assignment is group → profile (on Groups page); profile no longer has group_id
     let profile = service
         .create_profile(
             &payload.name,
             payload.description.as_deref(),
-            group_id,
+            None,
             &payload.markup_type,
             &payload.bid_markup,
             &payload.ask_markup,
@@ -201,13 +200,12 @@ async fn update_profile(
     check_admin(&claims)?;
 
     let service = AdminMarkupService::new(pool);
-    let group_id = payload.group_id.as_ref().and_then(|s| Uuid::parse_str(s).ok());
-
+    // Assignment is group → profile (on Groups page); profile no longer has group_id
     let profile = service
         .update_profile(
             id,
             &payload.name,
-            group_id,
+            None,
             &payload.markup_type,
             &payload.bid_markup,
             &payload.ask_markup,

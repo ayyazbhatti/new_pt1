@@ -4,7 +4,7 @@ export interface MarkupProfile {
   description: string | null
   groupId: string | null
   groupName: string | null
-  markupType: 'points' | 'percent' | 'pips'
+  markupType: 'percent'
   bidMarkup: string
   askMarkup: string
   createdAt: string
@@ -35,16 +35,14 @@ export interface SymbolWithMarkup {
 export interface CreateProfilePayload {
   name: string
   description?: string | null
-  group_id?: string | null
-  markup_type: 'points' | 'percent' | 'pips'
+  markup_type: 'percent'
   bid_markup: string
   ask_markup: string
 }
 
 export interface UpdateProfilePayload {
   name: string
-  group_id?: string | null
-  markup_type: 'points' | 'percent' | 'pips'
+  markup_type: 'percent'
   bid_markup: string
   ask_markup: string
 }

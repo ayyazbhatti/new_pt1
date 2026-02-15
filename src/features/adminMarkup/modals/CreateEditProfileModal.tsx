@@ -8,12 +8,12 @@ import { Switch } from '@/shared/ui/Switch'
 import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
 import { useState, useEffect } from 'react'
-import { PriceStreamProfile, MarkupType, RoundingMode } from '../types/pricing'
+import { PriceStreamProfile, RoundingMode } from '../types/pricing'
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Profile name is required'),
   description: z.string().optional(),
-  markupType: z.enum(['points', 'pips', 'percent']),
+  markupType: z.literal('percent'),
   bidMarkup: z.number(),
   askMarkup: z.number(),
   allowNegative: z.boolean(),
@@ -30,7 +30,6 @@ interface CreateEditProfileModalProps {
 export function CreateEditProfileModal({ profile }: CreateEditProfileModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const [status, setStatus] = useState(profile?.status === 'active' || true)
-  const [markupType, setMarkupType] = useState<MarkupType>(profile?.markupType || 'pips')
   const [roundingMode, setRoundingMode] = useState<RoundingMode>(profile?.roundingMode || 'symbol')
 
   const {
@@ -44,7 +43,7 @@ export function CreateEditProfileModal({ profile }: CreateEditProfileModalProps)
     defaultValues: {
       name: profile?.name || '',
       description: profile?.description || '',
-      markupType: profile?.markupType || 'pips',
+      markupType: 'percent',
       bidMarkup: profile?.bidMarkup || 0,
       askMarkup: profile?.askMarkup || 0,
       allowNegative: profile?.allowNegative || false,
@@ -56,7 +55,6 @@ export function CreateEditProfileModal({ profile }: CreateEditProfileModalProps)
   useEffect(() => {
     if (profile) {
       setStatus(profile.status === 'active')
-      setMarkupType(profile.markupType)
       setRoundingMode(profile.roundingMode)
     }
   }, [profile])
@@ -98,55 +96,28 @@ export function CreateEditProfileModal({ profile }: CreateEditProfileModalProps)
 
       <div className="space-y-4 border-t border-border pt-4">
         <div className="text-sm font-semibold text-text mb-2">Markup Logic</div>
-        <div>
-          <label className="text-sm font-medium text-text mb-2 block">Markup Type *</label>
-          <Select
-            value={markupType}
-            onValueChange={(value) => {
-              setMarkupType(value as MarkupType)
-              setValue('markupType', value as MarkupType)
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="points">Points</SelectItem>
-              <SelectItem value="pips">Pips</SelectItem>
-              <SelectItem value="percent" disabled>
-                Percentage (Future)
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          {errors.markupType && (
-            <p className="mt-1 text-sm text-danger">{errors.markupType.message}</p>
-          )}
+        <div className="rounded-lg border border-border bg-surface-2/50 p-3">
+          <p className="text-sm text-text-muted">Markup is applied as a <strong className="text-text">percentage (%)</strong> of the price.</p>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="text-sm font-medium text-text mb-2 block">Bid Markup *</label>
+            <label className="text-sm font-medium text-text mb-2 block">Bid Markup (%) *</label>
             <Input
               type="number"
-              step={markupType === 'pips' ? '0.01' : '0.0001'}
+              step="0.01"
               {...register('bidMarkup', { valueAsNumber: true })}
             />
-            <p className="mt-1 text-xs text-text-muted">
-              {markupType === 'pips' ? 'Pips' : 'Points'} to add/subtract from bid price
-            </p>
             {errors.bidMarkup && (
               <p className="mt-1 text-sm text-danger">{errors.bidMarkup.message}</p>
             )}
           </div>
           <div>
-            <label className="text-sm font-medium text-text mb-2 block">Ask Markup *</label>
+            <label className="text-sm font-medium text-text mb-2 block">Ask Markup (%) *</label>
             <Input
               type="number"
-              step={markupType === 'pips' ? '0.01' : '0.0001'}
+              step="0.01"
               {...register('askMarkup', { valueAsNumber: true })}
             />
-            <p className="mt-1 text-xs text-text-muted">
-              {markupType === 'pips' ? 'Pips' : 'Points'} to add/subtract from ask price
-            </p>
             {errors.askMarkup && (
               <p className="mt-1 text-sm text-danger">{errors.askMarkup.message}</p>
             )}

@@ -50,7 +50,7 @@ export function SymbolPriceOverridePanel() {
   }
 
   const formatMarkup = (value: number) => {
-    return `${value >= 0 ? '+' : ''}${value.toFixed(2)} pips`
+    return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
   }
 
   const columns: ColumnDef<SymbolPriceOverride>[] = [

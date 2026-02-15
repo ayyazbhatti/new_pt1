@@ -1,4 +1,4 @@
-export type MarkupType = 'points' | 'pips' | 'percent'
+export type MarkupType = 'percent'
 export type RoundingMode = 'none' | 'symbol' | 'custom'
 
 export interface PriceStreamProfile {

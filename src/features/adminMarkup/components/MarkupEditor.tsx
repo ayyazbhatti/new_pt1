@@ -128,17 +128,13 @@ export function MarkupEditor() {
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              step="0.0001"
+              step="0.01"
               value={symbol.bidMarkup}
               onChange={(e) => handleBidMarkupChange(symbol.symbolId, e.target.value)}
               className="w-24 font-mono text-sm"
               disabled={!selectedProfileId || isSaving}
             />
-            {selectedProfile && (
-              <span className="text-xs text-text-muted">
-                {selectedProfile.markupType === 'percent' ? '%' : 'pts'}
-              </span>
-            )}
+            <span className="text-xs text-text-muted">%</span>
           </div>
         )
       },
@@ -153,17 +149,13 @@ export function MarkupEditor() {
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              step="0.0001"
+              step="0.01"
               value={symbol.askMarkup}
               onChange={(e) => handleAskMarkupChange(symbol.symbolId, e.target.value)}
               className="w-24 font-mono text-sm"
               disabled={!selectedProfileId || isSaving}
             />
-            {selectedProfile && (
-              <span className="text-xs text-text-muted">
-                {selectedProfile.markupType === 'percent' ? '%' : 'pts'}
-              </span>
-            )}
+            <span className="text-xs text-text-muted">%</span>
           </div>
         )
       },
@@ -208,8 +200,7 @@ export function MarkupEditor() {
         {selectedProfile && (
           <div className="flex-1">
             <div className="text-sm text-text-muted">
-              <span className="font-medium">Default:</span> Bid: {selectedProfile.bidMarkup} | Ask:{' '}
-              {selectedProfile.askMarkup} ({selectedProfile.markupType})
+              <span className="font-medium">Default:</span> Bid: {selectedProfile.bidMarkup}% | Ask: {selectedProfile.askMarkup}% (%)
             </div>
           </div>
         )}

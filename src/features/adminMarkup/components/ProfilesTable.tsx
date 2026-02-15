@@ -21,10 +21,9 @@ export function ProfilesTable({ profiles, isLoading }: ProfilesTableProps) {
     })
   }
 
-  const formatMarkup = (value: string, type: string) => {
+  const formatMarkup = (value: string) => {
     const num = parseFloat(value)
-    const suffix = type === 'pips' ? ' pips' : type === 'points' ? ' pts' : '%'
-    return `${num >= 0 ? '+' : ''}${num.toFixed(type === 'pips' ? 2 : 4)}${suffix}`
+    return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`
   }
 
   const columns: ColumnDef<MarkupProfile>[] = [
@@ -33,16 +32,7 @@ export function ProfilesTable({ profiles, isLoading }: ProfilesTableProps) {
       header: 'Profile Name',
       cell: ({ row }) => {
         const profile = row.original
-        return (
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-text">{profile.name}</span>
-            {profile.groupName && (
-              <Badge variant="neutral" className="text-xs">
-                {profile.groupName}
-              </Badge>
-            )}
-          </div>
-        )
+        return <span className="font-semibold text-text">{profile.name}</span>
       },
     },
     {
@@ -56,16 +46,13 @@ export function ProfilesTable({ profiles, isLoading }: ProfilesTableProps) {
       },
     },
     {
-      accessorKey: 'markupType',
+      id: 'markupType',
       header: 'Type',
-      cell: ({ row }) => {
-        const type = row.getValue('markupType') as string
-        return (
-          <Badge variant="info" className="text-xs capitalize">
-            {type}
-          </Badge>
-        )
-      },
+      cell: () => (
+        <Badge variant="info" className="text-xs">
+          %
+        </Badge>
+      ),
     },
     {
       id: 'bidMarkup',
@@ -74,7 +61,7 @@ export function ProfilesTable({ profiles, isLoading }: ProfilesTableProps) {
         const profile = row.original
         return (
           <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.bidMarkup, profile.markupType)}
+            {formatMarkup(profile.bidMarkup)}
           </span>
         )
       },
@@ -86,18 +73,8 @@ export function ProfilesTable({ profiles, isLoading }: ProfilesTableProps) {
         const profile = row.original
         return (
           <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.askMarkup, profile.markupType)}
+            {formatMarkup(profile.askMarkup)}
           </span>
-        )
-      },
-    },
-    {
-      id: 'group',
-      header: 'Group',
-      cell: ({ row }) => {
-        const groupName = row.original.groupName
-        return (
-          <span className="text-sm text-text-muted">{groupName || 'No Group'}</span>
         )
       },
     },

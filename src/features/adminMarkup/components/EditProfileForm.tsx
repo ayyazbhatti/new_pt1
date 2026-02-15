@@ -3,17 +3,14 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Label } from '@/shared/ui/label'
 import { MarkupProfile } from '../types/markup'
 import { useUpdateMarkupProfile } from '../hooks/useMarkup'
-import { useGroupsList } from '@/features/groups/hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Profile name is required'),
-  group_id: z.string().nullable().optional(),
-  markup_type: z.enum(['points', 'percent', 'pips']),
+  markup_type: z.literal('percent'),
   bid_markup: z.string().refine((val) => {
     const num = parseFloat(val)
     return !isNaN(num)
@@ -32,7 +29,6 @@ interface EditProfileFormProps {
 
 export function EditProfileForm({ profile }: EditProfileFormProps) {
   const updateProfile = useUpdateMarkupProfile()
-  const { data: groups } = useGroupsList()
 
   const {
     register,
@@ -44,8 +40,7 @@ export function EditProfileForm({ profile }: EditProfileFormProps) {
     resolver: zodResolver(profileSchema),
     defaultValues: {
       name: profile.name,
-      group_id: profile.groupId || null,
-      markup_type: profile.markupType as 'points' | 'percent' | 'pips',
+      markup_type: 'percent',
       bid_markup: profile.bidMarkup,
       ask_markup: profile.askMarkup,
     },
@@ -79,51 +74,16 @@ export function EditProfileForm({ profile }: EditProfileFormProps) {
         </div>
       )}
 
-      <div>
-        <Label>User Group</Label>
-        <Select
-          value={watch('group_id') || 'none'}
-          onValueChange={(value) => setValue('group_id', value === 'none' ? null : value)}
-          disabled={isSubmitting}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="No group" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">No Group</SelectItem>
-            {groups?.items.map((group) => (
-              <SelectItem key={group.id} value={group.id}>
-                {group.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div>
-        <Label>Markup Type</Label>
-        <Select
-          value={watch('markup_type')}
-          onValueChange={(value) => setValue('markup_type', value as 'points' | 'percent' | 'pips')}
-          disabled={isSubmitting}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="points">Points</SelectItem>
-            <SelectItem value="percent">Percent</SelectItem>
-            <SelectItem value="pips">Pips</SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="rounded-lg border border-border bg-surface-2/50 p-3">
+        <p className="text-sm text-text-muted">Markup is applied as a <strong className="text-text">percentage (%)</strong>.</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label>Bid Markup *</Label>
+          <Label>Bid Markup (%) *</Label>
           <Input
             type="number"
-            step="0.0001"
+            step="0.01"
             {...register('bid_markup')}
             disabled={isSubmitting}
           />
@@ -132,10 +92,10 @@ export function EditProfileForm({ profile }: EditProfileFormProps) {
           )}
         </div>
         <div>
-          <Label>Ask Markup *</Label>
+          <Label>Ask Markup (%) *</Label>
           <Input
             type="number"
-            step="0.0001"
+            step="0.01"
             {...register('ask_markup')}
             disabled={isSubmitting}
           />

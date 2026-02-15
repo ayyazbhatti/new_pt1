@@ -48,9 +48,8 @@ export function PriceStreamProfilesPanel() {
     return profile.bidMarkup + profile.askMarkup
   }
 
-  const formatMarkup = (value: number, type: string) => {
-    const suffix = type === 'pips' ? ' pips' : type === 'points' ? ' pts' : '%'
-    return `${value >= 0 ? '+' : ''}${value.toFixed(type === 'pips' ? 2 : 4)}${suffix}`
+  const formatMarkup = (value: number) => {
+    return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
   }
 
   const columns: ColumnDef<PriceStreamProfile>[] = [
@@ -75,7 +74,7 @@ export function PriceStreamProfilesPanel() {
         const profile = row.original
         return (
           <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.bidMarkup, profile.markupType)}
+            {formatMarkup(profile.bidMarkup)}
           </span>
         )
       },
@@ -87,7 +86,7 @@ export function PriceStreamProfilesPanel() {
         const profile = row.original
         return (
           <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.askMarkup, profile.markupType)}
+            {formatMarkup(profile.askMarkup)}
           </span>
         )
       },
@@ -100,7 +99,7 @@ export function PriceStreamProfilesPanel() {
         const impact = getSpreadImpact(profile)
         return (
           <span className="font-mono text-sm font-semibold text-warning">
-            {formatMarkup(impact, profile.markupType)}
+            {formatMarkup(impact)}
           </span>
         )
       },

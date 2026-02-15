@@ -17,7 +17,7 @@ function toCamelCaseProfile(obj: any): MarkupProfile {
     description: obj?.description ?? undefined,
     groupId: obj?.group_id ?? obj?.groupId ?? undefined,
     groupName: obj?.group_name ?? obj?.groupName ?? undefined,
-    markupType: obj?.markup_type ?? obj?.markupType,
+    markupType: 'percent',
     bidMarkup: obj?.bid_markup ?? obj?.bidMarkup,
     askMarkup: obj?.ask_markup ?? obj?.askMarkup,
     createdAt: obj?.created_at ?? obj?.createdAt,

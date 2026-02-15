@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use contracts::VersionedMessage;
+use contracts::{VersionedMessage, commands::PlaceOrderCommand, enums::{Side, OrderType, TimeInForce}};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -453,12 +453,12 @@ async fn create_admin_order(
         "Unknown".to_string()
     };
 
-    // Insert order
+    // Insert order (schema: reference nullable, no time_in_force column)
     sqlx::query(
         r#"
         INSERT INTO orders (
             id, user_id, symbol_id, side, type, size, price, stop_price,
-            status, time_in_force, created_at, updated_at
+            status, reference, created_at, updated_at
         )
         VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12)
         "#,
@@ -472,7 +472,7 @@ async fn create_admin_order(
     .bind(price)
     .bind(stop_price)
     .bind("pending")
-        .bind(req.time_in_force.clone().as_deref().unwrap_or("GTC"))
+    .bind(Some("admin"))
     .bind(now)
     .bind(now)
     .execute(&pool)
@@ -490,23 +490,67 @@ async fn create_admin_order(
         )
     })?;
 
-    // Publish to NATS
-    let order_event = serde_json::json!({
-        "orderId": order_id.to_string(),
-        "userId": user_id.to_string(),
-        "symbolId": symbol_id.to_string(),
-        "symbol": symbol_row.code,
-        "side": req.side,
-        "orderType": req.order_type,
-        "size": req.size,
-        "price": req.price,
-        "stopPrice": req.stop_price,
-        "timeInForce": req.time_in_force.clone().unwrap_or_else(|| "GTC".to_string()),
-        "createdAt": now.to_rfc3339(),
-    });
+    // Publish to NATS as PlaceOrderCommand so order-engine can deserialize and process
+    let side = match side_lower.as_str() {
+        "buy" => Side::Buy,
+        "sell" => Side::Sell,
+        _ => {
+            error!("Invalid side: {}", req.side);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "INVALID_SIDE".to_string(),
+                        message: "Side must be BUY or SELL".to_string(),
+                    },
+                }),
+            ));
+        }
+    };
+    let order_type = match order_type_lower.as_str() {
+        "market" => OrderType::Market,
+        "limit" => OrderType::Limit,
+        _ => {
+            error!("Invalid order type: {}", req.order_type);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "INVALID_ORDER_TYPE".to_string(),
+                        message: "Order type must be MARKET or LIMIT".to_string(),
+                    },
+                }),
+            ));
+        }
+    };
+    let tif = match req.time_in_force.as_deref().unwrap_or("GTC").to_uppercase().as_str() {
+        "GTC" => TimeInForce::Gtc,
+        "IOC" => TimeInForce::Ioc,
+        "FOK" => TimeInForce::Fok,
+        _ => TimeInForce::Gtc,
+    };
+    let sl = req.stop_loss.or(req.stop_price).and_then(|p| Decimal::try_from(p).ok());
+    let tp = req.take_profit.and_then(|p| Decimal::try_from(p).ok());
 
-    let msg = VersionedMessage::new("cmd.order.place", &order_event)
-        .map_err(|_| {
+    let place_order_cmd = PlaceOrderCommand {
+        order_id,
+        user_id,
+        symbol: symbol_row.code.clone(),
+        side,
+        order_type,
+        size,
+        limit_price: price,
+        sl,
+        tp,
+        tif,
+        client_order_id: None,
+        idempotency_key: format!("admin:{}", order_id),
+        ts: now,
+    };
+
+    let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)
+        .map_err(|e| {
+            error!("Failed to create versioned message: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -517,7 +561,8 @@ async fn create_admin_order(
                 }),
             )
         })?;
-    let payload = serde_json::to_vec(&msg).map_err(|_| {
+    let payload = serde_json::to_vec(&msg).map_err(|e| {
+        error!("Failed to serialize order command: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -529,6 +574,7 @@ async fn create_admin_order(
         )
     })?;
 
+    info!("Publishing admin order to NATS: cmd.order.place, order_id={}, user_id={}, symbol={}", order_id, user_id, symbol_row.code);
     admin_state.nats.publish("cmd.order.place".to_string(), payload.into()).await
         .map_err(|e| {
             error!("Failed to publish to NATS: {}", e);
