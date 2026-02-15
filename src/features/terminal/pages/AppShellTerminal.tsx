@@ -70,6 +70,8 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
     volume24h: 0, // TODO: Get from market data
     baseCurrency: symbol.baseCurrency,
     quoteCurrency: symbol.quoteCurrency,
+    pricePrecision: symbol.pricePrecision,
+    volumePrecision: symbol.volumePrecision,
   }
 }
 

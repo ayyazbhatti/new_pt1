@@ -11,6 +11,10 @@ export interface MockSymbol {
   volume24h: number
   baseCurrency: string
   quoteCurrency: string
+  /** Decimal places for price (axes/tooltips); from symbol config */
+  pricePrecision?: number
+  /** Decimal places for volume (axes/tooltips); from symbol config */
+  volumePrecision?: number
 }
 
 export interface MockPosition {
