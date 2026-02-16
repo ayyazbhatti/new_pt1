@@ -36,10 +36,17 @@ const TableCell = memo(({ cell, onRowClick }: { cell: any; onRowClick?: (row: an
     </td>
   )
 }, (prev, next) => {
-  // For price cells, always allow re-renders (they update internally via hooks)
-  const isPriceCell = prev.cell.column.id === 'livePrice' || next.cell.column.id === 'livePrice'
-  if (isPriceCell) {
-    // Price cells can re-render - don't block them
+  // For price cells and cells with controlled inputs (e.g. Select), allow re-renders
+  const isLiveCell =
+    prev.cell.column.id === 'livePrice' ||
+    next.cell.column.id === 'livePrice' ||
+    prev.cell.column.id === 'leverageProfileName' ||
+    next.cell.column.id === 'leverageProfileName' ||
+    prev.cell.column.id === 'bid' ||
+    next.cell.column.id === 'bid' ||
+    prev.cell.column.id === 'ask' ||
+    next.cell.column.id === 'ask'
+  if (isLiveCell) {
     return false
   }
   

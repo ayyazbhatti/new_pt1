@@ -6,8 +6,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { UserGroup, ProfileRef } from '../types/group'
 import { GroupFormDialog } from './GroupFormDialog'
 import { DeleteGroupDialog } from './DeleteGroupDialog'
-import { Eye, Edit, Trash2 } from 'lucide-react'
+import { AssignSymbolsModal } from '../modals/AssignSymbolsModal'
+import { Eye, Edit, Trash2, Settings } from 'lucide-react'
 import { useState } from 'react'
+import { useModalStore } from '@/app/store'
 import { formatDistanceToNow } from 'date-fns'
 import { useUpdateGroupPriceProfile } from '../hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
@@ -24,6 +26,7 @@ interface GroupsTableProps {
 const NONE_PROFILE_VALUE = '__none__'
 
 export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate, onRefresh }: GroupsTableProps) {
+  const openModal = useModalStore((state) => state.openModal)
   const updatePriceProfile = useUpdateGroupPriceProfile()
   const [viewingGroup, setViewingGroup] = useState<UserGroup | null>(null)
   const [editingGroup, setEditingGroup] = useState<UserGroup | null>(null)
@@ -31,6 +34,14 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+
+  const handleSettings = (group: UserGroup) => {
+    openModal(
+      `group-symbol-settings-${group.id}`,
+      <AssignSymbolsModal group={group} />,
+      { title: `Symbol settings – ${group.name}`, size: 'xl' }
+    )
+  }
 
   const handleView = (group: UserGroup) => {
     setViewingGroup(group)
@@ -133,6 +144,14 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
         const group = row.original
         return (
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleSettings(group)}
+              title="Symbol settings"
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
             <Button
               variant="ghost"
               size="sm"

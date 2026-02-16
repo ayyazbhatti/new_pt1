@@ -115,13 +115,13 @@ export function TierFormDialog({ mode, profileId, initial, open, onOpenChange }:
     <ModalShell
       open={open}
       onOpenChange={onOpenChange}
-      title={mode === 'create' ? 'Create Tier' : 'Edit Tier'}
-      description={mode === 'create' ? 'Add a new leverage tier to this profile' : 'Update tier settings'}
+      title={mode === 'create' ? 'Add tier' : 'Edit tier'}
+      description={mode === 'create' ? 'Set exposure (notional) range and max leverage — e.g. 0 to 1000 → 10×' : 'Update tier settings'}
       size="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="tier_index">Tier Index *</Label>
+          <Label htmlFor="tier_index">Tier index *</Label>
           <Input
             id="tier_index"
             type="number"
@@ -133,7 +133,7 @@ export function TierFormDialog({ mode, profileId, initial, open, onOpenChange }:
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="notional_from">Notional From *</Label>
+            <Label htmlFor="notional_from">Exposure range from *</Label>
             <Input
               id="notional_from"
               type="text"
@@ -145,7 +145,7 @@ export function TierFormDialog({ mode, profileId, initial, open, onOpenChange }:
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="notional_to">Notional To (leave empty for ∞)</Label>
+            <Label htmlFor="notional_to">Exposure range to (empty = ∞)</Label>
             <Input
               id="notional_to"
               type="text"
@@ -158,7 +158,7 @@ export function TierFormDialog({ mode, profileId, initial, open, onOpenChange }:
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="max_leverage">Max Leverage *</Label>
+          <Label htmlFor="max_leverage">Max leverage (e.g. 10 for 10×) *</Label>
           <Input
             id="max_leverage"
             type="number"

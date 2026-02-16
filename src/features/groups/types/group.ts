@@ -44,3 +44,12 @@ export interface UpdateGroupPayload extends CreateGroupPayload {}
 export interface UsageResponse {
   users_count: number
 }
+
+/** Per-symbol settings for a group (leverage profile + enabled). Markup is set in the price stream profile assigned to the group. */
+export interface GroupSymbol {
+  symbolId: string
+  symbolCode: string
+  leverageProfileId: string | null
+  leverageProfileName: string | null
+  enabled: boolean
+}

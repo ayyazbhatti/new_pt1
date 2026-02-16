@@ -6,6 +6,7 @@ import {
   CreateGroupPayload,
   UpdateGroupPayload,
   UsageResponse,
+  GroupSymbol,
 } from '../types/group'
 
 // Helper to convert snake_case to camelCase (list item may include price_profile, leverage_profile)
@@ -106,6 +107,37 @@ export async function updateGroupPriceProfile(groupId: string, priceProfileId: s
     method: 'PUT',
     body: JSON.stringify({
       price_profile_id: priceProfileId,
+    }),
+  })
+}
+
+/** Get per-symbol settings for a group (all symbols with group defaults/overrides applied). */
+export async function getGroupSymbols(groupId: string): Promise<GroupSymbol[]> {
+  const response = await http<{ items: any[] }>(`/api/admin/groups/${groupId}/symbols`, {
+    method: 'GET',
+  })
+  return (response.items ?? []).map((row: any) => ({
+    symbolId: row.symbol_id,
+    symbolCode: row.symbol_code,
+    leverageProfileId: row.leverage_profile_id != null ? String(row.leverage_profile_id).toLowerCase() : null,
+    leverageProfileName: row.leverage_profile_name ?? null,
+    enabled: row.enabled ?? true,
+  }))
+}
+
+/** Save per-symbol settings for a group. */
+export async function updateGroupSymbols(
+  groupId: string,
+  symbols: { symbolId: string; leverageProfileId: string | null; enabled: boolean }[],
+): Promise<void> {
+  await http(`/api/admin/groups/${groupId}/symbols`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      symbols: symbols.map((s) => ({
+        symbol_id: s.symbolId,
+        leverage_profile_id: s.leverageProfileId ?? null,
+        enabled: Boolean(s.enabled),
+      })),
     }),
   })
 }

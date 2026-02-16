@@ -4,6 +4,23 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use crate::models::user_group::UserGroup;
 
+/// Group symbol row for list response (symbol_id, symbol_code, leverage_profile_id, leverage_profile_name, enabled).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GroupSymbolRow {
+    pub symbol_id: Uuid,
+    pub symbol_code: String,
+    pub leverage_profile_id: Option<Uuid>,
+    pub leverage_profile_name: Option<String>,
+    pub enabled: bool,
+}
+
+/// Input for upserting one symbol's settings for a group.
+pub struct GroupSymbolInput {
+    pub symbol_id: Uuid,
+    pub leverage_profile_id: Option<Uuid>,
+    pub enabled: bool,
+}
+
 /// Row without profile id columns (for DBs that haven't run migration 0009).
 #[derive(sqlx::FromRow)]
 struct UserGroupRowMinimal {
@@ -328,6 +345,58 @@ impl AdminGroupsService {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|r| (r.id, r.name)).collect())
+    }
+
+    /// List all symbols with per-group settings applied. For each symbol: use group_symbols override if present, else group default leverage + symbol default enabled.
+    pub async fn list_group_symbols(&self, group_id: Uuid) -> anyhow::Result<Vec<GroupSymbolRow>> {
+        let rows = sqlx::query_as::<_, GroupSymbolRow>(
+            r#"
+            SELECT
+                s.id AS symbol_id,
+                s.code AS symbol_code,
+                COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id,
+                (SELECT lp2.name FROM leverage_profiles lp2 WHERE lp2.id = COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id)) AS leverage_profile_name,
+                COALESCE(gs.enabled, s.trading_enabled) AS enabled
+            FROM symbols s
+            CROSS JOIN user_groups ug
+            LEFT JOIN group_symbols gs ON gs.symbol_id = s.id AND gs.group_id = ug.id
+            WHERE ug.id = $1
+            ORDER BY s.code
+            "#,
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Upsert group symbol settings. Replaces all settings for the group with the given list.
+    pub async fn upsert_group_symbols(
+        &self,
+        group_id: Uuid,
+        symbols: &[GroupSymbolInput],
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM group_symbols WHERE group_id = $1")
+            .bind(group_id)
+            .execute(&mut *tx)
+            .await?;
+        for s in symbols {
+            sqlx::query(
+                r#"
+                INSERT INTO group_symbols (group_id, symbol_id, leverage_profile_id, enabled)
+                VALUES ($1, $2, $3, $4)
+                "#,
+            )
+            .bind(group_id)
+            .bind(s.symbol_id)
+            .bind(s.leverage_profile_id)
+            .bind(s.enabled)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 }
 

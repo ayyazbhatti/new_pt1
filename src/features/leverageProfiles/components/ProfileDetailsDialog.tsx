@@ -1,18 +1,55 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
 import { ModalShell } from '@/shared/ui/modal'
 import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
-import { LeverageProfile, LeverageTier } from '../types/leverageProfile'
+import { Label } from '@/shared/ui/label'
+import { LeverageProfile, LeverageTier, CreateLeverageTierPayload, UpdateLeverageTierPayload } from '../types/leverageProfile'
 import { ProfileFormDialog } from './ProfileFormDialog'
-import { TierFormDialog } from './TierFormDialog'
 import { DeleteProfileDialog } from './DeleteProfileDialog'
-import { useLeverageProfileTiers, useLeverageProfileSymbols, useDeleteLeverageTier, useSetProfileSymbols } from '../hooks/useLeverageProfiles'
-import { Skeleton } from '@/shared/ui/loading'
-import { Edit, Trash2, Plus, ArrowRight, ArrowLeft, Search } from 'lucide-react'
+import { useLeverageProfileTiers, useDeleteLeverageTier, useCreateLeverageTier, useUpdateLeverageTier } from '../hooks/useLeverageProfiles'
+import { Skeleton, Spinner } from '@/shared/ui/loading'
+import { Edit, Trash2, Plus, X } from 'lucide-react'
 import { Input } from '@/shared/ui/input'
 import { formatDistanceToNow } from 'date-fns'
 import { toast } from 'react-hot-toast'
+
+const tierFormSchema = z.object({
+  tier_index: z.number().min(1, 'Tier index must be >= 1'),
+  notional_from: z.string().refine((val) => {
+    const num = parseFloat(val)
+    return !isNaN(num) && num >= 0
+  }, 'Must be a number >= 0'),
+  notional_to: z.string().optional().nullable().refine(
+    (val) => {
+      if (!val || val === '') return true
+      const num = parseFloat(val)
+      return !isNaN(num)
+    },
+    'Must be a valid number'
+  ),
+  max_leverage: z.number().min(1, 'Max leverage must be >= 1'),
+  initial_margin_percent: z.string().refine((val) => {
+    const num = parseFloat(val)
+    return !isNaN(num) && num >= 0
+  }, 'Must be >= 0'),
+  maintenance_margin_percent: z.string().refine((val) => {
+    const num = parseFloat(val)
+    return !isNaN(num) && num >= 0
+  }, 'Must be >= 0'),
+}).refine(
+  (data) => {
+    if (!data.notional_to || data.notional_to === '') return true
+    const from = parseFloat(data.notional_from)
+    const to = parseFloat(data.notional_to)
+    return to > from
+  },
+  { message: 'Range "to" must be > "from"', path: ['notional_to'] }
+)
+type TierFormData = z.infer<typeof tierFormSchema>
 
 interface ProfileDetailsDialogProps {
   profile: LeverageProfile | null
@@ -20,20 +57,64 @@ interface ProfileDetailsDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+const defaultTierFormValues: TierFormData = {
+  tier_index: 1,
+  notional_from: '0',
+  notional_to: '',
+  max_leverage: 500,
+  initial_margin_percent: '0.2',
+  maintenance_margin_percent: '0.1',
+}
+
 export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDetailsDialogProps) {
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useState('tiers')
   const [editingProfile, setEditingProfile] = useState(false)
   const [deletingProfile, setDeletingProfile] = useState(false)
+  const [showTierForm, setShowTierForm] = useState(false)
   const [editingTier, setEditingTier] = useState<LeverageTier | null>(null)
-  const [creatingTier, setCreatingTier] = useState(false)
-  const [symbolSearch, setSymbolSearch] = useState('')
-  const [selectedUnassigned, setSelectedUnassigned] = useState<Set<string>>(new Set())
-  const [selectedAssigned, setSelectedAssigned] = useState<Set<string>>(new Set())
 
-  const { data: tiers, isLoading: tiersLoading } = useLeverageProfileTiers(profile?.id || null, open && activeTab === 'tiers')
-  const { data: symbols, isLoading: symbolsLoading } = useLeverageProfileSymbols(profile?.id || null, open && activeTab === 'symbols')
+  const { data: tiers, isLoading: tiersLoading } = useLeverageProfileTiers(profile?.id || null, open)
   const deleteTier = useDeleteLeverageTier()
-  const setSymbols = useSetProfileSymbols()
+  const createTier = useCreateLeverageTier()
+  const updateTier = useUpdateLeverageTier()
+
+  const tierForm = useForm<TierFormData>({
+    resolver: zodResolver(tierFormSchema),
+    defaultValues: defaultTierFormValues,
+  })
+
+  useEffect(() => {
+    if (!showTierForm) return
+    if (editingTier) {
+      tierForm.reset({
+        tier_index: editingTier.tierIndex,
+        notional_from: editingTier.notionalFrom,
+        notional_to: editingTier.notionalTo || '',
+        max_leverage: editingTier.maxLeverage,
+        initial_margin_percent: editingTier.initialMarginPercent,
+        maintenance_margin_percent: editingTier.maintenanceMarginPercent,
+      })
+    } else {
+      tierForm.reset({
+        ...defaultTierFormValues,
+        tier_index: (tiers?.length ?? 0) + 1,
+      })
+    }
+  }, [showTierForm, editingTier, tiers?.length])
+
+  const openAddTierForm = () => {
+    setEditingTier(null)
+    setShowTierForm(true)
+  }
+  const openEditTierForm = (tier: LeverageTier) => {
+    setEditingTier(tier)
+    setShowTierForm(true)
+  }
+  const closeTierForm = () => {
+    setShowTierForm(false)
+    setEditingTier(null)
+    tierForm.reset(defaultTierFormValues)
+  }
 
   if (!profile) return null
 
@@ -41,69 +122,48 @@ export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDet
     if (!confirm('Are you sure you want to delete this tier?')) return
     try {
       await deleteTier.mutateAsync({ profileId: profile.id, tierId })
+      if (editingTier?.id === tierId) closeTierForm()
     } catch (error) {
       // Error handled by hook
     }
   }
 
-  const handleAddSymbols = async () => {
-    if (selectedUnassigned.size === 0) return
-    const currentAssigned = new Set(symbols?.assigned.map((s) => s.symbolId) || [])
-    selectedUnassigned.forEach((id) => currentAssigned.add(id))
+  const onTierFormSubmit = async (data: TierFormData) => {
+    const payload: CreateLeverageTierPayload | UpdateLeverageTierPayload = {
+      tier_index: data.tier_index,
+      notional_from: data.notional_from,
+      notional_to: data.notional_to && data.notional_to !== '' ? data.notional_to : null,
+      max_leverage: data.max_leverage,
+      initial_margin_percent: data.initial_margin_percent,
+      maintenance_margin_percent: data.maintenance_margin_percent,
+    }
     try {
-      await setSymbols.mutateAsync({
-        profileId: profile.id,
-        payload: { symbol_ids: Array.from(currentAssigned) },
-      })
-      setSelectedUnassigned(new Set())
+      if (editingTier) {
+        await updateTier.mutateAsync({ profileId: profile.id, tierId: editingTier.id, payload })
+        closeTierForm()
+      } else {
+        await createTier.mutateAsync({ profileId: profile.id, payload: payload as CreateLeverageTierPayload })
+        tierForm.reset({ ...defaultTierFormValues, tier_index: (tiers?.length ?? 0) + 1 })
+        // Keep form open for "add another"
+      }
     } catch (error) {
-      // Error handled by hook
+      // Error handled by mutation hook
     }
   }
-
-  const handleRemoveSymbols = async () => {
-    if (selectedAssigned.size === 0) return
-    const currentAssigned = new Set(symbols?.assigned.map((s) => s.symbolId) || [])
-    selectedAssigned.forEach((id) => currentAssigned.delete(id))
-    try {
-      await setSymbols.mutateAsync({
-        profileId: profile.id,
-        payload: { symbol_ids: Array.from(currentAssigned) },
-      })
-      setSelectedAssigned(new Set())
-    } catch (error) {
-      // Error handled by hook
-    }
-  }
-
-  const filteredUnassigned = symbols?.unassigned.filter(
-    (s) =>
-      !symbolSearch ||
-      s.symbolCode.toLowerCase().includes(symbolSearch.toLowerCase()) ||
-      s.name?.toLowerCase().includes(symbolSearch.toLowerCase())
-  ) || []
-
-  const filteredAssigned = symbols?.assigned.filter(
-    (s) =>
-      !symbolSearch ||
-      s.symbolCode.toLowerCase().includes(symbolSearch.toLowerCase()) ||
-      s.name?.toLowerCase().includes(symbolSearch.toLowerCase())
-  ) || []
 
   return (
     <>
       <ModalShell
         open={open && !editingProfile && !deletingProfile}
         onOpenChange={onOpenChange}
-        title={`Profile Details — ${profile.name}`}
-        description="Manage profile settings, tiers, and symbol assignments"
+        title={`${profile.name} — Leverage tiers`}
+        description="Define exposure ranges and max leverage per tier. Add tiers then optionally assign symbols."
         size="xl"
       >
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="tiers">Tiers ({tiers?.length || 0})</TabsTrigger>
-            <TabsTrigger value="symbols">Assign Symbols ({symbols?.assigned.length || 0})</TabsTrigger>
+            <TabsTrigger value="overview">Profile</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">
@@ -147,11 +207,15 @@ export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDet
           </TabsContent>
 
           <TabsContent value="tiers" className="space-y-4">
-            <div className="flex justify-between items-center">
-              <div className="text-sm text-text-muted">Manage leverage tiers for this profile</div>
-              <Button onClick={() => setCreatingTier(true)}>
+            <div className="flex justify-between items-center flex-wrap gap-2">
+              <div>
+                <p className="text-sm text-text-muted">
+                  Set exposure (notional) range and max leverage per tier — e.g. 0–1000 → 10×, 1001–2000 → 20×.
+                </p>
+              </div>
+              <Button onClick={openAddTierForm} disabled={showTierForm}>
                 <Plus className="h-4 w-4 mr-2" />
-                Add Tier
+                Add tier
               </Button>
             </div>
 
@@ -167,10 +231,8 @@ export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDet
                   <thead className="bg-surface-2">
                     <tr>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-text-muted">Tier</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-text-muted">Notional Range</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-text-muted">Max Leverage</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-text-muted">Initial Margin</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-text-muted">Maintenance Margin</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-text-muted">Exposure range</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-text-muted">Max leverage</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-text-muted">Actions</th>
                     </tr>
                   </thead>
@@ -182,11 +244,9 @@ export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDet
                           {tier.notionalFrom} → {tier.notionalTo || '∞'}
                         </td>
                         <td className="px-4 py-3 text-sm text-text font-mono">{tier.maxLeverage}×</td>
-                        <td className="px-4 py-3 text-sm text-text">{parseFloat(tier.initialMarginPercent).toFixed(4)}%</td>
-                        <td className="px-4 py-3 text-sm text-text">{parseFloat(tier.maintenanceMarginPercent).toFixed(4)}%</td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex justify-end gap-2">
-                            <Button variant="ghost" size="sm" onClick={() => setEditingTier(tier)}>
+                            <Button variant="ghost" size="sm" onClick={() => openEditTierForm(tier)}>
                               <Edit className="h-4 w-4" />
                             </Button>
                             <Button variant="ghost" size="sm" onClick={() => handleDeleteTier(tier.id)}>
@@ -199,150 +259,103 @@ export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDet
                   </tbody>
                 </table>
               </div>
-            ) : (
-              <div className="text-center py-8 text-text-muted">
-                <p>No tiers defined. Click "Add Tier" to create one.</p>
+            ) : null}
+            {tiers && tiers.length > 0 && !showTierForm && (
+              <div className="flex justify-end">
+                <Button variant="outline" onClick={openAddTierForm}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add another tier
+                </Button>
               </div>
             )}
-          </TabsContent>
-
-          <TabsContent value="symbols" className="space-y-4">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted" />
-                <Input
-                  placeholder="Search symbols..."
-                  value={symbolSearch}
-                  onChange={(e) => setSymbolSearch(e.target.value)}
-                  className="pl-9"
-                />
+            {!tiersLoading && (!tiers || tiers.length === 0) && !showTierForm ? (
+              <div className="text-center py-8 text-text-muted border border-dashed border-border rounded-lg">
+                <p className="mb-2">No tiers yet. Add your first tier to define exposure range and leverage.</p>
+                <Button variant="outline" onClick={openAddTierForm}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add first tier
+                </Button>
               </div>
-            </div>
+            ) : null}
 
-            <div className="grid grid-cols-2 gap-4 h-[400px]">
-              {/* Unassigned */}
-              <div className="border border-border rounded-lg flex flex-col">
-                <div className="p-3 border-b border-border bg-surface-2">
-                  <div className="text-sm font-medium text-text">Unassigned Symbols ({filteredUnassigned.length})</div>
-                </div>
-                <div className="flex-1 overflow-y-auto">
-                  {symbolsLoading ? (
-                    <div className="p-4 space-y-2">
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <Skeleton key={i} className="h-10 w-full" />
-                      ))}
-                    </div>
-                  ) : filteredUnassigned.length > 0 ? (
-                    <div className="p-2 space-y-1">
-                      {filteredUnassigned.map((symbol) => (
-                        <label
-                          key={symbol.symbolId}
-                          className="flex items-center gap-2 p-2 hover:bg-surface-2 rounded cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedUnassigned.has(symbol.symbolId)}
-                            onChange={(e) => {
-                              const newSet = new Set(selectedUnassigned)
-                              if (e.target.checked) {
-                                newSet.add(symbol.symbolId)
-                              } else {
-                                newSet.delete(symbol.symbolId)
-                              }
-                              setSelectedUnassigned(newSet)
-                            }}
-                            className="rounded border-border"
-                          />
-                          <div className="flex-1">
-                            <div className="text-sm font-medium text-text">{symbol.symbolCode}</div>
-                            <div className="text-xs text-text-muted">{symbol.name || '—'}</div>
-                          </div>
-                          <Badge variant="neutral" className="text-xs">
-                            {symbol.assetClass}
-                          </Badge>
-                        </label>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="p-4 text-center text-sm text-text-muted">No unassigned symbols</div>
-                  )}
-                </div>
-                <div className="p-3 border-t border-border">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="w-full"
-                    onClick={handleAddSymbols}
-                    disabled={selectedUnassigned.size === 0 || setSymbols.isPending}
-                  >
-                    <ArrowRight className="h-4 w-4 mr-2" />
-                    Add Selected ({selectedUnassigned.size})
+            {showTierForm && (
+              <div className="border border-border rounded-lg bg-surface-2/50 p-4 space-y-4 mt-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-text">
+                    {editingTier ? 'Edit tier' : 'New tier'}
+                  </h4>
+                  <Button type="button" variant="ghost" size="sm" onClick={closeTierForm} title="Close">
+                    <X className="h-4 w-4" />
                   </Button>
                 </div>
-              </div>
-
-              {/* Assigned */}
-              <div className="border border-border rounded-lg flex flex-col">
-                <div className="p-3 border-b border-border bg-surface-2">
-                  <div className="text-sm font-medium text-text">Assigned Symbols ({filteredAssigned.length})</div>
-                  <div className="text-xs text-text-muted mt-1">Select symbols to remove</div>
-                </div>
-                <div className="flex-1 overflow-y-auto">
-                  {symbolsLoading ? (
-                    <div className="p-4 space-y-2">
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <Skeleton key={i} className="h-10 w-full" />
-                      ))}
+                <form onSubmit={tierForm.handleSubmit(onTierFormSubmit)} className="space-y-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Tier index</Label>
+                      <Input
+                        type="number"
+                        {...tierForm.register('tier_index', { valueAsNumber: true })}
+                        disabled={createTier.isPending || updateTier.isPending}
+                        className="h-8"
+                      />
+                      {tierForm.formState.errors.tier_index && (
+                        <p className="text-xs text-danger">{tierForm.formState.errors.tier_index.message}</p>
+                      )}
                     </div>
-                  ) : filteredAssigned.length > 0 ? (
-                    <div className="p-2 space-y-1">
-                      {filteredAssigned.map((symbol) => (
-                        <label
-                          key={symbol.symbolId}
-                          className="flex items-center gap-2 p-2 hover:bg-surface-2 rounded cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedAssigned.has(symbol.symbolId)}
-                            onChange={(e) => {
-                              const newSet = new Set(selectedAssigned)
-                              if (e.target.checked) {
-                                newSet.add(symbol.symbolId)
-                              } else {
-                                newSet.delete(symbol.symbolId)
-                              }
-                              setSelectedAssigned(newSet)
-                            }}
-                            className="rounded border-border"
-                          />
-                          <div className="flex-1">
-                            <div className="text-sm font-medium text-text">{symbol.symbolCode}</div>
-                            <div className="text-xs text-text-muted">{symbol.name || '—'}</div>
-                          </div>
-                          <Badge variant="neutral" className="text-xs">
-                            {symbol.assetClass}
-                          </Badge>
-                        </label>
-                      ))}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Exposure from</Label>
+                      <Input
+                        {...tierForm.register('notional_from')}
+                        placeholder="0"
+                        disabled={createTier.isPending || updateTier.isPending}
+                        className="h-8"
+                      />
+                      {tierForm.formState.errors.notional_from && (
+                        <p className="text-xs text-danger">{tierForm.formState.errors.notional_from.message}</p>
+                      )}
                     </div>
-                  ) : (
-                    <div className="p-4 text-center text-sm text-text-muted">No assigned symbols</div>
-                  )}
-                </div>
-                <div className="p-3 border-t border-border">
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    className="w-full"
-                    onClick={handleRemoveSymbols}
-                    disabled={selectedAssigned.size === 0 || setSymbols.isPending}
-                  >
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Remove Selected ({selectedAssigned.size})
-                  </Button>
-                </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Exposure to (∞ if empty)</Label>
+                      <Input
+                        {...tierForm.register('notional_to')}
+                        placeholder="10000"
+                        disabled={createTier.isPending || updateTier.isPending}
+                        className="h-8"
+                      />
+                      {tierForm.formState.errors.notional_to && (
+                        <p className="text-xs text-danger">{tierForm.formState.errors.notional_to.message}</p>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Max leverage</Label>
+                      <Input
+                        type="number"
+                        {...tierForm.register('max_leverage', { valueAsNumber: true })}
+                        disabled={createTier.isPending || updateTier.isPending}
+                        className="h-8"
+                      />
+                      {tierForm.formState.errors.max_leverage && (
+                        <p className="text-xs text-danger">{tierForm.formState.errors.max_leverage.message}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button type="button" variant="ghost" size="sm" onClick={closeTierForm} disabled={createTier.isPending || updateTier.isPending}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" size="sm" disabled={createTier.isPending || updateTier.isPending}>
+                      {createTier.isPending || updateTier.isPending ? (
+                        <><Spinner className="h-3.5 w-3.5 mr-2" /> Saving…</>
+                      ) : editingTier ? (
+                        'Save changes'
+                      ) : (
+                        'Add tier'
+                      )}
+                    </Button>
+                  </div>
+                </form>
               </div>
-            </div>
+            )}
           </TabsContent>
         </Tabs>
       </ModalShell>
@@ -374,28 +387,6 @@ export function ProfileDetailsDialog({ profile, open, onOpenChange }: ProfileDet
         />
       )}
 
-      {creatingTier && (
-        <TierFormDialog
-          mode="create"
-          profileId={profile.id}
-          open={creatingTier}
-          onOpenChange={(open) => {
-            setCreatingTier(open)
-          }}
-        />
-      )}
-
-      {editingTier && (
-        <TierFormDialog
-          mode="edit"
-          profileId={profile.id}
-          initial={editingTier}
-          open={!!editingTier}
-          onOpenChange={(open) => {
-            if (!open) setEditingTier(null)
-          }}
-        />
-      )}
     </>
   )
 }

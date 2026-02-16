@@ -68,7 +68,7 @@ export function ModalShell({
               <span className="sr-only">Close</span>
             </button>
           </Dialog.Close>
-          <div className="max-h-[calc(100vh-200px)] overflow-y-auto">{children}</div>
+          <div className="flex flex-col max-h-[calc(100vh-200px)] min-h-0 overflow-hidden">{children}</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

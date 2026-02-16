@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { priceStreamClient } from '@/shared/ws/priceStreamClient'
+import { useAuthStore } from '@/shared/store/auth.store'
 
 interface PriceData {
   bid: string
@@ -13,10 +14,9 @@ const priceStore = new Map<string, PriceData>()
 // Subscribers map: symbol -> Set of callbacks
 const subscribers = new Map<string, Set<(price: PriceData) => void>>()
 
-// Notify all subscribers for a symbol
-// Normalize symbol key - convert USDT to USD to match gateway format
-function normalizeSymbolKey(symbol: string): string {
-  return symbol.toUpperCase().trim().replace('USDT', 'USD')
+/** Normalize symbol key for storage/lookup: uppercase, no slashes, USDT->USD. Export for modal. */
+export function normalizeSymbolKey(symbol: string): string {
+  return symbol.toUpperCase().trim().replace(/\//g, '').replace('USDT', 'USD')
 }
 
 function notifySubscribers(symbol: string, price: PriceData) {
@@ -135,7 +135,13 @@ export function usePriceStream(symbols: string[]) {
     return () => clearInterval(interval)
   }, [])
 
-  // Listen to ticks from data-provider
+  // Sync auth token so gateway accepts subscribe (gateway requires auth first)
+  const accessToken = useAuthStore((s) => s.accessToken)
+  useEffect(() => {
+    priceStreamClient.setAuthToken(accessToken)
+  }, [accessToken])
+
+  // Listen to ticks from gateway or data-provider
   useEffect(() => {
     const unsub = priceStreamClient.onTick((tick) => {
       notifySubscribers(tick.symbol, { bid: tick.bid, ask: tick.ask, ts: tick.ts })

@@ -1,4 +1,4 @@
-import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity, Loader2, Clock, Gauge, ArrowRight } from 'lucide-react'
+import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity, Loader2, Clock, Gauge, ArrowRight, User } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Segmented } from '@/shared/ui'
@@ -10,6 +10,8 @@ import { toast } from 'react-hot-toast'
 import { SinglePriceDisplay } from './SinglePriceDisplay'
 import { placeOrder, PlaceOrderRequest } from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { useQuery } from '@tanstack/react-query'
+import { me, getSymbolLeverage } from '@/shared/api/auth.api'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import {
@@ -42,6 +44,8 @@ interface TradingPanelState {
   takeProfit: string
   limitPrice: string
   symbolDetailsOpen: boolean
+  userDetailsOpen: boolean
+  leverageDetailsOpen: boolean
   selectedSymbolCode: string
 }
 
@@ -67,9 +71,24 @@ const saveTradingPanelState = (state: Partial<TradingPanelState>) => {
   }
 }
 
+function formatTierNotional(value: string): string {
+  const n = parseFloat(value)
+  return Number.isNaN(n) ? value : n.toFixed(2)
+}
+
 export function RightTradingPanel() {
   const { selectedSymbol, setSelectedSymbol, symbols } = useTerminalStore()
-  
+  const { data: meData } = useQuery({ queryKey: ['auth', 'me'], queryFn: me })
+  const {
+    data: symbolLeverage,
+    isLoading: symbolLeverageLoading,
+    isFetched: symbolLeverageFetched,
+  } = useQuery({
+    queryKey: ['auth', 'symbolLeverage', selectedSymbol?.code],
+    queryFn: () => getSymbolLeverage(selectedSymbol!.code),
+    enabled: !!selectedSymbol?.code,
+  })
+
   // Fetch AdminSymbol data to get tickSize, lotMin, lotMax
   const { data: symbolsData } = useSymbolsList({
     is_enabled: 'true',
@@ -96,6 +115,8 @@ export function RightTradingPanel() {
   const [takeProfit, setTakeProfit] = useState(() => loadTradingPanelState().takeProfit || '')
   const [limitPrice, setLimitPrice] = useState(() => loadTradingPanelState().limitPrice || '')
   const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(() => loadTradingPanelState().symbolDetailsOpen || false)
+  const [userDetailsOpen, setUserDetailsOpen] = useState(() => loadTradingPanelState().userDetailsOpen || false)
+  const [leverageDetailsOpen, setLeverageDetailsOpen] = useState(() => loadTradingPanelState().leverageDetailsOpen || false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
   
@@ -115,9 +136,11 @@ export function RightTradingPanel() {
       takeProfit,
       limitPrice,
       symbolDetailsOpen,
+      userDetailsOpen,
+      leverageDetailsOpen,
       selectedSymbolCode: selectedSymbol?.code ?? '',
     })
-  }, [orderType, sizeMode, size, lotSize, pipPosition, pipPositionCurrency, currency, marginPercent, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen, selectedSymbol?.code])
+  }, [orderType, sizeMode, size, lotSize, pipPosition, pipPositionCurrency, currency, marginPercent, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen, userDetailsOpen, leverageDetailsOpen, selectedSymbol?.code])
 
   // Restore selected symbol by code on load when store has symbols but no selection (e.g. after reload)
   useEffect(() => {
@@ -1020,22 +1043,6 @@ export function RightTradingPanel() {
             </div>
           </div>
 
-          {/* Leverage */}
-          <div className="mb-4 p-3 rounded-lg bg-surface-2/30 border border-white/5">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-1">Leverage</div>
-                <div className="text-base font-bold text-accent">50x</div>
-              </div>
-              <button 
-                className="px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent/10 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
-                title="Leverage Profile Settings"
-              >
-                Profile
-              </button>
-            </div>
-          </div>
-
           {/* Action Buttons - Enhanced */}
           <div className="grid grid-cols-2 gap-3">
             <Button 
@@ -1122,6 +1129,152 @@ export function RightTradingPanel() {
               </div>
             </div>
           )}
+
+          {/* User - collapsible */}
+          <div className="border-t border-white/5">
+            <button
+              onClick={() => setUserDetailsOpen(!userDetailsOpen)}
+              className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
+            >
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-1 rounded-full bg-accent"></div>
+                <span className="text-xs font-bold text-text uppercase tracking-wider">User</span>
+              </div>
+              {userDetailsOpen ? (
+                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              )}
+            </button>
+            {userDetailsOpen && (
+              <div className="px-4 pb-4 space-y-2.5 text-xs bg-surface-2/20">
+                {meData ? (
+                  <>
+                    <div className="flex items-center gap-2 pb-2 border-b border-white/5">
+                      <User className="h-4 w-4 text-accent shrink-0" />
+                      <span className="font-semibold text-text truncate">{meData.email}</span>
+                    </div>
+                    {meData.groupName != null && (
+                      <div className="flex justify-between items-center py-2 border-b border-white/5">
+                        <span className="text-muted/80">Group</span>
+                        <span className="font-medium text-text">{meData.groupName}</span>
+                      </div>
+                    )}
+                    {meData.priceProfileName != null && (
+                      <div className="flex justify-between items-center py-2 border-b border-white/5">
+                        <span className="text-muted/80">Price stream</span>
+                        <span className="font-medium text-text">{meData.priceProfileName}</span>
+                      </div>
+                    )}
+                    {meData.leverageProfileName != null && (
+                      <div className="flex justify-between items-center py-2 border-b border-white/5">
+                        <span className="text-muted/80">Leverage profile</span>
+                        <span className="font-medium text-text">{meData.leverageProfileName}</span>
+                      </div>
+                    )}
+                    {(meData.minLeverage != null || meData.maxLeverage != null) && (
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-muted/80">Leverage range</span>
+                        <span className="font-medium text-text">
+                          {meData.minLeverage != null && meData.maxLeverage != null
+                            ? `${meData.minLeverage}–${meData.maxLeverage}x`
+                            : meData.minLeverage != null
+                              ? `≥${meData.minLeverage}x`
+                              : `≤${meData.maxLeverage}x`}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-muted py-2">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    <span>Loading user…</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Leverage - collapsible */}
+          <div className="border-t border-white/5">
+            <button
+              onClick={() => setLeverageDetailsOpen(!leverageDetailsOpen)}
+              className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
+            >
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-1 rounded-full bg-accent"></div>
+                <span className="text-xs font-bold text-text uppercase tracking-wider">Leverage</span>
+              </div>
+              {leverageDetailsOpen ? (
+                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              )}
+            </button>
+            {leverageDetailsOpen && (
+              <div className="px-4 pb-4 space-y-2.5 text-xs bg-surface-2/20">
+                {meData ? (
+                  <>
+                    {selectedSymbol && (
+                      <div className="flex justify-between items-center py-2 border-b border-white/5">
+                        <span className="text-muted/80">Symbol</span>
+                        <span className="font-mono font-medium text-text">{selectedSymbol.code}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center py-2 border-b border-white/5">
+                      <span className="text-muted/80">Leverage profile{selectedSymbol ? ` (${selectedSymbol.code})` : ''}</span>
+                      <span className="font-medium text-text">
+                        {selectedSymbol
+                          ? symbolLeverageLoading
+                            ? 'Loading…'
+                            : symbolLeverageFetched
+                              ? (symbolLeverage?.leverage_profile_name ?? '—')
+                              : '—'
+                          : (meData.leverageProfileName ?? '—')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2">
+                      <span className="text-muted/80">Your min – max</span>
+                      <span className="font-semibold text-accent">
+                        {meData.minLeverage != null && meData.maxLeverage != null
+                          ? `${meData.minLeverage} – ${meData.maxLeverage}×`
+                          : meData.minLeverage != null
+                            ? `≥ ${meData.minLeverage}×`
+                            : meData.maxLeverage != null
+                              ? `≤ ${meData.maxLeverage}×`
+                              : '—'}
+                      </span>
+                    </div>
+                    {(meData.minLeverage == null && meData.maxLeverage == null) && (
+                      <p className="text-[10px] text-muted/80 pt-1">
+                        Set in Admin → Users (leverage column)
+                      </p>
+                    )}
+                    {selectedSymbol && symbolLeverage?.tiers && symbolLeverage.tiers.length > 0 && (
+                      <div className="pt-2 border-t border-white/5 space-y-1.5">
+                        <span className="text-muted/80 text-[10px] uppercase tracking-wider block mb-1.5">Profile tiers</span>
+                        <ul className="space-y-1">
+                          {symbolLeverage.tiers.map((tier, idx) => (
+                            <li key={idx} className="text-[11px] text-text/90 flex justify-between items-baseline gap-2">
+                              <span className="text-muted/80 truncate">
+                                {formatTierNotional(tier.notional_from)} – {tier.notional_to != null ? formatTierNotional(tier.notional_to) : '∞'} USD
+                              </span>
+                              <span className="font-medium text-accent shrink-0">≤ {tier.max_leverage}×</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-muted py-2">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    <span>Loading…</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Promo carousel - trading imagery, static dummy slides */}
           <div className="p-4">

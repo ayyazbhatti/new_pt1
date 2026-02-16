@@ -45,12 +45,16 @@ export function ProfilesTable({ profiles, onRefresh }: ProfilesTableProps) {
       cell: ({ row }) => {
         const profile = row.original
         return (
-          <div>
+          <button
+            type="button"
+            onClick={() => handleView(profile)}
+            className="text-left hover:opacity-80 transition-opacity w-full"
+          >
             <div className="font-semibold text-text">{profile.name}</div>
             {profile.description && (
               <div className="text-xs text-text-muted mt-0.5">{profile.description}</div>
             )}
-          </div>
+          </button>
         )
       },
     },

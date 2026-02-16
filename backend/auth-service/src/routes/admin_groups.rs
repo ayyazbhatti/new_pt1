@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::models::user_group::UserGroup;
-use crate::services::admin_groups_service::AdminGroupsService;
+use crate::services::admin_groups_service::{AdminGroupsService, GroupSymbolInput};
 use crate::utils::jwt::Claims;
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +80,7 @@ pub fn create_admin_groups_router(pool: PgPool) -> Router<PgPool> {
         .route("/:id/usage", get(get_group_usage))
         .route("/:id/price-profile", put(update_group_price_profile))
         .route("/:id/leverage-profile", put(update_group_leverage_profile))
+        .route("/:id/symbols", get(get_group_symbols).put(update_group_symbols))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -669,6 +670,170 @@ async fn update_group_leverage_profile(
     Ok(Json(serde_json::json!({
         "success": true,
         "message": "Group leverage profile updated successfully"
+    })))
+}
+
+#[derive(Debug, Serialize)]
+pub struct GroupSymbolItem {
+    pub symbol_id: Uuid,
+    pub symbol_code: String,
+    pub leverage_profile_id: Option<Uuid>,
+    pub leverage_profile_name: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListGroupSymbolsResponse {
+    pub items: Vec<GroupSymbolItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateGroupSymbolsRequest {
+    pub symbols: Vec<GroupSymbolItemPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GroupSymbolItemPayload {
+    pub symbol_id: String,
+    #[serde(default)]
+    pub leverage_profile_id: Option<String>,
+    pub enabled: bool,
+}
+
+async fn get_group_symbols(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ListGroupSymbolsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AdminGroupsService::new(pool);
+    match service.list_group_symbols(id).await {
+        Ok(rows) => {
+            let items = rows
+                .into_iter()
+                .map(|r| GroupSymbolItem {
+                    symbol_id: r.symbol_id,
+                    symbol_code: r.symbol_code,
+                    leverage_profile_id: r.leverage_profile_id,
+                    leverage_profile_name: r.leverage_profile_name,
+                    enabled: r.enabled,
+                })
+                .collect();
+            Ok(Json(ListGroupSymbolsResponse { items }))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "LIST_GROUP_SYMBOLS_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )),
+    }
+}
+
+async fn update_group_symbols(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateGroupSymbolsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+    let group_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1)")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    if !group_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "GROUP_NOT_FOUND".to_string(),
+                    message: "Group not found".to_string(),
+                },
+            }),
+        ));
+    }
+    let mut inputs = Vec::with_capacity(payload.symbols.len());
+    for s in &payload.symbols {
+        let symbol_id = Uuid::parse_str(&s.symbol_id).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "INVALID_SYMBOL_ID".to_string(),
+                        message: format!("Invalid symbol_id: {}", s.symbol_id),
+                    },
+                }),
+            )
+        })?;
+        let leverage_profile_id = match s.leverage_profile_id.as_ref().filter(|x| !x.is_empty()) {
+            None => None,
+            Some(id_str) => Some(Uuid::parse_str(id_str).map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "INVALID_LEVERAGE_PROFILE_ID".to_string(),
+                            message: format!("Invalid leverage_profile_id: {}", id_str),
+                        },
+                    }),
+                )
+            })?),
+        };
+        inputs.push(GroupSymbolInput {
+            symbol_id,
+            leverage_profile_id,
+            enabled: s.enabled,
+        });
+    }
+    let service = AdminGroupsService::new(pool);
+    if let Err(e) = service.upsert_group_symbols(id, &inputs).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_GROUP_SYMBOLS_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        ));
+    }
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Group symbol settings saved"
     })))
 }
 

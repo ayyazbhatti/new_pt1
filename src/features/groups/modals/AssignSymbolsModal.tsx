@@ -1,99 +1,184 @@
-import { useState } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { Switch } from '@/shared/ui/Switch'
-import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { UserGroup, GroupSymbol } from '../types/group'
 import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
 import { ColumnDef } from '@tanstack/react-table'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
+import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
+import { Skeleton } from '@/shared/ui/loading'
+import { getGroupSymbols, updateGroupSymbols } from '../api/groups.api'
+import { groupsQueryKeys } from '../hooks/useGroups'
+
+function formatPrice(value: string | undefined): string {
+  if (value == null || value === '') return '—'
+  const num = parseFloat(value)
+  if (Number.isNaN(num)) return value
+  return num.toFixed(8).replace(/\.?0+$/, '') || '0'
+}
 
 interface AssignSymbolsModalProps {
   group: UserGroup
 }
 
-const mockSymbols: GroupSymbol[] = [
-  { symbol: 'EURUSD', currentMarkup: 1.5, leverageProfile: 'Standard Profile', enabled: true },
-  { symbol: 'GBPUSD', currentMarkup: 2.0, leverageProfile: 'Standard Profile', enabled: true },
-  { symbol: 'USDJPY', currentMarkup: 1.2, leverageProfile: 'Standard Profile', enabled: true },
-  { symbol: 'AUDUSD', currentMarkup: 1.8, leverageProfile: 'Conservative Profile', enabled: true },
-  { symbol: 'USDCAD', currentMarkup: 1.5, leverageProfile: 'Standard Profile', enabled: false },
-  { symbol: 'EURGBP', currentMarkup: 2.5, leverageProfile: 'Standard Profile', enabled: true },
-  { symbol: 'USDCHF', currentMarkup: 1.3, leverageProfile: 'Standard Profile', enabled: true },
-  { symbol: 'NZDUSD', currentMarkup: 2.2, leverageProfile: 'Standard Profile', enabled: true },
-]
-
 export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
-  const [symbols, setSymbols] = useState<GroupSymbol[]>(mockSymbols)
+  const queryClient = useQueryClient()
 
-  const handleMarkupChange = (symbol: string, markup: number) => {
-    setSymbols(
-      symbols.map((s) => (s.symbol === symbol ? { ...s, currentMarkup: markup } : s))
-    )
+  const { data: groupSymbolsData, isLoading: symbolsLoading } = useQuery({
+    queryKey: ['adminGroups', 'groupSymbols', group.id],
+    queryFn: () => getGroupSymbols(group.id),
+    enabled: !!group.id,
+  })
+  const { data: leverageProfilesData } = useLeverageProfilesList({ page_size: 500 })
+  const leverageProfiles = leverageProfilesData?.items ?? []
+
+  const initialSymbols: GroupSymbol[] = useMemo(
+    () => groupSymbolsData ?? [],
+    [groupSymbolsData]
+  )
+
+  const [symbols, setSymbols] = useState<GroupSymbol[]>([])
+  const populatedForGroupIdRef = useRef<string | null>(null)
+
+  const displaySymbolsList = symbols.length > 0 ? symbols : initialSymbols
+  const symbolCodesForPrice = useMemo(
+    () => displaySymbolsList.map((s) => s.symbolCode.toUpperCase().trim()).filter(Boolean),
+    [displaySymbolsList]
+  )
+  const { prices } = usePriceStream(symbolCodesForPrice)
+
+  useEffect(() => {
+    if (group.id !== populatedForGroupIdRef.current && initialSymbols.length > 0) {
+      setSymbols([...initialSymbols])
+      populatedForGroupIdRef.current = group.id
+    }
+    if (group.id !== populatedForGroupIdRef.current && initialSymbols.length === 0) {
+      populatedForGroupIdRef.current = null
+    }
+  }, [group.id, initialSymbols])
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: GroupSymbol[]) =>
+      updateGroupSymbols(
+        group.id,
+        payload.map((s) => ({
+          symbolId: s.symbolId,
+          leverageProfileId: s.leverageProfileId,
+          enabled: s.enabled,
+        })),
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: groupsQueryKeys.all })
+      queryClient.invalidateQueries({ queryKey: ['adminGroups', 'groupSymbols', group.id] })
+      toast.success(`Symbol settings saved for ${group.name}`)
+    },
+    onError: (error: any) => {
+      const message =
+        error?.response?.data?.error?.message || error?.message || 'Failed to save symbol settings'
+      toast.error(message)
+    },
+  })
+
+  const handleLeverageProfileChange = (symbolId: string, profileId: string | null) => {
+    const normalizedId = profileId ? String(profileId).toLowerCase() : null
+    const profile = normalizedId
+      ? leverageProfiles.find((p) => String(p.id).toLowerCase() === normalizedId)
+      : null
+    setSymbols((prev) => {
+      const base = prev.length > 0 ? prev : initialSymbols
+      return base.map((s) =>
+        s.symbolId === symbolId
+          ? {
+              ...s,
+              leverageProfileId: normalizedId,
+              leverageProfileName: profile?.name ?? null,
+            }
+          : s
+      )
+    })
   }
 
-  const handleLeverageProfileChange = (symbol: string, profile: string) => {
-    setSymbols(
-      symbols.map((s) => (s.symbol === symbol ? { ...s, leverageProfile: profile } : s))
-    )
-  }
-
-  const handleEnabledToggle = (symbol: string) => {
-    setSymbols(
-      symbols.map((s) => (s.symbol === symbol ? { ...s, enabled: !s.enabled } : s))
-    )
+  const handleEnabledToggle = (symbolId: string) => {
+    setSymbols((prev) => {
+      const base = prev.length > 0 ? prev : initialSymbols
+      return base.map((s) => (s.symbolId === symbolId ? { ...s, enabled: !s.enabled } : s))
+    })
   }
 
   const handleSave = () => {
-    toast.success(`Symbol assignments saved for ${group.name}`)
-    closeModal(`assign-symbols-${group.id}`)
+    saveMutation.mutate(displaySymbolsList)
   }
 
   const columns: ColumnDef<GroupSymbol>[] = [
     {
-      accessorKey: 'symbol',
+      accessorKey: 'symbolCode',
       header: 'Symbol',
-      cell: ({ row }) => {
-        return <span className="font-mono font-semibold">{row.getValue('symbol')}</span>
-      },
+      cell: ({ row }) => (
+        <span className="font-mono font-semibold">{row.getValue('symbolCode')}</span>
+      ),
     },
     {
-      accessorKey: 'currentMarkup',
-      header: 'Current Markup',
+      id: 'bid',
+      header: 'Bid',
       cell: ({ row }) => {
-        const symbol = row.original
+        const code = row.original.symbolCode
+        const price = prices.get(normalizeSymbolKey(code))
         return (
-          <Input
-            type="number"
-            step="0.1"
-            value={symbol.currentMarkup}
-            onChange={(e) =>
-              handleMarkupChange(symbol.symbol, parseFloat(e.target.value) || 0)
-            }
-            className="w-24 h-8"
-          />
+          <span className="font-mono text-sm text-success">
+            {formatPrice(price?.bid)}
+          </span>
         )
       },
     },
     {
-      accessorKey: 'leverageProfile',
+      id: 'ask',
+      header: 'Ask',
+      cell: ({ row }) => {
+        const code = row.original.symbolCode
+        const price = prices.get(normalizeSymbolKey(code))
+        return (
+          <span className="font-mono text-sm text-danger">
+            {formatPrice(price?.ask)}
+          </span>
+        )
+      },
+    },
+    {
+      accessorKey: 'leverageProfileName',
       header: 'Leverage Profile',
       cell: ({ row }) => {
         const symbol = row.original
+        const value = symbol.leverageProfileId ? String(symbol.leverageProfileId).toLowerCase() : '__none__'
+        const optionIds = new Set(leverageProfiles.map((p) => String(p.id).toLowerCase()))
+        const valueNotInList = value !== '__none__' && !optionIds.has(value)
         return (
           <Select
-            value={symbol.leverageProfile}
-            onValueChange={(value) => handleLeverageProfileChange(symbol.symbol, value)}
+            key={`lev-${symbol.symbolId}-${value}`}
+            value={value}
+            onValueChange={(v) =>
+              handleLeverageProfileChange(symbol.symbolId, v === '__none__' ? null : v)
+            }
           >
             <SelectTrigger className="w-48 h-8">
-              <SelectValue />
+              <SelectValue placeholder="Default" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="Standard Profile">Standard Profile</SelectItem>
-              <SelectItem value="Conservative Profile">Conservative Profile</SelectItem>
-              <SelectItem value="Aggressive Profile">Aggressive Profile</SelectItem>
+              <SelectItem value="__none__">Default (group)</SelectItem>
+              {leverageProfiles.map((p) => (
+                <SelectItem key={p.id} value={String(p.id).toLowerCase()}>
+                  {p.name}
+                </SelectItem>
+              ))}
+              {valueNotInList && (
+                <SelectItem value={value}>
+                  {symbol.leverageProfileName ? `${symbol.leverageProfileName} (removed)` : value}
+                </SelectItem>
+              )}
             </SelectContent>
           </Select>
         )
@@ -107,7 +192,7 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
         return (
           <Switch
             checked={symbol.enabled}
-            onCheckedChange={() => handleEnabledToggle(symbol.symbol)}
+            onCheckedChange={() => handleEnabledToggle(symbol.symbolId)}
           />
         )
       },
@@ -115,20 +200,45 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
   ]
 
   return (
-    <div className="space-y-4">
-      <div className="text-sm text-text-muted">
-        Configure symbol-specific settings for <strong className="text-text">{group.name}</strong>
+    <div className="flex flex-col min-h-0 flex-1">
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
+        <div className="text-sm text-text-muted space-y-1">
+        <p>
+          Configure symbol-specific settings for <strong className="text-text">{group.name}</strong>.
+          Leverage profile and enable/disable per symbol. Markup is set in the{' '}
+          <strong>price stream profile</strong> assigned to this group.
+        </p>
+        {leverageProfiles.length === 0 && (
+          <p className="text-amber-600 dark:text-amber-400">
+            No leverage profiles in the system. Create them in <strong>Admin → Leverage Profiles</strong> to see more options than “Default (group)” here.
+          </p>
+        )}
+        </div>
+        {symbolsLoading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ) : displaySymbolsList.length === 0 ? (
+        <p className="text-sm text-text-muted py-4">No symbols found.</p>
+      ) : (
+        <div className="border border-border rounded-lg overflow-hidden">
+          <DataTable data={displaySymbolsList} columns={columns} />
+        </div>
+      )}
       </div>
-      <div className="border border-border rounded-lg overflow-hidden">
-        <DataTable data={symbols} columns={columns} />
-      </div>
-      <div className="flex justify-end gap-2 pt-4 border-t border-border">
-        <Button variant="outline" onClick={() => closeModal(`assign-symbols-${group.id}`)}>
+      <div className="flex-shrink-0 flex justify-end gap-2 pt-4 border-t border-border">
+        <Button variant="outline" onClick={() => closeModal(`group-symbol-settings-${group.id}`)}>
           Cancel
         </Button>
-        <Button onClick={handleSave}>Save Changes</Button>
+        <Button
+          onClick={handleSave}
+          disabled={displaySymbolsList.length === 0 || saveMutation.isPending}
+        >
+          {saveMutation.isPending ? 'Saving…' : 'Save Changes'}
+        </Button>
       </div>
     </div>
   )
 }
-

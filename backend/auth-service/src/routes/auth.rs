@@ -10,6 +10,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
+use crate::models::leverage_profile::LeverageProfileTier;
 use crate::services::auth_service::AuthService;
 use crate::utils::jwt::Claims;
 
@@ -72,6 +73,10 @@ pub struct UserResponse {
     pub min_leverage: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_leverage: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_profile_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leverage_profile_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +95,19 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SymbolLeverageQuery {
+    pub symbol_code: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SymbolLeverageResponse {
+    pub leverage_profile_name: Option<String>,
+    pub leverage_profile_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tiers: Option<Vec<LeverageProfileTier>>,
+}
+
 pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
     // Public routes (no auth required)
     let public_routes = Router::new()
@@ -97,9 +115,10 @@ pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
         .route("/login", post(login))
         .route("/refresh", post(refresh));
     
-    // Protected routes (auth required)
+    // Protected routes (auth required) – more specific /me/symbol-leverage before /me
     let protected_routes = Router::new()
         .route("/logout", post(logout))
+        .route("/me/symbol-leverage", get(symbol_leverage))
         .route("/me", get(me))
         .route("/users", get(list_users))
         .layer(axum::middleware::from_fn(auth_middleware));
@@ -147,6 +166,8 @@ async fn register(
                 group_name: None, // Will be populated if needed
                 min_leverage: user.min_leverage,
                 max_leverage: user.max_leverage,
+                price_profile_name: None,
+                leverage_profile_name: None,
             },
         })),
         Err(e) => {
@@ -209,6 +230,8 @@ async fn login(
                 group_name: None, // Will be populated if needed
                 min_leverage: user.min_leverage,
                 max_leverage: user.max_leverage,
+                price_profile_name: None,
+                leverage_profile_name: None,
             },
         })),
         Err(e) => Err((
@@ -274,19 +297,37 @@ async fn me(
 
     match service.get_user_by_id(claims.sub).await {
         Ok(user) => {
-            // Fetch group name if user has a group
-            let group_name: Option<String> = if let Some(group_id) = user.group_id {
-                sqlx::query_scalar::<_, String>(
-                    "SELECT name FROM user_groups WHERE id = $1"
-                )
-                .bind(group_id)
-                .fetch_optional(&pool)
-                .await
-                .ok()
-                .flatten()
-            } else {
-                None
-            };
+            // Fetch group name and profile names if user has a group
+            let (group_name, price_profile_name, leverage_profile_name): (Option<String>, Option<String>, Option<String>) =
+                if let Some(group_id) = user.group_id {
+                    #[derive(sqlx::FromRow)]
+                    struct GroupProfileRow {
+                        group_name: Option<String>,
+                        price_profile_name: Option<String>,
+                        leverage_profile_name: Option<String>,
+                    }
+                    let row = sqlx::query_as::<_, GroupProfileRow>(
+                        r#"
+                        SELECT ug.name AS group_name, psp.name AS price_profile_name, lp.name AS leverage_profile_name
+                        FROM user_groups ug
+                        LEFT JOIN price_stream_profiles psp ON ug.default_price_profile_id = psp.id
+                        LEFT JOIN leverage_profiles lp ON ug.default_leverage_profile_id = lp.id
+                        WHERE ug.id = $1
+                        "#,
+                    )
+                    .bind(group_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .ok()
+                    .flatten();
+                    (
+                        row.as_ref().and_then(|r| r.group_name.clone()),
+                        row.as_ref().and_then(|r| r.price_profile_name.clone()),
+                        row.as_ref().and_then(|r| r.leverage_profile_name.clone()),
+                    )
+                } else {
+                    (None, None, None)
+                };
 
             Ok(Json(UserResponse {
                 id: user.id,
@@ -304,6 +345,8 @@ async fn me(
                 group_name,
                 min_leverage: user.min_leverage,
                 max_leverage: user.max_leverage,
+                price_profile_name,
+                leverage_profile_name,
             }))
         },
         Err(e) => Err((
@@ -316,6 +359,85 @@ async fn me(
             }),
         )),
     }
+}
+
+async fn symbol_leverage(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Query(params): Query<SymbolLeverageQuery>,
+) -> Result<Json<SymbolLeverageResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let symbol_code = params.symbol_code.trim();
+    if symbol_code.is_empty() {
+        return Ok(Json(SymbolLeverageResponse {
+            leverage_profile_name: None,
+            leverage_profile_id: None,
+            tiers: None,
+        }));
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        leverage_profile_id: Option<Uuid>,
+        leverage_profile_name: Option<String>,
+    }
+
+    // Case-insensitive symbol match; COALESCE gives per-symbol override else group default
+    let row = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT
+            COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id,
+            (SELECT lp2.name FROM leverage_profiles lp2 WHERE lp2.id = COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id)) AS leverage_profile_name
+        FROM users u
+        INNER JOIN user_groups ug ON ug.id = u.group_id
+        INNER JOIN symbols s ON LOWER(TRIM(s.code)) = LOWER(TRIM($2))
+        LEFT JOIN group_symbols gs ON gs.symbol_id = s.id AND gs.group_id = ug.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(claims.sub)
+    .bind(symbol_code)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "SYMBOL_LEVERAGE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let profile_id = row.as_ref().and_then(|r| r.leverage_profile_id);
+    let tiers: Option<Vec<LeverageProfileTier>> = match profile_id {
+        Some(pid) => {
+            let tiers_result = sqlx::query_as::<_, LeverageProfileTier>(
+                r#"
+                SELECT id, profile_id, tier_index,
+                    notional_from::text AS notional_from, notional_to::text AS notional_to,
+                    max_leverage, initial_margin_percent::text AS initial_margin_percent,
+                    maintenance_margin_percent::text AS maintenance_margin_percent,
+                    created_at, updated_at
+                FROM leverage_profile_tiers
+                WHERE profile_id = $1
+                ORDER BY tier_index ASC
+                "#,
+            )
+            .bind(pid)
+            .fetch_all(&pool)
+            .await;
+            tiers_result.ok()
+        }
+        None => None,
+    };
+
+    Ok(Json(SymbolLeverageResponse {
+        leverage_profile_name: row.as_ref().and_then(|r| r.leverage_profile_name.clone()),
+        leverage_profile_id: profile_id,
+        tiers,
+    }))
 }
 
 async fn list_users(
@@ -379,6 +501,8 @@ async fn list_users(
                     group_name,
                     min_leverage: u.min_leverage,
                     max_leverage: u.max_leverage,
+                    price_profile_name: None,
+                    leverage_profile_name: None,
                 });
             }
             Ok(Json(user_responses))
