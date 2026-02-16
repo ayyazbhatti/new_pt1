@@ -152,7 +152,7 @@ export function EditGroupModal({ group, readOnly = false }: EditGroupModalProps)
 
         <Tabs.Content value="trading" className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-text mb-2 block">Spread Markup (points)</label>
+            <label className="text-sm font-medium text-text mb-2 block">Spread Markup (%)</label>
             <Input
               type="number"
               step="0.1"

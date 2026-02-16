@@ -11,15 +11,6 @@ import { Spinner } from '@/shared/ui/loading'
 const profileSchema = z.object({
   name: z.string().min(1, 'Profile name is required'),
   description: z.string().optional(),
-  markup_type: z.literal('percent'),
-  bid_markup: z.string().refine((val) => {
-    const num = parseFloat(val)
-    return !isNaN(num)
-  }, 'Bid markup must be a number'),
-  ask_markup: z.string().refine((val) => {
-    const num = parseFloat(val)
-    return !isNaN(num)
-  }, 'Ask markup must be a number'),
 })
 
 type ProfileFormData = z.infer<typeof profileSchema>
@@ -31,23 +22,24 @@ export function CreateProfileModal() {
   const {
     register,
     handleSubmit,
-    setValue,
-    watch,
     formState: { errors, isSubmitting },
   } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: {
       name: '',
       description: '',
-      markup_type: 'percent',
-      bid_markup: '0',
-      ask_markup: '0',
     },
   })
 
   const onSubmit = async (data: ProfileFormData) => {
     try {
-      await createProfile.mutateAsync(data)
+      await createProfile.mutateAsync({
+        name: data.name,
+        description: data.description ?? null,
+        markup_type: 'percent',
+        bid_markup: '0',
+        ask_markup: '0',
+      })
       closeModal('create-profile')
     } catch (error) {
       // Error handled by hook
@@ -72,38 +64,9 @@ export function CreateProfileModal() {
         />
       </div>
 
-      <div className="rounded-lg border border-border bg-surface-2/50 p-3">
-        <p className="text-sm text-text-muted">Markup is applied as a <strong className="text-text">percentage (%)</strong> of the price.</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label>Bid Markup (%) *</Label>
-          <Input
-            type="number"
-            step="0.01"
-            placeholder="0"
-            {...register('bid_markup')}
-            disabled={isSubmitting}
-          />
-          {errors.bid_markup && (
-            <p className="mt-1 text-sm text-danger">{errors.bid_markup.message}</p>
-          )}
-        </div>
-        <div>
-          <Label>Ask Markup (%) *</Label>
-          <Input
-            type="number"
-            step="0.01"
-            placeholder="0"
-            {...register('ask_markup')}
-            disabled={isSubmitting}
-          />
-          {errors.ask_markup && (
-            <p className="mt-1 text-sm text-danger">{errors.ask_markup.message}</p>
-          )}
-        </div>
-      </div>
+      <p className="text-sm text-text-muted">
+        After creating the profile, set bid/ask markup per symbol in the profile&apos;s symbol overrides.
+      </p>
 
       <div className="flex justify-end gap-2 pt-4 border-t border-border">
         <Button

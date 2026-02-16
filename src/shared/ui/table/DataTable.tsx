@@ -17,6 +17,10 @@ interface DataTableProps<TData> {
   data: TData[]
   columns: ColumnDef<TData>[]
   className?: string
+  /** When true, reduces row height and cell padding for a denser table */
+  dense?: boolean
+  /** When false, table has no outer border/radius so it blends into parent (e.g. modal) */
+  bordered?: boolean
   onRowClick?: (row: TData) => void
   pagination?: {
     page: number
@@ -29,9 +33,15 @@ interface DataTableProps<TData> {
 
 // Memoized table cell component to prevent re-renders
 // For price cells (livePrice column), we allow re-renders since they update internally
-const TableCell = memo(({ cell, onRowClick }: { cell: any; onRowClick?: (row: any) => void }) => {
+const TableCell = memo(({ cell, onRowClick, dense }: { cell: any; onRowClick?: (row: any) => void; dense?: boolean }) => {
   return (
-    <td key={cell.id} className="p-4 align-middle text-sm text-text whitespace-nowrap">
+    <td
+      key={cell.id}
+      className={cn(
+        'align-middle text-sm text-text whitespace-nowrap',
+        dense ? 'py-2 px-3' : 'p-4'
+      )}
+    >
       {flexRender(cell.column.columnDef.cell, cell.getContext())}
     </td>
   )
@@ -51,21 +61,24 @@ const TableCell = memo(({ cell, onRowClick }: { cell: any; onRowClick?: (row: an
   }
   
   // For other cells, only re-render if cell ID or value changes
-  return prev.cell.id === next.cell.id && 
+  return prev.cell.id === next.cell.id &&
          prev.cell.getValue() === next.cell.getValue() &&
-         prev.onRowClick === next.onRowClick
+         prev.onRowClick === next.onRowClick &&
+         prev.dense === next.dense
 })
 
 TableCell.displayName = 'TableCell'
 
 // Memoized table row component
 // Rows should only re-render when row data changes, not when individual cells update
-const TableRow = memo(({ 
-  row, 
-  onRowClick 
-}: { 
-  row: Row<any>; 
-  onRowClick?: (row: any) => void 
+const TableRow = memo(({
+  row,
+  onRowClick,
+  dense,
+}: {
+  row: Row<any>
+  onRowClick?: (row: any) => void
+  dense?: boolean
 }) => {
   return (
     <tr
@@ -74,29 +87,24 @@ const TableRow = memo(({
       onClick={() => onRowClick?.(row.original)}
     >
       {row.getVisibleCells().map((cell) => (
-        <TableCell key={cell.id} cell={cell} onRowClick={onRowClick} />
+        <TableCell key={cell.id} cell={cell} onRowClick={onRowClick} dense={dense} />
       ))}
     </tr>
   )
 }, (prev, next) => {
-  // Only re-render if row ID or row data reference changes
-  // Individual cells (like PriceCell) will handle their own re-renders
-  // This prevents the entire row from re-rendering when only one cell updates
   const rowDataChanged = prev.row.original !== next.row.original
   const rowIdChanged = prev.row.id !== next.row.id
   const onRowClickChanged = prev.onRowClick !== next.onRowClick
-  
-  // If nothing changed, don't re-render
-  if (!rowDataChanged && !rowIdChanged && !onRowClickChanged) {
-    return true // props are equal, skip re-render
+  const denseChanged = prev.dense !== next.dense
+  if (!rowDataChanged && !rowIdChanged && !onRowClickChanged && !denseChanged) {
+    return true
   }
-  
-  return false // props changed, allow re-render
+  return false
 })
 
 TableRow.displayName = 'TableRow'
 
-export function DataTable<TData>({ data, columns, className, onRowClick, pagination }: DataTableProps<TData>) {
+export function DataTable<TData>({ data, columns, className, dense, bordered = true, onRowClick, pagination }: DataTableProps<TData>) {
   const table = useReactTable({
     data,
     columns,
@@ -118,7 +126,7 @@ export function DataTable<TData>({ data, columns, className, onRowClick, paginat
 
   return (
     <div className={cn('space-y-4', className)}>
-      <div className="rounded-lg border border-border overflow-hidden">
+      <div className={cn(bordered && 'rounded-lg border border-border', 'overflow-hidden')}>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-surface-2 border-b border-border">
@@ -127,7 +135,10 @@ export function DataTable<TData>({ data, columns, className, onRowClick, paginat
                   {headerGroup.headers.map((header) => (
                     <th
                       key={header.id}
-                      className="h-12 px-4 text-left align-middle font-medium text-text-muted text-sm whitespace-nowrap"
+                      className={cn(
+                        'text-left align-middle font-medium text-text-muted text-sm whitespace-nowrap',
+                        dense ? 'h-9 py-2 px-3' : 'h-12 px-4'
+                      )}
                     >
                       {header.isPlaceholder
                         ? null
@@ -140,7 +151,7 @@ export function DataTable<TData>({ data, columns, className, onRowClick, paginat
             <tbody className="divide-y divide-border">
               {table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id} row={row} onRowClick={onRowClick} />
+                  <TableRow key={row.id} row={row} onRowClick={onRowClick} dense={dense} />
                 ))
               ) : (
                 <tr>

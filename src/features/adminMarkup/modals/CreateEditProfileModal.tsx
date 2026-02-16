@@ -13,9 +13,6 @@ import { PriceStreamProfile, RoundingMode } from '../types/pricing'
 const profileSchema = z.object({
   name: z.string().min(1, 'Profile name is required'),
   description: z.string().optional(),
-  markupType: z.literal('percent'),
-  bidMarkup: z.number(),
-  askMarkup: z.number(),
   allowNegative: z.boolean(),
   roundingMode: z.enum(['none', 'symbol', 'custom']),
   customRounding: z.number().optional(),
@@ -43,9 +40,6 @@ export function CreateEditProfileModal({ profile }: CreateEditProfileModalProps)
     defaultValues: {
       name: profile?.name || '',
       description: profile?.description || '',
-      markupType: 'percent',
-      bidMarkup: profile?.bidMarkup || 0,
-      askMarkup: profile?.askMarkup || 0,
       allowNegative: profile?.allowNegative || false,
       roundingMode: profile?.roundingMode || 'symbol',
       customRounding: profile?.customRounding,
@@ -91,43 +85,6 @@ export function CreateEditProfileModal({ profile }: CreateEditProfileModalProps)
             <span className="text-sm text-text-muted">{status ? 'Active' : 'Disabled'}</span>
             <Switch checked={status} onCheckedChange={setStatus} />
           </div>
-        </div>
-      </div>
-
-      <div className="space-y-4 border-t border-border pt-4">
-        <div className="text-sm font-semibold text-text mb-2">Markup Logic</div>
-        <div className="rounded-lg border border-border bg-surface-2/50 p-3">
-          <p className="text-sm text-text-muted">Markup is applied as a <strong className="text-text">percentage (%)</strong> of the price.</p>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-medium text-text mb-2 block">Bid Markup (%) *</label>
-            <Input
-              type="number"
-              step="0.01"
-              {...register('bidMarkup', { valueAsNumber: true })}
-            />
-            {errors.bidMarkup && (
-              <p className="mt-1 text-sm text-danger">{errors.bidMarkup.message}</p>
-            )}
-          </div>
-          <div>
-            <label className="text-sm font-medium text-text mb-2 block">Ask Markup (%) *</label>
-            <Input
-              type="number"
-              step="0.01"
-              {...register('askMarkup', { valueAsNumber: true })}
-            />
-            {errors.askMarkup && (
-              <p className="mt-1 text-sm text-danger">{errors.askMarkup.message}</p>
-            )}
-          </div>
-        </div>
-        <div className="p-3 bg-surface-2 rounded-lg border border-border">
-          <p className="text-xs text-text-muted">
-            <strong className="text-text">Buy trades</strong> are opened at <strong>ASK</strong>,{' '}
-            <strong className="text-text">Sell trades</strong> at <strong>BID</strong>. Markups directly affect spread and trader cost.
-          </p>
         </div>
       </div>
 

@@ -3,7 +3,6 @@ import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { Switch } from '@/shared/ui/Switch'
 import { Input } from '@/shared/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { AdminSymbol, GroupMarkup } from '../types/symbol'
 import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
@@ -22,17 +21,11 @@ export function SymbolGroupMarkupsModal({ symbol }: SymbolGroupMarkupsModalProps
     mockGroups.map((group) => ({
       groupId: group.id,
       groupName: group.name,
-      markupType: 'points' as const,
+      markupType: 'percent' as const,
       markupValue: group.spreadMarkup,
       enabled: true,
     }))
   )
-
-  const handleMarkupTypeChange = (groupId: string, type: 'points' | 'percent') => {
-    setMarkups(
-      markups.map((m) => (m.groupId === groupId ? { ...m, markupType: type } : m))
-    )
-  }
 
   const handleMarkupValueChange = (groupId: string, value: number) => {
     setMarkups(
@@ -59,29 +52,11 @@ export function SymbolGroupMarkupsModal({ symbol }: SymbolGroupMarkupsModalProps
     {
       accessorKey: 'markupType',
       header: 'Markup Type',
-      cell: ({ row }) => {
-        const markup = row.original
-        return (
-          <Select
-            value={markup.markupType}
-            onValueChange={(value) =>
-              handleMarkupTypeChange(markup.groupId, value as 'points' | 'percent')
-            }
-          >
-            <SelectTrigger className="w-32 h-8">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="points">Points</SelectItem>
-              <SelectItem value="percent">Percent</SelectItem>
-            </SelectContent>
-          </Select>
-        )
-      },
+      cell: () => <span className="text-text">%</span>,
     },
     {
       accessorKey: 'markupValue',
-      header: 'Markup Value',
+      header: 'Markup (%)',
       cell: ({ row }) => {
         const markup = row.original
         return (

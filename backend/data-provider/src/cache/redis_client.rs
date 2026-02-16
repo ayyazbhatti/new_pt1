@@ -11,7 +11,7 @@ pub struct MarkupConfig {
     pub bid_markup: f64,
     pub ask_markup: f64,
     #[serde(rename = "type")]
-    pub markup_type: String, // "points" | "percent"
+    pub markup_type: String, // "percent" (bid/ask markup as %)
 }
 
 pub struct RedisClient {

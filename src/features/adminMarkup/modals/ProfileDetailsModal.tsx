@@ -1,26 +1,21 @@
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Input } from '@/shared/ui/input'
 import { Badge } from '@/shared/ui/badge'
-import { Label } from '@/shared/ui/label'
-import { Button } from '@/shared/ui/button'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
 import { useSymbolOverrides, useUpsertSymbolOverride } from '../hooks/useMarkup'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { MarkupProfile, SymbolWithMarkup } from '../types/markup'
 import { Spinner } from '@/shared/ui/loading'
 import { useDebouncedCallback } from '@/shared/hooks/useDebounce'
-import { EditProfileForm } from '../components/EditProfileForm'
 
 interface ProfileDetailsModalProps {
   profile: MarkupProfile
 }
 
 export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
-  const [activeTab, setActiveTab] = useState<'details' | 'symbols'>('details')
   const { data: symbols, isLoading: symbolsLoading } = useSymbolsList({ page_size: 1000 })
-  const { data: overrides, isLoading: overridesLoading } = useSymbolOverrides(profile.id, activeTab === 'symbols')
+  const { data: overrides, isLoading: overridesLoading } = useSymbolOverrides(profile.id, true)
   const upsertOverride = useUpsertSymbolOverride()
 
   // Create symbol list with markup data
@@ -38,8 +33,8 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
         symbolCode: symbol.symbolCode,
         baseCurrency: symbol.baseCurrency,
         quoteCurrency: symbol.quoteCurrency,
-        bidMarkup: override?.bid || profile.bidMarkup,
-        askMarkup: override?.ask || profile.askMarkup,
+        bidMarkup: override?.bid ?? '0',
+        askMarkup: override?.ask ?? '0',
         isOverride: !!override,
       }
     })
@@ -152,44 +147,32 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
   ]
 
   return (
-    <div className="space-y-4">
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'details' | 'symbols')}>
-        <TabsList>
-          <TabsTrigger value="details">Profile Details</TabsTrigger>
-          <TabsTrigger value="symbols">Symbol Markups</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="details" className="space-y-4">
-          <EditProfileForm profile={profile} />
-        </TabsContent>
-
-        <TabsContent value="symbols" className="space-y-4">
-          {symbolsLoading || overridesLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Spinner className="h-8 w-8" />
-            </div>
-          ) : symbolsWithMarkup.length > 0 ? (
-            <>
-              <div className="text-sm text-text-muted">
-                Default: Bid {formatMarkup(profile.bidMarkup)} | Ask {formatMarkup(profile.askMarkup)} (%)
-              </div>
-              {upsertOverride.isPending && (
-                <div className="flex items-center gap-2 text-sm text-text-muted">
-                  <Spinner className="h-4 w-4" />
-                  <span>Saving...</span>
-                </div>
-              )}
-              <div className="border border-border rounded-lg">
-                <DataTable data={symbolsWithMarkup} columns={columns} />
-              </div>
-            </>
-          ) : (
-            <div className="text-center py-12 text-text-muted">
-              No symbols found. Import symbols first.
+    <div className="flex flex-col min-h-0">
+      <h3 className="text-sm font-semibold text-text shrink-0 mb-3">Symbol Markups</h3>
+      {symbolsLoading || overridesLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Spinner className="h-8 w-8" />
+        </div>
+      ) : symbolsWithMarkup.length > 0 ? (
+        <div className="flex flex-col min-h-0 overflow-hidden">
+          <p className="text-sm text-text-muted shrink-0 mb-3">
+            Set bid/ask markup (%) per symbol. Changes save automatically.
+          </p>
+          {upsertOverride.isPending && (
+            <div className="flex items-center gap-2 text-sm text-text-muted shrink-0 mb-2">
+              <Spinner className="h-4 w-4" />
+              <span>Saving...</span>
             </div>
           )}
-        </TabsContent>
-      </Tabs>
+          <div className="overflow-auto min-h-0 max-h-[70vh]">
+            <DataTable data={symbolsWithMarkup} columns={columns} dense bordered={false} className="space-y-0" />
+          </div>
+        </div>
+      ) : (
+        <div className="text-center py-12 text-text-muted">
+          No symbols found. Import symbols first.
+        </div>
+      )}
     </div>
   )
 }

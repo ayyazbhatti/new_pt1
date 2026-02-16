@@ -74,6 +74,22 @@ fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)>
     Ok(())
 }
 
+/// Bid/ask markup is percent-only; reject other types.
+fn ensure_percent_markup(markup_type: &str) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if markup_type != "percent" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_MARKUP_TYPE".to_string(),
+                    message: "Only percent markup is supported for bid/ask.".to_string(),
+                },
+            }),
+        ));
+    }
+    Ok(())
+}
+
 async fn list_profiles(
     State(pool): State<PgPool>,
     claims: axum::extract::Extension<Claims>,
@@ -120,15 +136,15 @@ async fn create_profile(
     Json(payload): Json<CreateProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     check_admin(&claims)?;
+    ensure_percent_markup(&payload.markup_type)?;
 
     let service = AdminMarkupService::new(pool);
-    // Assignment is group → profile (on Groups page); profile no longer has group_id
     let profile = service
         .create_profile(
             &payload.name,
             payload.description.as_deref(),
             None,
-            &payload.markup_type,
+            "percent",
             &payload.bid_markup,
             &payload.ask_markup,
         )
@@ -198,15 +214,15 @@ async fn update_profile(
     Json(payload): Json<UpdateProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     check_admin(&claims)?;
+    ensure_percent_markup(&payload.markup_type)?;
 
     let service = AdminMarkupService::new(pool);
-    // Assignment is group → profile (on Groups page); profile no longer has group_id
     let profile = service
         .update_profile(
             id,
             &payload.name,
             None,
-            &payload.markup_type,
+            "percent",
             &payload.bid_markup,
             &payload.ask_markup,
         )

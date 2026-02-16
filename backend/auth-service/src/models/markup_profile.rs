@@ -9,7 +9,7 @@ pub struct MarkupProfile {
     pub name: String,
     pub description: Option<String>,
     pub group_id: Option<Uuid>,
-    pub markup_type: String, // 'points' or 'percent'
+    pub markup_type: String, // 'percent' (bid/ask markup as %)
     pub bid_markup: String,
     pub ask_markup: String,
     pub created_at: DateTime<Utc>,
@@ -23,7 +23,7 @@ pub struct MarkupProfileWithGroup {
     pub description: Option<String>,
     pub group_id: Option<Uuid>,
     pub group_name: Option<String>,
-    pub markup_type: String,
+    pub markup_type: String, // 'percent'
     pub bid_markup: String,
     pub ask_markup: String,
     pub created_at: DateTime<Utc>,

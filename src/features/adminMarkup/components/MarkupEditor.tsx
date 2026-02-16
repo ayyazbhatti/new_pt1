@@ -37,8 +37,8 @@ export function MarkupEditor() {
         symbolCode: symbol.symbolCode,
         baseCurrency: symbol.baseCurrency,
         quoteCurrency: symbol.quoteCurrency,
-        bidMarkup: override?.bid || selectedProfile.bidMarkup,
-        askMarkup: override?.ask || selectedProfile.askMarkup,
+        bidMarkup: override?.bid ?? '0',
+        askMarkup: override?.ask ?? '0',
         isOverride: !!override,
       }
     })
@@ -197,13 +197,6 @@ export function MarkupEditor() {
             </SelectContent>
           </Select>
         </div>
-        {selectedProfile && (
-          <div className="flex-1">
-            <div className="text-sm text-text-muted">
-              <span className="font-medium">Default:</span> Bid: {selectedProfile.bidMarkup}% | Ask: {selectedProfile.askMarkup}% (%)
-            </div>
-          </div>
-        )}
         {upsertOverride.isPending && (
           <div className="flex items-center gap-2 text-sm text-text-muted">
             <Spinner className="h-4 w-4" />

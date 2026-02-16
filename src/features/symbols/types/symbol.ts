@@ -82,7 +82,7 @@ export interface ListSymbolsResponse {
 export interface GroupMarkup {
   groupId: string
   groupName: string
-  markupType: 'points' | 'percent'
+  markupType: 'percent'
   markupValue: number
   enabled: boolean
 }

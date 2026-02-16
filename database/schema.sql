@@ -23,7 +23,7 @@ CREATE TYPE order_status AS ENUM ('pending', 'filled', 'cancelled', 'rejected', 
 CREATE TYPE position_side AS ENUM ('long', 'short');
 CREATE TYPE position_status AS ENUM ('open', 'closed', 'liquidated');
 CREATE TYPE market_type AS ENUM ('crypto', 'forex', 'commodities', 'indices', 'stocks');
-CREATE TYPE markup_type AS ENUM ('points', 'pips', 'percent');
+CREATE TYPE markup_type AS ENUM ('percent');
 CREATE TYPE rounding_mode AS ENUM ('none', 'symbol', 'custom');
 CREATE TYPE swap_calc_mode AS ENUM ('daily', 'hourly', 'funding_8h');
 CREATE TYPE swap_unit AS ENUM ('percent', 'fixed');
@@ -57,7 +57,7 @@ CREATE TABLE price_stream_profiles (
     name VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
     group_id UUID REFERENCES user_groups(id) ON DELETE SET NULL,
-    markup_type markup_type NOT NULL DEFAULT 'pips',
+    markup_type markup_type NOT NULL DEFAULT 'percent',
     bid_markup NUMERIC(20, 8) NOT NULL DEFAULT 0,
     ask_markup NUMERIC(20, 8) NOT NULL DEFAULT 0,
     rounding_mode rounding_mode NOT NULL DEFAULT 'symbol',

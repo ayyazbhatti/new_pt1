@@ -10,15 +10,6 @@ import { Spinner } from '@/shared/ui/loading'
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Profile name is required'),
-  markup_type: z.literal('percent'),
-  bid_markup: z.string().refine((val) => {
-    const num = parseFloat(val)
-    return !isNaN(num)
-  }, 'Bid markup must be a number'),
-  ask_markup: z.string().refine((val) => {
-    const num = parseFloat(val)
-    return !isNaN(num)
-  }, 'Ask markup must be a number'),
 })
 
 type ProfileFormData = z.infer<typeof profileSchema>
@@ -40,9 +31,6 @@ export function EditProfileForm({ profile }: EditProfileFormProps) {
     resolver: zodResolver(profileSchema),
     defaultValues: {
       name: profile.name,
-      markup_type: 'percent',
-      bid_markup: profile.bidMarkup,
-      ask_markup: profile.askMarkup,
     },
   })
 
@@ -50,7 +38,12 @@ export function EditProfileForm({ profile }: EditProfileFormProps) {
     try {
       await updateProfile.mutateAsync({
         id: profile.id,
-        payload: data,
+        payload: {
+          name: data.name,
+          markup_type: 'percent',
+          bid_markup: '0',
+          ask_markup: '0',
+        },
       })
     } catch (error) {
       // Error handled by hook
@@ -74,36 +67,7 @@ export function EditProfileForm({ profile }: EditProfileFormProps) {
         </div>
       )}
 
-      <div className="rounded-lg border border-border bg-surface-2/50 p-3">
-        <p className="text-sm text-text-muted">Markup is applied as a <strong className="text-text">percentage (%)</strong>.</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label>Bid Markup (%) *</Label>
-          <Input
-            type="number"
-            step="0.01"
-            {...register('bid_markup')}
-            disabled={isSubmitting}
-          />
-          {errors.bid_markup && (
-            <p className="mt-1 text-sm text-danger">{errors.bid_markup.message}</p>
-          )}
-        </div>
-        <div>
-          <Label>Ask Markup (%) *</Label>
-          <Input
-            type="number"
-            step="0.01"
-            {...register('ask_markup')}
-            disabled={isSubmitting}
-          />
-          {errors.ask_markup && (
-            <p className="mt-1 text-sm text-danger">{errors.ask_markup.message}</p>
-          )}
-        </div>
-      </div>
+      <p className="text-sm text-text-muted">Set bid/ask markup per symbol in the Symbol Markups view.</p>
 
       <div className="flex justify-end gap-2 pt-4 border-t border-border">
         <Button type="submit" disabled={isSubmitting}>

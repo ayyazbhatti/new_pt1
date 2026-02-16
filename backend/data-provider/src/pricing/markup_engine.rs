@@ -33,24 +33,10 @@ impl MarkupEngine {
             }
         };
 
-        let (final_bid, final_ask) = match markup.markup_type.as_str() {
-            "points" => {
-                // Add/subtract points
-                let bid_markup = decimal_from_f64(markup.bid_markup)?;
-                let ask_markup = decimal_from_f64(markup.ask_markup)?;
-                (bid + bid_markup, ask + ask_markup)
-            }
-            "percent" => {
-                // Apply percentage markup
-                let bid_multiplier = Decimal::from(1) + decimal_from_f64(markup.bid_markup / 100.0)?;
-                let ask_multiplier = Decimal::from(1) + decimal_from_f64(markup.ask_markup / 100.0)?;
-                (bid * bid_multiplier, ask * ask_multiplier)
-            }
-            _ => {
-                warn!("Unknown markup type: {}", markup.markup_type);
-                return Some((bid, ask));
-            }
-        };
+        // Bid/ask markup is percent-only: apply (1 + pct/100) to price
+        let bid_multiplier = Decimal::from(1) + decimal_from_f64(markup.bid_markup / 100.0)?;
+        let ask_multiplier = Decimal::from(1) + decimal_from_f64(markup.ask_markup / 100.0)?;
+        let (final_bid, final_ask) = (bid * bid_multiplier, ask * ask_multiplier);
 
         // Ensure ask > bid after markup
         if final_ask <= final_bid {

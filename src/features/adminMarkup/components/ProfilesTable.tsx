@@ -1,6 +1,5 @@
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
-import { Badge } from '@/shared/ui/badge'
 import { MarkupProfile } from '../types/markup'
 import { useModalStore } from '@/app/store'
 import { ProfileDetailsModal } from '../modals/ProfileDetailsModal'
@@ -21,11 +20,6 @@ export function ProfilesTable({ profiles, isLoading }: ProfilesTableProps) {
     })
   }
 
-  const formatMarkup = (value: string) => {
-    const num = parseFloat(value)
-    return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`
-  }
-
   const columns: ColumnDef<MarkupProfile>[] = [
     {
       accessorKey: 'name',
@@ -42,39 +36,6 @@ export function ProfilesTable({ profiles, isLoading }: ProfilesTableProps) {
         const desc = row.getValue('description') as string | null
         return (
           <span className="text-sm text-text-muted">{desc || '-'}</span>
-        )
-      },
-    },
-    {
-      id: 'markupType',
-      header: 'Type',
-      cell: () => (
-        <Badge variant="info" className="text-xs">
-          %
-        </Badge>
-      ),
-    },
-    {
-      id: 'bidMarkup',
-      header: 'Bid Markup',
-      cell: ({ row }) => {
-        const profile = row.original
-        return (
-          <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.bidMarkup)}
-          </span>
-        )
-      },
-    },
-    {
-      id: 'askMarkup',
-      header: 'Ask Markup',
-      cell: ({ row }) => {
-        const profile = row.original
-        return (
-          <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.askMarkup)}
-          </span>
         )
       },
     },

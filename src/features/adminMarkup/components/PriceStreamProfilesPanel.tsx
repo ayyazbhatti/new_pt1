@@ -44,14 +44,6 @@ export function PriceStreamProfilesPanel() {
     toast.success(`Profile ${profile.name} ${profile.status === 'active' ? 'disabled' : 'enabled'}`)
   }
 
-  const getSpreadImpact = (profile: PriceStreamProfile) => {
-    return profile.bidMarkup + profile.askMarkup
-  }
-
-  const formatMarkup = (value: number) => {
-    return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
-  }
-
   const columns: ColumnDef<PriceStreamProfile>[] = [
     {
       accessorKey: 'name',
@@ -65,43 +57,6 @@ export function PriceStreamProfilesPanel() {
       header: 'Description',
       cell: ({ row }) => {
         return <span className="text-sm text-text-muted">{row.getValue('description')}</span>
-      },
-    },
-    {
-      id: 'bidMarkup',
-      header: 'Bid Markup',
-      cell: ({ row }) => {
-        const profile = row.original
-        return (
-          <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.bidMarkup)}
-          </span>
-        )
-      },
-    },
-    {
-      id: 'askMarkup',
-      header: 'Ask Markup',
-      cell: ({ row }) => {
-        const profile = row.original
-        return (
-          <span className="font-mono text-sm text-text">
-            {formatMarkup(profile.askMarkup)}
-          </span>
-        )
-      },
-    },
-    {
-      id: 'spreadImpact',
-      header: 'Spread Impact',
-      cell: ({ row }) => {
-        const profile = row.original
-        const impact = getSpreadImpact(profile)
-        return (
-          <span className="font-mono text-sm font-semibold text-warning">
-            {formatMarkup(impact)}
-          </span>
-        )
       },
     },
     {
