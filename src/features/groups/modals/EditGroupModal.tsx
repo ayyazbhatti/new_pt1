@@ -18,9 +18,6 @@ const groupSchema = z.object({
   spreadMarkup: z.number().min(0, 'Spread markup must be 0 or greater'),
   commission: z.number().min(0, 'Commission must be 0 or greater'),
   swapProfile: z.string().min(1, 'Swap profile is required'),
-  minLeverage: z.number().min(1, 'Min leverage must be at least 1'),
-  maxLeverage: z.number().min(1, 'Max leverage must be at least 1'),
-  maxOpenPositions: z.number().min(1, 'Max open positions must be at least 1').optional(),
   maxExposure: z.number().min(0, 'Max exposure must be 0 or greater').optional(),
 })
 
@@ -51,9 +48,6 @@ export function EditGroupModal({ group, readOnly = false }: EditGroupModalProps)
       spreadMarkup: group.spreadMarkup,
       commission: group.commission,
       swapProfile: group.swapProfile,
-      minLeverage: group.minLeverage,
-      maxLeverage: group.maxLeverage,
-      maxOpenPositions: group.maxOpenPositions,
       maxExposure: group.maxExposure,
     },
   })
@@ -202,44 +196,9 @@ export function EditGroupModal({ group, readOnly = false }: EditGroupModalProps)
               <p className="mt-1 text-sm text-danger">{errors.swapProfile.message}</p>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium text-text mb-2 block">Min Leverage</label>
-              <Input
-                type="number"
-                {...register('minLeverage', { valueAsNumber: true })}
-                disabled={readOnly}
-              />
-              {errors.minLeverage && (
-                <p className="mt-1 text-sm text-danger">{errors.minLeverage.message}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-sm font-medium text-text mb-2 block">Max Leverage</label>
-              <Input
-                type="number"
-                {...register('maxLeverage', { valueAsNumber: true })}
-                disabled={readOnly}
-              />
-              {errors.maxLeverage && (
-                <p className="mt-1 text-sm text-danger">{errors.maxLeverage.message}</p>
-              )}
-            </div>
-          </div>
         </Tabs.Content>
 
         <Tabs.Content value="restrictions" className="space-y-4">
-          <div>
-            <label className="text-sm font-medium text-text mb-2 block">Max Open Positions</label>
-            <Input
-              type="number"
-              {...register('maxOpenPositions', { valueAsNumber: true })}
-              disabled={readOnly}
-            />
-            {errors.maxOpenPositions && (
-              <p className="mt-1 text-sm text-danger">{errors.maxOpenPositions.message}</p>
-            )}
-          </div>
           <div>
             <label className="text-sm font-medium text-text mb-2 block">Max Exposure</label>
             <Input

@@ -68,6 +68,10 @@ pub struct UserResponse {
     pub group_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_leverage: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_leverage: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,6 +145,8 @@ async fn register(
                 referral_code: user.referral_code.clone(),
                 group_id: user.group_id,
                 group_name: None, // Will be populated if needed
+                min_leverage: user.min_leverage,
+                max_leverage: user.max_leverage,
             },
         })),
         Err(e) => {
@@ -201,6 +207,8 @@ async fn login(
                 referral_code: user.referral_code.clone(),
                 group_id: user.group_id,
                 group_name: None, // Will be populated if needed
+                min_leverage: user.min_leverage,
+                max_leverage: user.max_leverage,
             },
         })),
         Err(e) => Err((
@@ -294,6 +302,8 @@ async fn me(
                 referral_code: user.referral_code,
                 group_id: user.group_id,
                 group_name,
+                min_leverage: user.min_leverage,
+                max_leverage: user.max_leverage,
             }))
         },
         Err(e) => Err((
@@ -367,6 +377,8 @@ async fn list_users(
                     referral_code: u.referral_code,
                     group_id: u.group_id,
                     group_name,
+                    min_leverage: u.min_leverage,
+                    max_leverage: u.max_leverage,
                 });
             }
             Ok(Json(user_responses))

@@ -14,6 +14,8 @@ export interface UserResponse {
   referral_code?: string | null
   group_id?: string | null
   group_name?: string | null
+  min_leverage?: number | null
+  max_leverage?: number | null
 }
 
 export interface ListUsersParams {

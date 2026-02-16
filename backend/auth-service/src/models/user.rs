@@ -34,6 +34,8 @@ pub struct User {
     pub status: UserStatus,
     pub role: String, // VARCHAR in database, not enum
     pub group_id: Option<Uuid>,
+    pub min_leverage: Option<i32>,
+    pub max_leverage: Option<i32>,
     pub referral_code: Option<String>,
     pub referred_by_user_id: Option<Uuid>,
     pub email_verified: bool,

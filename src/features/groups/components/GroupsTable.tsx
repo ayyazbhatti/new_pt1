@@ -65,25 +65,6 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
       },
     },
     {
-      accessorKey: 'priority',
-      header: 'Priority',
-      cell: ({ row }) => {
-        return <span className="text-text">{row.getValue('priority')}</span>
-      },
-    },
-    {
-      id: 'limits',
-      header: 'Limits',
-      cell: ({ row }) => {
-        const group = row.original
-        return (
-          <span className="text-text text-sm">
-            Pos: {group.maxOpenPositions} • Ord: {group.maxOpenOrders}
-          </span>
-        )
-      },
-    },
-    {
       id: 'priceProfile',
       header: 'Price profile',
       cell: ({ row }) => {
@@ -131,15 +112,6 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
             </Select>
           </div>
         )
-      },
-    },
-    {
-      accessorKey: 'riskMode',
-      header: 'Risk Mode',
-      cell: ({ row }) => {
-        const riskMode = row.getValue('riskMode') as string
-        const variant = riskMode === 'aggressive' ? 'warning' : riskMode === 'conservative' ? 'info' : 'neutral'
-        return <Badge variant={variant}>{riskMode}</Badge>
       },
     },
     {

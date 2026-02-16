@@ -28,8 +28,8 @@ function mapUserResponse(user: UserResponse): User {
     createdAt: user.created_at ? new Date(user.created_at).toISOString() : new Date().toISOString(),
     lastLogin: user.last_login_at ? new Date(user.last_login_at).toISOString() : undefined,
     affiliateCode: user.referral_code || undefined,
-    leverageLimitMin: 1, // TODO: Get from user_groups
-    leverageLimitMax: 500, // TODO: Get from user_groups
+    leverageLimitMin: user.min_leverage ?? 1,
+    leverageLimitMax: user.max_leverage ?? 500,
     currentExposure: 0, // TODO: Calculate from positions
     openPositions: 0, // TODO: Count from positions table
     ordersCount: 0, // TODO: Count from orders table

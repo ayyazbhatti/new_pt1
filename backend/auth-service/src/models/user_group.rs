@@ -9,12 +9,6 @@ pub struct UserGroup {
     pub name: String,
     pub description: Option<String>,
     pub status: String, // 'active' or 'disabled'
-    pub priority: i32,
-    pub min_leverage: i32,
-    pub max_leverage: i32,
-    pub max_open_positions: Option<i32>, // Nullable in database
-    pub max_open_orders: Option<i32>, // Nullable in database
-    pub risk_mode: String, // 'standard', 'conservative', 'aggressive'
     pub default_price_profile_id: Option<Uuid>,
     pub default_leverage_profile_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,

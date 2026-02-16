@@ -21,15 +21,22 @@ const userSchema = z.object({
   country: z.string().min(1, 'Country is required'),
   group: z.string().min(1, 'Group is required'),
   status: z.enum(['active', 'disabled']),
+  minLeverage: z.number().min(1, 'Min leverage must be at least 1').max(1000, 'Min leverage must be at most 1000'),
+  maxLeverage: z.number().min(1, 'Max leverage must be at least 1').max(1000, 'Max leverage must be at most 1000'),
+}).refine((data) => data.minLeverage <= data.maxLeverage, {
+  message: 'Min leverage must be less than or equal to max leverage',
+  path: ['maxLeverage'],
 })
 
 type UserFormData = z.infer<typeof userSchema>
 
 interface CreateEditUserModalProps {
   user?: User
+  /** Called after successful save so the table can update immediately without refetch */
+  onUserUpdate?: (userId: string, updates: Partial<User>) => void
 }
 
-export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
+export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const queryClient = useQueryClient()
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -50,6 +57,8 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
       ...user,
       group: found.group_id || '',
       groupName: found.group_name || user.groupName,
+      leverageLimitMin: found.min_leverage ?? user.leverageLimitMin ?? 1,
+      leverageLimitMax: found.max_leverage ?? user.leverageLimitMax ?? 500,
     }
   }, [user, usersList])
 
@@ -60,6 +69,8 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
   const formUser = displayUser ?? user
   const defaultGroup = formUser?.group || ''
   const defaultStatus = (formUser?.status === 'suspended' ? 'disabled' : formUser?.status) || 'active'
+  const defaultMinLeverage = formUser?.leverageLimitMin ?? 1
+  const defaultMaxLeverage = formUser?.leverageLimitMax ?? 500
 
   const {
     register,
@@ -78,6 +89,8 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
       country: formUser?.country || '',
       group: defaultGroup,
       status: defaultStatus,
+      minLeverage: defaultMinLeverage,
+      maxLeverage: defaultMaxLeverage,
     },
   })
 
@@ -92,8 +105,10 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
       country: formUser.country || '',
       group: defaultGroup,
       status: defaultStatus,
+      minLeverage: defaultMinLeverage,
+      maxLeverage: defaultMaxLeverage,
     })
-  }, [formUser?.id, defaultGroup, defaultStatus, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country])
+  }, [formUser?.id, defaultGroup, defaultStatus, defaultMinLeverage, defaultMaxLeverage, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country])
 
   const group = watch('group')
   const groups = groupsData?.items || []
@@ -102,13 +117,26 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
     if (user) {
       setIsSubmitting(true)
       try {
-        await updateUserGroup(user.id, { group_id: data.group })
+        await updateUserGroup(user.id, {
+          group_id: data.group,
+          min_leverage: data.minLeverage,
+          max_leverage: data.maxLeverage,
+        })
         const groupName = groups.find((g) => g.id === data.group)?.name ?? ''
-        // Optimistic update: write new group into cache so list and re-opened modal show it immediately
+        // Update table state immediately so leverage (and group) show without reload
+        onUserUpdate?.(user.id, {
+          group: data.group,
+          groupName,
+          leverageLimitMin: data.minLeverage,
+          leverageLimitMax: data.maxLeverage,
+        })
+        // Keep cache in sync for re-opened modal and other consumers
         queryClient.setQueryData<UserResponse[]>(['users'], (old) => {
           if (!old) return old
           return old.map((u) =>
-            u.id === user.id ? { ...u, group_id: data.group, group_name: groupName } : u
+            u.id === user.id
+              ? { ...u, group_id: data.group, group_name: groupName, min_leverage: data.minLeverage, max_leverage: data.maxLeverage }
+              : u
           )
         })
         await queryClient.invalidateQueries({ queryKey: ['users'] })
@@ -197,6 +225,32 @@ export function CreateEditUserModal({ user }: CreateEditUserModalProps) {
             <SelectItem value="disabled">Disabled</SelectItem>
           </SelectContent>
         </Select>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm font-medium text-text mb-2 block">Min leverage *</label>
+          <Input
+            type="number"
+            min={1}
+            max={1000}
+            {...register('minLeverage', { valueAsNumber: true })}
+          />
+          {errors.minLeverage && (
+            <p className="mt-1 text-sm text-danger">{errors.minLeverage.message}</p>
+          )}
+        </div>
+        <div>
+          <label className="text-sm font-medium text-text mb-2 block">Max leverage *</label>
+          <Input
+            type="number"
+            min={1}
+            max={1000}
+            {...register('maxLeverage', { valueAsNumber: true })}
+          />
+          {errors.maxLeverage && (
+            <p className="mt-1 text-sm text-danger">{errors.maxLeverage.message}</p>
+          )}
+        </div>
       </div>
       <div className="flex justify-end gap-2 pt-4 border-t border-border">
         <Button

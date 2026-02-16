@@ -34,7 +34,7 @@ export function GroupsPage() {
   const status = searchParams.get('status') || 'all'
   const page = parseInt(searchParams.get('page') || '1', 10)
   const pageSize = parseInt(searchParams.get('page_size') || '20', 10)
-  const sort = searchParams.get('sort') || 'priority_desc'
+  const sort = searchParams.get('sort') || 'created_desc'
 
   // Fetch groups
   const { data, isLoading, error, refetch } = useGroupsList({
@@ -184,7 +184,6 @@ export function GroupsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="priority_desc">Priority</SelectItem>
               <SelectItem value="name_asc">Name</SelectItem>
               <SelectItem value="created_desc">Created</SelectItem>
             </SelectContent>

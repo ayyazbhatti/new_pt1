@@ -94,10 +94,11 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   }
 
   const handleEdit = (user: User) => {
-    openModal(`edit-user-${user.id}`, <CreateEditUserModal user={user} />, {
-      title: 'Edit User',
-      size: 'md',
-    })
+    openModal(
+      `edit-user-${user.id}`,
+      <CreateEditUserModal user={user} onUserUpdate={onUserUpdate} />,
+      { title: 'Edit User', size: 'md' }
+    )
   }
 
   const handleRestrict = (user: User) => {
@@ -219,6 +220,16 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
             </Select>
           </div>
         )
+      },
+    },
+    {
+      id: 'leverage',
+      header: 'Leverage',
+      cell: ({ row }) => {
+        const u = row.original
+        const min = u.leverageLimitMin ?? 1
+        const max = u.leverageLimitMax ?? 500
+        return <span className="text-sm text-text whitespace-nowrap">{min} – {max}</span>
       },
     },
     {

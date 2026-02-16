@@ -20,12 +20,6 @@ pub struct CreateGroupRequest {
     pub name: String,
     pub description: Option<String>,
     pub status: String,
-    pub priority: i32,
-    pub min_leverage: i32,
-    pub max_leverage: i32,
-    pub max_open_positions: i32,
-    pub max_open_orders: i32,
-    pub risk_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,12 +27,6 @@ pub struct UpdateGroupRequest {
     pub name: String,
     pub description: Option<String>,
     pub status: String,
-    pub priority: i32,
-    pub min_leverage: i32,
-    pub max_leverage: i32,
-    pub max_open_positions: i32,
-    pub max_open_orders: i32,
-    pub risk_mode: String,
 }
 
 /// Reference to a profile (price stream or leverage) for embedding in group list.
@@ -251,17 +239,7 @@ async fn create_group(
 
     let service = AdminGroupsService::new(pool);
     match service
-        .create_group(
-            &payload.name,
-            payload.description.as_deref(),
-            &payload.status,
-            payload.priority,
-            payload.min_leverage,
-            payload.max_leverage,
-            payload.max_open_positions,
-            payload.max_open_orders,
-            &payload.risk_mode,
-        )
+        .create_group(&payload.name, payload.description.as_deref(), &payload.status)
         .await
     {
         Ok(group) => Ok(Json(group)),
@@ -270,8 +248,6 @@ async fn create_group(
                 "GROUP_NAME_EXISTS"
             } else if e.to_string().contains("between 2 and 40") {
                 "INVALID_NAME_LENGTH"
-            } else if e.to_string().contains("leverage") {
-                "INVALID_LEVERAGE"
             } else {
                 "CREATE_GROUP_FAILED"
             };
@@ -308,18 +284,7 @@ async fn update_group(
 
     let service = AdminGroupsService::new(pool);
     match service
-        .update_group(
-            id,
-            &payload.name,
-            payload.description.as_deref(),
-            &payload.status,
-            payload.priority,
-            payload.min_leverage,
-            payload.max_leverage,
-            payload.max_open_positions,
-            payload.max_open_orders,
-            &payload.risk_mode,
-        )
+        .update_group(id, &payload.name, payload.description.as_deref(), &payload.status)
         .await
     {
         Ok(group) => Ok(Json(group)),
@@ -328,8 +293,6 @@ async fn update_group(
                 "GROUP_NOT_FOUND"
             } else if e.to_string().contains("between 2 and 40") {
                 "INVALID_NAME_LENGTH"
-            } else if e.to_string().contains("leverage") {
-                "INVALID_LEVERAGE"
             } else {
                 "UPDATE_GROUP_FAILED"
             };

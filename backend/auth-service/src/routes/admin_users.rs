@@ -15,6 +15,10 @@ use crate::utils::jwt::Claims;
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserGroupRequest {
     pub group_id: String,
+    #[serde(default)]
+    pub min_leverage: Option<i32>,
+    #[serde(default)]
+    pub max_leverage: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -132,13 +136,49 @@ async fn update_user_group(
         ));
     }
 
-    // Update user's group
-    let rows_affected = sqlx::query(
-        "UPDATE users SET group_id = $1, updated_at = NOW() WHERE id = $2",
-    )
-    .bind(group_id)
-    .bind(user_id)
-    .execute(&pool)
+    // Validate leverage range if provided
+    if let (Some(min_l), Some(max_l)) = (payload.min_leverage, payload.max_leverage) {
+        if min_l < 1 || max_l > 1000 || min_l > max_l {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "INVALID_LEVERAGE".to_string(),
+                        message: "min_leverage and max_leverage must be between 1 and 1000, and min_leverage <= max_leverage".to_string(),
+                    },
+                }),
+            ));
+        }
+    } else if payload.min_leverage.is_some() || payload.max_leverage.is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_LEVERAGE".to_string(),
+                    message: "Both min_leverage and max_leverage must be provided together".to_string(),
+                },
+            }),
+        ));
+    }
+
+    // Build update: always set group_id; optionally set min/max leverage
+    let rows_affected = if let (Some(min_l), Some(max_l)) = (payload.min_leverage, payload.max_leverage) {
+        sqlx::query(
+            "UPDATE users SET group_id = $1, min_leverage = $2, max_leverage = $3, updated_at = NOW() WHERE id = $4",
+        )
+        .bind(group_id)
+        .bind(min_l)
+        .bind(max_l)
+        .bind(user_id)
+        .execute(&pool)
+    } else {
+        sqlx::query(
+            "UPDATE users SET group_id = $1, updated_at = NOW() WHERE id = $2",
+        )
+        .bind(group_id)
+        .bind(user_id)
+        .execute(&pool)
+    }
     .await
     .map_err(|e| {
         (

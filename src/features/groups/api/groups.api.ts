@@ -21,12 +21,6 @@ function toCamelCase(obj: any): UserGroup {
     name: obj.name,
     description: obj.description,
     status: obj.status,
-    priority: obj.priority,
-    minLeverage: obj.min_leverage,
-    maxLeverage: obj.max_leverage,
-    maxOpenPositions: obj.max_open_positions,
-    maxOpenOrders: obj.max_open_orders,
-    riskMode: obj.risk_mode,
     priceProfileId: obj.default_price_profile_id,
     leverageProfileId: obj.default_leverage_profile_id,
     priceProfile: priceProfile ?? undefined,
@@ -42,12 +36,6 @@ function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
     name: payload.name,
     description: payload.description ?? null,
     status: payload.status,
-    priority: payload.priority,
-    min_leverage: payload.min_leverage,
-    max_leverage: payload.max_leverage,
-    max_open_positions: payload.max_open_positions,
-    max_open_orders: payload.max_open_orders,
-    risk_mode: payload.risk_mode,
   }
 }
 

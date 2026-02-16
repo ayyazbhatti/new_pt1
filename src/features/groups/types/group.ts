@@ -6,12 +6,6 @@ export type UserGroup = {
   name: string
   description: string | null
   status: 'active' | 'disabled'
-  priority: number
-  minLeverage: number
-  maxLeverage: number
-  maxOpenPositions: number
-  maxOpenOrders: number
-  riskMode: 'standard' | 'conservative' | 'aggressive'
   priceProfileId?: string | null
   leverageProfileId?: string | null
   /** Set when returned from list groups API (assigned price stream profile). */
@@ -43,12 +37,6 @@ export interface CreateGroupPayload {
   name: string
   description?: string | null
   status: 'active' | 'disabled'
-  priority: number
-  min_leverage: number
-  max_leverage: number
-  max_open_positions: number
-  max_open_orders: number
-  risk_mode: 'standard' | 'conservative' | 'aggressive'
 }
 
 export interface UpdateGroupPayload extends CreateGroupPayload {}

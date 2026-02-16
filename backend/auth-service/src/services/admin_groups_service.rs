@@ -11,12 +11,6 @@ struct UserGroupRowMinimal {
     name: String,
     description: Option<String>,
     status: String,
-    priority: i32,
-    min_leverage: i32,
-    max_leverage: i32,
-    max_open_positions: Option<i32>,
-    max_open_orders: Option<i32>,
-    risk_mode: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -28,12 +22,6 @@ impl From<UserGroupRowMinimal> for UserGroup {
             name: r.name,
             description: r.description,
             status: r.status,
-            priority: r.priority,
-            min_leverage: r.min_leverage,
-            max_leverage: r.max_leverage,
-            max_open_positions: r.max_open_positions,
-            max_open_orders: r.max_open_orders,
-            risk_mode: r.risk_mode,
             default_price_profile_id: None,
             default_leverage_profile_id: None,
             created_at: r.created_at,
@@ -88,7 +76,7 @@ impl AdminGroupsService {
         let order_by = match sort {
             Some("name_asc") => "name ASC",
             Some("created_desc") => "created_at DESC",
-            _ => "priority DESC, created_at DESC",
+            _ => "created_at DESC",
         };
 
         // Try full query with profile columns first; fallback to minimal if columns missing
@@ -123,8 +111,7 @@ impl AdminGroupsService {
         order_by: &str,
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
-            "SELECT id, name, description, status, priority, min_leverage, max_leverage, \
-             max_open_positions, max_open_orders, risk_mode, default_price_profile_id, \
+            "SELECT id, name, description, status, default_price_profile_id, \
              default_leverage_profile_id, created_at, updated_at FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
@@ -162,8 +149,7 @@ impl AdminGroupsService {
         order_by: &str,
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
-            "SELECT id, name, description, status, priority, min_leverage, max_leverage, \
-             max_open_positions, max_open_orders, risk_mode, created_at, updated_at \
+            "SELECT id, name, description, status, created_at, updated_at \
              FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
@@ -209,52 +195,24 @@ impl AdminGroupsService {
         name: &str,
         description: Option<&str>,
         status: &str,
-        priority: i32,
-        min_leverage: i32,
-        max_leverage: i32,
-        max_open_positions: i32,
-        max_open_orders: i32,
-        risk_mode: &str,
     ) -> anyhow::Result<UserGroup> {
         // Validate
         if name.len() < 2 || name.len() > 40 {
             return Err(anyhow::anyhow!("Name must be between 2 and 40 characters"));
         }
-        if min_leverage < 1 {
-            return Err(anyhow::anyhow!("Min leverage must be at least 1"));
-        }
-        if max_leverage < min_leverage {
-            return Err(anyhow::anyhow!("Max leverage must be >= min leverage"));
-        }
-        if max_open_positions < 0 {
-            return Err(anyhow::anyhow!("Max open positions must be >= 0"));
-        }
-        if max_open_orders < 0 {
-            return Err(anyhow::anyhow!("Max open orders must be >= 0"));
-        }
-        if priority < -9999 || priority > 9999 {
-            return Err(anyhow::anyhow!("Priority must be between -9999 and 9999"));
-        }
 
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
             INSERT INTO user_groups (
-                name, description, status, priority,
-                min_leverage, max_leverage, max_open_positions, max_open_orders, risk_mode
+                name, description, status
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3)
             RETURNING *
             "#,
         )
         .bind(name)
         .bind(description)
         .bind(status)
-        .bind(priority)
-        .bind(min_leverage)
-        .bind(max_leverage)
-        .bind(Some(max_open_positions)) // Convert to Option
-        .bind(Some(max_open_orders)) // Convert to Option
-        .bind(risk_mode)
         .fetch_one(&self.pool)
         .await?;
 
@@ -267,31 +225,10 @@ impl AdminGroupsService {
         name: &str,
         description: Option<&str>,
         status: &str,
-        priority: i32,
-        min_leverage: i32,
-        max_leverage: i32,
-        max_open_positions: i32,
-        max_open_orders: i32,
-        risk_mode: &str,
     ) -> anyhow::Result<UserGroup> {
         // Validate (same as create)
         if name.len() < 2 || name.len() > 40 {
             return Err(anyhow::anyhow!("Name must be between 2 and 40 characters"));
-        }
-        if min_leverage < 1 {
-            return Err(anyhow::anyhow!("Min leverage must be at least 1"));
-        }
-        if max_leverage < min_leverage {
-            return Err(anyhow::anyhow!("Max leverage must be >= min leverage"));
-        }
-        if max_open_positions < 0 {
-            return Err(anyhow::anyhow!("Max open positions must be >= 0"));
-        }
-        if max_open_orders < 0 {
-            return Err(anyhow::anyhow!("Max open orders must be >= 0"));
-        }
-        if priority < -9999 || priority > 9999 {
-            return Err(anyhow::anyhow!("Priority must be between -9999 and 9999"));
         }
 
         let group = sqlx::query_as::<_, UserGroup>(
@@ -301,12 +238,6 @@ impl AdminGroupsService {
                 name = $2,
                 description = $3,
                 status = $4,
-                priority = $5,
-                min_leverage = $6,
-                max_leverage = $7,
-                max_open_positions = $8,
-                max_open_orders = $9,
-                risk_mode = $10,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -316,12 +247,6 @@ impl AdminGroupsService {
         .bind(name)
         .bind(description)
         .bind(status)
-        .bind(priority)
-        .bind(min_leverage)
-        .bind(max_leverage)
-        .bind(Some(max_open_positions)) // Convert to Option
-        .bind(Some(max_open_orders)) // Convert to Option
-        .bind(risk_mode)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Group not found"))?;
