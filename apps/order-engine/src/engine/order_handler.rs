@@ -136,7 +136,14 @@ impl OrderHandler {
                     .query_async(&mut conn)
                     .await?;
                 
-                // Create order object
+                // Create order object (include leverage for fill-time margin calculation)
+                let leverage_tiers: Option<Vec<crate::models::LeverageTier>> = cmd.leverage_tiers.as_ref().map(|tiers| {
+                    tiers.iter().map(|t| crate::models::LeverageTier {
+                        notional_from: t.notional_from.clone(),
+                        notional_to: t.notional_to.clone(),
+                        max_leverage: t.max_leverage,
+                    }).collect()
+                });
                 let order = Order {
                     id: order_id,
                     user_id: cmd.user_id,
@@ -159,6 +166,9 @@ impl OrderHandler {
                     filled_at: None,
                     canceled_at: None,
                     rejection_reason: None,
+                    min_leverage: cmd.min_leverage,
+                    max_leverage: cmd.max_leverage,
+                    leverage_tiers,
                 };
                 
                 // Store order in Redis
@@ -207,9 +217,16 @@ impl OrderHandler {
                         
                         info!("🚀 Executing market order {} immediately at price {}", order_id, fill_price);
                         
-                        // Execute fill immediately using Lua script
+                        let notional = fill_price * order.size;
+                        let effective_lev = crate::leverage::effective_leverage(
+                            notional,
+                            order.min_leverage,
+                            order.max_leverage,
+                            order.leverage_tiers.as_deref(),
+                            100.0,
+                        );
                         let mut conn = self.redis.get_connection().await;
-                        match self.lua.atomic_fill_order(&mut conn, &order_id, fill_price, order.size).await {
+                        match self.lua.atomic_fill_order(&mut conn, &order_id, fill_price, order.size, effective_lev).await {
                             Ok(result) => {
                                 if result.get("error").is_some() {
                                     let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");

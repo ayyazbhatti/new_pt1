@@ -6,7 +6,8 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use contracts::{VersionedMessage, commands::PlaceOrderCommand, enums::{Side, OrderType, TimeInForce}};
+use contracts::{VersionedMessage, commands::{PlaceOrderCommand, LeverageTier as CmdLeverageTier}, enums::{Side, OrderType, TimeInForce}};
+use crate::models::leverage_profile::LeverageProfileTier;
 use redis::AsyncCommands;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -124,6 +125,76 @@ async fn place_order(
 
     let symbol_id = symbol_row.id;
 
+    // Fetch user leverage limits and symbol tiers for order-engine (effective leverage at fill time)
+    #[derive(sqlx::FromRow)]
+    struct UserLeverageRow { min_leverage: Option<i32>, max_leverage: Option<i32> }
+    let user_lev = sqlx::query_as::<_, UserLeverageRow>(
+        r#"SELECT min_leverage, max_leverage FROM users WHERE id = $1"#,
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to fetch user leverage: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let (user_min_lev, user_max_lev) = user_lev
+        .map(|r| (r.min_leverage, r.max_leverage))
+        .unwrap_or((None, None));
+
+    #[derive(sqlx::FromRow)]
+    struct ProfileRow { leverage_profile_id: Option<Uuid> }
+    let profile_row = sqlx::query_as::<_, ProfileRow>(
+        r#"
+        SELECT COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id
+        FROM users u
+        INNER JOIN user_groups ug ON ug.id = u.group_id
+        INNER JOIN symbols s ON LOWER(TRIM(s.code)) = LOWER(TRIM($2))
+        LEFT JOIN group_symbols gs ON gs.symbol_id = s.id AND gs.group_id = ug.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(user_id)
+    .bind(&req.symbol)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to fetch symbol leverage profile: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let leverage_tiers: Option<Vec<CmdLeverageTier>> = match profile_row.and_then(|r| r.leverage_profile_id) {
+        Some(pid) => {
+            let tiers: Vec<LeverageProfileTier> = sqlx::query_as(
+                r#"
+                SELECT id, profile_id, tier_index,
+                    notional_from::text AS notional_from, notional_to::text AS notional_to,
+                    max_leverage, initial_margin_percent::text AS initial_margin_percent,
+                    maintenance_margin_percent::text AS maintenance_margin_percent,
+                    created_at, updated_at
+                FROM leverage_profile_tiers WHERE profile_id = $1 ORDER BY tier_index ASC
+                "#,
+            )
+            .bind(pid)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                error!("Failed to fetch leverage tiers: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            if tiers.is_empty() {
+                None
+            } else {
+                Some(tiers.into_iter().map(|t| CmdLeverageTier {
+                    notional_from: t.notional_from,
+                    notional_to: t.notional_to,
+                    max_leverage: t.max_leverage,
+                }).collect())
+            }
+        }
+        None => None,
+    };
+
     // Check idempotency
     let mut conn = orders_state.redis.get_async_connection().await
         .map_err(|e| {
@@ -224,6 +295,9 @@ async fn place_order(
         idempotency_key: req.idempotency_key.clone(),
         ts: now,
         group_id: claims.group_id.map(|u| u.to_string()),
+        min_leverage: user_min_lev,
+        max_leverage: user_max_lev,
+        leverage_tiers: leverage_tiers,
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)

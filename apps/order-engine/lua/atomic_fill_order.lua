@@ -1,5 +1,5 @@
 -- Atomic order fill script
--- Args: order_id, fill_price, fill_size, timestamp_ms, position_uuid
+-- Args: order_id, fill_price, fill_size, timestamp_ms, position_uuid, effective_leverage
 -- Returns: JSON with fill result
 
 local order_key = KEYS[1]
@@ -8,6 +8,7 @@ local fill_price = ARGV[2]
 local fill_size = ARGV[3]
 local timestamp_ms = ARGV[4]
 local position_uuid = ARGV[5]
+local effective_leverage = tonumber(ARGV[6]) or 100.0
 
 -- Get order
 local order_json = redis.call('GET', order_key)
@@ -296,8 +297,8 @@ if not position_id then
     
     -- Store position as Hash (matches backend format)
     local pos_key = 'pos:by_id:' .. position_id
-    -- Calculate margin: (size * entry_price) / leverage
-    local leverage = 100.0
+    -- Calculate margin: (size * entry_price) / leverage (effective leverage from tiers + user limits)
+    local leverage = effective_leverage
     local margin = (tonumber(fill_size) * tonumber(fill_price)) / leverage
     
     redis.call('HSET', pos_key, 'user_id', user_id)

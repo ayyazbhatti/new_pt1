@@ -11,7 +11,7 @@ import { SinglePriceDisplay } from './SinglePriceDisplay'
 import { placeOrder, PlaceOrderRequest } from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useQuery } from '@tanstack/react-query'
-import { me, getSymbolLeverage } from '@/shared/api/auth.api'
+import { me, getSymbolLeverage, getEffectiveLeverage } from '@/shared/api/auth.api'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import {
@@ -298,7 +298,14 @@ export function RightTradingPanel() {
     
     const spread = Math.abs(askPrice - price)
     const fees = 0
-    const margin = quoteValue * 0.02 // 2% margin
+    const effectiveLeverage = getEffectiveLeverage(
+      quoteValue,
+      symbolLeverage?.tiers ?? null,
+      meData?.minLeverage,
+      meData?.maxLeverage,
+      50
+    )
+    const margin = effectiveLeverage > 0 ? quoteValue / effectiveLeverage : quoteValue * 0.02
     const liquidation = '-'
 
     return {
@@ -310,7 +317,27 @@ export function RightTradingPanel() {
       baseSize: baseSize.toFixed(8),
       quoteValue: quoteValue.toFixed(2),
     }
-  }, [size, selectedSymbol, currency])
+  }, [size, selectedSymbol, currency, meData?.minLeverage, meData?.maxLeverage, symbolLeverage?.tiers])
+
+  // Current order notional (exposure) for "active tier" indicator in Leverage card
+  const currentOrderNotional = useMemo(() => {
+    if (!selectedSymbol) return 0
+    const sizeNum = parseFloat(size) || 0
+    const price = selectedSymbol.numericPrice || 0
+    if (price <= 0) return 0
+    if (currency === selectedSymbol.quoteCurrency) return sizeNum
+    return sizeNum * price
+  }, [size, currency, selectedSymbol])
+
+  // Effective leverage for current order (used to show "active" on user min/max when clamped)
+  const effectiveLeverageForCard = useMemo(
+    () => getEffectiveLeverage(currentOrderNotional, symbolLeverage?.tiers ?? null, meData?.minLeverage, meData?.maxLeverage, 50),
+    [currentOrderNotional, symbolLeverage?.tiers, meData?.minLeverage, meData?.maxLeverage]
+  )
+  const isUserLimitActive =
+    meData &&
+    ((meData.minLeverage != null && effectiveLeverageForCard === meData.minLeverage) ||
+      (meData.maxLeverage != null && effectiveLeverageForCard === meData.maxLeverage))
 
   // Format live price for limit price placeholder
   const livePricePlaceholder = useMemo(() => {
@@ -1083,54 +1110,161 @@ export function RightTradingPanel() {
           )}
         </div>
 
-        {/* Symbol Details - Enhanced */}
+        {/* Leverage, Symbol Details, User - collapsibles */}
         <div className="border-b border-white/5">
-          <button
-            onClick={() => setSymbolDetailsOpen(!symbolDetailsOpen)}
-            className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
-          >
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-1 rounded-full bg-accent"></div>
-              <span className="text-xs font-bold text-text uppercase tracking-wider">Symbol Details</span>
-            </div>
-            {symbolDetailsOpen ? (
-              <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
-            )}
-          </button>
-          {symbolDetailsOpen && selectedSymbol && (
-            <div className="px-4 pb-4 space-y-3 text-xs bg-surface-2/20">
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-muted/80">Price</span>
-                <span className="font-semibold text-text">
-                  {selectedSymbol.numericPrice > 0 
-                    ? `$${selectedSymbol.numericPrice.toLocaleString()}`
-                    : '—'}
-                </span>
+          {/* Leverage - collapsible (first) */}
+          <div className="border-b border-white/5">
+            <button
+              onClick={() => setLeverageDetailsOpen(!leverageDetailsOpen)}
+              className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
+            >
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-1 rounded-full bg-accent"></div>
+                <span className="text-xs font-bold text-text uppercase tracking-wider">Leverage</span>
               </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-muted/80">24h Change</span>
-                <div className={cn(
-                  "flex items-center gap-1.5 font-semibold",
-                  selectedSymbol.change24h >= 0 ? 'text-success' : 'text-danger'
-                )}>
-                  {selectedSymbol.change24h >= 0 ? (
-                    <TrendingUp className="h-3.5 w-3.5" />
-                  ) : (
-                    <TrendingDown className="h-3.5 w-3.5" />
-                  )}
-                  <span>{selectedSymbol.change24h >= 0 ? '+' : ''}{selectedSymbol.change24h.toFixed(4)}%</span>
+              {leverageDetailsOpen ? (
+                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              )}
+            </button>
+            {leverageDetailsOpen && (
+              <div className="px-4 pb-4 space-y-2.5 text-xs bg-surface-2/20">
+                {meData ? (
+                  <>
+                    {selectedSymbol && (
+                      <div className="flex justify-between items-center py-2 border-b border-white/5">
+                        <span className="text-muted/80">Symbol</span>
+                        <span className="font-mono font-medium text-text">{selectedSymbol.code}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center py-2 border-b border-white/5">
+                      <span className="text-muted/80">Leverage profile{selectedSymbol ? ` (${selectedSymbol.code})` : ''}</span>
+                      <span className="font-medium text-text">
+                        {selectedSymbol
+                          ? symbolLeverageLoading
+                            ? 'Loading…'
+                            : symbolLeverageFetched
+                              ? (symbolLeverage?.leverage_profile_name ?? '—')
+                              : '—'
+                          : (meData.leverageProfileName ?? '—')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2">
+                      <span className="flex items-center gap-1.5">
+                        {isUserLimitActive && (
+                          <span
+                            className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0 ring-2 ring-green-500/40"
+                            title="Currently using this limit (min or max)"
+                            aria-hidden
+                          />
+                        )}
+                        <span className={isUserLimitActive ? 'text-text' : 'text-muted/80'}>Your min – max</span>
+                      </span>
+                      <span className="font-semibold text-accent">
+                        {meData.minLeverage != null && meData.maxLeverage != null
+                          ? `${meData.minLeverage} – ${meData.maxLeverage}×`
+                          : meData.minLeverage != null
+                            ? `≥ ${meData.minLeverage}×`
+                            : meData.maxLeverage != null
+                              ? `≤ ${meData.maxLeverage}×`
+                              : '—'}
+                      </span>
+                    </div>
+                    {(meData.minLeverage == null && meData.maxLeverage == null) && (
+                      <p className="text-[10px] text-muted/80 pt-1">
+                        Set in Admin → Users (leverage column)
+                      </p>
+                    )}
+                    {selectedSymbol && symbolLeverage?.tiers && symbolLeverage.tiers.length > 0 && (
+                      <div className="pt-2 border-t border-white/5 space-y-1.5">
+                        <span className="text-muted/80 text-[10px] uppercase tracking-wider block mb-1.5">Profile tiers</span>
+                        <ul className="space-y-1">
+                          {symbolLeverage.tiers.map((tier, idx) => {
+                            const from = parseFloat(tier.notional_from) || 0
+                            const to = tier.notional_to != null ? parseFloat(tier.notional_to) : Infinity
+                            const isActive = currentOrderNotional >= from && currentOrderNotional < to
+                            return (
+                              <li key={idx} className="text-[11px] text-text/90 flex justify-between items-center gap-2">
+                                <span className="flex items-center gap-1.5 min-w-0">
+                                  {isActive && (
+                                    <span
+                                      className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0 ring-2 ring-green-500/40"
+                                      title="Currently using this tier"
+                                      aria-hidden
+                                    />
+                                  )}
+                                  <span className={isActive ? 'text-text' : 'text-muted/80 truncate'}>
+                                    {formatTierNotional(tier.notional_from)} – {tier.notional_to != null ? formatTierNotional(tier.notional_to) : '∞'} USD
+                                  </span>
+                                </span>
+                                <span className="font-medium text-accent shrink-0">≤ {tier.max_leverage}×</span>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-muted py-2">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    <span>Loading…</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Symbol Details - collapsible (second) */}
+          <div className="border-t border-white/5">
+            <button
+              onClick={() => setSymbolDetailsOpen(!symbolDetailsOpen)}
+              className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
+            >
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-1 rounded-full bg-accent"></div>
+                <span className="text-xs font-bold text-text uppercase tracking-wider">Symbol Details</span>
+              </div>
+              {symbolDetailsOpen ? (
+                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+              )}
+            </button>
+            {symbolDetailsOpen && selectedSymbol && (
+              <div className="px-4 pb-4 space-y-3 text-xs bg-surface-2/20">
+                <div className="flex justify-between items-center py-2 border-b border-white/5">
+                  <span className="text-muted/80">Price</span>
+                  <span className="font-semibold text-text">
+                    {selectedSymbol.numericPrice > 0 
+                      ? `$${selectedSymbol.numericPrice.toLocaleString()}`
+                      : '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-white/5">
+                  <span className="text-muted/80">24h Change</span>
+                  <div className={cn(
+                    "flex items-center gap-1.5 font-semibold",
+                    selectedSymbol.change24h >= 0 ? 'text-success' : 'text-danger'
+                  )}>
+                    {selectedSymbol.change24h >= 0 ? (
+                      <TrendingUp className="h-3.5 w-3.5" />
+                    ) : (
+                      <TrendingDown className="h-3.5 w-3.5" />
+                    )}
+                    <span>{selectedSymbol.change24h >= 0 ? '+' : ''}{selectedSymbol.change24h.toFixed(4)}%</span>
+                  </div>
+                </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-muted/80">24h Volume</span>
+                  <span className="font-semibold text-text">${(selectedSymbol.volume24h / 1000000).toFixed(2)}M</span>
                 </div>
               </div>
-              <div className="flex justify-between items-center py-2">
-                <span className="text-muted/80">24h Volume</span>
-                <span className="font-semibold text-text">${(selectedSymbol.volume24h / 1000000).toFixed(2)}M</span>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
 
-          {/* User - collapsible */}
+          {/* User - collapsible (third) */}
           <div className="border-t border-white/5">
             <button
               onClick={() => setUserDetailsOpen(!userDetailsOpen)}
@@ -1189,87 +1323,6 @@ export function RightTradingPanel() {
                   <div className="flex items-center gap-2 text-muted py-2">
                     <Loader2 className="h-4 w-4 animate-spin shrink-0" />
                     <span>Loading user…</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Leverage - collapsible */}
-          <div className="border-t border-white/5">
-            <button
-              onClick={() => setLeverageDetailsOpen(!leverageDetailsOpen)}
-              className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
-            >
-              <div className="flex items-center gap-2">
-                <div className="h-1 w-1 rounded-full bg-accent"></div>
-                <span className="text-xs font-bold text-text uppercase tracking-wider">Leverage</span>
-              </div>
-              {leverageDetailsOpen ? (
-                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
-              ) : (
-                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
-              )}
-            </button>
-            {leverageDetailsOpen && (
-              <div className="px-4 pb-4 space-y-2.5 text-xs bg-surface-2/20">
-                {meData ? (
-                  <>
-                    {selectedSymbol && (
-                      <div className="flex justify-between items-center py-2 border-b border-white/5">
-                        <span className="text-muted/80">Symbol</span>
-                        <span className="font-mono font-medium text-text">{selectedSymbol.code}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between items-center py-2 border-b border-white/5">
-                      <span className="text-muted/80">Leverage profile{selectedSymbol ? ` (${selectedSymbol.code})` : ''}</span>
-                      <span className="font-medium text-text">
-                        {selectedSymbol
-                          ? symbolLeverageLoading
-                            ? 'Loading…'
-                            : symbolLeverageFetched
-                              ? (symbolLeverage?.leverage_profile_name ?? '—')
-                              : '—'
-                          : (meData.leverageProfileName ?? '—')}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-2">
-                      <span className="text-muted/80">Your min – max</span>
-                      <span className="font-semibold text-accent">
-                        {meData.minLeverage != null && meData.maxLeverage != null
-                          ? `${meData.minLeverage} – ${meData.maxLeverage}×`
-                          : meData.minLeverage != null
-                            ? `≥ ${meData.minLeverage}×`
-                            : meData.maxLeverage != null
-                              ? `≤ ${meData.maxLeverage}×`
-                              : '—'}
-                      </span>
-                    </div>
-                    {(meData.minLeverage == null && meData.maxLeverage == null) && (
-                      <p className="text-[10px] text-muted/80 pt-1">
-                        Set in Admin → Users (leverage column)
-                      </p>
-                    )}
-                    {selectedSymbol && symbolLeverage?.tiers && symbolLeverage.tiers.length > 0 && (
-                      <div className="pt-2 border-t border-white/5 space-y-1.5">
-                        <span className="text-muted/80 text-[10px] uppercase tracking-wider block mb-1.5">Profile tiers</span>
-                        <ul className="space-y-1">
-                          {symbolLeverage.tiers.map((tier, idx) => (
-                            <li key={idx} className="text-[11px] text-text/90 flex justify-between items-baseline gap-2">
-                              <span className="text-muted/80 truncate">
-                                {formatTierNotional(tier.notional_from)} – {tier.notional_to != null ? formatTierNotional(tier.notional_to) : '∞'} USD
-                              </span>
-                              <span className="font-medium text-accent shrink-0">≤ {tier.max_leverage}×</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="flex items-center gap-2 text-muted py-2">
-                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                    <span>Loading…</span>
                   </div>
                 )}
               </div>

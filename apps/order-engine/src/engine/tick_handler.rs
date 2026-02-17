@@ -209,8 +209,15 @@ impl TickHandler {
         fill_price: rust_decimal::Decimal,
         fill_size: rust_decimal::Decimal,
     ) -> Result<()> {
-        // Execute atomic fill via Lua script
-        let result = self.lua.atomic_fill_order(conn, &order.id, fill_price, fill_size).await?;
+        let notional = fill_price * fill_size;
+        let effective_lev = crate::leverage::effective_leverage(
+            notional,
+            order.min_leverage,
+            order.max_leverage,
+            order.leverage_tiers.as_deref(),
+            100.0,
+        );
+        let result = self.lua.atomic_fill_order(conn, &order.id, fill_price, fill_size, effective_lev).await?;
         
         if result.get("error").is_some() {
             let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");

@@ -35,6 +35,7 @@ impl LuaScripts {
         order_id: &Uuid,
         fill_price: Decimal,
         fill_size: Decimal,
+        effective_leverage: f64,
     ) -> Result<serde_json::Value> {
         // Generate UUID for potential new position
         let position_uuid = uuid::Uuid::new_v4();
@@ -45,6 +46,7 @@ impl LuaScripts {
             .arg(fill_size.to_string())
             .arg(Utc::now().timestamp_millis().to_string())
             .arg(position_uuid.to_string())
+            .arg(format!("{:.6}", effective_leverage))
             .invoke_async(conn)
             .await
             .context("Failed to execute atomic_fill_order Lua script")?;

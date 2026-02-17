@@ -14,6 +14,13 @@ pub struct Tick {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeverageTier {
+    pub notional_from: String,
+    pub notional_to: Option<String>,
+    pub max_leverage: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -37,6 +44,12 @@ pub struct Order {
     pub filled_at: Option<DateTime<Utc>>,
     pub canceled_at: Option<DateTime<Utc>>,
     pub rejection_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_leverage: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_leverage: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leverage_tiers: Option<Vec<LeverageTier>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

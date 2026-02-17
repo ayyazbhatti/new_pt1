@@ -172,6 +172,35 @@ export interface SymbolLeverageResponse {
   tiers?: SymbolLeverageTier[] | null
 }
 
+/**
+ * Effective leverage for a given notional (exposure): find tier where
+ * notional_from <= notional < notional_to, take tier's max_leverage, then clamp to [userMin, userMax].
+ * Returns defaultLeverage if no tiers or missing limits.
+ */
+export function getEffectiveLeverage(
+  notional: number,
+  tiers: SymbolLeverageTier[] | null | undefined,
+  userMin: number | null | undefined,
+  userMax: number | null | undefined,
+  defaultLeverage: number = 50
+): number {
+  if (!Number.isFinite(notional) || notional < 0) return defaultLeverage
+  const t = tiers?.length ? tiers : null
+  if (!t) return defaultLeverage
+  let symbolLeverage = defaultLeverage
+  for (const tier of t) {
+    const from = parseFloat(tier.notional_from) || 0
+    const to = tier.notional_to != null ? parseFloat(tier.notional_to) : Infinity
+    if (notional >= from && notional < to) {
+      symbolLeverage = tier.max_leverage
+      break
+    }
+  }
+  const minL = userMin != null ? userMin : 1
+  const maxL = userMax != null ? userMax : 1000
+  return Math.max(minL, Math.min(maxL, symbolLeverage))
+}
+
 /** Leverage profile applied to the given symbol for the current user's group (per-symbol or group default). */
 export async function getSymbolLeverage(symbolCode: string): Promise<SymbolLeverageResponse> {
   const response = await http<{
