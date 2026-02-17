@@ -79,26 +79,27 @@ impl PositionHandler {
             .query_async(&mut conn)
             .await?;
         
-        let (symbol, side) = if !position_data.is_empty() {
+        let (symbol, side, group_id) = if !position_data.is_empty() {
             // New format (Hash)
             let pos_user_id_str = position_data.get("user_id")
                 .ok_or_else(|| anyhow::anyhow!("Missing user_id in position"))?;
             let pos_user_id = Uuid::parse_str(pos_user_id_str)
                 .context("Invalid user_id in position")?;
-            
+
             if pos_user_id != user_id {
                 warn!("Position {} does not belong to user {}", position_id, user_id);
                 return Ok(());
             }
-            
+
             let symbol = position_data.get("symbol")
                 .ok_or_else(|| anyhow::anyhow!("Missing symbol in position"))?
                 .clone();
             let side = position_data.get("side")
                 .ok_or_else(|| anyhow::anyhow!("Missing side in position"))?
                 .clone();
-            
-            (symbol, side)
+            let group_id = position_data.get("group_id").cloned();
+
+            (symbol, side, group_id)
         } else {
             // Try old format (JSON)
         let position_key = format!("position:{}", position_id);
@@ -128,16 +129,17 @@ impl PositionHandler {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .context("Missing symbol in position")?;
-        
+
         let side = position.get("side")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .context("Missing side in position")?;
-            
-            (symbol, side)
+        let group_id = position.get("group_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+            (symbol, side, group_id)
         };
-        
-        let tick = self.cache.get_last_tick(&symbol)
+
+        let tick = self.cache.get_last_tick(&symbol, group_id.as_deref())
             .context("No tick data available for symbol")?;
         
         // Determine exit price (BID/ASK model)

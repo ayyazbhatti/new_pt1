@@ -223,6 +223,7 @@ async fn place_order(
         client_order_id: req.client_order_id.clone(),
         idempotency_key: req.idempotency_key.clone(),
         ts: now,
+        group_id: claims.group_id.map(|u| u.to_string()),
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)

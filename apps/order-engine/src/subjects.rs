@@ -19,12 +19,24 @@ pub mod subjects {
     pub const EVENT_POSITION_CLOSED: &str = "event.position.closed";
     pub const EVENT_BALANCE_UPDATED: &str = "event.balance.updated";
     
-    /// Parse symbol from tick subject (e.g., "ticks.BNBUSDT" -> "BNBUSDT")
+    /// Parse symbol from tick subject (e.g., "ticks.BNBUSDT" -> "BNBUSDT", "ticks.BNBUSDT.uuid" -> ("BNBUSDT", "uuid"))
     pub fn parse_symbol_from_tick_subject(subject: &str) -> Option<String> {
         subject.strip_prefix(TICKS_PREFIX).map(|s| s.to_string())
     }
-    
-    /// Build tick subject from symbol
+
+    /// Parse per-group tick subject: "ticks.SYMBOL.GROUP_ID" -> (symbol, group_id)
+    pub fn parse_tick_subject_per_group(subject: &str) -> Option<(String, String)> {
+        let rest = subject.strip_prefix(TICKS_PREFIX)?;
+        let mut parts = rest.splitn(2, '.');
+        let symbol = parts.next()?.to_string();
+        let group_id = parts.next()?.to_string();
+        if group_id.is_empty() {
+            return None;
+        }
+        Some((symbol, group_id))
+    }
+
+    /// Build tick subject from symbol (legacy)
     pub fn tick_subject(symbol: &str) -> String {
         format!("{}{}", TICKS_PREFIX, symbol)
     }

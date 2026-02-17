@@ -546,6 +546,7 @@ async fn create_admin_order(
         client_order_id: None,
         idempotency_key: format!("admin:{}", order_id),
         ts: now,
+        group_id: user_row.group_id.map(|g| g.to_string()),
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)

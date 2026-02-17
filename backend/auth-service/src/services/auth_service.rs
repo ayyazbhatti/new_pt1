@@ -127,21 +127,29 @@ impl AuthService {
         let email_lower = email.to_lowercase();
 
         // Find user
-        let user = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL",
+        let user = match sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE LOWER(email) = $1 AND deleted_at IS NULL",
         )
         .bind(&email_lower)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Invalid credentials"))?;
+        {
+            Some(u) => u,
+            None => {
+                tracing::warn!("Login failed: no user found for email (lowercase) {:?}", email_lower);
+                return Err(anyhow::anyhow!("Invalid credentials"));
+            }
+        };
 
         // Check status
         if user.status != UserStatus::Active {
+            tracing::warn!("Login failed: user {} account not active (status: {:?})", user.id, user.status);
             return Err(anyhow::anyhow!("Account is not active"));
         }
 
         // Verify password
         if !verify_password(password, &user.password_hash)? {
+            tracing::warn!("Login failed: password mismatch for user {}", user.id);
             return Err(anyhow::anyhow!("Invalid credentials"));
         }
 
@@ -197,7 +205,7 @@ impl AuthService {
         }
 
         // Generate new access token
-        let claims = Claims::new(user.id, user.email.clone(), user.role.clone());
+        let claims = Claims::new(user.id, user.email.clone(), user.role.clone(), user.group_id);
         let access_token = generate_access_token(&claims)?;
 
         Ok(access_token)
@@ -249,7 +257,7 @@ impl AuthService {
         ip: Option<&str>,
     ) -> anyhow::Result<(String, String)> {
         // Generate tokens
-        let claims = Claims::new(user.id, user.email.clone(), user.role.clone());
+        let claims = Claims::new(user.id, user.email.clone(), user.role.clone(), user.group_id);
         let access_token = generate_access_token(&claims)?;
         let refresh_token = generate_refresh_token();
         let refresh_token_hash = hash_token(&refresh_token);

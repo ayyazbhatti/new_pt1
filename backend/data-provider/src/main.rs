@@ -14,9 +14,11 @@ use crate::stream::broadcaster::Broadcaster;
 use crate::health::health_routes::create_health_router;
 use crate::validation::symbol_validation::{RateLimiter, SymbolValidator};
 use axum::Router;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
@@ -72,6 +74,34 @@ async fn main() -> anyhow::Result<()> {
     let subscribed_symbols: Arc<tokio::sync::RwLock<std::collections::HashSet<String>>> = 
         Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
 
+    // Per-group price stream: group_ids that receive ticks (from Redis price:groups)
+    let price_groups: Arc<RwLock<HashSet<String>>> = Arc::new(RwLock::new(HashSet::new()));
+    if let Ok(ids) = redis.smembers_price_groups().await {
+        let mut g = price_groups.write().await;
+        *g = ids.into_iter().collect();
+        info!("✅ Loaded {} price groups from Redis", g.len());
+    }
+    let price_groups_for_markup = price_groups.clone();
+    let redis_for_markup = redis.clone();
+    tokio::spawn(async move {
+        use futures_util::StreamExt;
+        let client = redis_for_markup.get_client();
+        while let Ok(mut conn) = client.get_async_connection().await {
+            let mut pubsub = conn.into_pubsub();
+            if pubsub.subscribe("markup:update").await.is_ok() {
+                let mut stream = pubsub.into_on_message();
+                while let Some(_msg) = stream.next().await {
+                    if let Ok(ids) = redis_for_markup.smembers_price_groups().await {
+                        let mut g = price_groups_for_markup.write().await;
+                        *g = ids.into_iter().collect();
+                        tracing::debug!("Refreshed price groups from Redis: {} groups", g.len());
+                    }
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    });
+
     // Subscribe to initial symbols (example)
     let initial_symbols = vec!["BTCUSDT", "ETHUSDT", "EURUSD", "BNBUSDT", "DOGEUSDT"];
     for symbol in initial_symbols {
@@ -80,26 +110,27 @@ async fn main() -> anyhow::Result<()> {
         subscribed_symbols.write().await.insert(symbol.to_string());
     }
 
-    // Price update loop - dynamically broadcast for all subscribed symbols
+    // Price update loop — per-group: one Redis message with prices[], per-group NATS, per-group WS
     let feed_clone = feed.clone();
     let broadcaster_clone = broadcaster.clone();
     let markup_engine_clone = Arc::new(MarkupEngine::new(redis.clone()));
     let subscribed_symbols_clone = subscribed_symbols.clone();
     let nats_for_ticks_clone = nats_for_ticks.clone();
     let redis_for_pubsub_clone = redis_for_pubsub.clone();
+    let price_groups_loop = price_groups.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
         loop {
             interval.tick().await;
-            
-            // Get all subscribed symbols dynamically
+
             let symbols_to_broadcast: Vec<String> = {
                 subscribed_symbols_clone.read().await.iter().cloned().collect()
             };
-            
-            // Broadcast prices for all subscribed symbols
+            let group_ids: Vec<String> = {
+                price_groups_loop.read().await.iter().cloned().collect()
+            };
+
             for symbol in &symbols_to_broadcast {
-                // Ensure symbol is subscribed to feed
                 if !subscribed_symbols_clone.read().await.contains(symbol) {
                     if let Err(e) = feed_clone.subscribe_symbol(symbol).await {
                         warn!("Failed to subscribe to symbol {}: {}", symbol, e);
@@ -108,69 +139,65 @@ async fn main() -> anyhow::Result<()> {
                     subscribed_symbols_clone.write().await.insert(symbol.clone());
                     info!("📈 Subscribed to new symbol: {}", symbol);
                 }
-                
+
                 if let Some(price_state) = feed_clone.get_price(symbol).await {
-                    debug!("🔄 Broadcasting price for {}: bid={}, ask={}", symbol, price_state.bid, price_state.ask);
-                    
-                    // Get final prices after markup (for NATS publishing)
-                    let (final_bid, final_ask) = {
-                        // Apply markup for "default" group
-                        match markup_engine_clone.apply_markup(symbol, "default", price_state.bid, price_state.ask).await {
-                            Some(prices) => prices,
+                    let mut prices_by_group: Vec<serde_json::Value> = Vec::new();
+                    for group_id in &group_ids {
+                        let (bid, ask) = match markup_engine_clone
+                            .apply_markup(symbol, group_id, price_state.bid, price_state.ask)
+                            .await
+                        {
+                            Some(p) => p,
                             None => (price_state.bid, price_state.ask),
-                        }
-                    };
-                    
-                    // Broadcast internally to WebSocket clients
-                    broadcaster_clone
-                        .broadcast_price(symbol, Some("default"), price_state.bid, price_state.ask)
-                        .await;
-                    
-                    // Also publish to Redis for ws-gateway
-                    let tick_json = serde_json::json!({
-                        "symbol": symbol,
-                        "bid": price_state.bid.to_string(),
-                        "ask": price_state.ask.to_string(),
-                        "ts": chrono::Utc::now().timestamp_millis(),
-                    });
-                    if let Err(e) = redis_for_pubsub_clone.publish_price_update("price:ticks", &tick_json.to_string()).await {
-                        warn!("Failed to publish price to Redis: {}", e);
-                    } else {
-                        debug!("✅ Published price tick to Redis for {}", symbol);
+                        };
+                        prices_by_group.push(serde_json::json!({
+                            "g": group_id,
+                            "bid": bid.to_string(),
+                            "ask": ask.to_string(),
+                        }));
+                        broadcaster_clone
+                            .broadcast_price(symbol, Some(group_id.as_str()), bid, ask)
+                            .await;
                     }
 
-                    // Publish to NATS for order-engine (if connected)
+                    let ts = chrono::Utc::now().timestamp_millis();
+                    let tick_json = serde_json::json!({
+                        "symbol": symbol,
+                        "ts": ts,
+                        "prices": prices_by_group,
+                    });
+                    if let Err(e) = redis_for_pubsub_clone
+                        .publish_price_update("price:ticks", &tick_json.to_string())
+                        .await
+                    {
+                        warn!("Failed to publish price to Redis: {}", e);
+                    } else {
+                        debug!("✅ Published price tick to Redis for {} ({} groups)", symbol, prices_by_group.len());
+                    }
+
                     if let Some(nats_client) = &nats_for_ticks_clone {
                         use contracts::{TickEvent, VersionedMessage};
                         use chrono::Utc;
-                        
-                        let tick_event = TickEvent {
-                            symbol: symbol.clone(),
-                            bid: final_bid,
-                            ask: final_ask,
-                            ts: Utc::now(),
-                            seq: chrono::Utc::now().timestamp_millis() as u64,
-                        };
-                        let subject = format!("ticks.{}", symbol);
-                        let subject_clone = subject.clone();
-                        // VersionedMessage::new() expects message TYPE, not subject
-                        match VersionedMessage::new("tick", &tick_event) {
-                            Ok(msg) => {
-                                let payload = match serde_json::to_vec(&msg) {
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        warn!("Failed to serialize tick event for {}: {}", symbol, e);
-                                        continue;
-                                    }
-                                };
-                                if let Err(e) = nats_client.publish(subject, payload.into()).await {
-                                    warn!("Failed to publish tick to NATS for {}: {}", symbol, e);
-                                } else {
-                                    info!("📤 Published tick to NATS: {} on subject {}", symbol, subject_clone);
+                        for group_id in &group_ids {
+                            let (bid, ask) = match markup_engine_clone
+                                .apply_markup(symbol, group_id, price_state.bid, price_state.ask)
+                                .await
+                            {
+                                Some(p) => p,
+                                None => (price_state.bid, price_state.ask),
+                            };
+                            let tick_event = TickEvent {
+                                symbol: symbol.clone(),
+                                bid,
+                                ask,
+                                ts: Utc::now(),
+                                seq: ts as u64,
+                            };
+                            let subject = format!("ticks.{}.{}", symbol, group_id);
+                            if let Ok(msg) = VersionedMessage::new("tick", &tick_event) {
+                                if let Ok(payload) = serde_json::to_vec(&msg) {
+                                    let _ = nats_client.publish(subject.clone(), payload.into()).await;
                                 }
-                            }
-                            Err(e) => {
-                                warn!("Failed to create versioned message for {}: {}", symbol, e);
                             }
                         }
                     }

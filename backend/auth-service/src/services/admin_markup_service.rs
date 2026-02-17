@@ -156,6 +156,17 @@ impl AdminMarkupService {
         Ok(profile)
     }
 
+    /// Returns group_ids (user_groups.id) that use this profile as default_price_profile_id.
+    pub async fn get_group_ids_by_profile_id(&self, profile_id: Uuid) -> Result<Vec<Uuid>> {
+        let rows = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM user_groups WHERE default_price_profile_id = $1",
+        )
+        .bind(profile_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn get_symbol_overrides(
         &self,
         profile_id: Uuid,
@@ -236,6 +247,103 @@ impl AdminMarkupService {
             return Err(anyhow::anyhow!("Override not found"));
         }
 
+        Ok(())
+    }
+
+    /// Bootstrap Redis for per-group price stream: populate price:groups and symbol:markup:* from DB.
+    /// Call once at auth-service startup.
+    pub async fn bootstrap_price_groups_redis(&self, redis_url: &str) -> Result<()> {
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            group_id: Uuid,
+            profile_id: Uuid,
+        }
+        let groups: Vec<Row> = sqlx::query_as::<_, Row>(
+            r#"
+            SELECT id as group_id, default_price_profile_id as profile_id
+            FROM user_groups
+            WHERE default_price_profile_id IS NOT NULL
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let client = redis::Client::open(redis_url)?;
+        let mut conn = client.get_connection()?;
+
+        for row in &groups {
+            let _: Result<(), _> = redis::cmd("SADD")
+                .arg("price:groups")
+                .arg(row.group_id.to_string())
+                .query(&mut conn);
+
+            let overrides = self.get_symbol_overrides(row.profile_id).await?;
+            for o in &overrides {
+                let markup_value = serde_json::json!({
+                    "bid_markup": o.bid_markup.parse::<f64>().unwrap_or(0.0),
+                    "ask_markup": o.ask_markup.parse::<f64>().unwrap_or(0.0),
+                    "type": "percent",
+                })
+                .to_string();
+                let key = format!("symbol:markup:{}:{}", o.symbol_code, row.group_id);
+                let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(&markup_value).query(&mut conn);
+            }
+        }
+        // Notify data-provider to refresh price:groups (e.g. if it started before auth)
+        let _: Result<(), _> = redis::cmd("PUBLISH")
+            .arg("markup:update")
+            .arg("bootstrap")
+            .query(&mut conn);
+
+        Ok(())
+    }
+
+    /// After a group's default_price_profile_id is changed: clear old markup keys for this group,
+    /// SADD price:groups, and if new profile_id is set, write that profile's overrides for this group.
+    pub async fn sync_redis_after_group_profile_change(
+        &self,
+        group_id: Uuid,
+        profile_id: Option<Uuid>,
+        redis_url: &str,
+    ) -> Result<()> {
+        let overrides: Vec<SymbolMarkupOverride> = if let Some(pid) = profile_id {
+            self.get_symbol_overrides(pid).await?
+        } else {
+            Vec::new()
+        };
+        let redis_url = redis_url.to_string();
+        let group_id = group_id;
+        tokio::task::spawn_blocking(move || {
+            let client = redis::Client::open(redis_url.as_str())?;
+            let mut conn = client.get_connection()?;
+            let pattern = format!("symbol:markup:*:{}", group_id);
+            let keys: Vec<String> = redis::cmd("KEYS").arg(&pattern).query(&mut conn)?;
+            for key in &keys {
+                let _: Result<(), _> = redis::cmd("DEL").arg(key).query(&mut conn);
+            }
+            let _: Result<(), _> = redis::cmd("SADD")
+                .arg("price:groups")
+                .arg(group_id.to_string())
+                .query(&mut conn);
+            for o in &overrides {
+                let markup_value = serde_json::json!({
+                    "bid_markup": o.bid_markup.parse::<f64>().unwrap_or(0.0),
+                    "ask_markup": o.ask_markup.parse::<f64>().unwrap_or(0.0),
+                    "type": "percent",
+                })
+                .to_string();
+                let key = format!("symbol:markup:{}:{}", o.symbol_code, group_id);
+                let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(&markup_value).query(&mut conn);
+            }
+            // Notify data-provider to refresh price:groups so it includes this group in ticks
+            let _: Result<(), _> = redis::cmd("PUBLISH")
+                .arg("markup:update")
+                .arg(serde_json::json!({ "group_id": group_id.to_string() }).to_string())
+                .query(&mut conn);
+            Ok::<(), anyhow::Error>(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("join: {}", e))??;
         Ok(())
     }
 }

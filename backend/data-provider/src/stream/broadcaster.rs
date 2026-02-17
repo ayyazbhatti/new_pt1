@@ -82,25 +82,7 @@ impl Broadcaster {
             ts: get_timestamp_ms(),
         };
 
-        // Broadcast to symbol room (both with and without group prefix)
-        let symbol_room = format!("symbol:{}", symbol);
-        let group_default_room = format!("group:default:symbol:{}", symbol);
-        
-        // Broadcast to symbol room (no group)
-        if let Some(sender) = self.rooms.get(&symbol_room) {
-            debug!(
-                "📡 Broadcasting {} to room '{}': bid={}, ask={}",
-                symbol, symbol_room, final_bid, final_ask
-            );
-            match sender.send(tick.clone()) {
-                Ok(count) => debug!("✅ Sent to {} receivers", count),
-                Err(_) => debug!("⚠️  No active receivers for room '{}'", symbol_room),
-            }
-        } else {
-            debug!("⚠️  No room exists for '{}'", symbol_room);
-        }
-
-        // Broadcast to group+symbol room if group provided
+        // Per-group only: broadcast only to group:{}:symbol:{} when group is provided
         if let Some(grp) = group {
             let group_room = format!("group:{}:symbol:{}", grp, symbol);
             if let Some(sender) = self.rooms.get(&group_room) {
@@ -112,8 +94,14 @@ impl Broadcaster {
                     Ok(count) => debug!("✅ Sent to {} receivers", count),
                     Err(_) => debug!("⚠️  No active receivers for room '{}'", group_room),
                 }
-            } else {
-                debug!("⚠️  No room exists for '{}'", group_room);
+            }
+        } else {
+            let symbol_room = format!("symbol:{}", symbol);
+            if let Some(sender) = self.rooms.get(&symbol_room) {
+                match sender.send(tick) {
+                    Ok(count) => debug!("✅ Sent to {} receivers (no group)", count),
+                    Err(_) => {}
+                }
             }
         }
     }

@@ -105,6 +105,7 @@ impl LuaScripts {
         &self,
         conn: &mut ConnectionManager,
         symbol: &str,
+        group_id: &str,
         bid: Decimal,
         ask: Decimal,
     ) -> Result<serde_json::Value> {
@@ -112,6 +113,7 @@ impl LuaScripts {
             .arg(symbol)
             .arg(bid.to_string())
             .arg(ask.to_string())
+            .arg(group_id)
             .invoke_async(conn)
             .await
             .context("Failed to execute check_sltp_triggers Lua script")?;

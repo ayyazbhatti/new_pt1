@@ -95,34 +95,15 @@ impl Broadcaster {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing symbol in tick"))?;
 
-        let bid = payload
-            .get("bid")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| payload.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string()))
-            .ok_or_else(|| anyhow::anyhow!("Missing bid in tick"))?;
-
-        let ask = payload
-            .get("ask")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| payload.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string()))
-            .ok_or_else(|| anyhow::anyhow!("Missing ask in tick"))?;
-
         let ts = payload
             .get("ts")
             .or_else(|| payload.get("timestamp"))
             .and_then(|v| v.as_i64())
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
-        let message = ServerMessage::Tick {
-            symbol: symbol.to_string(),
-            bid,
-            ask,
-            ts,
-        };
+        // Per-group format: { symbol, ts, prices: [ { g, bid, ask }, ... ] }
+        let prices_array = payload.get("prices").and_then(|v| v.as_array());
 
-        // Get subscribers for this symbol and for USD variant (clients may subscribe "BTCUSD" while feed sends "BTCUSDT")
         let mut subscriber_ids: Vec<Uuid> = registry.get_symbol_subscribers(symbol).into_iter().collect();
         if symbol.ends_with("USDT") {
             let symbol_usd = format!("{}USD", symbol.trim_end_matches("USDT"));
@@ -136,21 +117,97 @@ impl Broadcaster {
         let mut sent = 0;
         let mut failed = 0;
 
-        for conn_id in subscriber_ids {
-            if let Some(tx) = connection_txs.get(&conn_id) {
-                if tx.send(message.clone()).is_ok() {
-                    sent += 1;
+        /// Normalize group id for comparison (lowercase, no dashes) so UUID format always matches.
+        fn normalize_group_id(s: &str) -> String {
+            s.trim().to_lowercase().replace('-', "")
+        }
+
+        if let Some(prices) = prices_array {
+            for conn_id in subscriber_ids {
+                let conn = registry.get(&conn_id);
+                let (bid, ask) = if let Some(conn) = conn {
+                    let group_id_normalized = conn.group_id.as_deref().map(normalize_group_id);
+                    let found = group_id_normalized.as_ref().and_then(|gid_norm| {
+                        prices.iter().find(|p| {
+                            p.get("g")
+                                .and_then(|v| v.as_str())
+                                .map(normalize_group_id)
+                                .as_ref()
+                                == Some(gid_norm)
+                        })
+                    });
+                    match found {
+                        Some(p) => (
+                            p.get("bid").and_then(|v| v.as_str()).map(|s| s.to_string())
+                                .or_else(|| p.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string())),
+                            p.get("ask").and_then(|v| v.as_str()).map(|s| s.to_string())
+                                .or_else(|| p.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string())),
+                        ),
+                        None => {
+                            let first = prices.first();
+                            (
+                                first.and_then(|p| p.get("bid").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                                    .or_else(|| first.and_then(|p| p.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string()))),
+                                first.and_then(|p| p.get("ask").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                                    .or_else(|| first.and_then(|p| p.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string()))),
+                            )
+                        }
+                    }
                 } else {
-                    failed += 1;
-                    // Connection closed, remove it
-                    connection_txs.remove(&conn_id);
-                    registry.unregister(conn_id);
+                    (None, None)
+                };
+                if let (Some(bid), Some(ask)) = (bid, ask) {
+                    let message = ServerMessage::Tick {
+                        symbol: symbol.to_string(),
+                        bid,
+                        ask,
+                        ts,
+                    };
+                    if let Some(tx) = connection_txs.get(&conn_id) {
+                        if tx.send(message).is_ok() {
+                            sent += 1;
+                        } else {
+                            failed += 1;
+                            connection_txs.remove(&conn_id);
+                            registry.unregister(conn_id);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Legacy single bid/ask format
+            let bid = payload
+                .get("bid")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| payload.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+                .ok_or_else(|| anyhow::anyhow!("Missing bid in tick"))?;
+            let ask = payload
+                .get("ask")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| payload.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+                .ok_or_else(|| anyhow::anyhow!("Missing ask in tick"))?;
+            let message = ServerMessage::Tick {
+                symbol: symbol.to_string(),
+                bid,
+                ask,
+                ts,
+            };
+            for conn_id in subscriber_ids {
+                if let Some(tx) = connection_txs.get(&conn_id) {
+                    if tx.send(message.clone()).is_ok() {
+                        sent += 1;
+                    } else {
+                        failed += 1;
+                        connection_txs.remove(&conn_id);
+                        registry.unregister(conn_id);
+                    }
                 }
             }
         }
 
         if sent > 0 {
-            // Log every tick broadcast for debugging (can be reduced later)
             debug!("📡 Broadcast tick {} to {} connections ({} failed)", symbol, sent, failed);
         } else {
             debug!("⚠️ No subscribers for tick {}", symbol);

@@ -1,7 +1,7 @@
-// Seed admin user with proper password hash
+// Seed admin user with proper password hash (must match auth_service::utils::hash)
 // Run with: cargo run --bin seed_admin
+// Use the same DATABASE_URL as auth-service (e.g. from backend/auth-service/.env).
 
-use sqlx::PgPool;
 use std::env;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
@@ -11,11 +11,10 @@ use argon2::{
 fn hash_password(password: &str) -> anyhow::Result<String> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
-    let password_hash = argon2
+    argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?
-        .to_string();
-    Ok(password_hash)
+        .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))
+        .map(|h| h.to_string())
 }
 
 #[tokio::main]
@@ -31,24 +30,25 @@ async fn main() -> anyhow::Result<()> {
     let password = "Admin@12345";
     let password_hash = hash_password(password)?;
 
-    // Check if admin exists
+    // Check if admin exists (case-insensitive email)
     let existing = sqlx::query(
-        "SELECT id FROM users WHERE email = $1"
+        "SELECT id FROM users WHERE LOWER(email) = LOWER($1)"
     )
     .bind(email)
     .fetch_optional(&pool)
     .await?;
 
     if existing.is_some() {
-        // Update password hash
+        // Update password hash and ensure active (same DB as auth-service must use)
         let result = sqlx::query(
-            "UPDATE users SET password_hash = $1, role = 'admin', status = 'active' WHERE email = $2"
+            "UPDATE users SET password_hash = $1, role = 'admin', status = 'active', deleted_at = NULL WHERE LOWER(email) = LOWER($2)"
         )
         .bind(&password_hash)
         .bind(email)
         .execute(&pool)
         .await?;
         println!("✅ Admin user password updated (rows affected: {})", result.rows_affected());
+        println!("   Ensure auth-service is using the same DATABASE_URL (e.g. same .env)");
     } else {
         // Create admin user
         sqlx::query(

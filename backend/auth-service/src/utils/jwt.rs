@@ -9,18 +9,21 @@ pub struct Claims {
     pub sub: Uuid, // user_id
     pub email: String,
     pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<Uuid>,
     pub exp: i64,
     pub iat: i64,
 }
 
 impl Claims {
-    pub fn new(user_id: Uuid, email: String, role: String) -> Self {
+    pub fn new(user_id: Uuid, email: String, role: String, group_id: Option<Uuid>) -> Self {
         let now = Utc::now();
         let exp = now + Duration::seconds(get_access_token_ttl());
         Self {
             sub: user_id,
             email,
             role,
+            group_id,
             exp: exp.timestamp(),
             iat: now.timestamp(),
         }

@@ -34,8 +34,10 @@ pub struct UpdateProfileRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpsertSymbolOverrideRequest {
-    pub bid_markup: String,
-    pub ask_markup: String,
+    #[serde(alias = "bidMarkup", default)]
+    pub bid_markup: Option<String>,
+    #[serde(alias = "askMarkup", default)]
+    pub ask_markup: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,6 +293,18 @@ async fn get_symbol_overrides(
     Ok(Json(items))
 }
 
+/// Normalize markup string for DB: empty or non-numeric becomes "0".
+fn normalize_markup(s: &str) -> String {
+    let s = s.trim();
+    if s.is_empty() {
+        return "0".to_string();
+    }
+    if s.parse::<f64>().is_ok() {
+        return s.to_string();
+    }
+    "0".to_string()
+}
+
 async fn upsert_symbol_override(
     State(pool): State<PgPool>,
     Path((profile_id, symbol_id)): Path<(Uuid, Uuid)>,
@@ -299,14 +313,17 @@ async fn upsert_symbol_override(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     check_admin(&claims)?;
 
+    let bid_markup = normalize_markup(payload.bid_markup.as_deref().unwrap_or(""));
+    let ask_markup = normalize_markup(payload.ask_markup.as_deref().unwrap_or(""));
+
     let service = AdminMarkupService::new(pool);
 
     let override_data = service
         .upsert_symbol_override(
             profile_id,
             symbol_id,
-            &payload.bid_markup,
-            &payload.ask_markup,
+            &bid_markup,
+            &ask_markup,
         )
         .await
         .map_err(|e| {
@@ -321,8 +338,18 @@ async fn upsert_symbol_override(
             )
         })?;
 
-    // Publish Redis event
-    publish_markup_update(&override_data.symbol_code, &payload.bid_markup, &payload.ask_markup, profile_id).await;
+    // Resolve groups that use this profile and sync Redis (SET keys, SADD price:groups, PUBLISH)
+    let group_ids = service
+        .get_group_ids_by_profile_id(profile_id)
+        .await
+        .unwrap_or_default();
+    sync_redis_markup_for_override(
+        &override_data.symbol_code,
+        &bid_markup,
+        &ask_markup,
+        &group_ids,
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "id": override_data.id,
@@ -336,24 +363,37 @@ async fn upsert_symbol_override(
     })))
 }
 
-// Redis pubsub helper
-async fn publish_markup_update(symbol_code: &str, bid_markup: &str, ask_markup: &str, profile_id: Uuid) {
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    
+/// Per-group price stream: write markup to Redis for each group that uses the profile,
+/// add groups to price:groups set, and publish markup:update so data-provider can refresh.
+async fn sync_redis_markup_for_override(
+    symbol_code: &str,
+    bid_markup: &str,
+    ask_markup: &str,
+    group_ids: &[Uuid],
+) {
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
     if let Ok(client) = redis::Client::open(redis_url.as_str()) {
         if let Ok(mut conn) = client.get_connection() {
-            // Get group name from profile - simplified version
-            let group_name = "default"; // TODO: Fetch from DB if needed
-            
+            let markup_value = serde_json::json!({
+                "bid_markup": bid_markup.parse::<f64>().unwrap_or(0.0),
+                "ask_markup": ask_markup.parse::<f64>().unwrap_or(0.0),
+                "type": "percent",
+            })
+            .to_string();
+
+            for &group_id in group_ids {
+                let key = format!("symbol:markup:{}:{}", symbol_code, group_id);
+                let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(&markup_value).query(&mut conn);
+                let _: Result<(), _> = redis::cmd("SADD").arg("price:groups").arg(group_id.to_string()).query(&mut conn);
+            }
+
             let channel = "markup:update";
             let message = serde_json::json!({
                 "symbol": symbol_code,
-                "group": group_name,
-                "bid_markup": bid_markup,
-                "ask_markup": ask_markup,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             });
-            
             let _: Result<(), _> = redis::cmd("PUBLISH")
                 .arg(channel)
                 .arg(message.to_string())

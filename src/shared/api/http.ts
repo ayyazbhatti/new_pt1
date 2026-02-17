@@ -52,12 +52,16 @@ async function refreshAccessToken(): Promise<string> {
   return refreshPromise
 }
 
+// Endpoints where 401 means "invalid credentials" — do not try token refresh
+const SKIP_REFRESH_ON_401 = ['/api/auth/login', '/api/auth/register']
+
 export async function http<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const state = useAuthStore.getState()
   const accessToken = state.accessToken
+  const isAuthEndpoint = SKIP_REFRESH_ON_401.some((path) => endpoint.startsWith(path) || endpoint.endsWith(path))
 
   // Build headers
   const headers: HeadersInit = {
@@ -65,8 +69,8 @@ export async function http<T>(
     ...options.headers,
   }
 
-  // Add auth header if token exists
-  if (accessToken) {
+  // Add auth header if token exists (skip for login/register so we don't send stale token)
+  if (accessToken && !isAuthEndpoint) {
     headers['Authorization'] = `Bearer ${accessToken}`
   }
 
@@ -76,8 +80,8 @@ export async function http<T>(
     headers,
   })
 
-  // If 401, try to refresh token once
-  if (response.status === 401 && accessToken) {
+  // If 401, try to refresh token once (except for login/register where 401 = invalid credentials)
+  if (response.status === 401 && accessToken && !isAuthEndpoint) {
     try {
       const newAccessToken = await refreshAccessToken()
       headers['Authorization'] = `Bearer ${newAccessToken}`

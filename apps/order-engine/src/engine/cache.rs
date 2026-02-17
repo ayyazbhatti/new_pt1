@@ -7,6 +7,13 @@ use crate::models::Order;
 use crate::models::Tick;
 use tracing::{debug, info};
 
+fn tick_key(symbol: &str, group_id: Option<&str>) -> String {
+    match group_id {
+        Some(g) if !g.is_empty() => format!("{}:{}", symbol, g),
+        _ => format!("{}:", symbol),
+    }
+}
+
 /// In-memory cache for pending orders per symbol
 /// Redis is source of truth, this is for fast lookup
 #[derive(Clone)]
@@ -63,14 +70,16 @@ impl OrderCache {
         self.orders.insert(order.id, order);
     }
     
-    pub fn update_tick(&self, tick: Tick) {
+    pub fn update_tick(&self, tick: Tick, group_id: Option<&str>) {
+        let key = tick_key(&tick.symbol, group_id);
         let ticks = self.last_ticks.write();
-        ticks.insert(tick.symbol.clone(), tick);
+        ticks.insert(key, tick);
     }
-    
-    pub fn get_last_tick(&self, symbol: &str) -> Option<Tick> {
+
+    pub fn get_last_tick(&self, symbol: &str, group_id: Option<&str>) -> Option<Tick> {
+        let key = tick_key(symbol, group_id);
         let ticks = self.last_ticks.read();
-        ticks.get(symbol).map(|t| t.clone())
+        ticks.get(&key).map(|t| t.clone())
     }
     
     pub fn enable_symbol(&self, symbol: String) {

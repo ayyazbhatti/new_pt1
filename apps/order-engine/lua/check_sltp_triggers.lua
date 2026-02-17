@@ -1,17 +1,23 @@
--- Check SL/TP triggers for a symbol using price range queries
--- Args: symbol, current_bid, current_ask
+-- Check SL/TP triggers for a symbol (optionally filtered by group_id)
+-- Args: symbol, current_bid, current_ask, group_id (optional, filter positions by this group)
 -- Returns: JSON array of triggered positions with trigger reason
--- Optimized for 1M+ positions using range queries (O(log N + M))
 
 local symbol = ARGV[1]
 local current_bid = tonumber(ARGV[2])
 local current_ask = tonumber(ARGV[3])
+local filter_group_id = ARGV[4] or ''
 
 local triggered = {}
 
 -- Helper function to verify position and add to triggered list
 local function add_triggered(pos_id, reason, trigger_price)
     local pos_key = 'pos:by_id:' .. pos_id
+    if filter_group_id and filter_group_id ~= '' then
+        local pos_group = redis.call('HGET', pos_key, 'group_id')
+        if pos_group ~= filter_group_id then
+            return
+        end
+    end
     -- Verify position exists and is OPEN
     local status = redis.call('HGET', pos_key, 'status')
     if status == 'OPEN' then

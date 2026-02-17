@@ -134,6 +134,7 @@ for _, pos_id in ipairs(existing_positions) do
                         local new_pos_key = 'pos:by_id:' .. position_id
                         redis.call('HSET', new_pos_key, 'user_id', user_id)
                         redis.call('HSET', new_pos_key, 'symbol', symbol)
+                        redis.call('HSET', new_pos_key, 'group_id', order.group_id or '')
                         redis.call('HSET', new_pos_key, 'side', (order.side == "BUY") and "LONG" or "SHORT")
                         redis.call('HSET', new_pos_key, 'size', tostring(total_size))
                         redis.call('HSET', new_pos_key, 'entry_price', tostring(new_entry_price))
@@ -242,6 +243,7 @@ if not position_id then
                         local new_pos_key = 'pos:by_id:' .. position_id
                         redis.call('HSET', new_pos_key, 'user_id', user_id)
                         redis.call('HSET', new_pos_key, 'symbol', symbol)
+                        redis.call('HSET', new_pos_key, 'group_id', order.group_id or '')
                         redis.call('HSET', new_pos_key, 'side', (order.side == "BUY") and "LONG" or "SHORT")
                         redis.call('HSET', new_pos_key, 'size', tostring(total_size))
                         redis.call('HSET', new_pos_key, 'entry_price', tostring(new_entry_price))
@@ -300,6 +302,7 @@ if not position_id then
     
     redis.call('HSET', pos_key, 'user_id', user_id)
     redis.call('HSET', pos_key, 'symbol', symbol)
+    redis.call('HSET', pos_key, 'group_id', order.group_id or '')
     redis.call('HSET', pos_key, 'side', (order.side == "BUY") and "LONG" or "SHORT")
     redis.call('HSET', pos_key, 'size', fill_size)
     redis.call('HSET', pos_key, 'entry_price', fill_price)

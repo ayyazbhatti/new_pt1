@@ -26,22 +26,20 @@ impl MessageValidator {
                     return Err(anyhow::anyhow!("Symbols list cannot be empty"));
                 }
 
-                if channels.is_empty() {
-                    return Err(anyhow::anyhow!("Channels list cannot be empty"));
+                // Empty channels = subscribe to price ticks only (frontend price stream)
+                if !channels.is_empty() {
+                    let valid_channels = ["tick", "positions", "orders", "risk"];
+                    for channel in channels {
+                        if !valid_channels.contains(&channel.as_str()) {
+                            return Err(anyhow::anyhow!("Invalid channel: {}", channel));
+                        }
+                    }
                 }
 
                 // Validate symbol format (alphanumeric, max 20 chars)
                 for symbol in symbols {
                     if symbol.len() > 20 || !symbol.chars().all(|c| c.is_alphanumeric()) {
                         return Err(anyhow::anyhow!("Invalid symbol format: {}", symbol));
-                    }
-                }
-
-                // Validate channel names
-                let valid_channels = ["tick", "positions", "orders", "risk"];
-                for channel in channels {
-                    if !valid_channels.contains(&channel.as_str()) {
-                        return Err(anyhow::anyhow!("Invalid channel: {}", channel));
                     }
                 }
             }

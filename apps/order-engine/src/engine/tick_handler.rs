@@ -43,59 +43,55 @@ impl TickHandler {
         }
     }
     
-    #[instrument(skip(self, msg), fields(symbol = %msg.subject))]
+    #[instrument(skip(self, msg), fields(subject = %msg.subject))]
     pub async fn handle_tick(&self, msg: Message) -> Result<()> {
         self.metrics.inc_ticks_processed();
-        
-        // Parse symbol from subject (ticks.BNBUSDT -> BNBUSDT)
-        let symbol = nats_subjects::parse_symbol_from_tick_subject(&msg.subject)
-            .ok_or_else(|| anyhow::anyhow!("Invalid tick subject: {}", msg.subject))?;
-        
-        // Deserialize tick event
+
+        // Per-group subject: ticks.SYMBOL.GROUP_ID
+        let (symbol, group_id) = match nats_subjects::parse_tick_subject_per_group(&msg.subject) {
+            Some((s, g)) => (s, Some(g)),
+            None => {
+                let symbol = nats_subjects::parse_symbol_from_tick_subject(&msg.subject)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid tick subject: {}", msg.subject))?;
+                (symbol, None)
+            }
+        };
+
         let bytes = msg.payload.to_vec();
         let versioned: VersionedMessage = serde_json::from_slice(&bytes)
             .context("Failed to deserialize versioned message")?;
-        
+
         let tick_event: TickEvent = versioned.deserialize_payload()
             .context("Failed to deserialize TickEvent")?;
-        
-        // Validate tick
+
         if tick_event.bid <= Decimal::ZERO || tick_event.ask <= Decimal::ZERO {
             warn!("Invalid tick: bid={}, ask={}", tick_event.bid, tick_event.ask);
             return Ok(());
         }
-        
-        if tick_event.ask < tick_event.bid {
-            warn!("Invalid tick: ask < bid, clamping");
-            // Clamp: set ask = bid + small spread
+
+        let (bid, ask) = if tick_event.ask < tick_event.bid {
             let spread = tick_event.bid * Decimal::from_str("0.0001").unwrap_or(Decimal::ZERO);
-            let tick = Tick {
-                symbol: symbol.clone(),
-                bid: tick_event.bid,
-                ask: tick_event.bid + spread,
-                ts: tick_event.ts,
-                seq: tick_event.seq,
-            };
-            self.process_tick(tick).await?;
+            (tick_event.bid, tick_event.bid + spread)
         } else {
-            let tick = Tick {
-                symbol: symbol.clone(),
-                bid: tick_event.bid,
-                ask: tick_event.ask,
-                ts: tick_event.ts,
-                seq: tick_event.seq,
-            };
-            self.process_tick(tick).await?;
-        }
-        
+            (tick_event.bid, tick_event.ask)
+        };
+
+        let tick = Tick {
+            symbol: symbol.clone(),
+            bid,
+            ask,
+            ts: tick_event.ts,
+            seq: tick_event.seq,
+        };
+        self.process_tick(tick, group_id.as_deref()).await?;
+
         Ok(())
     }
     
     #[instrument(skip(self), fields(symbol = %tick.symbol))]
-    async fn process_tick(&self, tick: Tick) -> Result<()> {
-        // Store last price in Redis
+    async fn process_tick(&self, tick: Tick, group_id: Option<&str>) -> Result<()> {
         let mut conn = self.redis.get_connection().await;
-        let price_key = format!("prices:{}", tick.symbol);
+        let price_key = format!("prices:{}:{}", tick.symbol, group_id.unwrap_or(""));
         let price_json = serde_json::json!({
             "symbol": tick.symbol,
             "bid": tick.bid.to_string(),
@@ -106,118 +102,106 @@ impl TickHandler {
             use redis::AsyncCommands;
             conn.set(&price_key, price_json.to_string()).await?;
         }
-        
-        // Update cache
-        self.cache.update_tick(tick.clone());
-        
-        // Get pending orders for this symbol
+
+        self.cache.update_tick(tick.clone(), group_id);
+
         let pending_order_ids = self.cache.get_pending_orders(&tick.symbol);
-        
+
         if pending_order_ids.is_empty() {
             debug!("No pending orders for symbol {}", tick.symbol);
-            return Ok(());
-        }
-        
-        info!("Processing {} pending orders for {}", pending_order_ids.len(), tick.symbol);
-        
-        // Evaluate each pending order
-        for order_id in pending_order_ids {
-            if let Some(order) = self.cache.get_order(&order_id) {
-                if order.status != contracts::enums::OrderStatus::Pending {
-                    continue;
-                }
-                
-                // Check if order should fill
-                let should_fill = match order.order_type {
-                    contracts::enums::OrderType::Market => true,
-                    contracts::enums::OrderType::Limit => {
-                        if let Some(limit_price) = order.limit_price {
-                            match order.side {
-                                contracts::enums::Side::Buy => tick.ask <= limit_price,
-                                contracts::enums::Side::Sell => tick.bid >= limit_price,
-                            }
-                        } else {
-                            false
-                        }
+        } else {
+            let mut filled_any = false;
+            for order_id in pending_order_ids {
+                if let Some(order) = self.cache.get_order(&order_id) {
+                    if order.status != contracts::enums::OrderStatus::Pending {
+                        continue;
                     }
-                };
-                
-                if should_fill {
-                    // Determine fill price (BID/ASK model)
-                    let fill_price = match order.side {
-                        contracts::enums::Side::Buy => tick.ask,  // Buy hits ASK
-                        contracts::enums::Side::Sell => tick.bid, // Sell hits BID
-                    };
-                    
-                    // Execute fill atomically
-                    match self.execute_fill(&mut conn, &order, fill_price, order.size).await {
-                        Ok(_) => {
-                            info!("Order {} filled at {}", order_id, fill_price);
-                            self.metrics.inc_orders_filled();
+                    if order.group_id.as_deref() != group_id {
+                        continue;
+                    }
+
+                    let should_fill = match order.order_type {
+                        contracts::enums::OrderType::Market => true,
+                        contracts::enums::OrderType::Limit => {
+                            if let Some(limit_price) = order.limit_price {
+                                match order.side {
+                                    contracts::enums::Side::Buy => tick.ask <= limit_price,
+                                    contracts::enums::Side::Sell => tick.bid >= limit_price,
+                                }
+                            } else {
+                                false
+                            }
                         }
-                        Err(e) => {
-                            // Check if order was already filled (common for fast fills)
-                            let error_msg = e.to_string();
-                            if error_msg.contains("order_not_pending") || error_msg.contains("FILLED") {
-                                // Order was already filled, but we still need to publish the event
-                                // Get the filled order data from Redis to publish correct event
-                                let mut conn = self.redis.get_connection().await;
-                                let order_key = format!("order:{}", order.id);
-                                let order_json: Option<String> = {
-                                    use redis::AsyncCommands;
-                                    conn.get(&order_key).await.unwrap_or(None)
-                                };
-                                if let Some(json_str) = order_json {
-                                    if let Ok(order_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                                        if let Some(status) = order_data.get("status").and_then(|v| v.as_str()) {
-                                            if status == "FILLED" {
-                                                // Order is already filled, publish the event anyway
-                                                let filled_size = order_data.get("filled_size")
-                                                    .and_then(|v| v.as_str())
-                                                    .and_then(|s| Decimal::from_str_exact(s).ok())
-                                                    .unwrap_or(order.size);
-                                                let avg_fill_price = order_data.get("average_fill_price")
-                                                    .and_then(|v| v.as_str())
-                                                    .and_then(|s| Decimal::from_str_exact(s).ok());
-                                                
-                                                let order_updated_event = contracts::events::OrderUpdatedEvent {
-                                                    order_id: order.id,
-                                                    user_id: order.user_id,
-                                                    status: contracts::enums::OrderStatus::Filled,
-                                                    filled_size,
-                                                    avg_fill_price,
-                                                    reason: None,
-                                                    ts: now(),
-                                                };
-                                                
-                                                if let Err(pub_err) = self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event).await {
-                                                    error!("❌ Failed to publish evt.order.updated for already-filled order {}: {}", order.id, pub_err);
-                                                } else {
-                                                    info!("📤 Published evt.order.updated for already-filled order: order_id={}, status=FILLED", order.id);
+                    };
+
+                    if should_fill {
+                        let fill_price = match order.side {
+                            contracts::enums::Side::Buy => tick.ask,
+                            contracts::enums::Side::Sell => tick.bid,
+                        };
+                        match self.execute_fill(&mut conn, &order, fill_price, order.size).await {
+                            Ok(_) => {
+                                info!("Order {} filled at {}", order_id, fill_price);
+                                self.metrics.inc_orders_filled();
+                                filled_any = true;
+                            }
+                            Err(e) => {
+                                let error_msg = e.to_string();
+                                if error_msg.contains("order_not_pending") || error_msg.contains("FILLED") {
+                                    let order_key = format!("order:{}", order.id);
+                                    let order_json: Option<String> = {
+                                        use redis::AsyncCommands;
+                                        conn.get(&order_key).await.unwrap_or(None)
+                                    };
+                                    if let Some(json_str) = order_json {
+                                        if let Ok(order_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                                            if let Some(status) = order_data.get("status").and_then(|v| v.as_str()) {
+                                                if status == "FILLED" {
+                                                    let filled_size = order_data.get("filled_size")
+                                                        .and_then(|v| v.as_str())
+                                                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                                                        .unwrap_or(order.size);
+                                                    let avg_fill_price = order_data.get("average_fill_price")
+                                                        .and_then(|v| v.as_str())
+                                                        .and_then(|s| Decimal::from_str_exact(s).ok());
+                                                    let order_updated_event = contracts::events::OrderUpdatedEvent {
+                                                        order_id: order.id,
+                                                        user_id: order.user_id,
+                                                        status: contracts::enums::OrderStatus::Filled,
+                                                        filled_size,
+                                                        avg_fill_price,
+                                                        reason: None,
+                                                        ts: now(),
+                                                    };
+                                                    if let Err(pub_err) = self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event).await {
+                                                        error!("❌ Failed to publish evt.order.updated: {}", pub_err);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+                                } else {
+                                    error!("Failed to fill order {}: {}", order_id, e);
                                 }
-                            } else {
-                                error!("Failed to fill order {}: {}", order_id, e);
                             }
                         }
                     }
                 }
             }
+            if filled_any {
+                // Remove filled orders from pending in cache is done in execute_fill
+            }
         }
-        
-        // Check SL/TP triggers for open positions (event-driven, no polling)
-        // Uses range queries for O(log N + M) performance - scales to 1M+ positions
-        if let Err(e) = self.sltp_handler.check_and_trigger(&tick.symbol, tick.bid, tick.ask).await {
-            error!("SL/TP check failed for {}: {}", tick.symbol, e);
-            // Don't fail tick processing, just log the error
+
+        if let Some(gid) = group_id {
+            if let Err(e) = self.sltp_handler.check_and_trigger(&tick.symbol, gid, tick.bid, tick.ask).await {
+                error!("SL/TP check failed for {}: {}", tick.symbol, e);
+            }
         }
-        
+
         Ok(())
     }
-    
+
     async fn execute_fill(
         &self,
         conn: &mut ConnectionManager,

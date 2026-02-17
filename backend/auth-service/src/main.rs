@@ -66,9 +66,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect to Redis
     tracing::info!("Connecting to Redis at {}", redis_url);
-    let redis = redis::Client::open(redis_url)?;
+    let redis = redis::Client::open(redis_url.clone())?;
     redis.get_async_connection().await?;
     tracing::info!("Connected to Redis");
+
+    // Bootstrap Redis for per-group price stream (price:groups + symbol:markup:*)
+    let markup_service = services::admin_markup_service::AdminMarkupService::new(pool.clone());
+    if let Err(e) = markup_service.bootstrap_price_groups_redis(&redis_url).await {
+        tracing::warn!("Redis markup bootstrap failed (non-fatal): {}", e);
+    } else {
+        tracing::info!("Redis markup bootstrap completed");
+    }
 
     // Connect to NATS (try to connect, but don't fail if unavailable in dev)
     tracing::info!("Connecting to NATS at {}", nats_url);

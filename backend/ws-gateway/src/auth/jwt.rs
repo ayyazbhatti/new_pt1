@@ -9,10 +9,11 @@ pub struct Claims {
     pub sub: String, // user_id (can be UUID string)
     pub email: String,
     pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Group ID from token; accept both "group_id" and "groupId" (camelCase).
+    #[serde(alias = "groupId", skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
-    pub exp: i64, // Changed from u64 to i64 to match auth-service
-    pub iat: i64, // Changed from u64 to i64 to match auth-service
+    pub exp: i64,
+    pub iat: i64,
 }
 
 // Helper to deserialize sub field which can be UUID or string

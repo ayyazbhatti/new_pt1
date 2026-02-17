@@ -18,6 +18,8 @@ pub struct Order {
     pub id: Uuid,
     pub user_id: Uuid,
     pub symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
     pub side: Side,
     pub order_type: OrderType,
     pub size: Decimal,

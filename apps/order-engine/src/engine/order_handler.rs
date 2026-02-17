@@ -141,6 +141,7 @@ impl OrderHandler {
                     id: order_id,
                     user_id: cmd.user_id,
                     symbol: cmd.symbol.clone(),
+                    group_id: cmd.group_id.clone(),
                     side: cmd.side,
                     order_type: cmd.order_type,
                     size: cmd.size,
@@ -196,10 +197,9 @@ impl OrderHandler {
                 
                 info!("Order {} accepted for symbol {}", order_id, cmd.symbol);
                 
-                // For market orders, try immediate execution if tick exists
+                // For market orders, try immediate execution if tick exists for this group
                 if cmd.order_type == contracts::enums::OrderType::Market {
-                    if let Some(tick) = self.cache.get_last_tick(&cmd.symbol) {
-                        // Execute immediately
+                    if let Some(tick) = self.cache.get_last_tick(&cmd.symbol, cmd.group_id.as_deref()) {
                         let fill_price = match cmd.side {
                             contracts::enums::Side::Buy => tick.ask,
                             contracts::enums::Side::Sell => tick.bid,

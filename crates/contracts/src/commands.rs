@@ -19,6 +19,9 @@ pub struct PlaceOrderCommand {
     pub client_order_id: Option<String>,
     pub idempotency_key: String,
     pub ts: DateTime<Utc>,
+    /// User's group_id for per-group price stream (tick lookup)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

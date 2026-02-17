@@ -249,20 +249,25 @@ export JWT_ISSUER="${JWT_ISSUER:-newpt}"
 start_service "Auth Service" "cargo run --bin auth-service" $AUTH_SERVICE_PORT "http://localhost:$AUTH_SERVICE_PORT/health"
 cd - > /dev/null
 
-# Start Data Provider (port 3001)
-cd "$(dirname "$0")/.." || exit 1
-export PORT=$DATA_PROVIDER_PORT
-export WS_PORT=9003
-export HTTP_PORT=9002
-start_service "Data Provider" "cargo run -p data-provider" $DATA_PROVIDER_PORT "http://localhost:$DATA_PROVIDER_PORT/health"
+# Start Data Provider (port 3001) - use backend/data-provider (Redis price:ticks + markup)
+DATA_PROVIDER_DIR="$(cd "$(dirname "$0")/../backend/data-provider" && pwd)"
+export HTTP_PORT=$DATA_PROVIDER_PORT
+export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
+start_service "Data Provider" "cd $DATA_PROVIDER_DIR && cargo run --release" $DATA_PROVIDER_PORT "http://localhost:$DATA_PROVIDER_PORT/health"
 
 # Start Order Engine (port 3002)
 export PORT=$ORDER_ENGINE_PORT
 start_service "Order Engine" "cargo run -p order-engine" $ORDER_ENGINE_PORT "http://localhost:$ORDER_ENGINE_PORT/health"
 
-# Start Gateway WS (port 3003)
-export PORT=$GATEWAY_WS_PORT
-start_service "Gateway WS" "cargo run -p gateway-ws" $GATEWAY_WS_PORT "http://localhost:$GATEWAY_WS_PORT/health"
+# Start Gateway WS (port 3003) - use backend/ws-gateway (Redis price:ticks, per-group markup)
+# Same JWT_SECRET as auth-service required for correct user/group and marked-up prices
+export WS_PORT=$GATEWAY_WS_PORT
+export JWT_SECRET="${JWT_SECRET:-dev-jwt-secret-key-change-in-production-minimum-32-characters-long}"
+GATEWAY_DIR="$(cd "$(dirname "$0")/../backend/ws-gateway" && pwd)"
+if [ -f "$GATEWAY_DIR/.env" ]; then
+    set -a; . "$GATEWAY_DIR/.env"; set +a
+fi
+start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run --release" $GATEWAY_WS_PORT "http://localhost:$GATEWAY_WS_PORT/health"
 
 # Start Core API (port 3004)
 export PORT=$CORE_API_PORT

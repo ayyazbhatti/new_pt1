@@ -154,8 +154,8 @@ impl Session {
                                 match jwt_auth.validate_token(&token) {
                                     Ok(claims) => {
                                         info!("✅ Token validated successfully for connection {}", conn_id);
-                                        info!("   Claims - sub (user_id): {}, email: {}, role: {}", 
-                                            claims.sub, claims.email, claims.role);
+                                        info!("   Claims - sub (user_id): {}, email: {}, role: {}, group_id: {:?}", 
+                                            claims.sub, claims.email, claims.role, claims.group_id);
                                         
                                         if jwt_auth.is_expired(&claims) {
                                             warn!("Token expired for connection {}", conn_id);

@@ -101,9 +101,10 @@ async fn main() -> Result<()> {
     // Subscribe to NATS subjects
     let nats_client = nats.client();
     
-    // Subscribe to ticks (wildcard)
-    let mut ticks_sub = nats_client.subscribe(format!("{}*", nats_subjects::TICKS_PREFIX)).await?;
-    info!("✅ Subscribed to {}", nats_subjects::TICKS_PREFIX);
+    // Subscribe to per-group ticks: ticks.SYMBOL.GROUP_ID
+    let ticks_subject = format!("{}*.*", nats_subjects::TICKS_PREFIX);
+    let mut ticks_sub = nats_client.subscribe(ticks_subject.clone()).await?;
+    info!("✅ Subscribed to {}", ticks_subject);
     
     // Try to use JetStream consumer for order commands, fallback to basic subscription
     let use_jetstream = nats.jetstream().is_some();

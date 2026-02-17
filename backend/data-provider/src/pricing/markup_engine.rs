@@ -33,16 +33,10 @@ impl MarkupEngine {
             }
         };
 
-        // Bid/ask markup is percent-only: apply (1 + pct/100) to price
+        // Bid and ask markup applied separately (e.g. 2% bid, 4% ask): (1 + pct/100) per side
         let bid_multiplier = Decimal::from(1) + decimal_from_f64(markup.bid_markup / 100.0)?;
         let ask_multiplier = Decimal::from(1) + decimal_from_f64(markup.ask_markup / 100.0)?;
         let (final_bid, final_ask) = (bid * bid_multiplier, ask * ask_multiplier);
-
-        // Ensure ask > bid after markup
-        if final_ask <= final_bid {
-            warn!("Markup resulted in invalid spread for {}:{}", symbol, group);
-            return Some((bid, ask)); // Fallback
-        }
 
         debug!(
             "Applied markup to {}:{}: bid {} -> {}, ask {} -> {}",

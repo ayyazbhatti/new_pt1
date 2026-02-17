@@ -64,6 +64,13 @@ impl RedisClient {
         Ok(())
     }
 
+    /// SMEMBERS price:groups — group_ids that receive per-group price stream.
+    pub async fn smembers_price_groups(&self) -> Result<Vec<String>> {
+        let mut conn = self.connection.write().await;
+        let members: Vec<String> = conn.smembers("price:groups").await?;
+        Ok(members)
+    }
+
     pub async fn subscribe_to_updates<F>(&self, channels: Vec<String>, callback: F) -> Result<()>
     where
         F: Fn(String, String) + Send + Sync + 'static,
@@ -89,6 +96,10 @@ impl RedisClient {
 
     pub fn get_connection_manager(&self) -> Arc<RwLock<ConnectionManager>> {
         self.connection.clone()
+    }
+
+    pub fn get_client(&self) -> Client {
+        self.client.clone()
     }
 }
 

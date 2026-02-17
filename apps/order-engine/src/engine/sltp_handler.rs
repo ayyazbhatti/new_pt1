@@ -49,28 +49,26 @@ impl SltpHandler {
         }
     }
     
-    /// Check and trigger SL/TP for all positions of a symbol
-    /// Uses range queries for O(log N + M) performance (scales to 1M+ positions)
+    /// Check and trigger SL/TP for positions of a symbol (optionally for a group only)
     #[instrument(skip(self), fields(symbol = %symbol))]
     pub async fn check_and_trigger(
         &self,
         symbol: &str,
+        group_id: &str,
         bid: Decimal,
         ask: Decimal,
     ) -> Result<()> {
-        // Early exit: check if symbol has any open positions
         let symbol_open_key = format!("pos:open:{}", symbol);
         let mut conn = self.redis.get_connection().await;
         let has_positions: bool = conn.exists(&symbol_open_key).await
             .unwrap_or(false);
-        
+
         if !has_positions {
             debug!("No open positions for symbol {}, skipping SL/TP check", symbol);
             return Ok(());
         }
-        
-        // Use Lua script to check SL/TP triggers (single Redis round-trip, optimized for 1M+ positions)
-        let triggered = match self.lua.check_sltp_triggers(&mut conn, symbol, bid, ask).await {
+
+        let triggered = match self.lua.check_sltp_triggers(&mut conn, symbol, group_id, bid, ask).await {
             Ok(result) => result,
             Err(e) => {
                 error!("Failed to check SL/TP triggers for {}: {}", symbol, e);

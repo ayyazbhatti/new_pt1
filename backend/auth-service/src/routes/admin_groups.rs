@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::middleware::auth_middleware;
 use crate::models::user_group::UserGroup;
 use crate::services::admin_groups_service::{AdminGroupsService, GroupSymbolInput};
+use crate::services::admin_markup_service::AdminMarkupService;
 use crate::utils::jwt::Claims;
 
 #[derive(Debug, Deserialize)]
@@ -525,6 +526,13 @@ async fn update_group_price_profile(
                 },
             }),
         ));
+    }
+
+    // Sync Redis for per-group price stream (clear old markup for group, write new profile overrides)
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let markup_service = AdminMarkupService::new(pool);
+    if let Err(e) = markup_service.sync_redis_after_group_profile_change(id, price_profile_id, &redis_url).await {
+        tracing::warn!("Redis sync after group profile change failed (non-fatal): {}", e);
     }
 
     Ok(Json(serde_json::json!({
