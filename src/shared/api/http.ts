@@ -7,10 +7,29 @@ export interface ApiError {
   }
 }
 
-// In dev without VITE_API_URL, use relative /api so Vite proxy forwards to auth-service (3000)
+// In dev: same-origin so Vite's custom api-proxy middleware forwards /api and /v1 to auth-service.
+// Set VITE_API_URL=http://localhost:3000 to bypass and call auth-service directly (CORS must allow your origin).
 const API_BASE_URL =
-  import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? '' : 'http://localhost:3000')
+  import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== ''
+    ? import.meta.env.VITE_API_URL
+    : import.meta.env.DEV
+      ? ''
+      : 'http://localhost:3000'
+
+export function getApiBaseUrl(): string {
+  return API_BASE_URL || (typeof location !== 'undefined' ? `${location.origin}` : '')
+}
+
+const REQUEST_TIMEOUT_MS = 30_000 // 30s — avoid indefinite hang if proxy/network stalls
+
+function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  return fetch(url, {
+    ...options,
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeoutId))
+}
 
 let refreshPromise: Promise<string> | null = null
 
@@ -28,7 +47,7 @@ async function refreshAccessToken(): Promise<string> {
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/api/auth/refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -74,11 +93,19 @@ export async function http<T>(
     headers['Authorization'] = `Bearer ${accessToken}`
   }
 
-  // Make request
-  let response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  })
+  // Make request (direct to auth-service in dev to avoid Vite proxy hanging)
+  let response: Response
+  try {
+    response = await fetchWithTimeout(`${API_BASE_URL}${endpoint}`, {
+      ...options,
+      headers,
+    })
+  } catch (err: unknown) {
+    const msg = err instanceof Error && err.name === 'AbortError'
+      ? 'Request timed out. Is the auth server running on port 3000?'
+      : err instanceof Error ? err.message : 'Network error'
+    throw new Error(msg)
+  }
 
   // If 401, try to refresh token once (except for login/register where 401 = invalid credentials)
   if (response.status === 401 && accessToken && !isAuthEndpoint) {
@@ -87,10 +114,17 @@ export async function http<T>(
       ;(headers as Record<string, string>)['Authorization'] = `Bearer ${newAccessToken}`
 
       // Retry original request
-      response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        ...options,
-        headers,
-      })
+      try {
+        response = await fetchWithTimeout(`${API_BASE_URL}${endpoint}`, {
+          ...options,
+          headers,
+        })
+      } catch (retryErr: unknown) {
+        const msg = retryErr instanceof Error && retryErr.name === 'AbortError'
+          ? 'Request timed out. Is the auth server running on port 3000?'
+          : retryErr instanceof Error ? retryErr.message : 'Network error'
+        throw new Error(msg)
+      }
     } catch (error) {
       // Refresh failed, logout user
       useAuthStore.getState().logout()

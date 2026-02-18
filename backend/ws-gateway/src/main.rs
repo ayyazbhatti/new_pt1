@@ -10,6 +10,7 @@ mod health;
 
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info};
 use anyhow::Result;
 
@@ -115,8 +116,18 @@ async fn main() -> Result<()> {
     let http_listener = tokio::net::TcpListener::bind(&http_addr).await?;
     info!("📊 HTTP server listening on http://{}", http_addr);
 
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin, _parts| {
+            origin
+                .to_str()
+                .map(|s| s.starts_with("http://localhost:") || s.starts_with("http://127.0.0.1:"))
+                .unwrap_or(false)
+        }))
+        .allow_methods([axum::http::Method::GET]);
+
     let http_app = axum::Router::new()
         .merge(health_app)
+        .layer(cors)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     let http_server = axum::serve(http_listener, http_app);

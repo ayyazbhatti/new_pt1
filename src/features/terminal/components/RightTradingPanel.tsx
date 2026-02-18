@@ -26,7 +26,7 @@ import {
 } from '../utils/positionCalculations'
 import { AdminSymbol } from '@/features/symbols/types/symbol'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
-import { fetchAccountSummary, type AccountSummaryResponse } from '@/features/wallet/api'
+import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 
 // Local storage key for trading panel state
 const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
@@ -102,22 +102,8 @@ export function RightTradingPanel() {
     return symbolsData.items.find(s => s.id === selectedSymbol.id) || null
   }, [selectedSymbol, symbolsData])
 
-  // Account summary for free margin check (fetch on mount + real-time via WS)
-  useEffect(() => {
-    fetchAccountSummary()
-      .then(setAccountSummary)
-      .catch((err) => console.warn('Failed to fetch account summary:', err))
-  }, [])
-  useEffect(() => {
-    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
-      if (event.type === 'account.summary.updated') {
-        const payload = (event as { type: 'account.summary.updated'; payload: AccountSummaryResponse }).payload
-        if (payload) setAccountSummary(payload)
-      }
-    })
-    return unsubscribe
-  }, [])
-  
+  const { accountSummary } = useAccountSummary()
+
   // Load initial state from localStorage only on mount (lazy init) so reload restores tab and values
   const [orderType, setOrderType] = useState(() => loadTradingPanelState().orderType || 'market')
   const [sizeMode, setSizeMode] = useState<'units' | 'lots' | 'pipPosition'>(() => loadTradingPanelState().sizeMode || 'units')
@@ -135,7 +121,6 @@ export function RightTradingPanel() {
   const [userDetailsOpen, setUserDetailsOpen] = useState(() => loadTradingPanelState().userDetailsOpen || false)
   const [leverageDetailsOpen, setLeverageDetailsOpen] = useState(() => loadTradingPanelState().leverageDetailsOpen || false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse | null>(null)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
   
   // Save state to localStorage whenever it changes (keeps tab and values after reload)
@@ -516,7 +501,7 @@ export function RightTradingPanel() {
     return () => clearInterval(interval)
   }, [])
 
-  // Measure ping by fetching WS gateway health (proxied in dev to avoid CORS)
+  // Measure ping by fetching WS gateway health (proxied in dev via /ws-health)
   useEffect(() => {
     const wsUrl =
       import.meta.env?.VITE_WS_URL ||

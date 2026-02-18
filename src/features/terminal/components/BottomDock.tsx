@@ -6,7 +6,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { Input, Skeleton } from '@/shared/ui'
 import { getPositions, Position, updatePositionSltp, closePosition } from '../api/positions.api'
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
-import { fetchAccountSummary, type AccountSummaryResponse } from '@/features/wallet/api'
+import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
 import { wsClient } from '@/shared/ws/wsClient'
@@ -45,13 +45,11 @@ export function BottomDock() {
   const [isBottomDockFullscreen, setIsBottomDockFullscreen] = useState(false)
   const bottomDockRef = useRef<HTMLDivElement>(null)
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
-  const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse | null>(null)
+  const { accountSummary } = useAccountSummary()
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const lastPositionCountRef = useRef<number>(0)
-  /** Reject WS updates that look like stale/race (zeros) when we already had real data - avoids blink. */
-  const lastEquityRef = useRef<number | null>(null)
 
   useEffect(() => {
     const el = bottomDockRef.current
@@ -161,34 +159,6 @@ export function BottomDock() {
     }
     }
   }, [activeTab])
-
-  // Fetch account summary on mount
-  useEffect(() => {
-    fetchAccountSummary()
-      .then((data) => {
-        lastEquityRef.current = data.equity
-        setAccountSummary(data)
-      })
-      .catch((err) => console.warn('Failed to fetch account summary:', err))
-  }, [])
-
-  // Subscribe to account.summary.updated via wsClient
-  useEffect(() => {
-    const userId = useAuthStore.getState().user?.id
-    if (!userId) return
-    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
-      if (event.type === 'account.summary.updated') {
-        const payload = (event as { type: 'account.summary.updated'; payload: AccountSummaryResponse }).payload
-        if (payload?.userId !== userId) return
-        // Ignore obvious stale/race updates: all zeros when we already had real data (backend also serializes per-user now)
-        const isZeros = payload.balance === 0 && payload.equity === 0 && payload.marginUsed === 0
-        if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
-        lastEquityRef.current = payload.equity
-        setAccountSummary(payload as AccountSummaryResponse)
-      }
-    })
-    return unsubscribe
-  }, [])
 
   // Initial fetch on mount - show loading on first load only
   useEffect(() => {

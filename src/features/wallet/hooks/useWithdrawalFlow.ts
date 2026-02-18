@@ -6,6 +6,12 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { createWithdrawalRequest } from '../api'
+import { getApiBaseUrl } from '@/shared/api/http'
+import {
+  captureBefore,
+  captureAfter,
+  formatTimingForToast,
+} from '@/shared/utils/requestTiming'
 
 export function useWithdrawalFlow() {
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -97,13 +103,21 @@ export function useWithdrawalFlow() {
       setIsSubmitting(true)
 
       try {
+        const resourceCountBefore = captureBefore()
         // Call backend API - server will handle WebSocket broadcasting
         const response = await createWithdrawalRequest({ amount, note })
+        const timing = captureAfter(resourceCountBefore, getApiBaseUrl())
+        const totalStr =
+          timing.totalMs >= 1000
+            ? `${(timing.totalMs / 1000).toFixed(1)}s`
+            : `${timing.totalMs}ms`
+        const breakdown = formatTimingForToast(timing)
+        const message =
+          timing.requests.length > 0
+            ? `Withdrawal request sent (ID: ${response.requestId.slice(0, 8)}...) • Total: ${totalStr}\n\n${breakdown}`
+            : `Withdrawal request sent (ID: ${response.requestId.slice(0, 8)}...) • Total: ${totalStr}`
 
-        toast.success(
-          `Withdrawal request sent (ID: ${response.requestId.slice(0, 8)}...)`,
-          { duration: 5000 }
-        )
+        toast.success(message, { duration: 10000, style: { whiteSpace: 'pre-wrap' } })
       } catch (error: any) {
         const errorMessage =
           error?.response?.data?.error?.message ||

@@ -114,6 +114,7 @@ async fn place_order(
     Extension(orders_state): Extension<OrdersState>,
     Json(req): Json<PlaceOrderRequest>,
 ) -> Result<Json<PlaceOrderResponse>, PlaceOrderError> {
+    info!("📥 place_order started: user_id={}, symbol={}, side={}, type={}", claims.sub, req.symbol, req.side, req.order_type);
     let user_id = claims.sub;
     let order_id = Uuid::new_v4();
     let now = Utc::now();

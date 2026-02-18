@@ -12,7 +12,9 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { PriceDisplay } from './PriceDisplay'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
-import { fetchBalance, fetchAccountSummary, type AccountSummaryResponse } from '@/features/wallet/api'
+import { fetchBalance } from '@/features/wallet/api'
+import { useQueryClient } from '@tanstack/react-query'
+import { useAccountSummary, accountSummaryQueryKey } from '@/features/wallet/hooks/useAccountSummary'
 import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
@@ -40,17 +42,10 @@ export function LeftSidebar() {
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const lastEquityRef = useRef<number | null>(null)
-  const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse | null>(null)
+  const queryClient = useQueryClient()
+  const { accountSummary, isLoading: accountSummaryLoading } = useAccountSummary()
   const wsState = useWebSocketState()
   const symbols = getFilteredSymbols()
-
-  // Debug WebSocket connection state
-  useEffect(() => {
-    console.log('🔍 [LeftSidebar] WebSocket state:', wsState)
-    console.log('🔍 [LeftSidebar] wsClient.isConnected():', wsClient.isConnected())
-    console.log('🔍 [LeftSidebar] User ID:', user?.id)
-  }, [wsState, user?.id])
 
   // Ensure WebSocket is connected when user is on terminal (so balance push is received)
   useEffect(() => {
@@ -60,62 +55,20 @@ export function LeftSidebar() {
     }
   }, [user?.id, wsState])
 
-  // Fetch account summary (same source as BottomDock) for real Balance, Equity, Margin
+  // Sync wallet loading state with account summary (single shared fetch)
   useEffect(() => {
-    if (!user?.id) return
-    fetchAccountSummary()
-      .then((data) => {
-        lastEquityRef.current = data.equity
-        setAccountSummary(data)
-        setLoading(false)
-      })
-      .catch((err) => {
-        console.warn('LeftSidebar: failed to fetch account summary:', err)
-        setLoading(false)
-      })
-  }, [user?.id, setLoading])
+    if (!accountSummaryLoading) setLoading(false)
+  }, [accountSummaryLoading, setLoading])
 
-  // Subscribe to account.summary.updated (same as BottomDock) for real-time values
-  useEffect(() => {
-    if (!user?.id) return
-    const currentUserId = String(user.id).trim()
-    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
-      if (event.type === 'account.summary.updated') {
-        const payload = (event as { type: 'account.summary.updated'; payload: AccountSummaryResponse }).payload
-        if (!payload || String(payload.userId ?? '').trim() !== currentUserId) return
-        const isZeros = payload.balance === 0 && payload.equity === 0 && payload.marginUsed === 0
-        if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
-        lastEquityRef.current = payload.equity
-        setAccountSummary(payload as AccountSummaryResponse)
-        setLoading(false)
-      }
-    })
-    return unsubscribe
-  }, [user?.id, setLoading])
-
-  // When user returns to this tab, refetch account summary so we catch updates (e.g. deposit approved)
+  // When user returns to tab, refetch account summary (e.g. after deposit approved in another tab)
   useEffect(() => {
     if (!user?.id) return
     const onVisibilityChange = () => {
-      if (document.visibilityState !== 'visible') return
-      fetchAccountSummary()
-        .then((data) => {
-          lastEquityRef.current = data.equity
-          setAccountSummary(data)
-        })
-        .catch(() => {})
+      if (document.visibilityState === 'visible') queryClient.invalidateQueries({ queryKey: accountSummaryQueryKey })
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
-  }, [user?.id])
-
-  // Set loading state initially while waiting for WebSocket balance update
-  useEffect(() => {
-    if (user?.id) {
-      setLoading(true)
-      console.log('⏳ [LeftSidebar] Waiting for balance update, WebSocket state:', wsState)
-    }
-  }, [user?.id, setLoading, wsState])
+  }, [user?.id, queryClient])
 
   // REST fallback: fetch balance so it always shows (WS may be slow or not fire)
   useEffect(() => {

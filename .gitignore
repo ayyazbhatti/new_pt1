@@ -29,6 +29,12 @@ target/
 *.rs.bk
 
 
+# Environment (secrets)
+.env
+.env.local
+*.env
+!*.env.example
+
 # Rust build artifacts
 target/
 **/target/
