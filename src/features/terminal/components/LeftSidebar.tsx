@@ -31,6 +31,8 @@ export function LeftSidebar() {
     setSelectedSymbol,
     getFilteredSymbols,
     isLoading,
+    settingsPanelOpen,
+    setSettingsPanelOpen,
   } = useTerminalStore()
 
   const { user, logout } = useAuthStore()
@@ -513,7 +515,7 @@ export function LeftSidebar() {
       {/* Bottom Nav */}
       <div className="shrink-0 px-4 py-2.5 border-t border-white/5 space-y-0.5">
         <button
-          onClick={() => toast('Settings feature coming soon')}
+          onClick={() => setSettingsPanelOpen(!settingsPanelOpen)}
           className="w-full text-left text-xs font-medium text-text-muted/70 hover:text-text hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
         >
           Settings

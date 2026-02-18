@@ -8,16 +8,57 @@ interface TerminalStore {
   watchlist: Set<string>
   searchQuery: string
   activeTab: 'all' | 'watchlists'
+  settingsPanelOpen: boolean
+  /** Show ask price line on chart (persisted in localStorage only). */
+  chartShowAskPrice: boolean
+  /** Show position open marker (dot) on chart (persisted in localStorage only). */
+  chartShowPositionMarker: boolean
+  /** Show closed position marker (dot) on chart – position history (persisted in localStorage only). */
+  chartShowClosedPositionMarker: boolean
   setSymbols: (symbols: MockSymbol[]) => void
   setLoading: (loading: boolean) => void
   setSelectedSymbol: (symbol: MockSymbol) => void
   toggleWatchlist: (symbolId: string) => void
   setSearchQuery: (query: string) => void
   setActiveTab: (tab: 'all' | 'watchlists') => void
+  setSettingsPanelOpen: (open: boolean) => void
+  setChartShowAskPrice: (show: boolean) => void
+  setChartShowPositionMarker: (show: boolean) => void
+  setChartShowClosedPositionMarker: (show: boolean) => void
   getFilteredSymbols: () => MockSymbol[]
 }
 
 const STORAGE_KEY_SELECTED_SYMBOL = 'terminal.selectedSymbolId'
+const STORAGE_KEY_CHART_SHOW_ASK = 'terminal.chartShowAskPrice'
+const STORAGE_KEY_CHART_SHOW_POSITION_MARKER = 'terminal.chartShowPositionMarker'
+const STORAGE_KEY_CHART_SHOW_CLOSED_POSITION_MARKER = 'terminal.chartShowClosedPositionMarker'
+
+function getChartShowAskPriceFromStorage(): boolean {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_CHART_SHOW_ASK)
+    if (v === 'false') return false
+    if (v === 'true') return true
+  } catch {}
+  return true
+}
+
+function getChartShowPositionMarkerFromStorage(): boolean {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_CHART_SHOW_POSITION_MARKER)
+    if (v === 'false') return false
+    if (v === 'true') return true
+  } catch {}
+  return true
+}
+
+function getChartShowClosedPositionMarkerFromStorage(): boolean {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_CHART_SHOW_CLOSED_POSITION_MARKER)
+    if (v === 'false') return false
+    if (v === 'true') return true
+  } catch {}
+  return true
+}
 
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   selectedSymbol: null,
@@ -80,6 +121,29 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setActiveTab: (tab) => set({ activeTab: tab }),
+  settingsPanelOpen: false,
+  setSettingsPanelOpen: (open) => set({ settingsPanelOpen: open }),
+  chartShowAskPrice: getChartShowAskPriceFromStorage(),
+  setChartShowAskPrice: (show) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CHART_SHOW_ASK, String(show))
+    } catch {}
+    set({ chartShowAskPrice: show })
+  },
+  chartShowPositionMarker: getChartShowPositionMarkerFromStorage(),
+  setChartShowPositionMarker: (show) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CHART_SHOW_POSITION_MARKER, String(show))
+    } catch {}
+    set({ chartShowPositionMarker: show })
+  },
+  chartShowClosedPositionMarker: getChartShowClosedPositionMarkerFromStorage(),
+  setChartShowClosedPositionMarker: (show) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CHART_SHOW_CLOSED_POSITION_MARKER, String(show))
+    } catch {}
+    set({ chartShowClosedPositionMarker: show })
+  },
   getFilteredSymbols: () => {
     const { searchQuery, activeTab, watchlist, symbols } = get()
     let filtered = symbols

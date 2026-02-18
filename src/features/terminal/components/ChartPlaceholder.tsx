@@ -9,6 +9,11 @@ import type { ChartSettings, DrawingMagnetMode } from '../utils/chartOptions'
 import type { ChartIndicator } from '../utils/indicatorParams'
 import { Spinner } from '@/shared/ui/loading'
 import { priceStreamClient } from '@/shared/ws/priceStreamClient'
+import { getPositions } from '../api/positions.api'
+import type { Position } from '../api/positions.api'
+import './chartAskPriceLineOverlay'
+import './chartPositionOpenMarkerOverlay'
+import './chartPositionClosedMarkerOverlay'
 
 /** Normalize symbol for matching WS ticks (e.g. BTC-USD / BTCUSDT -> BTCUSD) */
 function normalizeSymbolKey(symbol: string): string {
@@ -91,23 +96,38 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   { chartType, timeframe, indicators, drawingTool, drawingMagnetMode, chartSettings },
   ref
 ) {
-  const { selectedSymbol } = useTerminalStore()
+  const { selectedSymbol, chartShowAskPrice, chartShowPositionMarker, chartShowClosedPositionMarker } = useTerminalStore()
   const chartRef = useRef<ReturnType<typeof init> | null>(null)
   const subscribeBarCallbackRef = useRef<((data: KLineData) => void) | null>(null)
   const lastBarRef = useRef<KLineBar | null>(null)
   const currentBarRef = useRef<KLineBar | null>(null)
+  const lastBarDataIndexRef = useRef<number>(0)
   const binanceSymbolRef = useRef<string>('BTCUSDT')
   const selectedSymbolKeyRef = useRef<string>('')
+  const chartShowAskPriceRef = useRef(chartShowAskPrice)
+  const chartShowPositionMarkerRef = useRef(chartShowPositionMarker)
+  const chartDataRef = useRef<KLineData[]>([])
+  const setChartDataLengthRef = useRef<((n: number) => void) | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [chartDataLength, setChartDataLength] = useState(0)
+  const [positions, setPositions] = useState<Position[]>([])
   const setLoadingRef = useRef<(loading: boolean) => void>(() => {})
 
-  // Keep ref in sync so tick listener always sees current symbol
+  setChartDataLengthRef.current = setChartDataLength
   selectedSymbolKeyRef.current = selectedSymbol?.code ? normalizeSymbolKey(selectedSymbol.code) : ''
+  chartShowAskPriceRef.current = chartShowAskPrice
+  chartShowPositionMarkerRef.current = chartShowPositionMarker
 
   useImperativeHandle(
     ref,
     () => ({
-      clearOverlays: () => chartRef.current?.removeOverlay(),
+      clearOverlays: () => {
+        const chart = chartRef.current
+        if (!chart) return
+        chart.getOverlays()?.forEach((o) => {
+          if (o.name !== 'askPriceLine' && o.name !== 'positionOpenMarker' && o.name !== 'closedPositionMarker') chart.removeOverlay({ id: o.id })
+        })
+      },
       zoomIn: () => chartRef.current?.zoomAtCoordinate(ZOOM_IN_SCALE),
       zoomOut: () => chartRef.current?.zoomAtCoordinate(ZOOM_OUT_SCALE),
       resetZoom: () => chartRef.current?.scrollToRealTime(200),
@@ -156,12 +176,17 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
           if (klineData.length > 0) {
             lastBarRef.current = bars[bars.length - 1]
             currentBarRef.current = { ...lastBarRef.current }
+            lastBarDataIndexRef.current = klineData.length - 1
           }
+          chartDataRef.current = klineData
+          setChartDataLengthRef.current?.(klineData.length)
           callback(klineData)
         } catch (err) {
           console.warn('Binance klines failed, using empty data:', err)
           lastBarRef.current = null
           currentBarRef.current = null
+          chartDataRef.current = []
+          setChartDataLengthRef.current?.(0)
           callback([])
         }
         // Hide loader only after chart has painted: force layout then wait for paint + short delay
@@ -196,10 +221,107 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
       subscribeBarCallbackRef.current = null
       lastBarRef.current = null
       currentBarRef.current = null
+      chartDataRef.current = []
+      setChartDataLengthRef.current?.(0)
       dispose(CHART_CONTAINER_ID)
       chartRef.current = null
     }
   }, [selectedSymbol?.id, selectedSymbol?.code, selectedSymbol?.quoteCurrency])
+
+  // Fetch positions when symbol changes (for position-open markers)
+  useEffect(() => {
+    if (!selectedSymbol?.code) {
+      setPositions([])
+      return
+    }
+    getPositions()
+      .then(setPositions)
+      .catch(() => setPositions([]))
+  }, [selectedSymbol?.code])
+
+  // When position markers are disabled, remove overlays immediately
+  useEffect(() => {
+    if (!chartShowPositionMarker) chartRef.current?.removeOverlay({ name: 'positionOpenMarker' })
+  }, [chartShowPositionMarker])
+  useEffect(() => {
+    if (!chartShowClosedPositionMarker) chartRef.current?.removeOverlay({ name: 'closedPositionMarker' })
+  }, [chartShowClosedPositionMarker])
+
+  // Update position-open markers when chart data + positions are ready (and setting enabled)
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !selectedSymbol?.code || chartDataLength === 0 || !chartShowPositionMarker) {
+      chart?.removeOverlay({ name: 'positionOpenMarker' })
+      return
+    }
+    const symbolKey = normalizeSymbolKey(selectedSymbol.code)
+    const openForSymbol = positions.filter(
+      (p) => p.status === 'OPEN' && normalizeSymbolKey(p.symbol) === symbolKey
+    )
+    if (openForSymbol.length === 0) {
+      chart.removeOverlay({ name: 'positionOpenMarker' })
+      return
+    }
+    const data = chartDataRef.current
+    if (!data || data.length === 0) return
+    const points = openForSymbol.map((p) => {
+      // API may return opened_at in seconds; chart uses ms
+      const openedAt = p.opened_at < 1e12 ? p.opened_at * 1000 : p.opened_at
+      const entryPrice = parseFloat(p.avg_price || p.entry_price || '0')
+      let dataIndex = 0
+      for (let i = data.length - 1; i >= 0; i--) {
+        if (data[i].timestamp <= openedAt) {
+          dataIndex = i
+          break
+        }
+      }
+      const bar = data[dataIndex]
+      // Place dot on candle head (high) so it sits right on top of the candle, no gap
+      const value = bar != null ? bar.high : entryPrice
+      return { timestamp: openedAt, value, dataIndex }
+    })
+    chart.removeOverlay({ name: 'positionOpenMarker' })
+    chart.createOverlay({ name: 'positionOpenMarker', points })
+  }, [selectedSymbol?.code, positions, chartDataLength, chartShowPositionMarker])
+
+  // Update closed position (position history) markers when chart data + positions ready (and setting enabled)
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !selectedSymbol?.code || chartDataLength === 0 || !chartShowClosedPositionMarker) {
+      chart?.removeOverlay({ name: 'closedPositionMarker' })
+      return
+    }
+    const symbolKey = normalizeSymbolKey(selectedSymbol.code)
+    const closedForSymbol = positions.filter(
+      (p) => p.status === 'CLOSED' && normalizeSymbolKey(p.symbol) === symbolKey
+    )
+    if (closedForSymbol.length === 0) {
+      chart.removeOverlay({ name: 'closedPositionMarker' })
+      return
+    }
+    const data = chartDataRef.current
+    if (!data || data.length === 0) return
+    const points = closedForSymbol.map((p) => {
+      const closedAt = (p.closed_at ?? p.updated_at) ?? 0
+      const closedAtMs = closedAt < 1e12 ? closedAt * 1000 : closedAt
+      const exitPriceRaw = p.exit_price ?? (p as { exitPrice?: string }).exitPrice
+      const exitPrice = exitPriceRaw && exitPriceRaw !== 'null' && exitPriceRaw !== ''
+        ? parseFloat(String(exitPriceRaw))
+        : parseFloat(p.avg_price || p.entry_price || '0')
+      let dataIndex = 0
+      for (let i = data.length - 1; i >= 0; i--) {
+        if (data[i].timestamp <= closedAtMs) {
+          dataIndex = i
+          break
+        }
+      }
+      const bar = data[dataIndex]
+      const value = bar != null ? bar.high : exitPrice
+      return { timestamp: closedAtMs, value, dataIndex }
+    })
+    chart.removeOverlay({ name: 'closedPositionMarker' })
+    chart.createOverlay({ name: 'closedPositionMarker', points })
+  }, [selectedSymbol?.code, positions, chartDataLength, chartShowClosedPositionMarker])
 
   // When symbol precision changes, update chart so axes/tooltips match
   useEffect(() => {
@@ -253,6 +375,11 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     })
   }, [chartSettings])
 
+  // When ask price line is disabled, remove overlay immediately
+  useEffect(() => {
+    if (!chartShowAskPrice) chartRef.current?.removeOverlay({ name: 'askPriceLine' })
+  }, [chartShowAskPrice])
+
   // Resize chart when entering or exiting fullscreen so it fills the new size
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -262,8 +389,8 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
   }, [])
 
-  // Live candle: subscribe directly to price stream so chart updates on every bid tick
-  // (symbols section uses same WS; chart was only reacting to store which can lag or miss updates)
+  // Live candle: subscribe directly to price stream so chart updates on every bid tick;
+  // also draw ask price line (duplicate of last-price mark) via custom overlay.
   useEffect(() => {
     const unsub = priceStreamClient.onTick((tick) => {
       const tickKey = normalizeSymbolKey(tick.symbol)
@@ -295,6 +422,27 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
       }
 
       if (cb) cb({ timestamp: bar.timestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume })
+
+      // Ask price line: only show when setting enabled; remove or update overlay
+      const chart = chartRef.current
+      if (!chartShowAskPriceRef.current) {
+        chart?.removeOverlay({ name: 'askPriceLine' })
+        return
+      }
+      const ask = typeof tick.ask === 'string' ? parseFloat(tick.ask) : Number(tick.ask)
+      if (!Number.isNaN(ask) && ask > 0 && currentBarRef.current) {
+        chart?.removeOverlay({ name: 'askPriceLine' })
+        chart?.createOverlay({
+          name: 'askPriceLine',
+          points: [
+            {
+              value: ask,
+              timestamp: currentBarRef.current.timestamp,
+              dataIndex: lastBarDataIndexRef.current,
+            },
+          ],
+        })
+      }
     })
     return unsub
   }, [])
