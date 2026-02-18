@@ -12,6 +12,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // /ws-health must come before /ws so GET /ws-health is not matched by /ws (which would send it to the WS server and 404)
+      '/ws-health': {
+        target: 'http://localhost:9002',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/ws-health/, '/health'),
+      },
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
@@ -23,11 +29,6 @@ export default defineConfig({
       '/ws': {
         target: 'ws://localhost:3003',
         ws: true,
-      },
-      '/ws-health': {
-        target: 'http://localhost:9002',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/ws-health/, '/health'),
       },
     },
   },

@@ -200,6 +200,19 @@ export function BottomDock() {
     fetchOrders()
   }, [fetchPositions, fetchOrders])
 
+  // Fetch data when tab changes - silent refresh so table doesn't flash
+  useEffect(() => {
+    if (activeTab === 'positions') {
+      fetchPositions(true)
+      fetchFilledOrders()
+    } else if (activeTab === 'orders') {
+      // Refresh orders when switching to orders tab
+      fetchOrders()
+    } else if (activeTab === 'order-history') {
+      fetchFilledOrders() // Fetch filled orders for order history tab
+    }
+  }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
+
   // Polling fallback: silent refresh every 2s when on positions tab
   useEffect(() => {
     if (activeTab === 'positions') {
@@ -227,270 +240,190 @@ export function BottomDock() {
     }
   }, [activeTab, fetchPositions, positions.length])
 
-  // Fetch data when tab changes - silent refresh so table doesn't flash
+  // WebSocket for real-time position/order updates with reconnection (no polling)
   useEffect(() => {
-    if (activeTab === 'positions') {
-      fetchPositions(true)
-      fetchFilledOrders()
-    } else if (activeTab === 'orders') {
-      // Refresh orders when switching to orders tab
-      fetchOrders()
-    } else if (activeTab === 'order-history') {
-      fetchFilledOrders() // Fetch filled orders for order history tab
-    }
-  }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
-
-  // WebSocket for real-time position updates
-  useEffect(() => {
-    const accessToken = useAuthStore.getState().accessToken
-    if (!accessToken) {
-      console.warn('No access token available for WebSocket authentication')
-      return
-    }
-
     const wsUrl =
       import.meta.env.VITE_WS_URL ||
       (import.meta.env.DEV ? `ws://${location.host}/ws?group=default` : 'ws://localhost:3003/ws?group=default')
-    const ws = new WebSocket(wsUrl)
+    let reconnectAttempts = 0
+    const maxReconnectAttempts = 30
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+    let mounted = true
 
-    ws.onopen = () => {
-      console.log('✅ WebSocket opened, authenticating...')
-      setWsConnected(true)
-      // Authenticate with JWT token
-      try {
-        const authMessage = JSON.stringify({ type: 'auth', token: accessToken })
-        console.log('Sending auth message:', { type: 'auth', token: accessToken ? `${accessToken.substring(0, 20)}...` : 'null' })
-        ws.send(authMessage)
-      } catch (error) {
-        console.error('Failed to send auth message:', error)
-      }
+    function scheduleReconnect() {
+      if (!mounted || reconnectAttempts >= maxReconnectAttempts) return
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)
+      reconnectAttempts++
+      reconnectTimeout = setTimeout(connect, delay)
     }
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        console.log('📨 [BottomDock] WebSocket message received:', {
-          type: data.type,
-          hasPayload: !!data.payload,
-          fullData: data
-        })
-        
-        // Log ALL messages to help debug
-        if (data.type !== 'pong' && data.type !== 'tick') {
-          console.log('📨 [BottomDock] Non-tick message:', JSON.stringify(data, null, 2))
+    function connect() {
+      if (!mounted) return
+      const accessToken = useAuthStore.getState().accessToken
+      if (!accessToken) {
+        console.warn('No access token available for WebSocket authentication')
+        return
+      }
+
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        if (!mounted || wsRef.current !== ws) return
+        reconnectAttempts = 0
+        setWsConnected(true)
+        try {
+          ws.send(JSON.stringify({ type: 'auth', token: accessToken }))
+        } catch (error) {
+          console.error('Failed to send auth message:', error)
         }
-        
-        // Handle auth responses
-        if (data.type === 'auth_success') {
-          console.log('✅ WebSocket authenticated successfully:', data)
-          // Subscribe to positions and orders channels after successful authentication
-          setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              const subscribeMsg = { type: 'subscribe', symbols: [], channels: ['positions', 'orders'] }
-              ws.send(JSON.stringify(subscribeMsg))
-              console.log('📡 [BottomDock] Subscribed to channels after auth:', subscribeMsg.channels)
-            }
-          }, 500) // Delay to ensure connection is fully ready
-        } else if (data.type === 'auth_error') {
-          console.error('❌ WebSocket authentication failed:', data.error)
-          toast.error(`WebSocket auth failed: ${data.error}`)
-        }
-        
-        // Handle position update events - check for position_update type
-        // The backend sends: { type: 'position_update', position_id, symbol, side, quantity, status, ... }
-        if (data.type === 'position_update') {
-          console.log('📊 [BottomDock] Position update received (position_update type):', data)
-          
-          // For position_update, all fields are directly on data
-          const positionId = data.position_id
-          if (!positionId) {
-            console.warn('⚠️ [BottomDock] Position update missing position_id:', data)
-            return
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type !== 'pong' && data.type !== 'tick') {
+            console.log('📨 [BottomDock] WebSocket message:', data.type, data)
           }
-          
-          const positionStatus = data.status || 'OPEN'
-          const isOpen = positionStatus === 'OPEN' || positionStatus === 'open'
-          
-          console.log('📊 [BottomDock] Processing position update:', {
-            positionId,
-            symbol: data.symbol,
-            side: data.side,
-            status: positionStatus,
-            isOpen,
-            quantity: data.quantity
-          })
-          
-          setPositions(prev => {
-            const existing = prev.findIndex(p => p.id === positionId)
-            
-            if (existing >= 0) {
-              // Update existing position
-              const updated = [...prev]
-              updated[existing] = {
-                ...updated[existing],
-                id: positionId,
-                symbol: data.symbol || updated[existing].symbol,
-                side: (data.side || updated[existing].side) as 'LONG' | 'SHORT',
-                size: data.quantity || updated[existing].size,
-                unrealized_pnl: data.unrealized_pnl || updated[existing].unrealized_pnl,
-                status: positionStatus as 'OPEN' | 'CLOSED',
-                updated_at: Date.now(),
+
+          if (data.type === 'auth_success') {
+            if (!mounted || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return
+            setTimeout(() => {
+              if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'subscribe', symbols: [], channels: ['positions', 'orders'] }))
               }
-              console.log('✅ [BottomDock] Position updated in state:', updated[existing])
-              return updated
-            } else if (isOpen) {
-              // Add new position immediately
-              console.log('✅ [BottomDock] Adding NEW position immediately:', {
-                positionId,
-                symbol: data.symbol,
-                side: data.side,
-                status: positionStatus
-              })
-              
-              const newPosition: Position = {
-                id: positionId,
-                user_id: '',
-                symbol: data.symbol || '',
-                side: (data.side === 'LONG' || data.side === 'long' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
-                size: data.quantity || '0',
-                original_size: undefined,
-                entry_price: '0', // Will be filled by fetchPositions
-                avg_price: '0', // Will be filled by fetchPositions
-                exit_price: undefined,
-                sl: undefined,
-                tp: undefined,
-                leverage: '50',
-                margin: '0', // Will be filled by fetchPositions
-                unrealized_pnl: data.unrealized_pnl || '0',
-                realized_pnl: '0',
-                status: positionStatus as 'OPEN' | 'CLOSED',
-                opened_at: Date.now(),
-                updated_at: Date.now(),
-                closed_at: undefined,
-              }
-              
-              console.log('✅ [BottomDock] New position object created:', newPosition)
-              console.log('✅ [BottomDock] Current positions count:', prev.length, 'Adding new one, will be:', prev.length + 1)
-              
-              // Fetch full position data in background (silent)
-              setTimeout(() => fetchPositions(true), 500)
-              
-              return [...prev, newPosition]
-            } else if (positionStatus === 'CLOSED' || positionStatus === 'closed') {
-              // Position was closed, remove from list
-              console.log('📊 [BottomDock] Position closed, removing from list:', positionId)
-              return prev.filter(p => p.id !== positionId)
-            }
-            
-            console.warn('⚠️ [BottomDock] Position update not processed:', { positionId, positionStatus, isOpen })
-            return prev
-          })
-        }
-        
-        // Handle SL/TP trigger notifications
-        if (data.type === 'position_update' && data.trigger_reason) {
-          const triggerReason = data.trigger_reason
-          if (triggerReason === 'SL' || triggerReason === 'TP') {
-            const triggerType = triggerReason === 'SL' ? 'Stop Loss' : 'Take Profit'
-            const symbol = data.symbol || 'Unknown'
-            const side = data.side || 'Unknown'
-            console.log('🎯 [BottomDock] Showing toaster for', triggerType, 'on', side, symbol)
-            toast.success(
-              `🎯 ${triggerType} Triggered! ${side} ${symbol} position closed`,
-              { duration: 5000 }
-            )
+            }, 500)
+          } else if (data.type === 'auth_error') {
+            console.error('❌ WebSocket authentication failed:', data.error)
+            toast.error(`WebSocket auth failed: ${data.error}`)
           }
-        }
-        
-        // Handle order update events
-        if (data.type === 'order_update' && data.payload) {
-          const orderUpdate = data.payload
-          console.log('📦 Order update received:', orderUpdate)
-          setOrders(prev => {
-            const existing = prev.findIndex(o => o.id === orderUpdate.order_id)
-            if (existing >= 0) {
-              // Update existing order
-              const updated = [...prev]
-              updated[existing] = {
-                ...updated[existing],
-                status: orderUpdate.status?.toLowerCase() || updated[existing].status,
-                filled_size: orderUpdate.filled_size?.toString() || updated[existing].filled_size,
-                avg_fill_price: orderUpdate.avg_fill_price?.toString() || updated[existing].avg_fill_price,
-              }
-              // Remove if filled or cancelled
-              if (orderUpdate.status === 'FILLED' || orderUpdate.status === 'CANCELLED') {
-                console.log('✅ [BottomDock] Order filled/cancelled, removing from list:', orderUpdate.order_id)
-                // If filled, immediately fetch positions multiple times to ensure we catch the new position
-                // This is a fallback in case WebSocket position_update doesn't arrive immediately
-                if (orderUpdate.status === 'FILLED') {
-                  fetchPositions(true).then(() => {
-                    const currentCount = positions.filter(p => p.status === 'OPEN').length
-                    lastPositionCountRef.current = currentCount
-                  })
-                  fetchFilledOrders()
-                  let pollCount = 0
-                  const aggressivePoll = setInterval(() => {
-                    pollCount++
-                    if (pollCount > 10) {
-                      clearInterval(aggressivePoll)
-                      return
-                    }
-                    fetchPositions(true).then(() => {
-                      const currentCount = positions.filter(p => p.status === 'OPEN').length
-                      if (currentCount > lastPositionCountRef.current) {
-                        lastPositionCountRef.current = currentCount
-                      }
-                    })
-                  }, 500)
+
+          if (data.type === 'position_update') {
+            const positionId = data.position_id
+            if (!positionId) return
+            const positionStatus = data.status || 'OPEN'
+            const isOpen = positionStatus === 'OPEN' || positionStatus === 'open'
+
+            setPositions(prev => {
+              const existing = prev.findIndex(p => p.id === positionId)
+              if (existing >= 0) {
+                const updated = [...prev]
+                updated[existing] = {
+                  ...updated[existing],
+                  id: positionId,
+                  symbol: data.symbol || updated[existing].symbol,
+                  side: (data.side || updated[existing].side) as 'LONG' | 'SHORT',
+                  size: data.quantity || updated[existing].size,
+                  unrealized_pnl: data.unrealized_pnl || updated[existing].unrealized_pnl,
+                  status: positionStatus as 'OPEN' | 'CLOSED',
+                  updated_at: Date.now(),
                 }
-                return updated.filter((_, i) => i !== existing)
+                return updated
               }
-              return updated
-            } else if (orderUpdate.status === 'PENDING') {
-              // Add new pending order
-              return [...prev, {
-                id: orderUpdate.order_id,
-                symbol: orderUpdate.symbol || 'UNKNOWN',
-                side: orderUpdate.side || 'BUY',
-                order_type: 'MARKET',
-                size: orderUpdate.quantity || '0',
-                price: orderUpdate.price,
-                status: 'pending',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              } as Order]
+              if (isOpen) {
+                const newPosition: Position = {
+                  id: positionId,
+                  user_id: '',
+                  symbol: data.symbol || '',
+                  side: (data.side === 'LONG' || data.side === 'long' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
+                  size: data.quantity || '0',
+                  original_size: undefined,
+                  entry_price: '0',
+                  avg_price: '0',
+                  exit_price: undefined,
+                  sl: undefined,
+                  tp: undefined,
+                  leverage: '50',
+                  margin: '0',
+                  unrealized_pnl: data.unrealized_pnl || '0',
+                  realized_pnl: '0',
+                  status: positionStatus as 'OPEN' | 'CLOSED',
+                  opened_at: Date.now(),
+                  updated_at: Date.now(),
+                  closed_at: undefined,
+                }
+                setTimeout(() => fetchPositions(true), 500)
+                return [...prev, newPosition]
+              }
+              if (positionStatus === 'CLOSED' || positionStatus === 'closed') {
+                return prev.filter(p => p.id !== positionId)
+              }
+              return prev
+            })
+          }
+
+          if (data.type === 'position_update' && data.trigger_reason) {
+            const triggerReason = data.trigger_reason
+            if (triggerReason === 'SL' || triggerReason === 'TP') {
+              const triggerType = triggerReason === 'SL' ? 'Stop Loss' : 'Take Profit'
+              toast.success(`🎯 ${triggerType} Triggered! ${data.side || ''} ${data.symbol || ''} position closed`, { duration: 5000 })
             }
-            return prev
-          })
+          }
+
+          if (data.type === 'order_update' && data.payload) {
+            const orderUpdate = data.payload
+            setOrders(prev => {
+              const existing = prev.findIndex(o => o.id === orderUpdate.order_id)
+              if (existing >= 0) {
+                const updated = [...prev]
+                updated[existing] = {
+                  ...updated[existing],
+                  status: orderUpdate.status?.toLowerCase() || updated[existing].status,
+                  filled_size: orderUpdate.filled_size?.toString() || updated[existing].filled_size,
+                  avg_fill_price: orderUpdate.avg_fill_price?.toString() || updated[existing].avg_fill_price,
+                }
+                if (orderUpdate.status === 'FILLED' || orderUpdate.status === 'CANCELLED') {
+                  if (orderUpdate.status === 'FILLED') {
+                    fetchPositions(true)
+                    fetchFilledOrders()
+                    setTimeout(() => fetchPositions(true), 600)
+                  }
+                  return updated.filter((_, i) => i !== existing)
+                }
+                return updated
+              }
+              if (orderUpdate.status === 'PENDING') {
+                return [...prev, {
+                  id: orderUpdate.order_id,
+                  symbol: orderUpdate.symbol || 'UNKNOWN',
+                  side: orderUpdate.side || 'BUY',
+                  order_type: 'MARKET',
+                  size: orderUpdate.quantity || '0',
+                  price: orderUpdate.price,
+                  status: 'pending',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                } as Order]
+              }
+              return prev
+            })
+          }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error)
         }
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error)
+      }
+
+      ws.onerror = () => {
+        // Can happen during connect/reconnect; onclose will trigger reconnect
+        if (ws.readyState !== WebSocket.CONNECTING) {
+          console.warn('WebSocket error (position/order stream)')
+        }
+      }
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null
+        setWsConnected(false)
+        if (mounted) scheduleReconnect()
       }
     }
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
-      console.error('WebSocket error details:', {
-        readyState: ws.readyState,
-        url: wsUrl,
-        hasToken: !!accessToken
-      })
-    }
-
-    ws.onclose = (event) => {
-      console.log('🔌 WebSocket closed:', {
-        code: event.code,
-        reason: event.reason,
-        wasClean: event.wasClean
-      })
-      setWsConnected(false)
-    }
-
-    wsRef.current = ws
-
+    connect()
     return () => {
+      mounted = false
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
       if (wsRef.current) {
         wsRef.current.close()
+        wsRef.current = null
       }
     }
   }, [])

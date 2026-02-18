@@ -516,7 +516,7 @@ export function RightTradingPanel() {
     return () => clearInterval(interval)
   }, [])
 
-  // Measure ping by fetching WS server health and measuring round-trip time
+  // Measure ping by fetching WS gateway health (proxied in dev to avoid CORS)
   useEffect(() => {
     const wsUrl =
       import.meta.env?.VITE_WS_URL ||
@@ -531,6 +531,7 @@ export function RightTradingPanel() {
         const res = await fetch(healthUrl, { method: 'GET', cache: 'no-store' })
         const end = performance.now()
         if (res.ok) setPingMs(Math.round(end - start))
+        else setPingMs(null)
       } catch {
         setPingMs(null)
       }

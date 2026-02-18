@@ -317,21 +317,22 @@ export function LeftSidebar() {
         </div>
       </div>
 
-      {/* Balances - from account summary (same as BottomDock) for real Equity/Margin */}
+      {/* Balance from WebSocket/wallet store (realtime); Equity & Margin from account summary */}
       <div className="shrink-0 px-4 py-3.5 border-b border-white/5 bg-gradient-to-b from-white/[0.02] to-transparent">
         <div className="space-y-2.5">
           {(() => {
-            const displayBalance = accountSummary?.balance ?? balance ?? 0
+            const displayBalance = balance ?? 0
             const displayEquity = accountSummary?.equity ?? equity ?? 0
             const displayMargin = accountSummary?.marginUsed ?? margin_used ?? 0
             const hasSummary = accountSummary != null
-            const loading = balanceLoading && !hasSummary
+            const balanceLoadingState = balanceLoading
+            const equityMarginLoading = !hasSummary
             return (
               <>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider">Balance</span>
-                    {loading ? (
+                    {balanceLoadingState ? (
                       <div className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse"></div>
                     ) : (
                       <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
@@ -339,7 +340,7 @@ export function LeftSidebar() {
                   </div>
                   <div className="text-xs font-medium text-text-muted/60">{currency || 'USD'}</div>
                 </div>
-                {loading ? (
+                {balanceLoadingState ? (
                   <div className="flex items-baseline gap-2">
                     <Skeleton className="h-7 w-32" />
                   </div>
@@ -359,7 +360,7 @@ export function LeftSidebar() {
                 <div className="flex items-center justify-between pt-1">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-text-muted/60">Equity</span>
-                    {loading ? (
+                    {equityMarginLoading ? (
                       <Skeleton className="h-4 w-20" />
                     ) : (
                       <span className="text-xs font-semibold text-text/80">
@@ -369,7 +370,7 @@ export function LeftSidebar() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-text-muted/60">Margin</span>
-                    {loading ? (
+                    {equityMarginLoading ? (
                       <Skeleton className="h-4 w-16" />
                     ) : (
                       <span className="text-xs font-semibold text-text/80">
