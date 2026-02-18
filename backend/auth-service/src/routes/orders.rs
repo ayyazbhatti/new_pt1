@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::routes::deposits::{compute_and_cache_account_summary, get_price_from_redis};
+use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin_from_db_fast, get_price_from_redis};
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 
@@ -292,19 +292,18 @@ async fn place_order(
     let free_margin = match free_margin {
         Some(fm) => fm,
         None => {
+            // Cache miss: use fast DB-only path so we don't block the request on full account summary.
             drop(conn);
-            compute_and_cache_account_summary(&pool, orders_state.redis.as_ref(), user_id).await;
-            let mut conn2 = orders_state.redis.get_async_connection().await
-                .map_err(|e| {
-                    error!("Failed to get Redis connection after cache warmup: {}", e);
-                    PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-                })?;
-            let s: Option<String> = conn2.hget(&summary_key, "free_margin").await
-                .map_err(|e| {
-                    error!("Failed to re-read free_margin: {}", e);
-                    PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-                })?;
-            s.and_then(|x| Decimal::from_str(&x).ok()).unwrap_or(Decimal::ZERO)
+            let fast_fm = get_free_margin_from_db_fast(&pool, user_id).await
+                .unwrap_or(Decimal::ZERO);
+            // Warm cache in background for next request (no await).
+            let pool_bg = pool.clone();
+            let redis_bg = Arc::clone(&orders_state.redis);
+            let user_id_bg = user_id;
+            tokio::spawn(async move {
+                compute_and_cache_account_summary(&pool_bg, redis_bg.as_ref(), user_id_bg).await;
+            });
+            fast_fm
         }
     };
 

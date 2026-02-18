@@ -552,6 +552,46 @@ async fn fetch_position_aggregates_from_redis(
     Some((margin_used, unrealized_pnl, realized_pnl))
 }
 
+/// Fast DB-only free margin for place_order when Redis cache is cold.
+/// Uses 2 queries so we don't block the request on full compute_and_cache_account_summary.
+pub(crate) async fn get_free_margin_from_db_fast(pool: &PgPool, user_id: Uuid) -> Option<Decimal> {
+    let balance: Option<Decimal> = sqlx::query_scalar(
+        r#"
+        SELECT
+            (SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE user_id = $1 AND type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND currency = 'USD')
+            - (SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND currency = 'USD')
+            + (SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status)
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let balance = balance.unwrap_or(Decimal::ZERO);
+
+    #[derive(sqlx::FromRow)]
+    struct OpenRow { margin_used: Option<Decimal>, pnl: Option<Decimal> }
+    let open: Option<OpenRow> = sqlx::query_as(
+        r#"SELECT COALESCE(SUM(margin_used), 0)::numeric AS margin_used, COALESCE(SUM(pnl), 0)::numeric AS pnl FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let (margin_used, unrealized_pnl) = open
+        .map(|r| (r.margin_used.unwrap_or(Decimal::ZERO), r.pnl.unwrap_or(Decimal::ZERO)))
+        .unwrap_or((Decimal::ZERO, Decimal::ZERO));
+    let equity = balance + unrealized_pnl;
+    let free_margin = if equity >= margin_used {
+        equity - margin_used
+    } else {
+        Decimal::ZERO
+    };
+    Some(free_margin)
+}
+
 /// Computes account summary, caches to Redis under position cache (pos:summary:{user_id}), and publishes to account:summary:updated.
 /// Call after orders, positions, or deposit/withdrawal changes.
 /// Position-derived metrics (margin, PnL) are read from Redis when available so they match the Positions tab.
