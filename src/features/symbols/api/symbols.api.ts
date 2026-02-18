@@ -7,6 +7,8 @@ import {
   ListSymbolsResponse,
 } from '../types/symbol'
 
+export type { CreateSymbolPayload, UpdateSymbolPayload, ListSymbolsParams }
+
 // Helper to convert snake_case to camelCase
 function toCamelCaseSymbol(obj: any): AdminSymbol {
   return {

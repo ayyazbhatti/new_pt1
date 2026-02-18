@@ -14,10 +14,17 @@ use redis_model::models::BalanceModel;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{error, info, warn};
 use uuid::Uuid;
+use dashmap::DashMap;
+use tokio::sync::Mutex;
+
+/// (symbol, group_id) -> (bid, ask). Used for tick-driven account summary so unrealized PnL uses live price.
+pub type PriceOverrides = HashMap<(String, String), (Decimal, Decimal)>;
 
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
@@ -27,6 +34,60 @@ use crate::services::ledger_service;
 pub struct DepositsState {
     pub redis: Arc<redis::Client>,
     pub nats: Arc<async_nats::Client>,
+}
+
+// ============================================================================
+// ACCOUNT SUMMARY COORDINATOR (per-user serialization + publish throttle)
+// ============================================================================
+/// Ensures only one account summary computation runs per user at a time and
+/// throttles WebSocket publishes to avoid UI flicker from rapid updates.
+pub struct AccountSummaryCoordinator {
+    user_locks: DashMap<Uuid, Arc<Mutex<()>>>,
+    last_publish: DashMap<Uuid, Instant>,
+}
+
+const PUBLISH_THROTTLE_MS: u64 = 250;
+
+impl AccountSummaryCoordinator {
+    pub fn new() -> Self {
+        Self {
+            user_locks: DashMap::new(),
+            last_publish: DashMap::new(),
+        }
+    }
+
+    /// Run a future with exclusive compute right for this user (one at a time per user).
+    pub async fn run_exclusive<Fut>(&self, user_id: Uuid, fut: Fut)
+    where
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let mutex = self
+            .user_locks
+            .entry(user_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+        let _guard = mutex.lock().await;
+        fut.await
+    }
+
+    pub fn should_publish(&self, user_id: Uuid) -> bool {
+        let now = Instant::now();
+        match self.last_publish.get(&user_id) {
+            Some(t) => now.duration_since(*t).as_millis() >= PUBLISH_THROTTLE_MS as u128,
+            None => true,
+        }
+    }
+
+    pub fn record_publish(&self, user_id: Uuid) {
+        self.last_publish.insert(user_id, Instant::now());
+    }
+}
+
+static COORDINATOR: std::sync::OnceLock<Arc<AccountSummaryCoordinator>> = std::sync::OnceLock::new();
+
+/// Call once at startup (e.g. from main) so account summary uses per-user serialization and throttle.
+pub fn init_account_summary_coordinator() {
+    COORDINATOR.get_or_init(|| Arc::new(AccountSummaryCoordinator::new()));
 }
 
 // ============================================================================
@@ -229,7 +290,7 @@ pub async fn calculate_wallet_balance(pool: &PgPool, user_id: Uuid) -> anyhow::R
         FROM transactions
         WHERE user_id = $1 
           AND type = 'deposit'::transaction_type
-          AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+          AND status = 'completed'::transaction_status
           AND currency = 'USD'
         "#
     )
@@ -245,7 +306,7 @@ pub async fn calculate_wallet_balance(pool: &PgPool, user_id: Uuid) -> anyhow::R
         FROM transactions
         WHERE user_id = $1 
           AND type = 'withdrawal'::transaction_type
-          AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+          AND status = 'completed'::transaction_status
           AND currency = 'USD'
         "#
     )
@@ -327,6 +388,367 @@ pub async fn calculate_wallet_balance(pool: &PgPool, user_id: Uuid) -> anyhow::R
     })
 }
 
+// ============================================================================
+// ACCOUNT SUMMARY (for BottomDock real-time display)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSummary {
+    pub user_id: String,
+    pub balance: f64,
+    pub equity: f64,
+    pub margin_used: f64,
+    pub free_margin: f64,
+    /// Margin level as percentage string, or "inf" when margin_used = 0
+    pub margin_level: String,
+    pub realized_pnl: f64,
+    pub unrealized_pnl: f64,
+    pub updated_at: String,
+}
+
+/// Read current (bid, ask) from Redis key prices:SYMBOL:GROUP_ID (written by order-engine on each tick).
+/// Returns None if key missing or parse error.
+async fn get_price_from_redis(
+    redis: &redis::Client,
+    symbol: &str,
+    group_id: &str,
+) -> Option<(Decimal, Decimal)> {
+    let key = format!("prices:{}:{}", symbol, group_id);
+    let mut conn = redis.get_async_connection().await.ok()?;
+    let json_str: String = conn.get(&key).await.ok()?;
+    let val: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+    let bid_s = val.get("bid").and_then(|v| v.as_str())?;
+    let ask_s = val.get("ask").and_then(|v| v.as_str())?;
+    let bid = Decimal::from_str(bid_s).ok()?;
+    let ask = Decimal::from_str(ask_s).ok()?;
+    if bid <= Decimal::ZERO || ask <= Decimal::ZERO {
+        return None;
+    }
+    Some((bid, ask))
+}
+
+/// Fetches position-derived aggregates from Redis (same source as Positions tab).
+/// Returns (margin_used, unrealized_pnl, realized_pnl). Uses "margin" and "status" from pos:by_id:* hashes.
+/// When `price_overrides` is set, unrealized PnL for open positions is computed from (bid, ask) for (symbol, group_id) instead of stored value.
+/// When `price_overrides` is None, tries to read current price from Redis (prices:SYMBOL:GROUP_ID, written by order-engine) so UnR PnL is not stuck at 0.
+async fn fetch_position_aggregates_from_redis(
+    redis: &redis::Client,
+    user_id: Uuid,
+    price_overrides: Option<&PriceOverrides>,
+) -> Option<(Decimal, Decimal, Decimal)> {
+    let mut conn = match redis.get_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Account summary: Redis connection failed for user {}: {}", user_id, e);
+            return None;
+        }
+    };
+    let positions_key = Keys::positions_set(user_id);
+    let position_ids: Vec<String> = match conn.smembers(&positions_key).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("Account summary: Redis SMEMBERS pos set failed for user {}: {}", user_id, e);
+            return None;
+        }
+    };
+    let mut margin_used = Decimal::ZERO;
+    let mut unrealized_pnl = Decimal::ZERO;
+    let mut realized_pnl = Decimal::ZERO;
+    for pos_id_str in position_ids {
+        let pos_id = match Uuid::parse_str(&pos_id_str) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+        let pos_key = Keys::position_by_id(pos_id);
+        let status: Option<String> = conn.hget(&pos_key, "status").await.ok().flatten();
+        let status = status.as_deref().unwrap_or("");
+        let margin_str: Option<String> = conn.hget(&pos_key, "margin").await.ok().flatten();
+        let margin: Decimal = margin_str
+            .as_deref()
+            .and_then(|s| Decimal::from_str(s).ok())
+            .unwrap_or(Decimal::ZERO);
+        let real_str: Option<String> = conn.hget(&pos_key, "realized_pnl").await.ok().flatten();
+        let real: Decimal = real_str
+            .as_deref()
+            .and_then(|s| Decimal::from_str(s).ok())
+            .unwrap_or(Decimal::ZERO);
+        realized_pnl += real;
+
+        let is_open = status.eq_ignore_ascii_case("open");
+        if is_open {
+            margin_used += margin;
+
+            let unreal: Decimal = if let Some(overrides) = price_overrides {
+                let symbol: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
+                let group_id: String = conn.hget(&pos_key, "group_id").await.ok().flatten().unwrap_or_default();
+                let key = (symbol.clone(), group_id.clone());
+                let (bid, ask) = if let Some(&(b, a)) = overrides.get(&key) {
+                    (b, a)
+                } else {
+                    // Overrides only contain the tick's symbol; for other symbols fall back to Redis price so UnR Net PnL is always sum of ALL open positions
+                    match get_price_from_redis(redis, &symbol, &group_id).await {
+                        Some((b, a)) => (b, a),
+                        None => {
+                            let stored_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
+                            let stored: Decimal = stored_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO);
+                            unrealized_pnl += stored;
+                            continue;
+                        }
+                    }
+                };
+                let size_str: Option<String> = conn.hget(&pos_key, "size").await.ok().flatten();
+                let size: Decimal = size_str
+                    .as_deref()
+                    .and_then(|s| Decimal::from_str(s).ok())
+                    .unwrap_or(Decimal::ZERO);
+                let avg_str: Option<String> = conn.hget(&pos_key, "avg_price").await.ok().flatten();
+                let avg_price: Decimal = avg_str
+                    .as_deref()
+                    .and_then(|s| Decimal::from_str(s).ok())
+                    .unwrap_or(Decimal::ZERO);
+                let side: Option<String> = conn.hget(&pos_key, "side").await.ok().flatten();
+                match side.as_deref() {
+                    Some("LONG") => (bid - avg_price) * size,
+                    Some("SHORT") => (avg_price - ask) * size,
+                    _ => {
+                        let unreal_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
+                        unreal_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO)
+                    }
+                }
+            } else {
+                // No overrides: compute from Redis price key (order-engine writes prices:SYMBOL:GROUP on each tick) so UnR PnL is not stuck at 0
+                let symbol: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
+                let group_id: String = conn.hget(&pos_key, "group_id").await.ok().flatten().unwrap_or_default();
+                let unreal = if let Some((bid, ask)) = get_price_from_redis(redis, &symbol, &group_id).await {
+                    let size_str: Option<String> = conn.hget(&pos_key, "size").await.ok().flatten();
+                    let size: Decimal = size_str
+                        .as_deref()
+                        .and_then(|s| Decimal::from_str(s).ok())
+                        .unwrap_or(Decimal::ZERO);
+                    let avg_str: Option<String> = conn.hget(&pos_key, "avg_price").await.ok().flatten();
+                    let avg_price: Decimal = avg_str
+                        .as_deref()
+                        .and_then(|s| Decimal::from_str(s).ok())
+                        .unwrap_or(Decimal::ZERO);
+                    let side: Option<String> = conn.hget(&pos_key, "side").await.ok().flatten();
+                    match side.as_deref() {
+                        Some("LONG") => (bid - avg_price) * size,
+                        Some("SHORT") => (avg_price - ask) * size,
+                        _ => {
+                            let unreal_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
+                            unreal_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO)
+                        }
+                    }
+                } else {
+                    let unreal_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
+                    unreal_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO)
+                };
+                unreal
+            };
+            unrealized_pnl += unreal;
+        }
+    }
+    Some((margin_used, unrealized_pnl, realized_pnl))
+}
+
+/// Computes account summary, caches to Redis under position cache (pos:summary:{user_id}), and publishes to account:summary:updated.
+/// Call after orders, positions, or deposit/withdrawal changes.
+/// Position-derived metrics (margin, PnL) are read from Redis when available so they match the Positions tab.
+pub async fn compute_and_cache_account_summary(
+    pool: &PgPool,
+    redis: &redis::Client,
+    user_id: Uuid,
+) {
+    compute_and_cache_account_summary_with_prices(pool, redis, user_id, None).await
+}
+
+/// Like compute_and_cache_account_summary but uses live (bid, ask) for unrealized PnL when overrides are provided (tick-driven).
+/// Uses AccountSummaryCoordinator when initialized: one computation per user at a time, and throttled publish to reduce UI flicker.
+pub async fn compute_and_cache_account_summary_with_prices(
+    pool: &PgPool,
+    redis: &redis::Client,
+    user_id: Uuid,
+    price_overrides: Option<PriceOverrides>,
+) {
+    let overrides_ref = price_overrides.as_ref();
+
+    let do_compute = async {
+        match compute_account_summary_inner(pool, Some(redis), user_id, overrides_ref).await {
+            Ok(summary) => {
+                let key = redis_model::keys::Keys::account_summary(user_id);
+                let json = match serde_json::to_string(&summary) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        error!("Failed to serialize account summary: {}", e);
+                        return;
+                    }
+                };
+                if let Ok(mut conn) = redis.get_async_connection().await {
+                    let _: Result<(), _> = conn.hset_multiple(&key, &[
+                        ("balance", summary.balance.to_string()),
+                        ("equity", summary.equity.to_string()),
+                        ("margin_used", summary.margin_used.to_string()),
+                        ("free_margin", summary.free_margin.to_string()),
+                        ("margin_level", summary.margin_level.clone()),
+                        ("realized_pnl", summary.realized_pnl.to_string()),
+                        ("unrealized_pnl", summary.unrealized_pnl.to_string()),
+                        ("updated_at", summary.updated_at.clone()),
+                    ]).await;
+                    let should_pub = COORDINATOR
+                        .get()
+                        .map(|c| c.should_publish(user_id))
+                        .unwrap_or(true);
+                    if should_pub {
+                        if let Ok(count) = conn.publish::<_, _, i32>("account:summary:updated", &json).await {
+                            info!("✅ Published account summary to Redis ({} subscribers) for user_id={}", count, user_id);
+                            if let Some(c) = COORDINATOR.get() {
+                                c.record_publish(user_id);
+                            }
+                        } else {
+                            error!("❌ Failed to publish account summary to Redis for user_id={}", user_id);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to compute account summary for user {}: {}", user_id, e);
+            }
+        }
+    };
+
+    if let Some(coord) = COORDINATOR.get() {
+        coord.run_exclusive(user_id, do_compute).await
+    } else {
+        do_compute.await
+    }
+}
+
+pub(crate) async fn compute_account_summary_inner(
+    pool: &PgPool,
+    redis: Option<&redis::Client>,
+    user_id: Uuid,
+    price_overrides: Option<&PriceOverrides>,
+) -> anyhow::Result<AccountSummary> {
+    // Deposits and withdrawals always from DB
+    let total_deposits: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"
+        SELECT COALESCE(SUM(net_amount), 0)
+        FROM transactions
+        WHERE user_id = $1 AND type = 'deposit'::transaction_type
+          AND status = 'completed'::transaction_status AND currency = 'USD'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let deposits = total_deposits.unwrap_or(Decimal::ZERO);
+
+    let total_withdrawals: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"
+        SELECT COALESCE(SUM(net_amount), 0)
+        FROM transactions
+        WHERE user_id = $1 AND type = 'withdrawal'::transaction_type
+          AND status = 'completed'::transaction_status AND currency = 'USD'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let withdrawals = total_withdrawals.unwrap_or(Decimal::ZERO);
+
+    // Position-derived metrics: prefer Redis (same source as Positions tab) so margin/PnL match UI
+    let (realized_pnl, unrealized_pnl, margin_used) = if let Some(rd) = redis {
+        if let Some((margin, unreal, real)) =
+            fetch_position_aggregates_from_redis(rd, user_id, price_overrides).await
+        {
+            (real, unreal, margin)
+        } else {
+            // Redis miss or error: fall back to DB
+            info!(
+                "Account summary: using DB fallback for position aggregates (user {}). Ensure auth-service uses same Redis as order-engine.",
+                user_id
+            );
+            let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+                r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status"#,
+            )
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+                r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+            )
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            let total_margin_used: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+                r#"SELECT COALESCE(SUM(margin_used), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+            )
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            (
+                total_realized_pnl.unwrap_or(Decimal::ZERO),
+                total_unrealized_pnl.unwrap_or(Decimal::ZERO),
+                total_margin_used.unwrap_or(Decimal::ZERO),
+            )
+        }
+    } else {
+        let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+            r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status"#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+        let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+            r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+        let total_margin_used: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+            r#"SELECT COALESCE(SUM(margin_used), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+        (
+            total_realized_pnl.unwrap_or(Decimal::ZERO),
+            total_unrealized_pnl.unwrap_or(Decimal::ZERO),
+            total_margin_used.unwrap_or(Decimal::ZERO),
+        )
+    };
+
+    let balance = deposits - withdrawals + realized_pnl;
+
+    let equity = balance + unrealized_pnl;
+    let free_margin = if equity >= margin_used {
+        equity - margin_used
+    } else {
+        Decimal::ZERO
+    };
+
+    let margin_level = if margin_used > Decimal::ZERO {
+        format!("{:.2}", (equity / margin_used) * Decimal::from(100))
+    } else {
+        "inf".to_string()
+    };
+
+    let to_f64 = |d: Decimal| d.to_string().parse::<f64>().unwrap_or(0.0);
+
+    Ok(AccountSummary {
+        user_id: user_id.to_string(),
+        balance: to_f64(balance),
+        equity: to_f64(equity),
+        margin_used: to_f64(margin_used),
+        free_margin: to_f64(free_margin),
+        margin_level,
+        realized_pnl: to_f64(realized_pnl),
+        unrealized_pnl: to_f64(unrealized_pnl),
+        updated_at: Utc::now().to_rfc3339(),
+    })
+}
+
 /// Recalculates wallet balance and publishes to Redis for real-time WebSocket updates.
 /// Call this after any operation that changes balance (deposit/withdrawal approval, etc.).
 pub async fn publish_wallet_balance_updated(
@@ -364,6 +786,53 @@ pub async fn publish_wallet_balance_updated(
         }
         Err(e) => {
             error!("Failed to calculate balance for publish (user {}): {}", user_id, e);
+        }
+    }
+}
+
+async fn get_account_summary(
+    State(pool): State<PgPool>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<AccountSummary>, StatusCode> {
+    let user_id = claims.sub;
+    // Try Redis cache first
+    let key = redis_model::keys::Keys::account_summary(user_id);
+    if let Ok(mut conn) = deposits_state.redis.get_async_connection().await {
+        let balance: Option<String> = conn.hget(&key, "balance").await.ok();
+        let equity: Option<String> = conn.hget(&key, "equity").await.ok();
+        let margin_used: Option<String> = conn.hget(&key, "margin_used").await.ok();
+        let free_margin: Option<String> = conn.hget(&key, "free_margin").await.ok();
+        let margin_level: Option<String> = conn.hget(&key, "margin_level").await.ok();
+        let realized_pnl: Option<String> = conn.hget(&key, "realized_pnl").await.ok();
+        let unrealized_pnl: Option<String> = conn.hget(&key, "unrealized_pnl").await.ok();
+        let updated_at: Option<String> = conn.hget(&key, "updated_at").await.ok();
+        if let (Some(bal), Some(equity), Some(margin_used), Some(free_margin), Some(margin_level), Some(realized_pnl), Some(unrealized_pnl), Some(updated_at)) =
+            (balance, equity, margin_used, free_margin, margin_level, realized_pnl, unrealized_pnl, updated_at)
+        {
+            let balance_f: f64 = bal.parse().unwrap_or(0.0);
+                return Ok(Json(AccountSummary {
+                    user_id: user_id.to_string(),
+                    balance: balance_f,
+                    equity: equity.parse().unwrap_or(0.0),
+                    margin_used: margin_used.parse().unwrap_or(0.0),
+                    free_margin: free_margin.parse().unwrap_or(0.0),
+                    margin_level,
+                    realized_pnl: realized_pnl.parse().unwrap_or(0.0),
+                    unrealized_pnl: unrealized_pnl.parse().unwrap_or(0.0),
+                    updated_at,
+                }));
+        }
+    }
+    // Cache miss: compute, cache, return (use Redis for position metrics so they match Positions tab)
+    match compute_account_summary_inner(&pool, Some(deposits_state.redis.as_ref()), user_id, None).await {
+        Ok(summary) => {
+            compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), user_id).await;
+            Ok(Json(summary))
+        }
+        Err(e) => {
+            error!("Failed to compute account summary for user {}: {}", user_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
@@ -644,7 +1113,7 @@ async fn approve_deposit(
     let total_deposits: Decimal = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(net_amount), 0) FROM transactions
-        WHERE user_id = $1 AND type = 'deposit'::transaction_type AND status IN ('approved'::transaction_status, 'completed'::transaction_status) AND currency = $2
+        WHERE user_id = $1 AND type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND currency = $2
         "#
     )
     .bind(user_id)
@@ -660,7 +1129,7 @@ async fn approve_deposit(
     let total_withdrawals: Decimal = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(net_amount), 0) FROM transactions
-        WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status IN ('approved'::transaction_status, 'completed'::transaction_status) AND currency = $2
+        WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND currency = $2
         "#
     )
     .bind(user_id)
@@ -787,6 +1256,7 @@ async fn approve_deposit(
 
     // Publish to Redis for real-time WebSocket balance update (single source of truth)
     publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), user_id).await;
+    compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), user_id).await;
 
     let notification_id = Uuid::new_v4();
     sqlx::query(
@@ -1215,6 +1685,23 @@ pub fn create_wallet_router(
 ) -> Router<PgPool> {
     Router::new()
         .route("/balance", get(get_wallet_balance))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
+            let state = deposits_state.clone();
+            async move {
+                req.extensions_mut().insert(state);
+                next.run(req).await
+            }
+        }))
+        .with_state(pool)
+}
+
+pub fn create_account_router(
+    pool: PgPool,
+    deposits_state: DepositsState,
+) -> Router<PgPool> {
+    Router::new()
+        .route("/summary", get(get_account_summary))
         .layer(axum::middleware::from_fn(auth_middleware))
         .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
             let state = deposits_state.clone();

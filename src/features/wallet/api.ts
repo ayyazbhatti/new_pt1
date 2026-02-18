@@ -24,6 +24,22 @@ export interface WalletBalanceResponse {
   updatedAt: string
 }
 
+export interface AccountSummaryResponse {
+  userId: string
+  balance: number
+  equity: number
+  marginUsed: number
+  freeMargin: number
+  marginLevel: string
+  realizedPnl: number
+  unrealizedPnl: number
+  updatedAt: string
+}
+
+export async function fetchAccountSummary(): Promise<AccountSummaryResponse> {
+  return http<AccountSummaryResponse>('/api/account/summary')
+}
+
 export async function createDepositRequest(
   input: CreateDepositRequestInput
 ): Promise<CreateDepositRequestResponse> {

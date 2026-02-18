@@ -29,6 +29,19 @@ impl Keys {
         format!("pos:by_id:{}", position_id)
     }
 
+    /// Open positions by symbol (ZSET: score = entry price, member = position_id).
+    /// Used by order-engine Lua and by auth-service for tick-driven account summary.
+    pub fn positions_open_by_symbol(symbol: &str) -> String {
+        format!("pos:open:{}", symbol)
+    }
+
+    /// Account summary for a user (Balance, Equity, Margin, PnL, etc.).
+    /// Stored under position namespace so position cache is centralized: pos:* holds
+    /// position list, per-position hashes, and this summary (derived from positions + DB).
+    pub fn position_summary(user_id: Uuid) -> String {
+        format!("pos:summary:{}", user_id)
+    }
+
     // Open orders sorted set
     pub fn orders_open(user_id: Uuid) -> String {
         format!("ord:{}:open", user_id)
@@ -77,6 +90,17 @@ impl Keys {
     // Idempotency
     pub fn idempotency(user_id: Uuid, key: &str) -> String {
         format!("idempo:{}:{}", user_id, key)
+    }
+
+    /// Account summary cache key. Alias for position_summary so all position-related
+    /// data (positions + summary) lives under pos:* (centralized position cache).
+    pub fn account_summary(user_id: Uuid) -> String {
+        Self::position_summary(user_id)
+    }
+
+    // Account summary pub/sub channel (event name; not a Redis key)
+    pub fn account_summary_channel(user_id: Uuid) -> String {
+        format!("account:summary:{}", user_id)
     }
 }
 

@@ -20,6 +20,15 @@ export default defineConfig({
         target: 'http://localhost:3000',
         changeOrigin: true,
       },
+      '/ws': {
+        target: 'ws://localhost:3003',
+        ws: true,
+      },
+      '/ws-health': {
+        target: 'http://localhost:9002',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/ws-health/, '/health'),
+      },
     },
   },
 })

@@ -116,8 +116,12 @@ impl TickHandler {
                     if order.status != contracts::enums::OrderStatus::Pending {
                         continue;
                     }
-                    if order.group_id.as_deref() != group_id {
-                        continue;
+                    // When tick has no group_id (ticks.SYMBOL from data-provider), treat as global - fill any order for symbol
+                    // When tick has group_id (ticks.SYMBOL.GROUP_ID), only fill orders matching that group
+                    if let Some(tick_group) = group_id {
+                        if order.group_id.as_deref() != Some(tick_group) {
+                            continue;
+                        }
                     }
 
                     let should_fill = match order.order_type {

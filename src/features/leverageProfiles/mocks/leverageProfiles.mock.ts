@@ -1,6 +1,6 @@
 import { LeverageProfile } from '../types/leverageProfile'
 
-export const mockLeverageProfiles: LeverageProfile[] = [
+export const mockLeverageProfiles = [
   {
     id: '1',
     name: 'Standard Profile',
@@ -44,5 +44,5 @@ export const mockLeverageProfiles: LeverageProfile[] = [
     createdAt: '2024-01-05',
     updatedAt: '2024-01-12',
   },
-]
+] as unknown as LeverageProfile[]
 

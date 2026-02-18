@@ -31,12 +31,24 @@ export type DepositRequestApprovedPayload = {
 
 export type NotificationPushPayload = {
   id: string
-  kind: 'DEPOSIT_REQUEST' | 'DEPOSIT_APPROVED'
+  kind: 'DEPOSIT_REQUEST' | 'DEPOSIT_APPROVED' | 'WITHDRAWAL_APPROVED'
   title: string
   message: string
   createdAt: string
   read: boolean
   meta?: Record<string, any>
+}
+
+export type AccountSummaryUpdatedPayload = {
+  userId: string
+  balance: number
+  equity: number
+  marginUsed: number
+  freeMargin: number
+  marginLevel: string
+  realizedPnl: number
+  unrealizedPnl: number
+  updatedAt: string
 }
 
 // Admin Trading WebSocket Events
@@ -178,6 +190,21 @@ export type WsInboundEvent =
         margin_used: number
         free_margin: number
         updatedAt: string
+      }
+    }
+  | {
+      type: 'account.summary.updated'
+      payload: AccountSummaryUpdatedPayload
+    }
+  | {
+      type: 'withdrawal.request.approved'
+      payload: {
+        userId: string
+        amount: number
+        currency: string
+        approvedAt: string
+        newBalance: number
+        requestId: string
       }
     }
   | {

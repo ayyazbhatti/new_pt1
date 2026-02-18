@@ -65,7 +65,7 @@ export function LeftSidebar() {
       if (document.visibilityState !== 'visible') return
       fetchBalance()
         .then((res) => {
-          const raw = res as Record<string, unknown>
+          const raw = res as unknown as Record<string, unknown>
           const available = Number(res.available ?? raw.available ?? 0)
           const locked = Number(res.locked ?? raw.locked ?? 0)
           const equity = Number(res.equity ?? raw.equity ?? available)
@@ -104,7 +104,7 @@ export function LeftSidebar() {
       fetchBalance()
         .then((res) => {
           if (cancelled) return
-          const raw = res as Record<string, unknown>
+          const raw = res as unknown as Record<string, unknown>
           const available = Number(res.available ?? raw.available ?? 0)
           const locked = Number(res.locked ?? raw.locked ?? 0)
           const equity = Number(res.equity ?? raw.equity ?? available)
@@ -526,13 +526,13 @@ export function LeftSidebar() {
       {/* Bottom Nav */}
       <div className="shrink-0 px-4 py-2.5 border-t border-white/5 space-y-0.5">
         <button
-          onClick={() => toast.info('Settings feature coming soon')}
+          onClick={() => toast('Settings feature coming soon')}
           className="w-full text-left text-xs font-medium text-text-muted/70 hover:text-text hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
         >
           Settings
         </button>
         <button
-          onClick={() => toast.info('Theme toggle coming soon')}
+          onClick={() => toast('Theme toggle coming soon')}
           className="w-full text-left text-xs font-medium text-text-muted/70 hover:text-text hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
         >
           Light Theme

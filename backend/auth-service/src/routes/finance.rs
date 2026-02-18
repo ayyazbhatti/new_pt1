@@ -17,7 +17,7 @@ use redis::AsyncCommands;
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
 use crate::services::ledger_service;
-use crate::routes::deposits::publish_wallet_balance_updated;
+use crate::routes::deposits::{compute_and_cache_account_summary, publish_wallet_balance_updated};
 
 #[derive(Debug, Serialize)]
 pub struct FinanceOverviewResponse {
@@ -258,7 +258,7 @@ async fn approve_transaction(
         sqlx::query(
             r#"
             UPDATE transactions
-            SET status = 'approved'::transaction_status,
+            SET status = 'completed'::transaction_status,
                 created_by = $1,
                 completed_at = $2,
                 updated_at = $3
@@ -280,7 +280,7 @@ async fn approve_transaction(
         sqlx::query(
             r#"
             UPDATE transactions
-            SET status = 'approved'::transaction_status,
+            SET status = 'completed'::transaction_status,
                 completed_at = $1,
                 updated_at = $2
             WHERE id = $3
@@ -301,6 +301,7 @@ async fn approve_transaction(
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     if let Ok(client) = redis::Client::open(redis_url.as_str()) {
         publish_wallet_balance_updated(&pool, &client, user_id).await;
+        compute_and_cache_account_summary(&pool, &client, user_id).await;
     }
 
     info!("Transaction approved: transaction_id={}, user_id={}, type={}, amount={}", 
@@ -474,7 +475,7 @@ async fn get_finance_overview(State(pool): State<PgPool>) -> Result<Json<Finance
         )
         FROM transactions
         WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type)
-        AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+        AND status = 'completed'::transaction_status
         AND DATE(created_at) = CURRENT_DATE
         "#
     )
@@ -491,7 +492,7 @@ async fn get_finance_overview(State(pool): State<PgPool>) -> Result<Json<Finance
         SELECT COUNT(*)::bigint
         FROM transactions
         WHERE type = 'deposit'::transaction_type
-        AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+        AND status = 'completed'::transaction_status
         AND DATE(created_at) = CURRENT_DATE
         "#
     )
@@ -507,7 +508,7 @@ async fn get_finance_overview(State(pool): State<PgPool>) -> Result<Json<Finance
         SELECT COALESCE(SUM(net_amount), 0)
         FROM transactions
         WHERE type = 'deposit'::transaction_type
-        AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+        AND status = 'completed'::transaction_status
         AND DATE(created_at) = CURRENT_DATE
         "#
     )
@@ -524,7 +525,7 @@ async fn get_finance_overview(State(pool): State<PgPool>) -> Result<Json<Finance
         SELECT COUNT(*)::bigint
         FROM transactions
         WHERE type = 'withdrawal'::transaction_type
-        AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+        AND status = 'completed'::transaction_status
         AND DATE(created_at) = CURRENT_DATE
         "#
     )
@@ -540,7 +541,7 @@ async fn get_finance_overview(State(pool): State<PgPool>) -> Result<Json<Finance
         SELECT COALESCE(SUM(net_amount), 0)
         FROM transactions
         WHERE type = 'withdrawal'::transaction_type
-        AND status IN ('approved'::transaction_status, 'completed'::transaction_status)
+        AND status = 'completed'::transaction_status
         AND DATE(created_at) = CURRENT_DATE
         "#
     )

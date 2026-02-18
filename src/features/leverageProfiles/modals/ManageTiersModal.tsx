@@ -29,7 +29,7 @@ export function ManageTiersModal({ profile }: ManageTiersModalProps) {
       ...tierData,
       id: `tier-${Date.now()}`,
     }
-    setTiers([...tiers, newTier].sort((a, b) => a.from - b.from))
+    setTiers([...tiers, newTier].sort((a, b) => Number((a as { from?: number }).from ?? a.notionalFrom ?? 0) - Number((b as { from?: number }).from ?? b.notionalFrom ?? 0)))
     toast.success('Tier added successfully')
   }
 
@@ -44,7 +44,7 @@ export function ManageTiersModal({ profile }: ManageTiersModalProps) {
     setTiers(
       tiers
         .map((t) => (t.id === updatedTier.id ? updatedTier : t))
-        .sort((a, b) => a.from - b.from)
+        .sort((a, b) => Number((a as { from?: number }).from ?? a.notionalFrom ?? 0) - Number((b as { from?: number }).from ?? b.notionalFrom ?? 0))
     )
     toast.success('Tier updated successfully')
   }

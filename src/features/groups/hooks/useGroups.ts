@@ -5,6 +5,7 @@ import {
   createGroup,
   updateGroup,
   deleteGroup,
+  getGroup,
   getGroupUsage,
   updateGroupPriceProfile,
 } from '../api/groups.api'

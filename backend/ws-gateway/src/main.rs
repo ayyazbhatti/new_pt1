@@ -54,6 +54,7 @@ async fn main() -> Result<()> {
         "deposits:approved".to_string(),
         "notifications:push".to_string(),
         "wallet:balance:updated".to_string(),
+        "account:summary:updated".to_string(),
     ];
 
     // Create Redis subscriber

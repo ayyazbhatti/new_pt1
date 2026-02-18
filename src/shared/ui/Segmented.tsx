@@ -1,7 +1,7 @@
 import { HTMLAttributes, ReactNode } from 'react'
 import { cn } from '@/shared/utils'
 
-interface SegmentedProps extends HTMLAttributes<HTMLDivElement> {
+interface SegmentedProps extends Omit<HTMLAttributes<HTMLDivElement>, 'onChange'> {
   options: { value: string; label: ReactNode }[]
   value: string
   onChange?: (value: string) => void

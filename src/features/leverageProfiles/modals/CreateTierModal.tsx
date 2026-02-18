@@ -44,10 +44,11 @@ export function CreateTierModal({ existingTiers = [], onSave }: CreateTierModalP
   const onSubmit = (data: TierFormData) => {
     // Check for overlapping ranges
     const overlaps = existingTiers.some(
-      (tier) =>
-        (data.from >= tier.from && data.from <= tier.to) ||
-        (data.to >= tier.from && data.to <= tier.to) ||
-        (data.from <= tier.from && data.to >= tier.to)
+      (tier) => {
+        const tFrom = Number((tier as { from?: number }).from ?? tier.notionalFrom ?? 0)
+        const tTo = Number((tier as { to?: number }).to ?? tier.notionalTo ?? 0)
+        return (data.from >= tFrom && data.from <= tTo) || (data.to >= tFrom && data.to <= tTo) || (data.from <= tFrom && data.to >= tTo)
+      }
     )
 
     if (overlaps) {

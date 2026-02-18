@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use async_nats::Message;
 use contracts::events::OrderUpdatedEvent;
+use crate::routes::deposits::compute_and_cache_account_summary;
 use contracts::enums::OrderStatus;
 use contracts::messages::VersionedMessage;
 use futures::StreamExt;
@@ -57,15 +58,17 @@ impl OrderEventHandler {
                     event.order_id, event.status, event.filled_size, event.avg_fill_price
                 );
                 
-                // Only update database if order is filled
-                if matches!(event.status, OrderStatus::Filled) {
-                    self.update_order_in_database(&event).await?;
-                } else if matches!(event.status, OrderStatus::Cancelled) {
-                    self.update_order_cancelled_in_database(&event).await?;
-                } else {
-                    info!("Order status is {:?}, skipping database update", event.status);
-                }
-                
+        // Only update database if order is filled
+        if matches!(event.status, OrderStatus::Filled) {
+            self.update_order_in_database(&event).await?;
+            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+        } else if matches!(event.status, OrderStatus::Cancelled) {
+            self.update_order_cancelled_in_database(&event).await?;
+            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+        } else {
+            info!("Order status is {:?}, skipping database update", event.status);
+        }
+        
                 return Ok(());
             }
         };
@@ -82,8 +85,10 @@ impl OrderEventHandler {
         // Only update database if order is filled
         if matches!(event.status, OrderStatus::Filled) {
             self.update_order_in_database(&event).await?;
+            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
         } else if matches!(event.status, OrderStatus::Cancelled) {
             self.update_order_cancelled_in_database(&event).await?;
+            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
         } else {
             info!("Order status is {:?}, skipping database update", event.status);
         }

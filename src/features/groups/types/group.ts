@@ -14,6 +14,15 @@ export type UserGroup = {
   leverageProfile?: ProfileRef | null
   createdAt: string
   updatedAt: string
+  /** Extended fields for edit modal compatibility */
+  currency?: string
+  region?: string
+  tradingAllowed?: boolean
+  spreadMarkup?: number
+  commission?: number
+  swapProfile?: string
+  maxExposure?: number
+  usersCount?: number
 }
 
 export interface ListGroupsParams {

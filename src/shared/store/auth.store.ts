@@ -6,6 +6,8 @@ export interface User {
   email: string
   firstName: string
   lastName: string
+  /** Display name - computed from firstName + lastName or set by API */
+  name?: string
   role: string
   status: string
 }

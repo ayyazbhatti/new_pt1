@@ -109,7 +109,7 @@ pub async fn place_order(
     // Generate order_id before creating command
     let order_id = Uuid::new_v4();
 
-    // Create command
+    // Create command (group_id / leverage from JWT in auth-service; core-api uses None)
     let cmd = PlaceOrderCommand {
         order_id,
         user_id,
@@ -124,6 +124,10 @@ pub async fn place_order(
         client_order_id: req.client_order_id,
         idempotency_key: req.idempotency_key,
         ts: Utc::now(),
+        group_id: None,
+        min_leverage: None,
+        max_leverage: None,
+        leverage_tiers: None,
     };
 
     // Publish to NATS

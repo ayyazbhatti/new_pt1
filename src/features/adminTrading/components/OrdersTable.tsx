@@ -229,7 +229,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
             <tr>
               {columns.map((column) => (
                 <th
-                  key={column.id || column.accessorKey}
+                  key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
                   className="px-4 py-3 text-left text-xs font-semibold text-text-muted uppercase tracking-wider"
                 >
                   {typeof column.header === 'string' ? column.header : '—'}
@@ -275,7 +275,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
                     <tr>
                       {columns.map((column) => (
                         <td
-                          key={column.id || column.accessorKey}
+                          key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
                           className="px-4 py-3"
                           onClick={(e) => {
                             // Prevent row click for action buttons

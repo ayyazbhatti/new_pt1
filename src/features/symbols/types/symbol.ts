@@ -4,6 +4,12 @@ export type AssetClass = 'FX' | 'Crypto' | 'Metals' | 'Indices' | 'Stocks' | 'Co
 export interface AdminSymbol {
   id: string
   symbolCode: string
+  /** Alias for symbolCode - for compatibility */
+  code?: string
+  /** Display name - for compatibility */
+  name?: string
+  /** Market/category - for compatibility */
+  market?: string
   providerSymbol: string | null
   assetClass: AssetClass | null
   baseCurrency: string

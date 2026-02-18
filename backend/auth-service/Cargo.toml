@@ -56,6 +56,9 @@ thiserror = "1.0"
 # Redis
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
+# Concurrency (per-user account summary serialization)
+dashmap = "5.5"
+
 # Futures for parallel operations and streams
 futures = { version = "0.3", features = ["std"] }
 

@@ -128,7 +128,7 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     chartRef.current = chart
 
     chart.setStyles('dark')
-    chart.setStyles(APP_THEME_CHART_STYLES)
+    chart.setStyles(APP_THEME_CHART_STYLES as any)
     chart.setStyles({ candle: { type: chartTypeToCandleType(chartType) } })
     const ticker = selectedSymbol?.code ?? 'BTC-USD'
     const name = selectedSymbol?.code?.replace('-', '/') ?? 'BTC/USD'

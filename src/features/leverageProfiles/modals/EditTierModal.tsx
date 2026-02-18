@@ -36,21 +36,20 @@ export function EditTierModal({ tier, existingTiers, onSave }: EditTierModalProp
   } = useForm<TierFormData>({
     resolver: zodResolver(tierSchema),
     defaultValues: {
-      from: tier.from,
-      to: tier.to,
-      leverage: tier.leverage,
+      from: Number((tier as { from?: number }).from ?? tier.notionalFrom ?? 0),
+      to: Number((tier as { to?: number }).to ?? tier.notionalTo ?? 0),
+      leverage: (tier as { leverage?: number }).leverage ?? tier.maxLeverage ?? 1,
     },
   })
 
   const onSubmit = (data: TierFormData) => {
     // Check for overlapping ranges (excluding current tier)
     const otherTiers = existingTiers.filter((t) => t.id !== tier.id)
-    const overlaps = otherTiers.some(
-      (t) =>
-        (data.from >= t.from && data.from <= t.to) ||
-        (data.to >= t.from && data.to <= t.to) ||
-        (data.from <= t.from && data.to >= t.to)
-    )
+    const overlaps = otherTiers.some((t) => {
+      const tFrom = Number((t as { from?: number }).from ?? t.notionalFrom ?? 0)
+      const tTo = Number((t as { to?: number }).to ?? t.notionalTo ?? 0)
+      return (data.from >= tFrom && data.from <= tTo) || (data.to >= tFrom && data.to <= tTo) || (data.from <= tFrom && data.to >= tTo)
+    })
 
     if (overlaps) {
       toast.error('This range overlaps with another tier')

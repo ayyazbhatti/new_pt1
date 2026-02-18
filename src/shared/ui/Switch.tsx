@@ -3,11 +3,12 @@ import { cn } from '@/shared/utils'
 
 interface SwitchProps extends Omit<HTMLAttributes<HTMLButtonElement>, 'onChange' | 'onCheckedChange'> {
   checked?: boolean
-  onCheckedChange?: (checked: boolean) => void
+  disabled?: boolean
+  onCheckedChange?: ((checked: boolean) => void) | React.Dispatch<React.SetStateAction<boolean>>
   onChange?: (checked: boolean) => void
 }
 
-export function Switch({ checked = false, onCheckedChange, onChange, className, ...props }: SwitchProps) {
+export function Switch({ checked = false, disabled, onCheckedChange, onChange, className, ...props }: SwitchProps) {
   const handleToggle = () => {
     const newValue = !checked
     onCheckedChange?.(newValue)
@@ -20,6 +21,7 @@ export function Switch({ checked = false, onCheckedChange, onChange, className, 
       role="switch"
       aria-checked={checked}
       onClick={handleToggle}
+      disabled={disabled}
       className={cn(
         'relative inline-flex h-5 w-9 items-center rounded-full transition-colors',
         checked ? 'bg-accent' : 'bg-surface-2',

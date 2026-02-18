@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::select;
 use futures_util::{StreamExt, FutureExt};
 use tracing::{error, info, warn};
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use config::Config;
 use nats::NatsClient;
@@ -51,8 +51,8 @@ async fn main() -> Result<()> {
     let validator = Arc::new(Validator);
     let metrics = Arc::new(Metrics::new());
     
-    // Warm cache: load enabled symbols and pending orders
-    warm_cache(&cache, &redis).await?;
+    // Warm cache: load pending orders from Redis so ticks can fill them
+    engine::warm_order_cache(&cache, &redis).await?;
     
     // Initialize handlers
     let order_handler = Arc::new(OrderHandler::new(
@@ -102,8 +102,9 @@ async fn main() -> Result<()> {
     // Subscribe to NATS subjects
     let nats_client = nats.client();
     
-    // Subscribe to per-group ticks: ticks.SYMBOL.GROUP_ID
-    let ticks_subject = format!("{}*.*", nats_subjects::TICKS_PREFIX);
+    // Subscribe to ticks: ticks.SYMBOL (data-provider) or ticks.SYMBOL.GROUP_ID (per-group)
+    // Use ticks.> to match both formats (NATS > = one or more tokens)
+    let ticks_subject = format!("{}>", nats_subjects::TICKS_PREFIX);
     let mut ticks_sub = nats_client.subscribe(ticks_subject.clone()).await?;
     info!("✅ Subscribed to {}", ticks_subject);
     
@@ -378,15 +379,6 @@ async fn main() -> Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
         info!("💓 Order engine heartbeat");
     }
-}
-
-async fn warm_cache(cache: &OrderCache, redis: &RedisClient) -> Result<()> {
-    info!("Warming cache...");
-    
-    // Load enabled symbols (would come from Redis or config)
-    // For now, just log
-    info!("Cache warmed");
-    Ok(())
 }
 
 async fn health(

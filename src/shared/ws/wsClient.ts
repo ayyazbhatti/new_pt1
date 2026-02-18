@@ -119,7 +119,7 @@ class WebSocketClient {
           }
           
           console.log(`📨 [wsClient] Dispatching to ${this.handlers.size} handler(s) for event type: ${data.type}`)
-          this.handlers.forEach((handler, index) => {
+          Array.from(this.handlers).forEach((handler, index) => {
             try {
               console.log(`📨 [wsClient] Calling handler ${index + 1}/${this.handlers.size} for ${data.type}`)
               handler(data)
@@ -301,8 +301,12 @@ class WebSocketClient {
 
 // Singleton instance
 // @ts-ignore - Vite env types
-// ws-gateway runs on port 3003 (apps/gateway-ws). Override with VITE_WS_URL if needed.
-const WS_URL = import.meta.env?.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
+// In dev: use Vite proxy (same origin). Override with VITE_WS_URL if needed.
+const WS_URL =
+  import.meta.env?.VITE_WS_URL ||
+  (import.meta.env.DEV && typeof location !== 'undefined'
+    ? `ws://${location.host}/ws?group=default`
+    : 'ws://localhost:3003/ws?group=default')
 export const wsClient = new WebSocketClient(WS_URL)
 
 // Auto-connect on import (lazy) - but only if user is already logged in

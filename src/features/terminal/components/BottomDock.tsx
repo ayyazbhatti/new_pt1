@@ -1,4 +1,4 @@
-import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Percent, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, Bot, AlertCircle, Maximize2, Minimize2 } from 'lucide-react'
+import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, Bot, AlertCircle, Maximize2, Minimize2 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { cn } from '@/shared/utils'
 import { toast } from 'react-hot-toast'
@@ -6,6 +6,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { Input, Skeleton } from '@/shared/ui'
 import { getPositions, Position, updatePositionSltp, closePosition } from '../api/positions.api'
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
+import { fetchAccountSummary, type AccountSummaryResponse } from '@/features/wallet/api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
 import { wsClient } from '@/shared/ws/wsClient'
@@ -44,10 +45,13 @@ export function BottomDock() {
   const [isBottomDockFullscreen, setIsBottomDockFullscreen] = useState(false)
   const bottomDockRef = useRef<HTMLDivElement>(null)
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
+  const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const lastPositionCountRef = useRef<number>(0)
+  /** Reject WS updates that look like stale/race (zeros) when we already had real data - avoids blink. */
+  const lastEquityRef = useRef<number | null>(null)
 
   useEffect(() => {
     const el = bottomDockRef.current
@@ -158,6 +162,34 @@ export function BottomDock() {
     }
   }, [activeTab])
 
+  // Fetch account summary on mount
+  useEffect(() => {
+    fetchAccountSummary()
+      .then((data) => {
+        lastEquityRef.current = data.equity
+        setAccountSummary(data)
+      })
+      .catch((err) => console.warn('Failed to fetch account summary:', err))
+  }, [])
+
+  // Subscribe to account.summary.updated via wsClient
+  useEffect(() => {
+    const userId = useAuthStore.getState().user?.id
+    if (!userId) return
+    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
+      if (event.type === 'account.summary.updated') {
+        const payload = (event as { type: 'account.summary.updated'; payload: AccountSummaryResponse }).payload
+        if (payload?.userId !== userId) return
+        // Ignore obvious stale/race updates: all zeros when we already had real data (backend also serializes per-user now)
+        const isZeros = payload.balance === 0 && payload.equity === 0 && payload.marginUsed === 0
+        if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
+        lastEquityRef.current = payload.equity
+        setAccountSummary(payload as AccountSummaryResponse)
+      }
+    })
+    return unsubscribe
+  }, [])
+
   // Initial fetch on mount - show loading on first load only
   useEffect(() => {
     fetchPositions().then(() => {
@@ -216,7 +248,9 @@ export function BottomDock() {
       return
     }
 
-    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
+    const wsUrl =
+      import.meta.env.VITE_WS_URL ||
+      (import.meta.env.DEV ? `ws://${location.host}/ws?group=default` : 'ws://localhost:3003/ws?group=default')
     const ws = new WebSocket(wsUrl)
 
     ws.onopen = () => {
@@ -362,11 +396,8 @@ export function BottomDock() {
             const side = data.side || 'Unknown'
             console.log('🎯 [BottomDock] Showing toaster for', triggerType, 'on', side, symbol)
             toast.success(
-              `🎯 ${triggerType} Triggered!`,
-              {
-                description: `${side} ${symbol} position closed`,
-                duration: 5000,
-              }
+              `🎯 ${triggerType} Triggered! ${side} ${symbol} position closed`,
+              { duration: 5000 }
             )
           }
         }
@@ -522,7 +553,7 @@ export function BottomDock() {
             </button>
           )}
           <button
-            onClick={() => toast.info('Column customization coming soon')}
+            onClick={() => toast('Column customization coming soon')}
             className="px-3 py-1.5 text-xs font-semibold text-text hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5"
             title="Customize Columns"
           >
@@ -1076,25 +1107,25 @@ export function BottomDock() {
           <div className="flex items-center gap-1.5 shrink-0">
             <Wallet className="h-4 w-4 text-muted" />
             <span className="text-muted">Balance </span>
-            <span className="text-text">$2,495.56</span>
+            <span className="text-text">{accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—'}</span>
           </div>
           <div className="h-4 w-px bg-border shrink-0"></div>
           <div className="flex items-center gap-1.5 shrink-0">
             <TrendingUp className="h-4 w-4 text-muted" />
             <span className="text-muted">Equity </span>
-            <span className="text-text">$2,495.68</span>
+            <span className="text-text">{accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—'}</span>
           </div>
           <div className="h-4 w-px bg-border shrink-0"></div>
           <div className="flex items-center gap-1.5 shrink-0">
             <Shield className="h-4 w-4 text-muted" />
             <span className="text-muted">Margin </span>
-            <span className="text-text">$22.28</span>
+            <span className="text-text">{accountSummary != null ? `$${accountSummary.marginUsed.toFixed(2)}` : '—'}</span>
           </div>
           <div className="h-4 w-px bg-border shrink-0"></div>
           <div className="flex items-center gap-1.5 shrink-0">
             <DollarSign className="h-4 w-4 text-muted" />
             <span className="text-muted">Free Margin </span>
-            <span className="text-text">$2,473.40</span>
+            <span className="text-text">{accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—'}</span>
           </div>
           <div className="h-4 w-px bg-border shrink-0"></div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -1104,21 +1135,25 @@ export function BottomDock() {
           </div>
           <div className="h-4 w-px bg-border shrink-0"></div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <Percent className="h-4 w-4 text-muted" />
+            <Gauge className="h-4 w-4 text-accent" />
             <span className="text-muted">Margin Level </span>
-            <span className="text-text">11199.80%</span>
+            <span className="font-semibold text-accent">{accountSummary != null ? (accountSummary.marginLevel === 'inf' ? '∞' : `${accountSummary.marginLevel}%`) : '—'}</span>
           </div>
           <div className="h-4 w-px bg-border shrink-0"></div>
           <div className="flex items-center gap-1.5 shrink-0">
             <ArrowUpRight className="h-4 w-4 text-success" />
             <span className="text-muted">RI PNL </span>
-            <span className="text-success">$2,472.56</span>
+            <span className={cn(accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success')}>
+              {accountSummary != null ? (accountSummary.realizedPnl >= 0 ? `$${accountSummary.realizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.realizedPnl).toFixed(2)}`) : '—'}
+            </span>
           </div>
           <div className="h-4 w-px bg-border shrink-0"></div>
           <div className="flex items-center gap-1.5 shrink-0">
             <ArrowDownRight className="h-4 w-4 text-success" />
             <span className="text-muted">UnR Net PNL </span>
-            <span className="text-success">$0.12</span>
+            <span className={cn(accountSummary != null && accountSummary.unrealizedPnl < 0 ? 'text-danger' : 'text-success')}>
+              {accountSummary != null ? (accountSummary.unrealizedPnl >= 0 ? `$${accountSummary.unrealizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.unrealizedPnl).toFixed(2)}`) : '—'}
+            </span>
           </div>
         </div>
       </div>

@@ -26,7 +26,7 @@ interface CreateEditProfileModalProps {
 
 export function CreateEditProfileModal({ profile }: CreateEditProfileModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
-  const [status, setStatus] = useState(profile?.status === 'active' || true)
+  const [status, setStatus] = useState<boolean>(profile ? profile.status === 'active' : true)
   const [roundingMode, setRoundingMode] = useState<RoundingMode>(profile?.roundingMode || 'symbol')
 
   const {

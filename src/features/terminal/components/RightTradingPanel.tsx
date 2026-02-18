@@ -497,8 +497,12 @@ export function RightTradingPanel() {
 
   // Measure ping by fetching WS server health and measuring round-trip time
   useEffect(() => {
-    const wsUrl = import.meta.env?.VITE_WS_URL || 'ws://localhost:3003/ws?group=default'
-    const healthUrl = wsUrl.replace(/^ws/, 'http').replace(/\/ws.*$/, '') + '/health'
+    const wsUrl =
+      import.meta.env?.VITE_WS_URL ||
+      (import.meta.env.DEV ? `ws://${location.host}/ws?group=default` : 'ws://localhost:3003/ws?group=default')
+    const healthUrl = import.meta.env.DEV
+      ? '/ws-health'
+      : wsUrl.replace(/^ws/, 'http').replace(/\/ws.*$/, '') + '/health'
 
     const measurePing = async () => {
       const start = performance.now()
@@ -557,7 +561,7 @@ export function RightTradingPanel() {
               { duration: 5000 }
             )
           } else if (status === 'Cancelled' || status === 'CANCELLED' || status === 'cancelled') {
-            toast.info(`Order ${orderId.slice(0, 8)}... cancelled`, { duration: 3000 })
+            toast(`Order ${orderId.slice(0, 8)}... cancelled`, { duration: 3000 })
           }
         }
       }
@@ -704,7 +708,7 @@ export function RightTradingPanel() {
           <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
         </div>
         <button
-          onClick={() => toast.info('Panel close feature coming soon')}
+          onClick={() => toast('Panel close feature coming soon')}
           className="p-1.5 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           title="Close Panel"
         >
@@ -1376,7 +1380,7 @@ export function RightTradingPanel() {
                 <button
                   type="button"
                   className="flex items-center gap-1.5 rounded-lg bg-accent/15 hover:bg-accent/25 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent transition-colors"
-                  onClick={() => toast.info('Coming soon')}
+                  onClick={() => toast('Coming soon')}
                 >
                   Learn more
                   <ArrowRight className="h-3.5 w-3.5" />

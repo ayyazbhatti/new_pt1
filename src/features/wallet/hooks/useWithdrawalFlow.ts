@@ -1,9 +1,8 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { toast } from 'react-hot-toast'
 import { useWalletStore } from '@/shared/store/walletStore'
 import { useNotificationsStore } from '@/shared/store/notificationsStore'
 import { useAuthStore } from '@/shared/store/auth.store'
-import { wsClient } from '@/shared/ws/wsClient'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { createWithdrawalRequest } from '../api'
@@ -73,13 +72,13 @@ export function useWithdrawalFlow() {
               available: payload.available || payload.balance || 0,
               locked: payload.locked || 0,
               equity: payload.equity || payload.balance || 0,
-              margin_used: payload.margin_used || payload.marginUsed || 0,
-              free_margin: payload.free_margin || payload.freeMargin || payload.available || payload.balance || 0,
+              margin_used: payload.margin_used ?? (Number((payload as Record<string, unknown>).marginUsed) || 0),
+              free_margin: Number(payload.free_margin ?? (payload as Record<string, unknown>).freeMargin ?? payload.available ?? payload.balance) || 0,
             })
           } else {
             console.log('💰 wallet.balance.updated received but userId mismatch:', {
-              payloadUserId: payloadUserIdStr,
-              currentUserId: currentUserIdStr
+              payloadUserId,
+              currentUserId
             })
           }
         }

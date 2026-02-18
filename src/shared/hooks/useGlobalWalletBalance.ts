@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useWebSocketSubscription } from '../ws/wsHooks'
 import { WsInboundEvent } from '../ws/wsEvents'
 import { useWalletStore } from '../store/walletStore'
@@ -47,8 +47,8 @@ export function useGlobalWalletBalance() {
               available: payload.available || payload.balance || 0,
               locked: payload.locked || 0,
               equity: payload.equity || payload.balance || 0,
-              margin_used: payload.margin_used || payload.marginUsed || 0,
-              free_margin: payload.free_margin || payload.freeMargin || payload.available || payload.balance || 0,
+              margin_used: payload.margin_used ?? (Number((payload as Record<string, unknown>).marginUsed) || 0),
+              free_margin: Number(payload.free_margin ?? (payload as Record<string, unknown>).freeMargin ?? payload.available ?? payload.balance) || 0,
             })
             
             // Only show toast if balance changed (not on initial load)
@@ -60,8 +60,8 @@ export function useGlobalWalletBalance() {
             }
           } else {
             console.log('💰 [Global] wallet.balance.updated received but userId mismatch:', {
-              payloadUserId: payloadUserIdStr,
-              currentUserId: currentUserIdStr
+              payloadUserId,
+              currentUserId
             })
           }
         }

@@ -4,6 +4,7 @@ export const mockGroups: UserGroup[] = [
   {
     id: '1',
     name: 'Standard Group',
+    description: null,
     currency: 'USD',
     spreadMarkup: 1.5,
     commission: 0.1,
@@ -19,6 +20,7 @@ export const mockGroups: UserGroup[] = [
   {
     id: '2',
     name: 'VIP Group',
+    description: null,
     currency: 'EUR',
     spreadMarkup: 0.5,
     commission: 0.05,
@@ -34,6 +36,7 @@ export const mockGroups: UserGroup[] = [
   {
     id: '3',
     name: 'Restricted Group',
+    description: null,
     currency: 'USD',
     spreadMarkup: 2.0,
     commission: 0.15,
@@ -49,6 +52,7 @@ export const mockGroups: UserGroup[] = [
   {
     id: '4',
     name: 'Demo Group',
+    description: null,
     currency: 'USD',
     spreadMarkup: 0,
     commission: 0,

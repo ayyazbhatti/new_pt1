@@ -78,6 +78,9 @@ impl Broadcaster {
             "wallet:balance:updated" => {
                 Self::broadcast_wallet_balance(registry, connection_txs, payload).await?;
             }
+            "account:summary:updated" => {
+                Self::broadcast_account_summary(registry, connection_txs, payload).await?;
+            }
             _ => {
                 warn!("Unknown channel: {}", channel);
             }
@@ -548,6 +551,31 @@ impl Broadcaster {
                 } else {
                     info!("✅ Sent wallet.balance.updated to connection {}", conn_id);
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn broadcast_account_summary(
+        registry: &ConnectionRegistry,
+        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let user_id = payload
+            .get("userId")
+            .or_else(|| payload.get("user_id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing userId in account summary"))?;
+
+        let message = ServerMessage::AccountSummaryUpdated {
+            payload: payload.clone(),
+        };
+
+        let connections = registry.get_user_connections(user_id);
+        for conn_id in connections {
+            if let Some(tx) = connection_txs.get(&conn_id) {
+                let _ = tx.send(message.clone());
             }
         }
 

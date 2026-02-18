@@ -39,6 +39,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@types/node": "^25.2.3",
     "@types/react": "^18.2.43",
     "@types/react-datepicker": "^4.19.4",
     "@types/react-dom": "^18.2.17",

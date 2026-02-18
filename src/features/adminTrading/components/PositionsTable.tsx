@@ -295,7 +295,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
             <tr>
               {columns.map((column) => (
                 <th
-                  key={column.id || column.accessorKey}
+                  key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
                   className="px-4 py-3 text-left text-xs font-semibold text-text-muted uppercase tracking-wider truncate"
                 >
                   {typeof column.header === 'string' ? column.header : '—'}
@@ -343,7 +343,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
                     <tr>
                       {columns.map((column) => (
                         <td
-                          key={column.id || column.accessorKey}
+                          key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
                           className="px-4 py-3 truncate"
                           onClick={(e) => {
                             if (column.id === 'actions') {

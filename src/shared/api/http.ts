@@ -64,9 +64,9 @@ export async function http<T>(
   const isAuthEndpoint = SKIP_REFRESH_ON_401.some((path) => endpoint.startsWith(path) || endpoint.endsWith(path))
 
   // Build headers
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string>),
   }
 
   // Add auth header if token exists (skip for login/register so we don't send stale token)
@@ -84,7 +84,7 @@ export async function http<T>(
   if (response.status === 401 && accessToken && !isAuthEndpoint) {
     try {
       const newAccessToken = await refreshAccessToken()
-      headers['Authorization'] = `Bearer ${newAccessToken}`
+      ;(headers as Record<string, string>)['Authorization'] = `Bearer ${newAccessToken}`
 
       // Retry original request
       response = await fetch(`${API_BASE_URL}${endpoint}`, {

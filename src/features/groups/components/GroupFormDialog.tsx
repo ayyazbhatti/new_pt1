@@ -19,7 +19,7 @@ const groupSchema = z.object({
 type GroupFormData = z.infer<typeof groupSchema>
 
 interface GroupFormDialogProps {
-  mode: 'create' | 'edit'
+  mode: 'create' | 'edit' | 'view'
   initial?: UserGroup
   open: boolean
   onOpenChange: (open: boolean) => void

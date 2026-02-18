@@ -41,6 +41,7 @@ export interface Order {
   stop_price?: string
   filled_size?: string
   average_price?: string
+  avg_fill_price?: string
   status: string
   created_at: string
   updated_at: string

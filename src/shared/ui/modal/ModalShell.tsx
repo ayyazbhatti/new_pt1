@@ -4,8 +4,8 @@ import { ReactNode } from 'react'
 import { cn } from '@/shared/utils'
 
 interface ModalShellProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   title?: string
   description?: string
   children: ReactNode
@@ -23,8 +23,8 @@ const sizeClasses = {
 }
 
 export function ModalShell({
-  open,
-  onOpenChange,
+  open = true,
+  onOpenChange = () => {},
   onClose,
   title,
   description,

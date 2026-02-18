@@ -126,7 +126,7 @@ export function AddSymbolModal() {
 
   const onSubmit = async (data: SymbolFormData) => {
     try {
-      await createSymbol.mutateAsync(data)
+      await createSymbol.mutateAsync(data as import('../types/symbol').CreateSymbolPayload)
       closeModal('add-symbol')
     } catch (error) {
       // Error handled by hook

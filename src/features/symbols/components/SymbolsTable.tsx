@@ -2,7 +2,7 @@ import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
-import { Switch } from '@/shared/ui/switch'
+import { Switch } from '@/shared/ui/Switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { AdminSymbol } from '../types/symbol'
 import { useModalStore } from '@/app/store'
@@ -139,7 +139,7 @@ export function SymbolsTable({
 
 
   // Memoize columns to prevent re-renders when only prices change
-  const columns: ColumnDef<AdminSymbol>[] = useMemo(() => [
+  const columns = useMemo(() => [
     {
       accessorKey: 'symbolCode',
       header: 'Symbol',
@@ -249,7 +249,7 @@ export function SymbolsTable({
       header: () => (
         <div className="flex items-center gap-1">
           <span>Tick Size</span>
-          <Info className="h-3 w-3 text-text-muted" title="Minimum price movement (pip size)" />
+          <span title="Minimum price movement (pip size)"><Info className="h-3 w-3 text-text-muted" /></span>
         </div>
       ),
       cell: ({ row }) => {
@@ -267,7 +267,7 @@ export function SymbolsTable({
       header: () => (
         <div className="flex items-center gap-1">
           <span>Lot Min</span>
-          <Info className="h-3 w-3 text-text-muted" title="Minimum lot size allowed" />
+          <span title="Minimum lot size allowed"><Info className="h-3 w-3 text-text-muted" /></span>
         </div>
       ),
       cell: ({ row }) => {
@@ -285,7 +285,7 @@ export function SymbolsTable({
       header: () => (
         <div className="flex items-center gap-1">
           <span>Lot Max</span>
-          <Info className="h-3 w-3 text-text-muted" title="Maximum lot size allowed" />
+          <span title="Maximum lot size allowed"><Info className="h-3 w-3 text-text-muted" /></span>
         </div>
       ),
       cell: ({ row }) => {
@@ -303,7 +303,7 @@ export function SymbolsTable({
       header: () => (
         <div className="flex items-center gap-1">
           <span>Default Pip Pos</span>
-          <Info className="h-3 w-3 text-text-muted" title="Default pip position value suggested for this symbol (USD per pip)" />
+          <span title="Default pip position value suggested for this symbol (USD per pip)"><Info className="h-3 w-3 text-text-muted" /></span>
         </div>
       ),
       cell: ({ row }) => {
@@ -321,7 +321,7 @@ export function SymbolsTable({
       header: () => (
         <div className="flex items-center gap-1">
           <span>Pip Pos Min</span>
-          <Info className="h-3 w-3 text-text-muted" title="Minimum allowed pip position for this symbol (USD per pip)" />
+          <span title="Minimum allowed pip position for this symbol (USD per pip)"><Info className="h-3 w-3 text-text-muted" /></span>
         </div>
       ),
       cell: ({ row }) => {
@@ -339,7 +339,7 @@ export function SymbolsTable({
       header: () => (
         <div className="flex items-center gap-1">
           <span>Pip Pos Max</span>
-          <Info className="h-3 w-3 text-text-muted" title="Maximum allowed pip position for this symbol (USD per pip)" />
+          <span title="Maximum allowed pip position for this symbol (USD per pip)"><Info className="h-3 w-3 text-text-muted" /></span>
         </div>
       ),
       cell: ({ row }) => {
@@ -440,7 +440,7 @@ export function SymbolsTable({
     leverageProfiles,
     updateSymbol.isPending,
     toggleEnabled.isPending,
-  ])
+  ]) as ColumnDef<AdminSymbol>[]
 
   return (
     <DataTable

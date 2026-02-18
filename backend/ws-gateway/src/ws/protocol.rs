@@ -100,6 +100,10 @@ pub enum ServerMessage {
     WalletBalanceUpdated {
         payload: serde_json::Value,
     },
+    #[serde(rename = "account.summary.updated")]
+    AccountSummaryUpdated {
+        payload: serde_json::Value,
+    },
 }
 
 impl ServerMessage {

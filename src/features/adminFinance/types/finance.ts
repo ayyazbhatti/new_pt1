@@ -1,5 +1,5 @@
 export type TransactionType = 'deposit' | 'withdrawal' | 'adjustment' | 'fee' | 'rebate'
-export type TransactionStatus = 'pending' | 'approved' | 'rejected' | 'failed'
+export type TransactionStatus = 'pending' | 'approved' | 'rejected' | 'failed' | 'completed'
 export type TransactionMethod = 'card' | 'bank' | 'crypto' | 'manual'
 export type Currency = 'USD' | 'EUR' | 'BTC' | 'USDT'
 export type WalletType = 'spot' | 'margin' | 'funding'

@@ -144,7 +144,7 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
     try {
       await updateSymbol.mutateAsync({
         id: symbol.id,
-        payload: data,
+        payload: data as import('../types/symbol').UpdateSymbolPayload,
       })
       closeModal(`edit-symbol-${symbol.id}`)
     } catch (error) {

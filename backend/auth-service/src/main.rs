@@ -135,6 +135,9 @@ async fn main() -> anyhow::Result<()> {
         ));
     };
 
+    // Initialize account summary coordinator (per-user serialization + publish throttle) to prevent UI flicker
+    routes::deposits::init_account_summary_coordinator();
+
     // Build application state for deposits
     let deposits_state = routes::deposits::DepositsState {
         redis: Arc::new(redis.clone()),
@@ -181,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
         .nest("/api/withdrawals", create_withdrawals_router(pool.clone(), withdrawals_state.redis.clone(), withdrawals_state.nats.clone()))
         .nest("/api/wallet", routes::deposits::create_wallet_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/account", routes::deposits::create_account_router(pool.clone(), deposits_state.clone()))
         .nest("/api/notifications", routes::deposits::create_notifications_router(pool.clone(), deposits_state.clone()))
         .nest("/v1/users", routes::deposits::create_positions_router(pool.clone(), deposits_state.clone()))
         .nest("/api/orders", create_orders_router(pool.clone(), orders_state.clone()))
@@ -211,9 +215,10 @@ async fn main() -> anyhow::Result<()> {
     // Start position event listener to sync positions to database
     let nats_for_positions = nats_client.clone();
     let pool_for_positions = pool_for_events.clone();
+    let redis_for_positions = redis.clone();
     tokio::spawn(async move {
         use services::position_event_handler::PositionEventHandler;
-        let position_handler = PositionEventHandler::new(pool_for_positions);
+        let position_handler = PositionEventHandler::new(pool_for_positions, redis_for_positions);
         match nats_for_positions.subscribe("evt.position.updated".to_string()).await {
             Ok(subscriber) => {
                 info!("✅ Subscribed to evt.position.updated for database sync");
@@ -265,6 +270,24 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+    });
+
+    // Start price:ticks subscriber for real-time account summary (UnR PnL, equity, free margin)
+    let pool_for_ticks = pool.clone();
+    let redis_for_ticks = redis.clone();
+    let redis_url_ticks = redis_url.clone();
+    tokio::spawn(async move {
+        use services::price_tick_summary_handler::PriceTickSummaryHandler;
+        let handler = PriceTickSummaryHandler::new(pool_for_ticks, redis_for_ticks);
+        handler.start_listener(&redis_url_ticks).await;
+    });
+
+    // Warm account summary cache for all users so Redis has every user's data (not only on login)
+    let pool_warm = pool.clone();
+    let redis_warm = redis.clone();
+    tokio::spawn(async move {
+        use services::account_summary_cache_warmup::warm_all_users;
+        warm_all_users(pool_warm, redis_warm).await;
     });
 
     // Start server

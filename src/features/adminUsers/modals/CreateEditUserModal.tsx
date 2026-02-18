@@ -215,7 +215,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
         <label className="text-sm font-medium text-text mb-2 block">Initial Status *</label>
         <Select
           value={watch('status')}
-          onValueChange={(value) => setValue('status', value as UserStatus)}
+          onValueChange={(value) => setValue('status', value as 'active' | 'disabled')}
         >
           <SelectTrigger>
             <SelectValue />

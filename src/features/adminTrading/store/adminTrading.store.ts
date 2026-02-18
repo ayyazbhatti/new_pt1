@@ -57,9 +57,9 @@ interface AdminTradingState {
   setOpenModal: (modal: string | null) => void
 
   // WebSocket
-  wsStatus: 'disconnected' | 'connecting' | 'connected'
+  wsStatus: 'disconnected' | 'connecting' | 'connected' | 'authenticated'
   wsLastMessageAt: number | null
-  setWsStatus: (status: 'disconnected' | 'connecting' | 'connected') => void
+  setWsStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'authenticated') => void
   setWsLastMessageAt: (timestamp: number) => void
 }
 

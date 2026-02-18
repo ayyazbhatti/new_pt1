@@ -7,6 +7,8 @@ import {
   UpsertSymbolOverridePayload,
 } from '../types/markup'
 
+export type { CreateProfilePayload, UpdateProfilePayload, UpsertSymbolOverridePayload }
+
 // Helper to convert snake_case to camelCase; accepts both shapes from API
 function toCamelCaseProfile(obj: any): MarkupProfile {
   const id = obj?.id != null ? String(obj.id) : ''

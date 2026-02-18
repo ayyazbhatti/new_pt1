@@ -262,12 +262,15 @@ start_service "Order Engine" "cargo run -p order-engine" $ORDER_ENGINE_PORT "htt
 # Start Gateway WS (port 3003) - use backend/ws-gateway (Redis price:ticks, per-group markup)
 # Same JWT_SECRET as auth-service required for correct user/group and marked-up prices
 export WS_PORT=$GATEWAY_WS_PORT
+GATEWAY_HTTP_PORT="${GATEWAY_HTTP_PORT:-9002}"
+export HTTP_PORT=$GATEWAY_HTTP_PORT
 export JWT_SECRET="${JWT_SECRET:-dev-jwt-secret-key-change-in-production-minimum-32-characters-long}"
 GATEWAY_DIR="$(cd "$(dirname "$0")/../backend/ws-gateway" && pwd)"
 if [ -f "$GATEWAY_DIR/.env" ]; then
     set -a; . "$GATEWAY_DIR/.env"; set +a
 fi
-start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run --release" $GATEWAY_WS_PORT "http://localhost:$GATEWAY_WS_PORT/health"
+# Health is on HTTP port (9002), not WS port (3003)
+start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run --release" $GATEWAY_WS_PORT "http://localhost:${GATEWAY_HTTP_PORT:-9002}/health"
 
 # Start Core API (port 3004)
 export PORT=$CORE_API_PORT

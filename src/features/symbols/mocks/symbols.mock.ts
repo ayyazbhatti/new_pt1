@@ -1,6 +1,6 @@
 import { AdminSymbol } from '../types/symbol'
 
-export const mockSymbols: AdminSymbol[] = [
+export const mockSymbols = [
   {
     id: '1',
     code: 'BTCUSDT',
@@ -229,5 +229,5 @@ export const mockSymbols: AdminSymbol[] = [
     status: 'enabled',
     commission: 0.05,
   },
-]
+] as unknown as AdminSymbol[]
 

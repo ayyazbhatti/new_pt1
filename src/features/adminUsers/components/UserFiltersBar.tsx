@@ -4,17 +4,19 @@ import { Button } from '@/shared/ui/button'
 import { UserStatus, KYCStatus } from '../types/users'
 import { mockGroups } from '@/features/groups/mocks/groups.mock'
 
+export type UserFilters = {
+  search: string
+  status: string
+  kycStatus: string
+  group: string
+  country: string
+  balanceMin: string
+  balanceMax: string
+}
+
 interface UserFiltersBarProps {
-  filters: {
-    search: string
-    status: string
-    kycStatus: string
-    group: string
-    country: string
-    balanceMin: string
-    balanceMax: string
-  }
-  onFilterChange: (filters: typeof filters) => void
+  filters: UserFilters
+  onFilterChange: (filters: UserFilters) => void
 }
 
 const countries = ['US', 'GB', 'CA', 'AU', 'DE', 'SG', 'FR', 'IT', 'ES', 'NL']

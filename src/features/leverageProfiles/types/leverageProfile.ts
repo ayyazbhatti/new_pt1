@@ -1,16 +1,5 @@
 export type LeverageProfileStatus = 'active' | 'disabled'
 
-export type LeverageProfile = {
-  id: string
-  name: string
-  description: string | null
-  status: LeverageProfileStatus
-  tiersCount: number
-  symbolsCount: number
-  createdAt: string
-  updatedAt: string
-}
-
 export type LeverageTier = {
   id: string
   profileId: string
@@ -21,6 +10,25 @@ export type LeverageTier = {
   initialMarginPercent: string
   maintenanceMarginPercent: string
   updatedAt: string
+  /** Alias for notionalFrom - for compatibility */
+  from?: number | string
+  /** Alias for notionalTo - for compatibility */
+  to?: number | string | null
+  /** Alias for maxLeverage - for compatibility */
+  leverage?: number
+}
+
+export type LeverageProfile = {
+  id: string
+  name: string
+  description: string | null
+  status: LeverageProfileStatus
+  tiersCount: number
+  symbolsCount: number
+  createdAt: string
+  updatedAt: string
+  /** Tiers for modal/display - optional, loaded separately */
+  tiers?: LeverageTier[]
 }
 
 export type LeverageProfileSymbols = {

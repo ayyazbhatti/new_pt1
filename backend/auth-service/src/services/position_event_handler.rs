@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use contracts::events::PositionUpdatedEvent;
+use crate::routes::deposits::compute_and_cache_account_summary;
 use contracts::enums::{PositionSide, PositionStatus};
 use contracts::messages::VersionedMessage;
 use futures::StreamExt;
@@ -10,11 +11,12 @@ use uuid::Uuid;
 
 pub struct PositionEventHandler {
     pool: Arc<PgPool>,
+    redis: redis::Client,
 }
 
 impl PositionEventHandler {
-    pub fn new(pool: Arc<PgPool>) -> Self {
-        Self { pool }
+    pub fn new(pool: Arc<PgPool>, redis: redis::Client) -> Self {
+        Self { pool, redis }
     }
 
     pub async fn start_listener(&self, mut subscriber: async_nats::Subscriber) -> Result<()> {
@@ -55,6 +57,7 @@ impl PositionEventHandler {
                 
                 // Sync position to database
                 self.sync_position_to_database(&event).await?;
+                compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
                 
                 return Ok(());
             }
@@ -71,6 +74,7 @@ impl PositionEventHandler {
 
         // Sync position to database
         self.sync_position_to_database(&event).await?;
+        compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
 
         Ok(())
     }
