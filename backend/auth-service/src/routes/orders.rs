@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State, Extension},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
@@ -9,6 +9,7 @@ use chrono::Utc;
 use contracts::{VersionedMessage, commands::{PlaceOrderCommand, LeverageTier as CmdLeverageTier}, enums::{Side, OrderType, TimeInForce}};
 use crate::models::leverage_profile::LeverageProfileTier;
 use redis::AsyncCommands;
+use redis_model::keys::Keys;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -17,6 +18,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::routes::deposits::{compute_and_cache_account_summary, get_price_from_redis};
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 
@@ -24,6 +26,56 @@ use crate::middleware::auth_middleware;
 pub struct OrdersState {
     pub redis: Arc<redis::Client>,
     pub nats: Arc<async_nats::Client>,
+}
+
+/// Error type for place_order: status-only or 403 with INSUFFICIENT_FREE_MARGIN body.
+pub enum PlaceOrderError {
+    Status(StatusCode),
+    InsufficientMargin { required_margin: String, free_margin: String },
+}
+
+impl IntoResponse for PlaceOrderError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            PlaceOrderError::Status(c) => c.into_response(),
+            PlaceOrderError::InsufficientMargin { required_margin, free_margin } => {
+                let body = serde_json::json!({
+                    "error": "INSUFFICIENT_FREE_MARGIN",
+                    "message": format!("Estimated margin ({}) exceeds free margin ({}).", required_margin, free_margin)
+                });
+                (StatusCode::FORBIDDEN, Json(body)).into_response()
+            }
+        }
+    }
+}
+
+/// Effective leverage for a given notional: tier lookup then clamp to [user_min, user_max]. Default 50 if no tiers.
+fn effective_leverage_for_notional(
+    notional: Decimal,
+    tiers: Option<&[CmdLeverageTier]>,
+    user_min: Option<i32>,
+    user_max: Option<i32>,
+) -> Decimal {
+    const DEFAULT_LEVERAGE: i32 = 50;
+    let Some(tiers) = tiers else { return Decimal::from(DEFAULT_LEVERAGE); };
+    if tiers.is_empty() {
+        return Decimal::from(DEFAULT_LEVERAGE);
+    }
+    let mut symbol_leverage = DEFAULT_LEVERAGE;
+    for t in tiers {
+        let from = Decimal::from_str(&t.notional_from).unwrap_or(Decimal::ZERO);
+        let to = t.notional_to.as_ref()
+            .and_then(|s| Decimal::from_str(s).ok())
+            .unwrap_or(Decimal::MAX);
+        if notional >= from && notional < to {
+            symbol_leverage = t.max_leverage;
+            break;
+        }
+    }
+    let min_l = user_min.unwrap_or(1);
+    let max_l = user_max.unwrap_or(1000);
+    let clamped = symbol_leverage.clamp(min_l, max_l);
+    Decimal::from(clamped)
 }
 
 // ============================================================================
@@ -61,7 +113,7 @@ async fn place_order(
     Extension(claims): Extension<Claims>,
     Extension(orders_state): Extension<OrdersState>,
     Json(req): Json<PlaceOrderRequest>,
-) -> Result<Json<PlaceOrderResponse>, StatusCode> {
+) -> Result<Json<PlaceOrderResponse>, PlaceOrderError> {
     let user_id = claims.sub;
     let order_id = Uuid::new_v4();
     let now = Utc::now();
@@ -70,32 +122,32 @@ async fn place_order(
     let order_type_upper = req.order_type.to_uppercase();
     if order_type_upper != "MARKET" && order_type_upper != "LIMIT" {
         error!("Invalid order type: {}", req.order_type);
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
     // Validate side
     let side_upper = req.side.to_uppercase();
     if side_upper != "BUY" && side_upper != "SELL" {
         error!("Invalid side: {}", req.side);
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
     // Parse size
     let size = Decimal::from_str(&req.size).map_err(|_| {
         error!("Invalid size: {}", req.size);
-        StatusCode::BAD_REQUEST
+        PlaceOrderError::Status(StatusCode::BAD_REQUEST)
     })?;
 
     if size <= Decimal::ZERO {
         error!("Size must be greater than zero");
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
     // Parse limit price if provided
     let limit_price = if let Some(price_str) = &req.limit_price {
         Some(Decimal::from_str(price_str).map_err(|_| {
             error!("Invalid limit price: {}", price_str);
-            StatusCode::BAD_REQUEST
+            PlaceOrderError::Status(StatusCode::BAD_REQUEST)
         })?)
     } else {
         None
@@ -104,7 +156,7 @@ async fn place_order(
     // Validate limit order has price
     if order_type_upper == "LIMIT" && limit_price.is_none() {
         error!("Limit order requires limit_price");
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
     // Get symbol_id from symbol code
@@ -116,11 +168,11 @@ async fn place_order(
     .await
     .map_err(|e| {
         error!("Failed to fetch symbol: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?
     .ok_or_else(|| {
         error!("Symbol not found: {}", req.symbol);
-        StatusCode::NOT_FOUND
+        PlaceOrderError::Status(StatusCode::NOT_FOUND)
     })?;
 
     let symbol_id = symbol_row.id;
@@ -136,7 +188,7 @@ async fn place_order(
     .await
     .map_err(|e| {
         error!("Failed to fetch user leverage: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
     let (user_min_lev, user_max_lev) = user_lev
         .map(|r| (r.min_leverage, r.max_leverage))
@@ -160,7 +212,7 @@ async fn place_order(
     .await
     .map_err(|e| {
         error!("Failed to fetch symbol leverage profile: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
     let leverage_tiers: Option<Vec<CmdLeverageTier>> = match profile_row.and_then(|r| r.leverage_profile_id) {
@@ -180,7 +232,7 @@ async fn place_order(
             .await
             .map_err(|e| {
                 error!("Failed to fetch leverage tiers: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
+                PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
             })?;
             if tiers.is_empty() {
                 None
@@ -199,14 +251,14 @@ async fn place_order(
     let mut conn = orders_state.redis.get_async_connection().await
         .map_err(|e| {
             error!("Failed to get Redis connection: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
     let idempotency_key = format!("order:idempotency:{}", req.idempotency_key);
     let existing_order_id: Option<String> = conn.get(&idempotency_key).await
         .map_err(|e| {
             error!("Failed to check idempotency: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
     if let Some(existing_id) = existing_order_id {
@@ -221,8 +273,74 @@ async fn place_order(
     let _: () = conn.set_ex(&idempotency_key, order_id.to_string(), 86400).await
         .map_err(|e| {
             error!("Failed to store idempotency key: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
+
+    // ---------- Free margin vs required margin check (block order if insufficient) ----------
+    let summary_key = Keys::account_summary(user_id);
+    let free_margin_str: Option<String> = conn.hget(&summary_key, "free_margin").await
+        .map_err(|e| {
+            error!("Failed to read free_margin from Redis: {}", e);
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    let free_margin = free_margin_str
+        .and_then(|s| Decimal::from_str(&s).ok())
+        .or_else(|| {
+            // Cache miss: try to compute and re-read (no second connection in same conn)
+            None
+        });
+    let free_margin = match free_margin {
+        Some(fm) => fm,
+        None => {
+            drop(conn);
+            compute_and_cache_account_summary(&pool, orders_state.redis.as_ref(), user_id).await;
+            let mut conn2 = orders_state.redis.get_async_connection().await
+                .map_err(|e| {
+                    error!("Failed to get Redis connection after cache warmup: {}", e);
+                    PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+                })?;
+            let s: Option<String> = conn2.hget(&summary_key, "free_margin").await
+                .map_err(|e| {
+                    error!("Failed to re-read free_margin: {}", e);
+                    PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+                })?;
+            s.and_then(|x| Decimal::from_str(&x).ok()).unwrap_or(Decimal::ZERO)
+        }
+    };
+
+    let execution_price = if order_type_upper == "LIMIT" {
+        limit_price.ok_or_else(|| {
+            error!("Limit order missing limit_price");
+            PlaceOrderError::Status(StatusCode::BAD_REQUEST)
+        })?
+    } else {
+        let group_id_str = claims.group_id.map(|u| u.to_string()).unwrap_or_default();
+        let (bid, ask) = get_price_from_redis(orders_state.redis.as_ref(), &req.symbol, &group_id_str).await
+            .ok_or_else(|| {
+                error!("Market order: no price in Redis for symbol={} group_id={}", req.symbol, group_id_str);
+                PlaceOrderError::Status(StatusCode::BAD_REQUEST)
+            })?;
+        if side_upper == "BUY" { ask } else { bid }
+    };
+
+    let notional = size * execution_price;
+    let eff_lev = effective_leverage_for_notional(
+        notional,
+        leverage_tiers.as_deref(),
+        user_min_lev,
+        user_max_lev,
+    );
+    let required_margin = if eff_lev > Decimal::ZERO {
+        notional / eff_lev
+    } else {
+        notional * Decimal::from(2) / Decimal::from(100) // 2% fallback
+    };
+    if required_margin > free_margin {
+        return Err(PlaceOrderError::InsufficientMargin {
+            required_margin: required_margin.to_string(),
+            free_margin: free_margin.to_string(),
+        });
+    }
 
     // Parse stop price if provided
     let stop_price = req.sl.as_ref().and_then(|s| Decimal::from_str(s).ok());
@@ -254,7 +372,7 @@ async fn place_order(
     .await
     .map_err(|e| {
         error!("Failed to insert order: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
     // Publish to NATS for order-engine to process
@@ -262,13 +380,13 @@ async fn place_order(
     let side = match side_upper.as_str() {
         "BUY" => Side::Buy,
         "SELL" => Side::Sell,
-        _ => return Err(StatusCode::BAD_REQUEST),
+        _ => return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST)),
     };
     
     let order_type = match order_type_upper.as_str() {
         "MARKET" => OrderType::Market,
         "LIMIT" => OrderType::Limit,
-        _ => return Err(StatusCode::BAD_REQUEST),
+        _ => return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST)),
     };
     
     let tif = match req.tif.as_deref().unwrap_or("GTC") {
@@ -303,12 +421,12 @@ async fn place_order(
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)
         .map_err(|e| {
             error!("Failed to create versioned message: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
     let payload = serde_json::to_vec(&msg)
         .map_err(|e| {
             error!("Failed to serialize order command: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
     info!("📤 Publishing order command to NATS: cmd.order.place, order_id={}, user_id={}, symbol={}", 
@@ -333,7 +451,7 @@ async fn place_order(
     orders_state.nats.publish("cmd.order.place".to_string(), payload.into()).await
         .map_err(|e| {
             error!("❌ Failed to publish order to NATS basic pub/sub: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
     info!("✅ Published to NATS (basic pub/sub): cmd.order.place");
 

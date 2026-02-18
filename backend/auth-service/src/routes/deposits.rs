@@ -409,7 +409,7 @@ pub struct AccountSummary {
 
 /// Read current (bid, ask) from Redis key prices:SYMBOL:GROUP_ID (written by order-engine on each tick).
 /// Returns None if key missing or parse error.
-async fn get_price_from_redis(
+pub(crate) async fn get_price_from_redis(
     redis: &redis::Client,
     symbol: &str,
     group_id: &str,

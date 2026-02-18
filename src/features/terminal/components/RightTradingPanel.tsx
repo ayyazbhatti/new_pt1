@@ -26,6 +26,7 @@ import {
 } from '../utils/positionCalculations'
 import { AdminSymbol } from '@/features/symbols/types/symbol'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
+import { fetchAccountSummary, type AccountSummaryResponse } from '@/features/wallet/api'
 
 // Local storage key for trading panel state
 const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
@@ -100,6 +101,22 @@ export function RightTradingPanel() {
     if (!selectedSymbol || !symbolsData?.items) return null
     return symbolsData.items.find(s => s.id === selectedSymbol.id) || null
   }, [selectedSymbol, symbolsData])
+
+  // Account summary for free margin check (fetch on mount + real-time via WS)
+  useEffect(() => {
+    fetchAccountSummary()
+      .then(setAccountSummary)
+      .catch((err) => console.warn('Failed to fetch account summary:', err))
+  }, [])
+  useEffect(() => {
+    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
+      if (event.type === 'account.summary.updated') {
+        const payload = (event as { type: 'account.summary.updated'; payload: AccountSummaryResponse }).payload
+        if (payload) setAccountSummary(payload)
+      }
+    })
+    return unsubscribe
+  }, [])
   
   // Load initial state from localStorage only on mount (lazy init) so reload restores tab and values
   const [orderType, setOrderType] = useState(() => loadTradingPanelState().orderType || 'market')
@@ -118,6 +135,7 @@ export function RightTradingPanel() {
   const [userDetailsOpen, setUserDetailsOpen] = useState(() => loadTradingPanelState().userDetailsOpen || false)
   const [leverageDetailsOpen, setLeverageDetailsOpen] = useState(() => loadTradingPanelState().leverageDetailsOpen || false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse | null>(null)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
   
   // Save state to localStorage whenever it changes (keeps tab and values after reload)
@@ -338,6 +356,9 @@ export function RightTradingPanel() {
     meData &&
     ((meData.minLeverage != null && effectiveLeverageForCard === meData.minLeverage) ||
       (meData.maxLeverage != null && effectiveLeverageForCard === meData.maxLeverage))
+
+  // Block Buy/Sell when estimated margin exceeds free margin (server also enforces)
+  const insufficientFreeMargin = (parseFloat(costBreakdown.margin) || 0) > (accountSummary?.freeMargin ?? 0)
 
   // Format live price for limit price placeholder
   const livePricePlaceholder = useMemo(() => {
@@ -683,8 +704,13 @@ export function RightTradingPanel() {
         setUseSlTp(false)
       }
     } catch (error: any) {
-      const errorMessage = error?.response?.data?.error?.message || error?.message || 'Failed to place order'
-      toast.error(`Order failed: ${errorMessage}`)
+      const data = error?.response?.data
+      const errorMessage =
+        data?.message ||
+        data?.error?.message ||
+        error?.message ||
+        'Failed to place order'
+      toast.error(data?.error === 'INSUFFICIENT_FREE_MARGIN' ? errorMessage : `Order failed: ${errorMessage}`)
       console.error('Order placement error:', error)
     } finally {
       setIsSubmitting(false)
@@ -1080,7 +1106,7 @@ export function RightTradingPanel() {
               variant="success" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-success/20 hover:shadow-success/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleBuy}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin}
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (
@@ -1095,7 +1121,7 @@ export function RightTradingPanel() {
               variant="danger" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-danger/20 hover:shadow-danger/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleSell}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin}
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (
@@ -1107,6 +1133,11 @@ export function RightTradingPanel() {
               </div>
             </Button>
           </div>
+          {insufficientFreeMargin && (parseFloat(costBreakdown.margin) || 0) > 0 && (
+            <div className="mt-2 text-xs text-danger text-center">
+              Insufficient free margin (Est. margin &gt; Free margin)
+            </div>
+          )}
           {!wsConnected && (
             <div className="mt-2 text-xs text-warning text-center">
               ⚠️ WebSocket disconnected - order updates may be delayed
