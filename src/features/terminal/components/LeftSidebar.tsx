@@ -12,7 +12,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { PriceDisplay } from './PriceDisplay'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
-import { fetchBalance } from '@/features/wallet/api'
+import { fetchBalance, fetchAccountSummary, type AccountSummaryResponse } from '@/features/wallet/api'
 import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
@@ -40,6 +40,8 @@ export function LeftSidebar() {
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const lastEquityRef = useRef<number | null>(null)
+  const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse | null>(null)
   const wsState = useWebSocketState()
   const symbols = getFilteredSymbols()
 
@@ -58,34 +60,54 @@ export function LeftSidebar() {
     }
   }, [user?.id, wsState])
 
-  // When user returns to this tab, refetch balance so we catch updates (e.g. deposit approved) even if push was missed
+  // Fetch account summary (same source as BottomDock) for real Balance, Equity, Margin
+  useEffect(() => {
+    if (!user?.id) return
+    fetchAccountSummary()
+      .then((data) => {
+        lastEquityRef.current = data.equity
+        setAccountSummary(data)
+        setLoading(false)
+      })
+      .catch((err) => {
+        console.warn('LeftSidebar: failed to fetch account summary:', err)
+        setLoading(false)
+      })
+  }, [user?.id, setLoading])
+
+  // Subscribe to account.summary.updated (same as BottomDock) for real-time values
+  useEffect(() => {
+    if (!user?.id) return
+    const currentUserId = String(user.id).trim()
+    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
+      if (event.type === 'account.summary.updated') {
+        const payload = (event as { type: 'account.summary.updated'; payload: AccountSummaryResponse }).payload
+        if (!payload || String(payload.userId ?? '').trim() !== currentUserId) return
+        const isZeros = payload.balance === 0 && payload.equity === 0 && payload.marginUsed === 0
+        if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
+        lastEquityRef.current = payload.equity
+        setAccountSummary(payload as AccountSummaryResponse)
+        setLoading(false)
+      }
+    })
+    return unsubscribe
+  }, [user?.id, setLoading])
+
+  // When user returns to this tab, refetch account summary so we catch updates (e.g. deposit approved)
   useEffect(() => {
     if (!user?.id) return
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return
-      fetchBalance()
-        .then((res) => {
-          const raw = res as unknown as Record<string, unknown>
-          const available = Number(res.available ?? raw.available ?? 0)
-          const locked = Number(res.locked ?? raw.locked ?? 0)
-          const equity = Number(res.equity ?? raw.equity ?? available)
-          const marginUsed = Number((res as any).marginUsed ?? raw.margin_used ?? raw.marginUsed ?? 0)
-          const freeMargin = Number((res as any).freeMargin ?? raw.free_margin ?? raw.freeMargin ?? 0)
-          setWalletData({
-            balance: available,
-            currency: res.currency ?? 'USD',
-            available,
-            locked,
-            equity,
-            margin_used: marginUsed,
-            free_margin: freeMargin,
-          })
+      fetchAccountSummary()
+        .then((data) => {
+          lastEquityRef.current = data.equity
+          setAccountSummary(data)
         })
         .catch(() => {})
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
-  }, [user?.id, setWalletData])
+  }, [user?.id])
 
   // Set loading state initially while waiting for WebSocket balance update
   useEffect(() => {
@@ -295,59 +317,70 @@ export function LeftSidebar() {
         </div>
       </div>
 
-      {/* Balances */}
+      {/* Balances - from account summary (same as BottomDock) for real Equity/Margin */}
       <div className="shrink-0 px-4 py-3.5 border-b border-white/5 bg-gradient-to-b from-white/[0.02] to-transparent">
         <div className="space-y-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider">Balance</span>
-              {balanceLoading ? (
-                <div className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse"></div>
-              ) : (
-                <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
-              )}
-            </div>
-            <div className="text-xs font-medium text-text-muted/60">{currency || 'USD'}</div>
-          </div>
-          {balanceLoading ? (
-            <div className="flex items-baseline gap-2">
-              <Skeleton className="h-7 w-32" />
-            </div>
-          ) : (
-            <div className="flex items-baseline gap-2">
-              <span className="text-xl font-bold text-text tracking-tight">
-                ${(balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-              {equity !== undefined && equity !== balance && (
-                <span className={`text-xs font-medium ${equity >= (balance ?? 0) ? 'text-success' : 'text-danger'}`}>
-                  {equity >= (balance ?? 0) ? '+' : ''}
-                  ${(equity - (balance ?? 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-              )}
-            </div>
-          )}
-          <div className="flex items-center justify-between pt-1">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-text-muted/60">Equity</span>
-              {balanceLoading ? (
-                <Skeleton className="h-4 w-20" />
-              ) : (
-                <span className="text-xs font-semibold text-text/80">
-                  ${(equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-text-muted/60">Margin</span>
-              {balanceLoading ? (
-                <Skeleton className="h-4 w-16" />
-              ) : (
-                <span className="text-xs font-semibold text-text/80">
-                  ${(margin_used ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-              )}
-            </div>
-          </div>
+          {(() => {
+            const displayBalance = accountSummary?.balance ?? balance ?? 0
+            const displayEquity = accountSummary?.equity ?? equity ?? 0
+            const displayMargin = accountSummary?.marginUsed ?? margin_used ?? 0
+            const hasSummary = accountSummary != null
+            const loading = balanceLoading && !hasSummary
+            return (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider">Balance</span>
+                    {loading ? (
+                      <div className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse"></div>
+                    ) : (
+                      <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
+                    )}
+                  </div>
+                  <div className="text-xs font-medium text-text-muted/60">{currency || 'USD'}</div>
+                </div>
+                {loading ? (
+                  <div className="flex items-baseline gap-2">
+                    <Skeleton className="h-7 w-32" />
+                  </div>
+                ) : (
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-xl font-bold text-text tracking-tight">
+                      ${displayBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                    {displayEquity !== displayBalance && (
+                      <span className={`text-xs font-medium ${displayEquity >= displayBalance ? 'text-success' : 'text-danger'}`}>
+                        {displayEquity >= displayBalance ? '+' : ''}
+                        ${(displayEquity - displayBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="flex items-center justify-between pt-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-text-muted/60">Equity</span>
+                    {loading ? (
+                      <Skeleton className="h-4 w-20" />
+                    ) : (
+                      <span className="text-xs font-semibold text-text/80">
+                        ${displayEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-text-muted/60">Margin</span>
+                    {loading ? (
+                      <Skeleton className="h-4 w-16" />
+                    ) : (
+                      <span className="text-xs font-semibold text-text/80">
+                        ${displayMargin.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </>
+            )
+          })()}
         </div>
       </div>
 
