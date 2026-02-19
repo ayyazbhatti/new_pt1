@@ -33,6 +33,8 @@ export interface AccountSummaryResponse {
   marginLevel: string
   /** Margin call threshold % for user's group. Null = use platform default (50). */
   marginCallLevelThreshold?: number | null
+  /** Stop out threshold %. When margin level falls below this, all positions are closed. Null = no automatic stop out. */
+  stopOutLevelThreshold?: number | null
   realizedPnl: number
   unrealizedPnl: number
   updatedAt: string

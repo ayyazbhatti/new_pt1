@@ -15,6 +15,7 @@ const groupSchema = z.object({
   description: z.string().optional().nullable(),
   status: z.enum(['active', 'disabled']),
   margin_call_level: z.number().min(0).max(1000).optional().nullable(),
+  stop_out_level: z.number().min(0).max(1000).optional().nullable(),
 })
 
 type GroupFormData = z.infer<typeof groupSchema>
@@ -45,12 +46,14 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           description: initial.description || '',
           status: initial.status,
           margin_call_level: initial.marginCallLevel ?? undefined,
+          stop_out_level: initial.stopOutLevel ?? undefined,
         }
       : {
           name: '',
           description: '',
           status: 'active',
           margin_call_level: undefined,
+          stop_out_level: undefined,
         },
   })
 
@@ -66,6 +69,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
         description: data.description || null,
         status: data.status,
         margin_call_level: data.margin_call_level ?? null,
+        stop_out_level: data.stop_out_level ?? null,
       }
 
       if (mode === 'create') {
@@ -145,6 +149,21 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
             {...register('margin_call_level', { setValueAs: (v) => (v === '' || Number.isNaN(Number(v)) ? undefined : Number(v)) })}
           />
           <p className="text-xs text-text-muted">When user margin level falls below this %, they see a margin call warning. Leave empty for default (50%).</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="stop_out_level">Stop out level (%)</Label>
+          <Input
+            id="stop_out_level"
+            type="number"
+            min={0}
+            max={1000}
+            step={0.5}
+            placeholder="e.g. 20 (empty = no automatic stop out)"
+            disabled={isLoading || isReadOnly}
+            {...register('stop_out_level', { setValueAs: (v) => (v === '' || Number.isNaN(Number(v)) ? undefined : Number(v)) })}
+          />
+          <p className="text-xs text-text-muted">When user margin level falls below this %, all their positions are closed automatically. Leave empty to disable. Should be lower than margin call level.</p>
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

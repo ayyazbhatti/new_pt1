@@ -84,6 +84,14 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
       },
     },
     {
+      accessorKey: 'stopOutLevel',
+      header: 'Stop out %',
+      cell: ({ row }) => {
+        const v = row.original.stopOutLevel
+        return <span className="text-text">{v != null ? `${v}%` : '—'}</span>
+      },
+    },
+    {
       id: 'priceProfile',
       header: 'Price profile',
       cell: ({ row }) => {

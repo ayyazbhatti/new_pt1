@@ -4,6 +4,7 @@ pub mod subjects {
     pub const CMD_ORDER_PLACE: &str = "cmd.order.place";
     pub const CMD_ORDER_CANCEL: &str = "cmd.order.cancel";
     pub const CMD_POSITION_CLOSE: &str = "cmd.position.close";
+    pub const CMD_POSITION_CLOSE_ALL: &str = "cmd.position.close_all";
     
     // Incoming ticks (wildcard: ticks.*)
     pub const TICKS_PREFIX: &str = "ticks.";

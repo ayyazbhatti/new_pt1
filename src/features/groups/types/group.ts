@@ -25,6 +25,8 @@ export type UserGroup = {
   usersCount?: number
   /** Margin call level % (e.g. 50). Null = platform default. */
   marginCallLevel?: number | null
+  /** Stop out level % (e.g. 20). When margin level falls below this, all positions are closed. Null = no automatic stop out. */
+  stopOutLevel?: number | null
 }
 
 export interface ListGroupsParams {
@@ -49,6 +51,7 @@ export interface CreateGroupPayload {
   description?: string | null
   status: 'active' | 'disabled'
   margin_call_level?: number | null
+  stop_out_level?: number | null
 }
 
 export interface UpdateGroupPayload extends CreateGroupPayload {}

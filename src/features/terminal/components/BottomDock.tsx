@@ -1,5 +1,6 @@
 import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, Bot, AlertCircle, Maximize2, Minimize2 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { cn } from '@/shared/utils'
 import { toast } from 'react-hot-toast'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -46,6 +47,7 @@ export function BottomDock() {
   const bottomDockRef = useRef<HTMLDivElement>(null)
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
   const { accountSummary } = useAccountSummary()
+  const [formulaTooltip, setFormulaTooltip] = useState<{ formula: string; rect: DOMRect } | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -1004,62 +1006,48 @@ export function BottomDock() {
         )}
       </div>
 
-      {/* Bottom Stats Bar */}
+      {/* Bottom Stats Bar - hover each stat to see formula (tooltip in portal so it's not clipped) */}
       <div className="shrink-0 h-14 border-t border-white/5 bg-surface-2 flex items-center px-4 text-sm overflow-x-auto scrollbar-thin scrollbar-hide">
         <div className="flex items-center gap-4 min-w-max">
-          <div className="flex items-center gap-1.5 shrink-0">
-            <Wallet className="h-4 w-4 text-muted" />
-            <span className="text-muted">Balance </span>
-            <span className="text-text">{accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—'}</span>
-          </div>
-          <div className="h-4 w-px bg-border shrink-0"></div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <TrendingUp className="h-4 w-4 text-muted" />
-            <span className="text-muted">Equity </span>
-            <span className="text-text">{accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—'}</span>
-          </div>
-          <div className="h-4 w-px bg-border shrink-0"></div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <Shield className="h-4 w-4 text-muted" />
-            <span className="text-muted">Margin </span>
-            <span className="text-text">{accountSummary != null ? `$${accountSummary.marginUsed.toFixed(2)}` : '—'}</span>
-          </div>
-          <div className="h-4 w-px bg-border shrink-0"></div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <DollarSign className="h-4 w-4 text-muted" />
-            <span className="text-muted">Free Margin </span>
-            <span className="text-text">{accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—'}</span>
-          </div>
-          <div className="h-4 w-px bg-border shrink-0"></div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <Gift className="h-4 w-4 text-muted" />
-            <span className="text-muted">Bonus </span>
-            <span className="text-text">$0.00</span>
-          </div>
-          <div className="h-4 w-px bg-border shrink-0"></div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <Gauge className="h-4 w-4 text-accent" />
-            <span className="text-muted">Margin Level </span>
-            <span className="font-semibold text-accent">{accountSummary != null ? (accountSummary.marginLevel === 'inf' ? '∞' : `${accountSummary.marginLevel}%`) : '—'}</span>
-          </div>
-          <div className="h-4 w-px bg-border shrink-0"></div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <ArrowUpRight className="h-4 w-4 text-success" />
-            <span className="text-muted">RI PNL </span>
-            <span className={cn(accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success')}>
-              {accountSummary != null ? (accountSummary.realizedPnl >= 0 ? `$${accountSummary.realizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.realizedPnl).toFixed(2)}`) : '—'}
+          {([
+            { formula: 'Balance = Deposits − Withdrawals + Realized PnL', icon: Wallet, label: 'Balance ', value: accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—', valueClass: 'text-text' },
+            { formula: 'Equity = Balance + Unrealized PnL', icon: TrendingUp, label: 'Equity ', value: accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—', valueClass: 'text-text' },
+            { formula: 'Margin = Sum of margin used by all open positions', icon: Shield, label: 'Margin ', value: accountSummary != null ? `$${(accountSummary.marginLevel === 'inf' ? 0 : accountSummary.marginUsed).toFixed(2)}` : '—', valueClass: 'text-text' },
+            { formula: 'Free Margin = Equity − Margin', icon: DollarSign, label: 'Free Margin ', value: accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—', valueClass: 'text-text' },
+            { formula: 'Bonus = Credit or promotion (if any)', icon: Gift, label: 'Bonus ', value: '$0.00', valueClass: 'text-text' },
+            { formula: 'Margin Level = (Equity ÷ Margin) × 100% (∞ when Margin = 0)', icon: Gauge, label: 'Margin Level ', value: accountSummary != null ? (accountSummary.marginLevel === 'inf' ? '∞' : `${accountSummary.marginLevel}%`) : '—', valueClass: 'font-semibold text-accent' },
+            { formula: 'RI PNL (Realized PnL) = Profit/Loss from closed positions', icon: ArrowUpRight, label: 'RI PNL ', value: accountSummary != null ? (accountSummary.realizedPnl >= 0 ? `$${accountSummary.realizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.realizedPnl).toFixed(2)}`) : '—', valueClass: cn(accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success') },
+            { formula: 'UnR Net PNL (Unrealized PnL) = Profit/Loss on open positions (mark-to-market)', icon: ArrowDownRight, label: 'UnR Net PNL ', value: accountSummary != null ? (accountSummary.unrealizedPnl >= 0 ? `$${accountSummary.unrealizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.unrealizedPnl).toFixed(2)}`) : '—', valueClass: cn(accountSummary != null && accountSummary.unrealizedPnl < 0 ? 'text-danger' : 'text-success') },
+          ] as const).map(({ formula, icon: Icon, label, value, valueClass }, i) => (
+            <span key={i} className="contents">
+              {i > 0 ? <div className="h-4 w-px bg-border shrink-0" /> : null}
+              <div
+                className="relative flex items-center gap-1.5 shrink-0 cursor-help"
+                onMouseEnter={(e) => setFormulaTooltip({ formula, rect: e.currentTarget.getBoundingClientRect() })}
+                onMouseLeave={() => setFormulaTooltip(null)}
+              >
+                <Icon className="h-4 w-4 text-muted" />
+                <span className="text-muted">{label}</span>
+                <span className={valueClass}>{value}</span>
+              </div>
             </span>
-          </div>
-          <div className="h-4 w-px bg-border shrink-0"></div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <ArrowDownRight className="h-4 w-4 text-success" />
-            <span className="text-muted">UnR Net PNL </span>
-            <span className={cn(accountSummary != null && accountSummary.unrealizedPnl < 0 ? 'text-danger' : 'text-success')}>
-              {accountSummary != null ? (accountSummary.unrealizedPnl >= 0 ? `$${accountSummary.unrealizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.unrealizedPnl).toFixed(2)}`) : '—'}
-            </span>
-          </div>
+          ))}
         </div>
       </div>
+      {formulaTooltip &&
+        createPortal(
+          <div
+            className="fixed z-[9999] px-2.5 py-1.5 text-xs font-medium text-text bg-surface border border-border rounded shadow-lg whitespace-nowrap pointer-events-none"
+            style={{
+              left: formulaTooltip.rect.left + formulaTooltip.rect.width / 2,
+              bottom: window.innerHeight - formulaTooltip.rect.top + 6,
+              transform: 'translateX(-50%)',
+            }}
+          >
+            {formulaTooltip.formula}
+          </div>,
+          document.body
+        )}
 
       {/* Close All Positions Dialog */}
       <Dialog.Root open={closeAllDialogOpen} onOpenChange={(open) => !closeAllLoading && setCloseAllDialogOpen(open)}>

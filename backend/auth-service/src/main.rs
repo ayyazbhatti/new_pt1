@@ -137,6 +137,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize account summary coordinator (per-user serialization + publish throttle) to prevent UI flicker
     routes::deposits::init_account_summary_coordinator();
+    // Register NATS for stop-out (close all positions when margin level drops below threshold)
+    routes::deposits::register_stop_out_nats(Arc::new(nats_client.clone()));
 
     // Build application state for deposits
     let deposits_state = routes::deposits::DepositsState {
@@ -228,6 +230,32 @@ async fn main() -> anyhow::Result<()> {
             }
             Err(e) => {
                 error!("Failed to subscribe to evt.position.updated: {}", e);
+            }
+        }
+    });
+
+    // On position closed, recompute account summary so margin_used reflects only open positions (0 when none).
+    let nats_for_closed = nats_client.clone();
+    let pool_for_closed = pool.clone();
+    let redis_for_closed = redis.clone();
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        use routes::deposits::compute_and_cache_account_summary;
+        match nats_for_closed.subscribe("event.position.closed".to_string()).await {
+            Ok(mut subscriber) => {
+                info!("✅ Subscribed to event.position.closed for account summary refresh");
+                while let Some(msg) = subscriber.next().await {
+                    if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&msg.payload.to_vec()) {
+                        if let Some(uid) = payload.get("user_id").and_then(|v| v.as_str()) {
+                            if let Ok(user_id) = Uuid::parse_str(uid) {
+                                compute_and_cache_account_summary(&pool_for_closed, &redis_for_closed, user_id).await;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to subscribe to event.position.closed: {}", e);
             }
         }
     });

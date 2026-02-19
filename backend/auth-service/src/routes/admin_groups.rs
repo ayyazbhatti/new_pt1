@@ -24,6 +24,7 @@ pub struct CreateGroupRequest {
     pub description: Option<String>,
     pub status: String,
     pub margin_call_level: Option<f64>,
+    pub stop_out_level: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +33,7 @@ pub struct UpdateGroupRequest {
     pub description: Option<String>,
     pub status: String,
     pub margin_call_level: Option<f64>,
+    pub stop_out_level: Option<f64>,
 }
 
 /// Reference to a profile (price stream or leverage) for embedding in group list.
@@ -250,6 +252,7 @@ async fn create_group(
             payload.description.as_deref(),
             &payload.status,
             payload.margin_call_level,
+            payload.stop_out_level,
         )
         .await
     {
@@ -302,17 +305,23 @@ async fn update_group(
             payload.description.as_deref(),
             &payload.status,
             payload.margin_call_level,
+            payload.stop_out_level,
         )
         .await
     {
         Ok(group) => {
-            // Update Redis cache so account summary sees new threshold immediately
+            // Update Redis cache so account summary sees new thresholds immediately
             let key = redis_model::keys::Keys::group(id);
             if let Ok(mut conn) = redis.get_async_connection().await {
                 if let Some(ref d) = group.margin_call_level {
                     let _: Result<(), _> = conn.hset(&key, "margin_call_level", d.to_string()).await;
                 } else {
                     let _: Result<(), _> = conn.hdel(&key, "margin_call_level").await;
+                }
+                if let Some(ref d) = group.stop_out_level {
+                    let _: Result<(), _> = conn.hset(&key, "stop_out_level", d.to_string()).await;
+                } else {
+                    let _: Result<(), _> = conn.hdel(&key, "stop_out_level").await;
                 }
             }
             Ok(Json(group))

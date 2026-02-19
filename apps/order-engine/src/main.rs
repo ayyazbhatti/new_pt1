@@ -155,6 +155,9 @@ async fn main() -> Result<()> {
     let mut close_sub = nats_client.subscribe(nats_subjects::CMD_POSITION_CLOSE.to_string()).await?;
     info!("✅ Subscribed to {}", nats_subjects::CMD_POSITION_CLOSE);
     
+    let mut close_all_sub = nats_client.subscribe(nats_subjects::CMD_POSITION_CLOSE_ALL.to_string()).await?;
+    info!("✅ Subscribed to {}", nats_subjects::CMD_POSITION_CLOSE_ALL);
+    
     // Create subscription health monitor
     let subscription_health = Arc::new(nats::SubscriptionHealth::new());
     
@@ -371,6 +374,17 @@ async fn main() -> Result<()> {
             }
         }
         error!("Close position subscription stream ended");
+    });
+    
+    let position_handler_close_all = position_handler.clone();
+    tokio::spawn(async move {
+        info!("🔄 Close all positions handler started");
+        while let Some(msg) = close_all_sub.next().await {
+            if let Err(e) = position_handler_close_all.handle_close_all_positions(msg).await {
+                error!("Error handling close all positions: {}", e);
+            }
+        }
+        error!("Close all positions subscription stream ended");
     });
     
     // Keep main thread alive

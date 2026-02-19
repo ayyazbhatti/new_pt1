@@ -17,6 +17,7 @@ use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -34,6 +35,64 @@ use crate::services::ledger_service;
 pub struct DepositsState {
     pub redis: Arc<redis::Client>,
     pub nats: Arc<async_nats::Client>,
+}
+
+/// NATS client for stop-out close_all publish. Set once from main so compute_and_cache_account_summary_with_prices can publish without threading through all callers.
+static STOP_OUT_NATS: OnceLock<Arc<async_nats::Client>> = OnceLock::new();
+
+/// Register NATS client for stop-out. Call from main after connecting to NATS.
+pub fn register_stop_out_nats(client: Arc<async_nats::Client>) {
+    let _ = STOP_OUT_NATS.set(client);
+}
+
+/// If margin_level < stop_out_threshold, set cooldown key and publish cmd.position.close_all. Called from compute_and_cache_account_summary_with_prices.
+async fn try_publish_stop_out_close_all(
+    redis: &redis::Client,
+    user_id: Uuid,
+    margin_level: &str,
+    stop_out_threshold: Option<f64>,
+) {
+    let Some(threshold) = stop_out_threshold else { return };
+    let margin_value = match margin_level.parse::<f64>() {
+        Ok(v) if v.is_finite() => v,
+        _ => return, // "inf" or invalid => no stop out
+    };
+    if margin_value >= threshold {
+        return;
+    }
+    let cooldown_key = format!("pos:stop_out:triggered:{}", user_id);
+    let mut conn = match redis.get_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Stop out: Redis connection failed for cooldown: {}", e);
+            return;
+        }
+    };
+    // SET key 1 EX 60 NX — only proceed if we set the key (first trigger in 60s)
+    let set_ok: Result<bool, _> = redis::cmd("SET")
+        .arg(&cooldown_key)
+        .arg("1")
+        .arg("EX")
+        .arg(60_u64)
+        .arg("NX")
+        .query_async(&mut conn)
+        .await;
+    if set_ok.ok() != Some(true) {
+        return; // Cooldown active or error
+    }
+    let Some(nats) = STOP_OUT_NATS.get() else {
+        return;
+    };
+    let payload = serde_json::json!({
+        "user_id": user_id.to_string(),
+        "correlation_id": Uuid::new_v4().to_string(),
+        "ts": Utc::now().to_rfc3339(),
+    });
+    if let Err(e) = nats.publish("cmd.position.close_all".to_string(), payload.to_string().into()).await {
+        error!("Stop out: failed to publish cmd.position.close_all for user {}: {}", user_id, e);
+    } else {
+        info!("Stop out: published cmd.position.close_all for user {} (margin_level={} < threshold={})", user_id, margin_value, threshold);
+    }
 }
 
 // ============================================================================
@@ -405,6 +464,9 @@ pub struct AccountSummary {
     /// Margin call threshold % for this user's group. None = use platform default (e.g. 50).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub margin_call_level_threshold: Option<f64>,
+    /// Stop out threshold % for this user's group. When margin level falls below this, all positions are closed. None = no automatic stop out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_out_level_threshold: Option<f64>,
     pub realized_pnl: f64,
     pub unrealized_pnl: f64,
     pub updated_at: String,
@@ -446,6 +508,34 @@ pub(crate) async fn get_margin_call_level_for_group(
     let value = row.and_then(|(v,)| v).and_then(|d| d.to_string().parse::<f64>().ok())?;
     if let Ok(mut conn) = redis.get_async_connection().await {
         let _: Result<(), _> = conn.hset(&key, "margin_call_level", value.to_string()).await;
+    }
+    Some(value)
+}
+
+/// Stop out level threshold for a group (%). Redis-first, then DB; on DB hit we cache in Redis.
+pub(crate) async fn get_stop_out_level_for_group(
+    redis: &redis::Client,
+    pool: &PgPool,
+    group_id: Uuid,
+) -> Option<f64> {
+    let key = redis_model::keys::Keys::group(group_id);
+    if let Ok(mut conn) = redis.get_async_connection().await {
+        if let Ok(Some(s)) = conn.hget::<_, _, Option<String>>(&key, "stop_out_level").await {
+            if let Ok(v) = s.parse::<f64>() {
+                return Some(v);
+            }
+        }
+    }
+    let row: Option<(Option<rust_decimal::Decimal>,)> = sqlx::query_as(
+        "SELECT stop_out_level FROM user_groups WHERE id = $1",
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await
+    .ok()?;
+    let value = row.and_then(|(v,)| v).and_then(|d| d.to_string().parse::<f64>().ok())?;
+    if let Ok(mut conn) = redis.get_async_connection().await {
+        let _: Result<(), _> = conn.hset(&key, "stop_out_level", value.to_string()).await;
     }
     Some(value)
 }
@@ -660,13 +750,17 @@ pub async fn compute_and_cache_account_summary_with_prices(
         match compute_account_summary_inner(pool, Some(redis), user_id, overrides_ref).await {
             Ok(summary) => {
                 let group_id = get_user_group_id(pool, user_id).await;
-                let threshold = if let Some(gid) = group_id {
-                    get_margin_call_level_for_group(redis, pool, gid).await
+                let (margin_call_threshold, stop_out_threshold) = if let Some(gid) = group_id {
+                    (
+                        get_margin_call_level_for_group(redis, pool, gid).await,
+                        get_stop_out_level_for_group(redis, pool, gid).await,
+                    )
                 } else {
-                    None
+                    (None, None)
                 };
                 let summary_with_threshold = AccountSummary {
-                    margin_call_level_threshold: threshold,
+                    margin_call_level_threshold: margin_call_threshold,
+                    stop_out_level_threshold: stop_out_threshold,
                     ..summary
                 };
                 let key = redis_model::keys::Keys::account_summary(user_id);
@@ -682,6 +776,10 @@ pub async fn compute_and_cache_account_summary_with_prices(
                         .margin_call_level_threshold
                         .map(|v| v.to_string())
                         .unwrap_or_default();
+                    let stop_out_str = summary_with_threshold
+                        .stop_out_level_threshold
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
                     let _: Result<(), _> = conn.hset_multiple(&key, &[
                         ("balance", summary_with_threshold.balance.to_string()),
                         ("equity", summary_with_threshold.equity.to_string()),
@@ -689,6 +787,7 @@ pub async fn compute_and_cache_account_summary_with_prices(
                         ("free_margin", summary_with_threshold.free_margin.to_string()),
                         ("margin_level", summary_with_threshold.margin_level.clone()),
                         ("margin_call_level_threshold", thresh_str),
+                        ("stop_out_level_threshold", stop_out_str),
                         ("realized_pnl", summary_with_threshold.realized_pnl.to_string()),
                         ("unrealized_pnl", summary_with_threshold.unrealized_pnl.to_string()),
                         ("updated_at", summary_with_threshold.updated_at.clone()),
@@ -708,6 +807,13 @@ pub async fn compute_and_cache_account_summary_with_prices(
                         }
                     }
                 }
+                // Stop out: if margin level below threshold, publish close_all (with cooldown)
+                try_publish_stop_out_close_all(
+                    redis,
+                    user_id,
+                    &summary_with_threshold.margin_level,
+                    summary_with_threshold.stop_out_level_threshold,
+                ).await;
             }
             Err(e) => {
                 error!("Failed to compute account summary for user {}: {}", user_id, e);
@@ -842,6 +948,7 @@ pub(crate) async fn compute_account_summary_inner(
         free_margin: to_f64(free_margin),
         margin_level,
         margin_call_level_threshold: None,
+        stop_out_level_threshold: None,
         realized_pnl: to_f64(realized_pnl),
         unrealized_pnl: to_f64(unrealized_pnl),
         updated_at: Utc::now().to_rfc3339(),
@@ -905,6 +1012,7 @@ async fn get_account_summary(
         let free_margin: Option<String> = conn.hget(&key, "free_margin").await.ok();
         let margin_level: Option<String> = conn.hget(&key, "margin_level").await.ok();
         let margin_call_level_threshold: Option<String> = conn.hget(&key, "margin_call_level_threshold").await.ok();
+        let stop_out_level_threshold: Option<String> = conn.hget(&key, "stop_out_level_threshold").await.ok();
         let realized_pnl: Option<String> = conn.hget(&key, "realized_pnl").await.ok();
         let unrealized_pnl: Option<String> = conn.hget(&key, "unrealized_pnl").await.ok();
         let updated_at: Option<String> = conn.hget(&key, "updated_at").await.ok();
@@ -921,6 +1029,14 @@ async fn get_account_summary(
             } else {
                 None
             };
+            let stop_out = stop_out_level_threshold.and_then(|s| s.parse::<f64>().ok());
+            let stop_out = if stop_out.is_some() {
+                stop_out
+            } else if let Some(gid) = claims.group_id {
+                get_stop_out_level_for_group(redis, &pool, gid).await
+            } else {
+                None
+            };
             return Ok(Json(AccountSummary {
                 user_id: user_id.to_string(),
                 balance: balance_f,
@@ -929,6 +1045,7 @@ async fn get_account_summary(
                 free_margin: free_margin.parse().unwrap_or(0.0),
                 margin_level,
                 margin_call_level_threshold: threshold,
+                stop_out_level_threshold: stop_out,
                 realized_pnl: realized_pnl.parse().unwrap_or(0.0),
                 unrealized_pnl: unrealized_pnl.parse().unwrap_or(0.0),
                 updated_at,
@@ -938,14 +1055,18 @@ async fn get_account_summary(
     // Cache miss: compute, cache, return (use Redis for position metrics so they match Positions tab)
     match compute_account_summary_inner(&pool, Some(redis), user_id, None).await {
         Ok(summary) => {
-            let threshold = if let Some(gid) = claims.group_id {
-                get_margin_call_level_for_group(redis, &pool, gid).await
+            let (threshold, stop_out) = if let Some(gid) = claims.group_id {
+                (
+                    get_margin_call_level_for_group(redis, &pool, gid).await,
+                    get_stop_out_level_for_group(redis, &pool, gid).await,
+                )
             } else {
-                None
+                (None, None)
             };
             compute_and_cache_account_summary(&pool, redis, user_id).await;
             let summary_with_threshold = AccountSummary {
                 margin_call_level_threshold: threshold,
+                stop_out_level_threshold: stop_out,
                 ..summary
             };
             Ok(Json(summary_with_threshold))

@@ -265,5 +265,146 @@ impl PositionHandler {
         
         Ok(())
     }
+
+    /// Handle cmd.position.close_all: close all OPEN positions for the user. Processes sequentially.
+    #[instrument(skip(self, msg))]
+    pub async fn handle_close_all_positions(&self, msg: async_nats::Message) -> Result<()> {
+        let bytes = msg.payload.to_vec();
+        let cmd_json: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let user_id = cmd_json
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .context("Invalid user_id in close_all")?;
+        let correlation_id = cmd_json
+            .get("correlation_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        info!("Received close_all_positions: user_id={}, correlation_id={}", user_id, correlation_id);
+
+        use redis_model::keys::Keys;
+        let mut conn = self.redis.get_connection().await;
+        let positions_key = Keys::positions_set(user_id);
+        let position_ids: Vec<String> = redis::cmd("SMEMBERS")
+            .arg(&positions_key)
+            .query_async(&mut conn)
+            .await?;
+        let mut closed = 0u32;
+        for pos_id_str in position_ids {
+            let position_id = match Uuid::parse_str(&pos_id_str) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+            let pos_key = Keys::position_by_id(position_id);
+            let status: Option<String> = redis::cmd("HGET")
+                .arg(&pos_key)
+                .arg("status")
+                .query_async(&mut conn)
+                .await
+                .ok();
+            if status.as_deref().map(|s| s.eq_ignore_ascii_case("OPEN")) != Some(true) {
+                continue;
+            }
+            let symbol: Option<String> = redis::cmd("HGET")
+                .arg(&pos_key)
+                .arg("symbol")
+                .query_async(&mut conn)
+                .await
+                .ok();
+            let side: Option<String> = redis::cmd("HGET")
+                .arg(&pos_key)
+                .arg("side")
+                .query_async(&mut conn)
+                .await
+                .ok();
+            let group_id: Option<String> = redis::cmd("HGET")
+                .arg(&pos_key)
+                .arg("group_id")
+                .query_async(&mut conn)
+                .await
+                .ok();
+            let (symbol, side) = match (symbol, side) {
+                (Some(s), Some(side)) => (s, side),
+                _ => continue,
+            };
+            let tick = match self.cache.get_last_tick(&symbol, group_id.as_deref()) {
+                Some(t) => t,
+                None => {
+                    warn!("Close all: no tick for symbol {}, skipping position {}", symbol, position_id);
+                    continue;
+                }
+            };
+            let exit_price = if side.eq_ignore_ascii_case("LONG") {
+                tick.bid
+            } else {
+                tick.ask
+            };
+            match self.lua.atomic_close_position(&mut conn, &position_id, exit_price, None).await {
+                Ok(result) => {
+                    if result.get("error").is_some() {
+                        let err_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        warn!("Close all: position {} failed: {}", position_id, err_msg);
+                        continue;
+                    }
+                    let closed_size: Decimal = result
+                        .get("closed_size")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                        .unwrap_or(Decimal::ZERO);
+                    let realized_pnl: Decimal = result
+                        .get("realized_pnl")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                        .unwrap_or(Decimal::ZERO);
+                    let pos_side = if side.eq_ignore_ascii_case("LONG") {
+                        contracts::enums::PositionSide::Long
+                    } else {
+                        contracts::enums::PositionSide::Short
+                    };
+                    let event = PositionClosedEvent {
+                        position_id,
+                        user_id,
+                        symbol: symbol.clone(),
+                        side: pos_side,
+                        closed_size,
+                        exit_price,
+                        realized_pnl,
+                        correlation_id: correlation_id.clone(),
+                        ts: now(),
+                        trigger_reason: Some("stop_out".to_string()),
+                    };
+                    if self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &event).await.is_err() {
+                        warn!("Close all: failed to publish position closed for {}", position_id);
+                    }
+                    if let Err(e) = redis::cmd("PUBLISH")
+                        .arg("positions:updates")
+                        .arg(serde_json::to_string(&serde_json::json!({
+                            "user_id": user_id.to_string(),
+                            "position_id": position_id.to_string(),
+                            "symbol": symbol,
+                            "side": side,
+                            "quantity": closed_size.to_string(),
+                            "unrealized_pnl": realized_pnl.to_string(),
+                            "trigger_reason": "stop_out",
+                            "ts": now().timestamp_millis(),
+                        }))?)
+                        .query_async::<_, i64>(&mut conn)
+                        .await
+                    {
+                        warn!("Close all: failed to publish to Redis: {}", e);
+                    }
+                    self.metrics.inc_positions_closed();
+                    closed += 1;
+                    info!("Close all: closed position {} for user {}", position_id, user_id);
+                }
+                Err(e) => {
+                    warn!("Close all: error closing position {}: {}", position_id, e);
+                }
+            }
+        }
+        info!("Close all: finished for user {}, closed {} position(s)", user_id, closed);
+        Ok(())
+    }
 }
 

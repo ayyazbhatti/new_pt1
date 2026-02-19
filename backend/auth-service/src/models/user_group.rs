@@ -13,6 +13,8 @@ pub struct UserGroup {
     pub default_leverage_profile_id: Option<Uuid>,
     /// Margin call level as percentage (e.g. 50 = 50%). NULL = use platform default.
     pub margin_call_level: Option<rust_decimal::Decimal>,
+    /// Stop out level as percentage (e.g. 20 = 20%). When margin level falls below this, all positions are closed. NULL = no automatic stop out.
+    pub stop_out_level: Option<rust_decimal::Decimal>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

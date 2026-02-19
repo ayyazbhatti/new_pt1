@@ -27,6 +27,7 @@ function toCamelCase(obj: any): UserGroup {
     priceProfile: priceProfile ?? undefined,
     leverageProfile: leverageProfile ?? undefined,
     marginCallLevel: obj.margin_call_level != null ? Number(obj.margin_call_level) : null,
+    stopOutLevel: obj.stop_out_level != null ? Number(obj.stop_out_level) : null,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
   }
@@ -39,6 +40,7 @@ function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
     description: payload.description ?? null,
     status: payload.status,
     margin_call_level: payload.margin_call_level ?? null,
+    stop_out_level: payload.stop_out_level ?? null,
   }
 }
 

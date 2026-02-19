@@ -16,19 +16,26 @@ export function useMarginCall(accountSummary: AccountSummaryResponse | null) {
 
   const threshold = accountSummary?.marginCallLevelThreshold ?? DEFAULT_THRESHOLD
   const marginLevelStr = accountSummary?.marginLevel
+  const marginUsed = accountSummary?.marginUsed ?? 0
   const currentLevel =
     marginLevelStr != null && marginLevelStr !== 'inf'
       ? parseFloat(marginLevelStr)
       : null
 
+  // Only consider margin call when: level below threshold AND user has margin in use (open positions).
+  // When positions are closed (e.g. stop out), marginUsed becomes 0 and marginLevel becomes "inf" — don't show popup.
   const isMarginCall =
-    currentLevel != null && !Number.isNaN(currentLevel) && currentLevel < threshold
+    marginUsed > 0 &&
+    currentLevel != null &&
+    !Number.isNaN(currentLevel) &&
+    currentLevel < threshold
 
   useEffect(() => {
-    if (!accountSummary || !isMarginCall) {
-      if (!isMarginCall) wasBelowRef.current = false
-      return
+    if (!isMarginCall) {
+      wasBelowRef.current = false
+      setShowModal(false) // Dismiss popup when no longer in margin call (e.g. after stop out closed positions)
     }
+    if (!accountSummary || !isMarginCall) return
     const now = Date.now()
     const cooldownPassed = now - lastShownRef.current >= COOLDOWN_MS
     if (!cooldownPassed && wasBelowRef.current) return

@@ -283,7 +283,11 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
           {(() => {
             const displayBalance = balance ?? 0
             const displayEquity = accountSummary?.equity ?? equity ?? 0
-            const displayMargin = accountSummary?.marginUsed ?? margin_used ?? 0
+            // Margin used is for open positions only; when margin level is "inf" there is no margin in use
+            const displayMargin =
+              accountSummary?.marginLevel === 'inf'
+                ? 0
+                : (accountSummary?.marginUsed ?? margin_used ?? 0)
             const hasSummary = accountSummary != null
             const balanceLoadingState = balanceLoading
             const equityMarginLoading = !hasSummary
