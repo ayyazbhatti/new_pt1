@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Input } from '@/shared/ui/input'
@@ -13,12 +13,34 @@ interface ProfileDetailsModalProps {
   profile: MarkupProfile
 }
 
+/** Local bid/ask per symbol so refetch never overwrites the field the user didn't edit */
+function useLocalMarkups(symbolsWithMarkup: SymbolWithMarkup[]) {
+  const [local, setLocal] = useState<Record<string, { bid: string; ask: string }>>({})
+
+  // Seed from server only for symbolIds we don't have yet (never overwrite after user edit / refetch)
+  useEffect(() => {
+    if (symbolsWithMarkup.length === 0) return
+    setLocal((prev) => {
+      let next = prev
+      for (const s of symbolsWithMarkup) {
+        const key = s.symbolId
+        if (key in prev) continue
+        next = next === prev ? { ...prev } : next
+        next[key] = { bid: s.bidMarkup, ask: s.askMarkup }
+      }
+      return next
+    })
+  }, [symbolsWithMarkup])
+
+  return [local, setLocal] as const
+}
+
 export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
   const { data: symbols, isLoading: symbolsLoading } = useSymbolsList({ page_size: 1000 })
   const { data: overrides, isLoading: overridesLoading } = useSymbolOverrides(profile.id, true)
   const upsertOverride = useUpsertSymbolOverride()
 
-  // Create symbol list with markup data
+  // Create symbol list with markup data from server
   const symbolsWithMarkup = useMemo<SymbolWithMarkup[]>(() => {
     if (!symbols?.items) return []
 
@@ -40,7 +62,9 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
     })
   }, [symbols, profile, overrides])
 
-  // Debounced save function
+  const [localMarkups, setLocalMarkups] = useLocalMarkups(symbolsWithMarkup)
+
+  // Debounced save: send both bid and ask so server never overwrites the other field
   const debouncedSave = useDebouncedCallback(
     (symbolId: string, bidMarkup: string, askMarkup: string) => {
       upsertOverride.mutate({
@@ -52,19 +76,19 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
         },
       })
     },
-    500 // 500ms debounce
+    500
   )
 
   const handleBidMarkupChange = (symbolId: string, value: string) => {
-    const symbol = symbolsWithMarkup.find((s) => s.symbolId === symbolId)
-    if (!symbol) return
-    debouncedSave(symbolId, value, symbol.askMarkup)
+    const current = localMarkups[symbolId] ?? { bid: '0', ask: '0' }
+    setLocalMarkups((prev) => ({ ...prev, [symbolId]: { ...current, bid: value } }))
+    debouncedSave(symbolId, value, current.ask)
   }
 
   const handleAskMarkupChange = (symbolId: string, value: string) => {
-    const symbol = symbolsWithMarkup.find((s) => s.symbolId === symbolId)
-    if (!symbol) return
-    debouncedSave(symbolId, symbol.bidMarkup, value)
+    const current = localMarkups[symbolId] ?? { bid: '0', ask: '0' }
+    setLocalMarkups((prev) => ({ ...prev, [symbolId]: { ...current, ask: value } }))
+    debouncedSave(symbolId, current.bid, value)
   }
 
   const formatMarkup = (value: string) => {
@@ -107,13 +131,15 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
       header: 'Bid Markup',
       cell: ({ row }) => {
         const symbol = row.original
+        const local = localMarkups[symbol.symbolId]
+        const bidValue = local?.bid ?? symbol.bidMarkup
         const isSaving = upsertOverride.isPending
         return (
           <div className="flex items-center gap-2">
             <Input
               type="number"
               step="0.01"
-              value={symbol.bidMarkup}
+              value={bidValue}
               onChange={(e) => handleBidMarkupChange(symbol.symbolId, e.target.value)}
               className="w-24 font-mono text-sm"
               disabled={isSaving}
@@ -128,13 +154,15 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
       header: 'Ask Markup',
       cell: ({ row }) => {
         const symbol = row.original
+        const local = localMarkups[symbol.symbolId]
+        const askValue = local?.ask ?? symbol.askMarkup
         const isSaving = upsertOverride.isPending
         return (
           <div className="flex items-center gap-2">
             <Input
               type="number"
               step="0.01"
-              value={symbol.askMarkup}
+              value={askValue}
               onChange={(e) => handleAskMarkupChange(symbol.symbolId, e.target.value)}
               className="w-24 font-mono text-sm"
               disabled={isSaving}

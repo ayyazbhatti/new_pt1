@@ -4,6 +4,7 @@ import { LeftSidebar } from '../components/LeftSidebar'
 import { CenterWorkspace } from '../components/CenterWorkspace'
 import { RightTradingPanel } from '../components/RightTradingPanel'
 import { SettingsPanel } from '../components/SettingsPanel'
+import { PaymentPanel } from '../components/PaymentPanel'
 import { useTerminalStore } from '../store'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
@@ -167,6 +168,7 @@ export function AppShellTerminal() {
   }, [isLoading, setLoading])
 
   const settingsPanelOpen = useTerminalStore((s) => s.settingsPanelOpen)
+  const paymentPanelOpen = useTerminalStore((s) => s.paymentPanelOpen)
 
   return (
     <>
@@ -178,7 +180,9 @@ export function AppShellTerminal() {
         }
         center={<CenterWorkspace />}
         right={<RightTradingPanel />}
-        rightPanel={settingsPanelOpen ? <SettingsPanel /> : undefined}
+        rightPanel={
+          paymentPanelOpen ? <PaymentPanel /> : settingsPanelOpen ? <SettingsPanel /> : undefined
+        }
       />
       <MarginCallModal
         open={marginCall.showModal}

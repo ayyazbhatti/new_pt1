@@ -1937,12 +1937,71 @@ pub fn create_wallet_router(
         .with_state(pool)
 }
 
+/// Current user's deposit history (for Payment / Deposit History panel)
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyDepositItem {
+    pub id: String,
+    pub amount: f64,
+    pub currency: String,
+    pub status: String,
+    pub reference: String,
+    pub created_at: String,
+}
+
+async fn list_my_deposits(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Vec<MyDepositItem>>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = claims.sub;
+    let rows = sqlx::query(
+        r#"
+        SELECT id, net_amount::text, currency, status::text, reference, created_at
+        FROM transactions
+        WHERE user_id = $1 AND type = 'deposit'::transaction_type
+        ORDER BY created_at DESC
+        LIMIT 100
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to fetch deposit history for user {}: {}", user_id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": { "code": "DEPOSIT_HISTORY_FAILED", "message": e.to_string() }
+            })),
+        )
+    })?;
+
+    let items: Vec<MyDepositItem> = rows
+        .into_iter()
+        .map(|row| {
+            let amount_str: String = row.get(1);
+            let amount = amount_str.parse::<f64>().unwrap_or(0.0);
+            let created_at: chrono::DateTime<Utc> = row.get(5);
+            MyDepositItem {
+                id: row.get::<Uuid, _>(0).to_string(),
+                amount,
+                currency: row.get(2),
+                status: row.get(3),
+                reference: row.get(4),
+                created_at: created_at.to_rfc3339(),
+            }
+        })
+        .collect();
+    Ok(Json(items))
+}
+
 pub fn create_account_router(
     pool: PgPool,
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
     Router::new()
         .route("/summary", get(get_account_summary))
+        .route("/deposits", get(list_my_deposits))
         .layer(axum::middleware::from_fn(auth_middleware))
         .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
             let state = deposits_state.clone();

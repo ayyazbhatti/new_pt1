@@ -1,4 +1,4 @@
-import { Search, Grid3x3, Bell, HelpCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
+import { Search, Grid3x3, Bell, CreditCard, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
@@ -38,6 +38,8 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
     isLoading,
     settingsPanelOpen,
     setSettingsPanelOpen,
+    paymentPanelOpen,
+    setPaymentPanelOpen,
   } = useTerminalStore()
 
   const { user, logout } = useAuthStore()
@@ -270,8 +272,18 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               <Bell className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
               <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-danger ring-2 ring-[#0f172a]"></span>
             </button>
-            <button className="p-2 hover:bg-white/5 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group">
-              <HelpCircle className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
+            <button
+              onClick={() => {
+                setSettingsPanelOpen(false)
+                setPaymentPanelOpen(!paymentPanelOpen)
+              }}
+              className={cn(
+                'p-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group',
+                paymentPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-white/5 text-text-muted group-hover:text-text'
+              )}
+              title="Deposit history"
+            >
+              <CreditCard className="h-4 w-4" />
             </button>
           </div>
         </div>

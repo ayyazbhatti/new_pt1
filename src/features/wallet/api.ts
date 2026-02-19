@@ -71,3 +71,16 @@ export async function createWithdrawalRequest(
 export async function fetchBalance(): Promise<WalletBalanceResponse> {
   return http<WalletBalanceResponse>('/api/wallet/balance')
 }
+
+export interface DepositHistoryItem {
+  id: string
+  amount: number
+  currency: string
+  status: string
+  reference: string
+  createdAt: string
+}
+
+export async function fetchDepositHistory(): Promise<DepositHistoryItem[]> {
+  return http<DepositHistoryItem[]>('/api/account/deposits')
+}
