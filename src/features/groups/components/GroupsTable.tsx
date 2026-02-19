@@ -76,6 +76,14 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
       },
     },
     {
+      accessorKey: 'marginCallLevel',
+      header: 'Margin call %',
+      cell: ({ row }) => {
+        const v = row.original.marginCallLevel
+        return <span className="text-text">{v != null ? `${v}%` : '—'}</span>
+      },
+    },
+    {
       id: 'priceProfile',
       header: 'Price profile',
       cell: ({ row }) => {

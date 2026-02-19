@@ -402,9 +402,52 @@ pub struct AccountSummary {
     pub free_margin: f64,
     /// Margin level as percentage string, or "inf" when margin_used = 0
     pub margin_level: String,
+    /// Margin call threshold % for this user's group. None = use platform default (e.g. 50).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_call_level_threshold: Option<f64>,
     pub realized_pnl: f64,
     pub unrealized_pnl: f64,
     pub updated_at: String,
+}
+
+/// Returns the user's group_id from DB. Used when we have user_id but no JWT (e.g. background summary).
+async fn get_user_group_id(pool: &PgPool, user_id: Uuid) -> Option<Uuid> {
+    let row: Option<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT group_id FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()?;
+    row.flatten()
+}
+
+/// Margin call level threshold for a group (%). Redis-first, then DB; on DB hit we cache in Redis.
+pub(crate) async fn get_margin_call_level_for_group(
+    redis: &redis::Client,
+    pool: &PgPool,
+    group_id: Uuid,
+) -> Option<f64> {
+    let key = redis_model::keys::Keys::group(group_id);
+    if let Ok(mut conn) = redis.get_async_connection().await {
+        if let Ok(Some(s)) = conn.hget::<_, _, Option<String>>(&key, "margin_call_level").await {
+            if let Ok(v) = s.parse::<f64>() {
+                return Some(v);
+            }
+        }
+    }
+    let row: Option<(Option<rust_decimal::Decimal>,)> = sqlx::query_as(
+        "SELECT margin_call_level FROM user_groups WHERE id = $1",
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await
+    .ok()?;
+    let value = row.and_then(|(v,)| v).and_then(|d| d.to_string().parse::<f64>().ok())?;
+    if let Ok(mut conn) = redis.get_async_connection().await {
+        let _: Result<(), _> = conn.hset(&key, "margin_call_level", value.to_string()).await;
+    }
+    Some(value)
 }
 
 /// Read current (bid, ask) from Redis key prices:SYMBOL:GROUP_ID (written by order-engine on each tick).
@@ -616,8 +659,18 @@ pub async fn compute_and_cache_account_summary_with_prices(
     let do_compute = async {
         match compute_account_summary_inner(pool, Some(redis), user_id, overrides_ref).await {
             Ok(summary) => {
+                let group_id = get_user_group_id(pool, user_id).await;
+                let threshold = if let Some(gid) = group_id {
+                    get_margin_call_level_for_group(redis, pool, gid).await
+                } else {
+                    None
+                };
+                let summary_with_threshold = AccountSummary {
+                    margin_call_level_threshold: threshold,
+                    ..summary
+                };
                 let key = redis_model::keys::Keys::account_summary(user_id);
-                let json = match serde_json::to_string(&summary) {
+                let json = match serde_json::to_string(&summary_with_threshold) {
                     Ok(j) => j,
                     Err(e) => {
                         error!("Failed to serialize account summary: {}", e);
@@ -625,15 +678,20 @@ pub async fn compute_and_cache_account_summary_with_prices(
                     }
                 };
                 if let Ok(mut conn) = redis.get_async_connection().await {
+                    let thresh_str = summary_with_threshold
+                        .margin_call_level_threshold
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
                     let _: Result<(), _> = conn.hset_multiple(&key, &[
-                        ("balance", summary.balance.to_string()),
-                        ("equity", summary.equity.to_string()),
-                        ("margin_used", summary.margin_used.to_string()),
-                        ("free_margin", summary.free_margin.to_string()),
-                        ("margin_level", summary.margin_level.clone()),
-                        ("realized_pnl", summary.realized_pnl.to_string()),
-                        ("unrealized_pnl", summary.unrealized_pnl.to_string()),
-                        ("updated_at", summary.updated_at.clone()),
+                        ("balance", summary_with_threshold.balance.to_string()),
+                        ("equity", summary_with_threshold.equity.to_string()),
+                        ("margin_used", summary_with_threshold.margin_used.to_string()),
+                        ("free_margin", summary_with_threshold.free_margin.to_string()),
+                        ("margin_level", summary_with_threshold.margin_level.clone()),
+                        ("margin_call_level_threshold", thresh_str),
+                        ("realized_pnl", summary_with_threshold.realized_pnl.to_string()),
+                        ("unrealized_pnl", summary_with_threshold.unrealized_pnl.to_string()),
+                        ("updated_at", summary_with_threshold.updated_at.clone()),
                     ]).await;
                     let should_pub = COORDINATOR
                         .get()
@@ -783,6 +841,7 @@ pub(crate) async fn compute_account_summary_inner(
         margin_used: to_f64(margin_used),
         free_margin: to_f64(free_margin),
         margin_level,
+        margin_call_level_threshold: None,
         realized_pnl: to_f64(realized_pnl),
         unrealized_pnl: to_f64(unrealized_pnl),
         updated_at: Utc::now().to_rfc3339(),
@@ -836,14 +895,16 @@ async fn get_account_summary(
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<AccountSummary>, StatusCode> {
     let user_id = claims.sub;
+    let redis = deposits_state.redis.as_ref();
     // Try Redis cache first
     let key = redis_model::keys::Keys::account_summary(user_id);
-    if let Ok(mut conn) = deposits_state.redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get_async_connection().await {
         let balance: Option<String> = conn.hget(&key, "balance").await.ok();
         let equity: Option<String> = conn.hget(&key, "equity").await.ok();
         let margin_used: Option<String> = conn.hget(&key, "margin_used").await.ok();
         let free_margin: Option<String> = conn.hget(&key, "free_margin").await.ok();
         let margin_level: Option<String> = conn.hget(&key, "margin_level").await.ok();
+        let margin_call_level_threshold: Option<String> = conn.hget(&key, "margin_call_level_threshold").await.ok();
         let realized_pnl: Option<String> = conn.hget(&key, "realized_pnl").await.ok();
         let unrealized_pnl: Option<String> = conn.hget(&key, "unrealized_pnl").await.ok();
         let updated_at: Option<String> = conn.hget(&key, "updated_at").await.ok();
@@ -851,24 +912,43 @@ async fn get_account_summary(
             (balance, equity, margin_used, free_margin, margin_level, realized_pnl, unrealized_pnl, updated_at)
         {
             let balance_f: f64 = bal.parse().unwrap_or(0.0);
-                return Ok(Json(AccountSummary {
-                    user_id: user_id.to_string(),
-                    balance: balance_f,
-                    equity: equity.parse().unwrap_or(0.0),
-                    margin_used: margin_used.parse().unwrap_or(0.0),
-                    free_margin: free_margin.parse().unwrap_or(0.0),
-                    margin_level,
-                    realized_pnl: realized_pnl.parse().unwrap_or(0.0),
-                    unrealized_pnl: unrealized_pnl.parse().unwrap_or(0.0),
-                    updated_at,
-                }));
+            let threshold = margin_call_level_threshold
+                .and_then(|s| s.parse::<f64>().ok());
+            let threshold = if threshold.is_some() {
+                threshold
+            } else if let Some(gid) = claims.group_id {
+                get_margin_call_level_for_group(redis, &pool, gid).await
+            } else {
+                None
+            };
+            return Ok(Json(AccountSummary {
+                user_id: user_id.to_string(),
+                balance: balance_f,
+                equity: equity.parse().unwrap_or(0.0),
+                margin_used: margin_used.parse().unwrap_or(0.0),
+                free_margin: free_margin.parse().unwrap_or(0.0),
+                margin_level,
+                margin_call_level_threshold: threshold,
+                realized_pnl: realized_pnl.parse().unwrap_or(0.0),
+                unrealized_pnl: unrealized_pnl.parse().unwrap_or(0.0),
+                updated_at,
+            }));
         }
     }
     // Cache miss: compute, cache, return (use Redis for position metrics so they match Positions tab)
-    match compute_account_summary_inner(&pool, Some(deposits_state.redis.as_ref()), user_id, None).await {
+    match compute_account_summary_inner(&pool, Some(redis), user_id, None).await {
         Ok(summary) => {
-            compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), user_id).await;
-            Ok(Json(summary))
+            let threshold = if let Some(gid) = claims.group_id {
+                get_margin_call_level_for_group(redis, &pool, gid).await
+            } else {
+                None
+            };
+            compute_and_cache_account_summary(&pool, redis, user_id).await;
+            let summary_with_threshold = AccountSummary {
+                margin_call_level_threshold: threshold,
+                ..summary
+            };
+            Ok(Json(summary_with_threshold))
         }
         Err(e) => {
             error!("Failed to compute account summary for user {}: {}", user_id, e);

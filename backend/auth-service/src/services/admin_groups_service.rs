@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
+use rust_decimal::prelude::FromPrimitive;
 use sqlx::PgPool;
 use uuid::Uuid;
 use crate::models::user_group::UserGroup;
@@ -41,6 +42,7 @@ impl From<UserGroupRowMinimal> for UserGroup {
             status: r.status,
             default_price_profile_id: None,
             default_leverage_profile_id: None,
+            margin_call_level: None,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -129,7 +131,7 @@ impl AdminGroupsService {
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, default_price_profile_id, \
-             default_leverage_profile_id, created_at, updated_at FROM user_groups WHERE 1=1"
+             default_leverage_profile_id, margin_call_level, created_at, updated_at FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
             if !search.is_empty() {
@@ -212,6 +214,7 @@ impl AdminGroupsService {
         name: &str,
         description: Option<&str>,
         status: &str,
+        margin_call_level: Option<f64>,
     ) -> anyhow::Result<UserGroup> {
         // Validate
         if name.len() < 2 || name.len() > 40 {
@@ -221,15 +224,16 @@ impl AdminGroupsService {
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
             INSERT INTO user_groups (
-                name, description, status
+                name, description, status, margin_call_level
             )
-            VALUES ($1, $2, $3)
+            VALUES ($1, $2, $3, $4)
             RETURNING *
             "#,
         )
         .bind(name)
         .bind(description)
         .bind(status)
+        .bind(margin_call_level.and_then(rust_decimal::Decimal::from_f64))
         .fetch_one(&self.pool)
         .await?;
 
@@ -242,6 +246,7 @@ impl AdminGroupsService {
         name: &str,
         description: Option<&str>,
         status: &str,
+        margin_call_level: Option<f64>,
     ) -> anyhow::Result<UserGroup> {
         // Validate (same as create)
         if name.len() < 2 || name.len() > 40 {
@@ -255,6 +260,7 @@ impl AdminGroupsService {
                 name = $2,
                 description = $3,
                 status = $4,
+                margin_call_level = $5,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -264,6 +270,7 @@ impl AdminGroupsService {
         .bind(name)
         .bind(description)
         .bind(status)
+        .bind(margin_call_level.and_then(rust_decimal::Decimal::from_f64))
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Group not found"))?;

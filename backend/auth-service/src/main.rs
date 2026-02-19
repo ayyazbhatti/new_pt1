@@ -174,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/audit", create_admin_audit_router(pool.clone()))
-        .nest("/api/admin/groups", create_admin_groups_router(pool.clone()))
+        .nest("/api/admin/groups", create_admin_groups_router(pool.clone()).layer(axum::extract::Extension(deposits_state.redis.clone())))
         .nest("/api/admin/leverage-profiles", create_admin_leverage_profiles_router(pool.clone()))
         .nest("/api/admin/symbols", create_admin_symbols_router(pool.clone()))
         .nest("/api/admin/markup", create_admin_markup_router(pool.clone()))

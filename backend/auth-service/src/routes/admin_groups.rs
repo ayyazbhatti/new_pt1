@@ -8,8 +8,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
+use redis::AsyncCommands;
 use crate::middleware::auth_middleware;
 use crate::models::user_group::UserGroup;
 use crate::services::admin_groups_service::{AdminGroupsService, GroupSymbolInput};
@@ -21,6 +23,7 @@ pub struct CreateGroupRequest {
     pub name: String,
     pub description: Option<String>,
     pub status: String,
+    pub margin_call_level: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +31,7 @@ pub struct UpdateGroupRequest {
     pub name: String,
     pub description: Option<String>,
     pub status: String,
+    pub margin_call_level: Option<f64>,
 }
 
 /// Reference to a profile (price stream or leverage) for embedding in group list.
@@ -241,7 +245,12 @@ async fn create_group(
 
     let service = AdminGroupsService::new(pool);
     match service
-        .create_group(&payload.name, payload.description.as_deref(), &payload.status)
+        .create_group(
+            &payload.name,
+            payload.description.as_deref(),
+            &payload.status,
+            payload.margin_call_level,
+        )
         .await
     {
         Ok(group) => Ok(Json(group)),
@@ -269,6 +278,7 @@ async fn create_group(
 async fn update_group(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    axum::extract::Extension(redis): axum::extract::Extension<Arc<redis::Client>>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateGroupRequest>,
 ) -> Result<Json<UserGroup>, (StatusCode, Json<ErrorResponse>)> {
@@ -286,10 +296,27 @@ async fn update_group(
 
     let service = AdminGroupsService::new(pool);
     match service
-        .update_group(id, &payload.name, payload.description.as_deref(), &payload.status)
+        .update_group(
+            id,
+            &payload.name,
+            payload.description.as_deref(),
+            &payload.status,
+            payload.margin_call_level,
+        )
         .await
     {
-        Ok(group) => Ok(Json(group)),
+        Ok(group) => {
+            // Update Redis cache so account summary sees new threshold immediately
+            let key = redis_model::keys::Keys::group(id);
+            if let Ok(mut conn) = redis.get_async_connection().await {
+                if let Some(ref d) = group.margin_call_level {
+                    let _: Result<(), _> = conn.hset(&key, "margin_call_level", d.to_string()).await;
+                } else {
+                    let _: Result<(), _> = conn.hdel(&key, "margin_call_level").await;
+                }
+            }
+            Ok(Json(group))
+        }
         Err(e) => {
             let code = if e.to_string().contains("not found") {
                 "GROUP_NOT_FOUND"

@@ -19,7 +19,12 @@ import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
 
-export function LeftSidebar() {
+interface LeftSidebarProps {
+  /** When provided, Deposit button opens parent's deposit modal and parent renders DepositModal. */
+  onOpenDeposit?: () => void
+}
+
+export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const {
     activeTab,
     setActiveTab,
@@ -498,7 +503,7 @@ export function LeftSidebar() {
           <Button
             variant="success"
             className="w-full h-9 text-xs font-semibold shadow-lg shadow-success/20 hover:shadow-success/30 transition-all"
-            onClick={() => setDepositModalOpen(true)}
+            onClick={() => (onOpenDeposit ? onOpenDeposit() : setDepositModalOpen(true))}
           >
             Deposit
           </Button>
@@ -535,8 +540,10 @@ export function LeftSidebar() {
         </button>
       </div>
 
-      {/* Deposit Modal */}
-      <DepositModal open={depositModalOpen} onOpenChange={setDepositModalOpen} />
+      {/* Deposit Modal (only when parent does not control it via onOpenDeposit) */}
+      {!onOpenDeposit && (
+        <DepositModal open={depositModalOpen} onOpenChange={setDepositModalOpen} />
+      )}
       
       {/* Withdraw Modal */}
       <WithdrawModal open={withdrawModalOpen} onOpenChange={setWithdrawModalOpen} />

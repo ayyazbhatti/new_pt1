@@ -246,18 +246,18 @@ fi
 export PORT=$AUTH_SERVICE_PORT
 export JWT_SECRET="${JWT_SECRET:-dev-jwt-secret-key-change-in-production-minimum-32-characters-long}"
 export JWT_ISSUER="${JWT_ISSUER:-newpt}"
-start_service "Auth Service" "cargo run --bin auth-service" $AUTH_SERVICE_PORT "http://localhost:$AUTH_SERVICE_PORT/health"
+start_service "Auth Service" "cargo run --bin auth-service" $AUTH_SERVICE_PORT "http://localhost:$AUTH_SERVICE_PORT/health" || true
 cd - > /dev/null
 
 # Start Data Provider (port 3001) - use backend/data-provider (Redis price:ticks + markup)
 DATA_PROVIDER_DIR="$(cd "$(dirname "$0")/../backend/data-provider" && pwd)"
 export HTTP_PORT=$DATA_PROVIDER_PORT
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
-start_service "Data Provider" "cd $DATA_PROVIDER_DIR && cargo run --release" $DATA_PROVIDER_PORT "http://localhost:$DATA_PROVIDER_PORT/health"
+start_service "Data Provider" "cd $DATA_PROVIDER_DIR && cargo run --release" $DATA_PROVIDER_PORT "http://localhost:$DATA_PROVIDER_PORT/health" || true
 
 # Start Order Engine (port 3002)
 export PORT=$ORDER_ENGINE_PORT
-start_service "Order Engine" "cargo run -p order-engine" $ORDER_ENGINE_PORT "http://localhost:$ORDER_ENGINE_PORT/health"
+start_service "Order Engine" "cargo run -p order-engine" $ORDER_ENGINE_PORT "http://localhost:$ORDER_ENGINE_PORT/health" || true
 
 # Start Gateway WS (port 3003) - use backend/ws-gateway (Redis price:ticks, per-group markup)
 # Same JWT_SECRET as auth-service required for correct user/group and marked-up prices
@@ -270,11 +270,11 @@ if [ -f "$GATEWAY_DIR/.env" ]; then
     set -a; . "$GATEWAY_DIR/.env"; set +a
 fi
 # Health is on HTTP port (9002), not WS port (3003)
-start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run --release" $GATEWAY_WS_PORT "http://localhost:${GATEWAY_HTTP_PORT:-9002}/health"
+start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run --release" $GATEWAY_WS_PORT "http://localhost:${GATEWAY_HTTP_PORT:-9002}/health" || true
 
 # Start Core API (port 3004)
 export PORT=$CORE_API_PORT
-start_service "Core API" "cargo run -p core-api" $CORE_API_PORT "http://localhost:$CORE_API_PORT/health"
+start_service "Core API" "cargo run -p core-api" $CORE_API_PORT "http://localhost:$CORE_API_PORT/health" || true
 
 echo ""
 

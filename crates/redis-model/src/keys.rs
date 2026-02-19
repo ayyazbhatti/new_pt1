@@ -102,5 +102,10 @@ impl Keys {
     pub fn account_summary_channel(user_id: Uuid) -> String {
         format!("account:summary:{}", user_id)
     }
+
+    /// Group settings cache (e.g. margin_call_level). Hash: group:{group_id} -> field -> value.
+    pub fn group(group_id: Uuid) -> String {
+        format!("group:{}", group_id)
+    }
 }
 

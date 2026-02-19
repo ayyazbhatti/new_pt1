@@ -14,6 +14,7 @@ const groupSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(40, 'Name must be at most 40 characters'),
   description: z.string().optional().nullable(),
   status: z.enum(['active', 'disabled']),
+  margin_call_level: z.number().min(0).max(1000).optional().nullable(),
 })
 
 type GroupFormData = z.infer<typeof groupSchema>
@@ -43,11 +44,13 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           name: initial.name,
           description: initial.description || '',
           status: initial.status,
+          margin_call_level: initial.marginCallLevel ?? undefined,
         }
       : {
           name: '',
           description: '',
           status: 'active',
+          margin_call_level: undefined,
         },
   })
 
@@ -62,6 +65,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
         name: data.name,
         description: data.description || null,
         status: data.status,
+        margin_call_level: data.margin_call_level ?? null,
       }
 
       if (mode === 'create') {
@@ -126,6 +130,21 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
               <SelectItem value="disabled">Disabled</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="margin_call_level">Margin call level (%)</Label>
+          <Input
+            id="margin_call_level"
+            type="number"
+            min={0}
+            max={1000}
+            step={0.5}
+            placeholder="e.g. 50 (empty = platform default)"
+            disabled={isLoading || isReadOnly}
+            {...register('margin_call_level', { setValueAs: (v) => (v === '' || Number.isNaN(Number(v)) ? undefined : Number(v)) })}
+          />
+          <p className="text-xs text-text-muted">When user margin level falls below this %, they see a margin call warning. Leave empty for default (50%).</p>
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

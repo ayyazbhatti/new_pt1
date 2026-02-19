@@ -26,6 +26,7 @@ function toCamelCase(obj: any): UserGroup {
     leverageProfileId: obj.default_leverage_profile_id,
     priceProfile: priceProfile ?? undefined,
     leverageProfile: leverageProfile ?? undefined,
+    marginCallLevel: obj.margin_call_level != null ? Number(obj.margin_call_level) : null,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
   }
@@ -37,6 +38,7 @@ function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
     name: payload.name,
     description: payload.description ?? null,
     status: payload.status,
+    margin_call_level: payload.margin_call_level ?? null,
   }
 }
 

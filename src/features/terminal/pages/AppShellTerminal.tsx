@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { TerminalLayout } from '../layout/TerminalLayout'
 import { LeftSidebar } from '../components/LeftSidebar'
 import { CenterWorkspace } from '../components/CenterWorkspace'
@@ -9,6 +9,10 @@ import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
 import { AdminSymbol } from '@/features/symbols/types/symbol'
 import { MockSymbol } from '@/shared/mock/terminalMock'
+import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
+import { useMarginCall } from '@/features/wallet/hooks/useMarginCall'
+import { MarginCallModal } from '@/features/wallet/components/MarginCallModal'
+import { DepositModal } from '@/features/wallet/components/DepositModal'
 
 // Map AdminSymbol to MockSymbol format
 function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: string; ask: string; ts: number }>): MockSymbol {
@@ -78,6 +82,9 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
 
 export function AppShellTerminal() {
   const { setSymbols, setLoading, symbols } = useTerminalStore()
+  const [depositModalOpen, setDepositModalOpen] = useState(false)
+  const { accountSummary } = useAccountSummary()
+  const marginCall = useMarginCall(accountSummary ?? null)
 
   // Fetch enabled symbols
   const { data: symbolsData, isLoading } = useSymbolsList({
@@ -162,11 +169,29 @@ export function AppShellTerminal() {
   const settingsPanelOpen = useTerminalStore((s) => s.settingsPanelOpen)
 
   return (
-    <TerminalLayout
-      left={<LeftSidebar />}
-      center={<CenterWorkspace />}
-      right={<RightTradingPanel />}
-      rightPanel={settingsPanelOpen ? <SettingsPanel /> : undefined}
-    />
+    <>
+      <TerminalLayout
+        left={
+          <LeftSidebar
+            onOpenDeposit={() => setDepositModalOpen(true)}
+          />
+        }
+        center={<CenterWorkspace />}
+        right={<RightTradingPanel />}
+        rightPanel={settingsPanelOpen ? <SettingsPanel /> : undefined}
+      />
+      <MarginCallModal
+        open={marginCall.showModal}
+        onOpenChange={marginCall.setShowModal}
+        onDepositClick={() => setDepositModalOpen(true)}
+        accountSummary={marginCall.accountSummary}
+        threshold={marginCall.threshold}
+        currentLevel={marginCall.currentLevel}
+      />
+      <DepositModal
+        open={depositModalOpen}
+        onOpenChange={setDepositModalOpen}
+      />
+    </>
   )
 }

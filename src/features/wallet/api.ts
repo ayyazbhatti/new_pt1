@@ -31,6 +31,8 @@ export interface AccountSummaryResponse {
   marginUsed: number
   freeMargin: number
   marginLevel: string
+  /** Margin call threshold % for user's group. Null = use platform default (50). */
+  marginCallLevelThreshold?: number | null
   realizedPnl: number
   unrealizedPnl: number
   updatedAt: string
