@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
@@ -7,10 +7,25 @@ import { Checkbox } from '@/shared/ui/Checkbox'
 import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
 import { ColumnDef } from '@tanstack/react-table'
+import { useQueryClient } from '@tanstack/react-query'
 import { SwapCalcMode, SwapUnit, WeekendRule } from '../types/swap'
-import { mockGroups } from '@/features/groups/mocks/groups.mock'
-import { swapSymbols } from '../mocks/symbols.mock'
+import { createSwapRule } from '../api/swap.api'
+import { swapRulesQueryKeys } from '../hooks/useSwapRules'
+import { useGroupsList } from '@/features/groups/hooks/useGroups'
+import { useAdminSymbolsList } from '@/features/symbols/hooks/useSymbols'
+import type { SwapRule } from '../types/swap'
 import { Search } from 'lucide-react'
+
+function assetClassToMarket(ac: string | null): SwapRule['market'] {
+  if (!ac) return 'forex'
+  const m = ac.toLowerCase()
+  if (m === 'fx') return 'forex'
+  if (m === 'crypto') return 'crypto'
+  if (m === 'metals' || m === 'commodities') return 'commodities'
+  if (m === 'indices') return 'indices'
+  if (m === 'stocks') return 'stocks'
+  return 'forex'
+}
 
 interface SymbolForBulk {
   code: string
@@ -21,6 +36,19 @@ interface SymbolForBulk {
 
 export function BulkAssignSwapModal() {
   const closeModal = useModalStore((state) => state.closeModal)
+  const queryClient = useQueryClient()
+  const { data: groupsData } = useGroupsList()
+  const { data: symbolsData } = useAdminSymbolsList()
+  const groups = groupsData?.items ?? []
+  const allSymbolsFromApi = useMemo(() => {
+    const items = symbolsData?.items ?? []
+    return items.map((s) => ({
+      code: s.symbolCode,
+      name: s.symbolCode,
+      market: assetClassToMarket(s.assetClass ?? null),
+      selected: false,
+    }))
+  }, [symbolsData?.items])
 
   const [groupId, setGroupId] = useState('')
   const [calcMode, setCalcMode] = useState<SwapCalcMode>('daily')
@@ -31,14 +59,13 @@ export function BulkAssignSwapModal() {
   const [weekendRule, setWeekendRule] = useState<WeekendRule>('none')
   const [tripleDay, setTripleDay] = useState<'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun' | undefined>()
   const [search, setSearch] = useState('')
-  const [symbols, setSymbols] = useState<SymbolForBulk[]>(
-    swapSymbols.map((s) => ({
-      code: s.code,
-      name: s.name,
-      market: s.market,
-      selected: false,
-    }))
-  )
+  const [symbols, setSymbols] = useState<SymbolForBulk[]>([])
+
+  useEffect(() => {
+    if (allSymbolsFromApi.length > 0 && symbols.length === 0) {
+      setSymbols(allSymbolsFromApi.map((s) => ({ ...s, selected: false })))
+    }
+  }, [allSymbolsFromApi, symbols.length])
 
   const filteredSymbols = symbols.filter((s) => {
     if (search) {
@@ -67,8 +94,9 @@ export function BulkAssignSwapModal() {
     )
   }
 
-  const handleApply = () => {
-    const selectedCount = symbols.filter((s) => s.selected).length
+  const handleApply = async () => {
+    const selectedSymbols = symbols.filter((s) => s.selected)
+    const selectedCount = selectedSymbols.length
     if (!groupId) {
       toast.error('Please select a group')
       return
@@ -77,8 +105,31 @@ export function BulkAssignSwapModal() {
       toast.error('Please select at least one symbol')
       return
     }
-    toast.success(`Swap rules applied to ${selectedCount} symbols`)
-    closeModal('bulk-assign-swap')
+    try {
+      for (const s of selectedSymbols) {
+        await createSwapRule({
+          groupId,
+          symbol: s.code,
+          market: s.market as SwapRule['market'],
+          calcMode,
+          unit,
+          longRate,
+          shortRate,
+          rolloverTimeUtc,
+          weekendRule,
+          status: 'active',
+          tripleDay: tripleDay ?? undefined,
+          notes: undefined,
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: swapRulesQueryKeys.lists() })
+      toast.success(`Swap rules created for ${selectedCount} symbol(s)`)
+      closeModal('bulk-assign-swap')
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.error?.message || err?.message || 'Failed to create swap rules'
+      toast.error(message)
+    }
   }
 
   const selectedCount = symbols.filter((s) => s.selected).length
@@ -128,7 +179,7 @@ export function BulkAssignSwapModal() {
               <SelectValue placeholder="Select group" />
             </SelectTrigger>
             <SelectContent>
-              {mockGroups.map((group) => (
+              {groups.map((group) => (
                 <SelectItem key={group.id} value={group.id}>
                   {group.name}
                 </SelectItem>

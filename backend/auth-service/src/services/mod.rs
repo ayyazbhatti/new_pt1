@@ -4,6 +4,7 @@ pub mod admin_groups_service;
 pub mod admin_leverage_profiles_service;
 pub mod admin_symbols_service;
 pub mod admin_markup_service;
+pub mod admin_swap_service;
 pub mod order_event_handler;
 pub mod position_event_handler;
 pub mod price_tick_summary_handler;

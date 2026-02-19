@@ -1,15 +1,16 @@
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { SwapRulesTable } from '../components/SwapRulesTable'
 import { SwapFiltersBar } from '../components/SwapFiltersBar'
-import { mockSwapRules } from '../mocks/swapRules.mock'
 import { Button } from '@/shared/ui/button'
 import { CreateSwapRuleModal } from '../modals/CreateSwapRuleModal'
 import { BulkAssignSwapModal } from '../modals/BulkAssignSwapModal'
 import { useModalStore } from '@/app/store'
 import { Plus, Upload, Download } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Card } from '@/shared/ui/card'
 import { toast } from 'react-hot-toast'
+import { useSwapRulesList, useUpdateSwapRule } from '../hooks/useSwapRules'
+import type { ListSwapRulesParams } from '../types/swap'
 
 export function SwapRulesPage() {
   const openModal = useModalStore((state) => state.openModal)
@@ -27,6 +28,21 @@ export function SwapRulesPage() {
     calcMode: 'all',
   })
 
+  const listParams: ListSwapRulesParams = useMemo(
+    () => ({
+      groupId: filters.group === 'all' ? undefined : filters.group,
+      market: filters.market === 'all' ? undefined : filters.market,
+      symbol: filters.symbol.trim() || undefined,
+      status: filters.status === 'all' ? undefined : filters.status,
+      calcMode: filters.calcMode === 'all' ? undefined : filters.calcMode,
+    }),
+    [filters]
+  )
+
+  const { data, isLoading, error } = useSwapRulesList(listParams)
+  const updateRule = useUpdateSwapRule()
+  const rules = data?.items ?? []
+
   const handleCreateRule = () => {
     openModal('create-swap-rule', <CreateSwapRuleModal />, {
       title: 'Create Swap Rule',
@@ -43,6 +59,15 @@ export function SwapRulesPage() {
 
   const handleExport = () => {
     toast.success('Export functionality coming soon')
+  }
+
+  const handleDisable = (rule: { id: string; status: string }) => {
+    updateRule.mutate({
+      id: rule.id,
+      payload: {
+        status: rule.status === 'active' ? 'disabled' : 'active',
+      },
+    })
   }
 
   return (
@@ -74,7 +99,16 @@ export function SwapRulesPage() {
         </p>
       </Card>
       <SwapFiltersBar onFilterChange={setFilters} />
-      <SwapRulesTable rules={mockSwapRules} filters={filters} />
+      {error && (
+        <p className="text-sm text-danger mb-4">
+          {(error as Error)?.message ?? 'Failed to load swap rules'}
+        </p>
+      )}
+      <SwapRulesTable
+        rules={rules}
+        isLoading={isLoading}
+        onDisable={handleDisable}
+      />
     </ContentShell>
   )
 }

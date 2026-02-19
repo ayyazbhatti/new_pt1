@@ -241,6 +241,50 @@ export function RightTradingPanel() {
     }
   }, [sizeMode, size, lotSize, pipPosition, selectedSymbol, currency, pipPositionCurrency, getSymbolForCalculations])
 
+  // Target est. margin from Free Margin slider: (marginPercent / 100) * freeMargin (for display)
+  const targetMarginFromSlider = useMemo(() => {
+    const free = accountSummary?.freeMargin ?? 0
+    return (marginPercent / 100) * free
+  }, [marginPercent, accountSummary?.freeMargin])
+
+  // When Free Margin slider moves: set size (Units mode) so est. margin equals target % of free margin
+  const handleFreeMarginSliderChange = useCallback(
+    (newPercent: number) => {
+      setMarginPercent(newPercent)
+      const freeMargin = accountSummary?.freeMargin ?? 0
+      if (freeMargin <= 0 || !selectedSymbol) return
+      const price = selectedSymbol.numericPrice || 0
+      if (price <= 0) return
+      const targetMargin = (newPercent / 100) * freeMargin
+      const guessNotional = targetMargin * 50
+      const leverage = getEffectiveLeverage(
+        guessNotional,
+        symbolLeverage?.tiers ?? null,
+        meData?.minLeverage,
+        meData?.maxLeverage,
+        50
+      )
+      const notional = targetMargin * leverage
+      const symbolForCalc = getSymbolForCalculations()
+      const volPrecision = symbolForCalc?.volumePrecision ?? 8
+      setSizeMode('units')
+      if (currency === selectedSymbol.quoteCurrency) {
+        setSize(notional.toFixed(2))
+      } else {
+        setSize((notional / price).toFixed(volPrecision))
+      }
+    },
+    [
+      accountSummary?.freeMargin,
+      selectedSymbol,
+      currency,
+      symbolLeverage?.tiers,
+      meData?.minLeverage,
+      meData?.maxLeverage,
+      getSymbolForCalculations,
+    ]
+  )
+
   // Handle size mode change with conversion
   const handleSizeModeChange = useCallback((newMode: 'units' | 'lots' | 'pipPosition') => {
     if (newMode === sizeMode) return
@@ -1007,7 +1051,9 @@ export function RightTradingPanel() {
           <div className="mb-4">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-semibold text-muted uppercase tracking-wider">Free Margin: {marginPercent.toFixed(1)}%</span>
-              <span className="text-xs font-bold text-text">$24.73</span>
+              <span className="text-xs font-bold text-text">
+                {accountSummary?.freeMargin != null ? `$${targetMarginFromSlider.toFixed(2)}` : '—'}
+              </span>
             </div>
             <div className="relative">
               <input
@@ -1016,7 +1062,7 @@ export function RightTradingPanel() {
                 max="100"
                 step="0.1"
                 value={marginPercent}
-                onChange={(e) => setMarginPercent(Number(e.target.value))}
+                onChange={(e) => handleFreeMarginSliderChange(Number(e.target.value))}
                 className="w-full h-2 bg-surface-2 rounded-lg appearance-none cursor-pointer accent-accent"
               />
               <div className="flex justify-between text-xs text-muted mt-1">

@@ -23,6 +23,57 @@ export interface SwapRule {
   notes?: string
 }
 
+export interface ListSwapRulesParams {
+  groupId?: string
+  market?: string
+  symbol?: string
+  status?: string
+  calcMode?: string
+  page?: number
+  pageSize?: number
+}
+
+export interface ListSwapRulesResponse {
+  items: SwapRule[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface CreateSwapRulePayload {
+  groupId: string
+  symbol: string
+  market: SwapRule['market']
+  calcMode: SwapCalcMode
+  unit: SwapUnit
+  longRate: number
+  shortRate: number
+  rolloverTimeUtc: string
+  weekendRule: WeekendRule
+  status: 'active' | 'disabled'
+  tripleDay?: SwapRule['tripleDay']
+  minCharge?: number
+  maxCharge?: number
+  notes?: string
+}
+
+export interface UpdateSwapRulePayload {
+  groupId?: string
+  symbol?: string
+  market?: SwapRule['market']
+  calcMode?: SwapCalcMode
+  unit?: SwapUnit
+  longRate?: number
+  shortRate?: number
+  rolloverTimeUtc?: string
+  weekendRule?: WeekendRule
+  tripleDay?: SwapRule['tripleDay'] | null
+  minCharge?: number | null
+  maxCharge?: number | null
+  status?: 'active' | 'disabled'
+  notes?: string | null
+}
+
 export interface SwapPreviewInput {
   side: 'long' | 'short'
   positionSize: number

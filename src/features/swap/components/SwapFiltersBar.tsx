@@ -3,8 +3,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/shared/ui/button'
 import { Search, X } from 'lucide-react'
 import { useState } from 'react'
-import { SwapCalcMode } from '../types/swap'
-import { mockGroups } from '@/features/groups/mocks/groups.mock'
+import { useGroupsList } from '@/features/groups/hooks/useGroups'
 
 interface SwapFiltersBarProps {
   onFilterChange?: (filters: {
@@ -22,6 +21,8 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
   const [symbol, setSymbol] = useState('')
   const [status, setStatus] = useState('all')
   const [calcMode, setCalcMode] = useState('all')
+  const { data: groupsData } = useGroupsList()
+  const groups = groupsData?.items ?? []
 
   const handleClear = () => {
     setGroup('all')
@@ -58,7 +59,7 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All Groups</SelectItem>
-          {mockGroups.map((g) => (
+          {groups.map((g) => (
             <SelectItem key={g.id} value={g.id}>
               {g.name}
             </SelectItem>

@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SwapRule } from '../types/swap'
 import { useModalStore } from '@/app/store'
 import { computeSwapPreview } from '../utils/computeSwapPreview'
-import { swapSymbols } from '../mocks/symbols.mock'
+import { useAdminSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { WifiOff } from 'lucide-react'
 
 interface PreviewSwapModalProps {
@@ -15,9 +15,11 @@ interface PreviewSwapModalProps {
 
 export function PreviewSwapModal({ rule }: PreviewSwapModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
-
-  const symbolInfo = swapSymbols.find((s) => s.code === rule.symbol)
-  const quoteCurrency = symbolInfo?.quoteCurrency || 'USD'
+  const { data: symbolsData } = useAdminSymbolsList()
+  const symbolInfo = (symbolsData?.items ?? []).find(
+    (s) => s.symbolCode === rule.symbol
+  )
+  const quoteCurrency = symbolInfo?.quoteCurrency ?? 'USD'
 
   const [side, setSide] = useState<'long' | 'short'>('long')
   const [positionSize, setPositionSize] = useState(1)

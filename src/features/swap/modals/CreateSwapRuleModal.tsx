@@ -6,11 +6,25 @@ import { Button } from '@/shared/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Switch } from '@/shared/ui/Switch'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { SwapCalcMode, SwapUnit, WeekendRule } from '../types/swap'
-import { mockGroups } from '@/features/groups/mocks/groups.mock'
-import { swapSymbols } from '../mocks/symbols.mock'
+import { useCreateSwapRule } from '../hooks/useSwapRules'
+import { useGroupsList } from '@/features/groups/hooks/useGroups'
+import { useAdminSymbolsList } from '@/features/symbols/hooks/useSymbols'
+import type { SwapRule } from '../types/swap'
+
+function assetClassToMarket(
+  ac: string | null
+): SwapRule['market'] {
+  if (!ac) return 'forex'
+  const m = ac.toLowerCase()
+  if (m === 'fx') return 'forex'
+  if (m === 'crypto') return 'crypto'
+  if (m === 'metals' || m === 'commodities') return 'commodities'
+  if (m === 'indices') return 'indices'
+  if (m === 'stocks') return 'stocks'
+  return 'forex'
+}
 
 const swapRuleSchema = z.object({
   groupId: z.string().min(1, 'Group is required'),
@@ -66,11 +80,39 @@ export function CreateSwapRuleModal() {
   const symbol = watch('symbol')
   const groupId = watch('groupId')
 
-  const filteredSymbols = swapSymbols.filter((s) => s.market === market)
+  const createRule = useCreateSwapRule()
+  const { data: groupsData } = useGroupsList()
+  const { data: symbolsData } = useAdminSymbolsList()
+  const groups = groupsData?.items ?? []
+  const filteredSymbols = useMemo(() => {
+    const items = symbolsData?.items ?? []
+    return items.filter(
+      (s) => assetClassToMarket(s.assetClass ?? null) === market
+    )
+  }, [symbolsData?.items, market])
 
   const onSubmit = (data: SwapRuleFormData) => {
-    toast.success(`Swap rule created for ${data.symbol}`)
-    closeModal('create-swap-rule')
+    createRule.mutate(
+      {
+        groupId: data.groupId,
+        symbol: data.symbol,
+        market: data.market,
+        calcMode: data.calcMode,
+        unit: data.unit,
+        longRate: data.longRate,
+        shortRate: data.shortRate,
+        rolloverTimeUtc: data.rolloverTimeUtc,
+        weekendRule: data.weekendRule,
+        status: status ? 'active' : 'disabled',
+        tripleDay: data.tripleDay,
+        minCharge: data.minCharge,
+        maxCharge: data.maxCharge,
+        notes: data.notes,
+      },
+      {
+        onSuccess: () => closeModal('create-swap-rule'),
+      }
+    )
   }
 
   return (
@@ -83,7 +125,7 @@ export function CreateSwapRuleModal() {
               <SelectValue placeholder="Select group" />
             </SelectTrigger>
             <SelectContent>
-              {mockGroups.map((group) => (
+              {groups.map((group) => (
                 <SelectItem key={group.id} value={group.id}>
                   {group.name}
                 </SelectItem>
@@ -124,8 +166,8 @@ export function CreateSwapRuleModal() {
           </SelectTrigger>
           <SelectContent>
             {filteredSymbols.map((s) => (
-              <SelectItem key={s.code} value={s.code}>
-                {s.code} - {s.name}
+              <SelectItem key={s.id} value={s.symbolCode}>
+                {s.symbolCode}
               </SelectItem>
             ))}
           </SelectContent>

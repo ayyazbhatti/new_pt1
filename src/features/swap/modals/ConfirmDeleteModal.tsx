@@ -1,7 +1,7 @@
 import { Button } from '@/shared/ui/button'
 import { SwapRule } from '../types/swap'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { useDeleteSwapRule } from '../hooks/useSwapRules'
 
 interface ConfirmDeleteModalProps {
   rule: SwapRule
@@ -9,10 +9,12 @@ interface ConfirmDeleteModalProps {
 
 export function ConfirmDeleteModal({ rule }: ConfirmDeleteModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
+  const deleteRule = useDeleteSwapRule()
 
   const handleDelete = () => {
-    toast.success(`Swap rule for ${rule.symbol} deleted`)
-    closeModal(`delete-swap-${rule.id}`)
+    deleteRule.mutate(rule.id, {
+      onSuccess: () => closeModal(`delete-swap-${rule.id}`),
+    })
   }
 
   return (

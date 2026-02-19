@@ -8,44 +8,15 @@ import { EditSwapRuleModal } from '../modals/EditSwapRuleModal'
 import { PreviewSwapModal } from '../modals/PreviewSwapModal'
 import { ConfirmDeleteModal } from '../modals/ConfirmDeleteModal'
 import { Eye, Edit, X, Trash2 } from 'lucide-react'
-import { toast } from 'react-hot-toast'
-import { useMemo } from 'react'
 
 interface SwapRulesTableProps {
   rules: SwapRule[]
-  filters?: {
-    group: string
-    market: string
-    symbol: string
-    status: string
-    calcMode: string
-  }
+  isLoading?: boolean
+  onDisable?: (rule: SwapRule) => void
 }
 
-export function SwapRulesTable({ rules, filters }: SwapRulesTableProps) {
+export function SwapRulesTable({ rules, isLoading, onDisable }: SwapRulesTableProps) {
   const openModal = useModalStore((state) => state.openModal)
-
-  const filteredRules = useMemo(() => {
-    return rules.filter((rule) => {
-      if (filters?.group && filters.group !== 'all') {
-        if (rule.groupId !== filters.group) return false
-      }
-      if (filters?.market && filters.market !== 'all') {
-        if (rule.market !== filters.market) return false
-      }
-      if (filters?.symbol) {
-        const searchLower = filters.symbol.toLowerCase()
-        if (!rule.symbol.toLowerCase().includes(searchLower)) return false
-      }
-      if (filters?.status && filters.status !== 'all') {
-        if (rule.status !== filters.status) return false
-      }
-      if (filters?.calcMode && filters.calcMode !== 'all') {
-        if (rule.calcMode !== filters.calcMode) return false
-      }
-      return true
-    })
-  }, [rules, filters])
 
   const handlePreview = (rule: SwapRule) => {
     openModal(`preview-swap-${rule.id}`, <PreviewSwapModal rule={rule} />, {
@@ -69,7 +40,7 @@ export function SwapRulesTable({ rules, filters }: SwapRulesTableProps) {
   }
 
   const handleDisable = (rule: SwapRule) => {
-    toast.success(`Swap rule ${rule.status === 'active' ? 'disabled' : 'enabled'}`)
+    onDisable?.(rule)
   }
 
   const getCalcModeLabel = (mode: string) => {
@@ -236,6 +207,13 @@ export function SwapRulesTable({ rules, filters }: SwapRulesTableProps) {
     },
   ]
 
-  return <DataTable data={filteredRules} columns={columns} />
+  if (isLoading) {
+    return (
+      <div className="text-sm text-text-muted py-8 text-center">
+        Loading swap rules...
+      </div>
+    )
+  }
+  return <DataTable data={rules} columns={columns} />
 }
 
