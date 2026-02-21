@@ -47,6 +47,15 @@ redis.call('SET', order_key, cjson.encode(order))
 local symbol = order.symbol
 redis.call('ZREM', 'orders:pending:' .. symbol, order_id)
 
+-- Account type: hedging = multiple positions per symbol; netting = one net position per symbol
+local account_type = (order.account_type == "netting") and "netting" or "hedging"
+local fill_action = nil  -- "created", "added_to", "reduced", "closed", "flipped"
+local closed_position_id = nil
+local closed_position_size = nil  -- size that was closed (for event.position.closed)
+local closed_position_side = nil  -- "LONG" or "SHORT"
+local realized_pnl = "0"
+local closed_size_result = nil  -- size closed (for event.position.closed)
+
 -- Get or create position
 local user_id = order.user_id
 -- Use correct key format: pos:{user_id} (matches backend Keys::positions_set)
@@ -75,6 +84,7 @@ for _, pos_id in ipairs(existing_positions) do
             if (order.side == "BUY" and pos_side == "LONG") or
                (order.side == "SELL" and pos_side == "SHORT") then
                 position_id = pos_id
+                fill_action = "added_to"
                 -- Update position (Hash format)
                 local pos_size = tonumber(redis.call('HGET', pos_key_new, 'size') or '0')
                 local pos_entry_price = tonumber(redis.call('HGET', pos_key_new, 'entry_price') or '0')
@@ -116,6 +126,7 @@ for _, pos_id in ipairs(existing_positions) do
             if (order.side == "BUY" and pos.side == "LONG") or
                (order.side == "SELL" and pos.side == "SHORT") then
                 position_id = pos_id
+                fill_action = "added_to"
                     -- Migrate to new format and update
                     local pos_size = tonumber(pos.size or '0')
                     local pos_entry_price = tonumber(pos.entry_price or '0')
@@ -228,6 +239,7 @@ if not position_id then
                 if pos.symbol == symbol and pos.status == "OPEN" then
                     if (order.side == "BUY" and pos.side == "LONG") or
                        (order.side == "SELL" and pos.side == "SHORT") then
+                        fill_action = "added_to"
                         -- Migrate old position to new format using UUID
                         position_id = position_uuid
                         local pos_size = tonumber(pos.size or '0')
@@ -291,9 +303,120 @@ if not position_id then
     end
 end
 
+-- Netting: if no same-side position found, try to reduce/close/flip opposite-side position (one per symbol)
+if not position_id and account_type == "netting" then
+    local fill_size_num = tonumber(fill_size)
+    local fill_price_num = tonumber(fill_price)
+    -- Find open position for this symbol (any side) in new format
+    for _, pos_id in ipairs(existing_positions) do
+        local pos_key_new = 'pos:by_id:' .. pos_id
+        if redis.call('EXISTS', pos_key_new) == 1 then
+            local pos_symbol = redis.call('HGET', pos_key_new, 'symbol')
+            local pos_status = redis.call('HGET', pos_key_new, 'status')
+            local pos_side = redis.call('HGET', pos_key_new, 'side')
+            if pos_symbol == symbol and pos_status == "OPEN" then
+                local opposite = (order.side == "BUY" and pos_side == "SHORT") or (order.side == "SELL" and pos_side == "LONG")
+                if opposite then
+                    local symbol_open_key = 'pos:open:' .. symbol
+                    local pos_size = tonumber(redis.call('HGET', pos_key_new, 'size') or '0')
+                    local pos_entry = tonumber(redis.call('HGET', pos_key_new, 'entry_price') or '0')
+                    local pos_realized = tonumber(redis.call('HGET', pos_key_new, 'realized_pnl') or '0')
+                    local pos_leverage = tonumber(redis.call('HGET', pos_key_new, 'leverage') or '100.0')
+                    local close_size = math.min(pos_size, fill_size_num)
+                    local new_size = pos_size - fill_size_num
+                    -- PnL on closed portion
+                    local pnl_close = 0
+                    if pos_side == "LONG" then
+                        pnl_close = (fill_price_num - pos_entry) * close_size
+                    else
+                        pnl_close = (pos_entry - fill_price_num) * close_size
+                    end
+                    local new_realized = pos_realized + pnl_close
+                    realized_pnl = tostring(pnl_close)
+                    if new_size > 0 then
+                        -- Reduce position
+                        local new_margin = (new_size * pos_entry) / pos_leverage
+                        redis.call('HSET', pos_key_new, 'size', tostring(new_size))
+                        redis.call('HSET', pos_key_new, 'margin', tostring(new_margin))
+                        redis.call('HSET', pos_key_new, 'realized_pnl', tostring(new_realized))
+                        redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
+                        local symbol_open_key = 'pos:open:' .. symbol
+                        redis.call('ZADD', symbol_open_key, pos_entry, pos_id)
+                        position_id = pos_id
+                        fill_action = "reduced"
+                    elseif new_size == 0 then
+                        -- Full close
+                        closed_size_result = tostring(pos_size)
+                        redis.call('HSET', pos_key_new, 'size', '0')
+                        redis.call('HSET', pos_key_new, 'realized_pnl', tostring(new_realized))
+                        redis.call('HSET', pos_key_new, 'status', 'CLOSED')
+                        redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
+                        redis.call('SREM', positions_key, pos_id)
+                        local symbol_open_key = 'pos:open:' .. symbol
+                        redis.call('ZREM', symbol_open_key, pos_id)
+                        redis.call('ZREM', 'pos:sl:' .. symbol, pos_id)
+                        redis.call('ZREM', 'pos:tp:' .. symbol, pos_id)
+                        closed_position_id = pos_id
+                        closed_position_size = tostring(pos_size)
+                        closed_position_side = pos_side
+                        fill_action = "closed"
+                    else
+                        -- Flip: close old, open new with opposite side
+                        closed_size_result = tostring(pos_size)
+                        redis.call('HSET', pos_key_new, 'size', '0')
+                        redis.call('HSET', pos_key_new, 'realized_pnl', tostring(new_realized))
+                        redis.call('HSET', pos_key_new, 'status', 'CLOSED')
+                        redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
+                        redis.call('SREM', positions_key, pos_id)
+                        local symbol_open_key = 'pos:open:' .. symbol
+                        redis.call('ZREM', symbol_open_key, pos_id)
+                        redis.call('ZREM', 'pos:sl:' .. symbol, pos_id)
+                        redis.call('ZREM', 'pos:tp:' .. symbol, pos_id)
+                        closed_position_id = pos_id
+                        closed_position_size = tostring(pos_size)
+                        closed_position_side = pos_side
+                        position_id = position_uuid
+                        local flip_size = -new_size
+                        local new_pos_key = 'pos:by_id:' .. position_id
+                        local new_side = (order.side == "BUY") and "LONG" or "SHORT"
+                        local new_margin = (flip_size * fill_price_num) / pos_leverage
+                        redis.call('HSET', new_pos_key, 'user_id', user_id)
+                        redis.call('HSET', new_pos_key, 'symbol', symbol)
+                        redis.call('HSET', new_pos_key, 'group_id', order.group_id or '')
+                        redis.call('HSET', new_pos_key, 'side', new_side)
+                        redis.call('HSET', new_pos_key, 'size', tostring(flip_size))
+                        redis.call('HSET', new_pos_key, 'entry_price', tostring(fill_price))
+                        redis.call('HSET', new_pos_key, 'avg_price', tostring(fill_price))
+                        redis.call('HSET', new_pos_key, 'leverage', tostring(pos_leverage))
+                        redis.call('HSET', new_pos_key, 'margin', tostring(new_margin))
+                        redis.call('HSET', new_pos_key, 'unrealized_pnl', '0')
+                        redis.call('HSET', new_pos_key, 'realized_pnl', '0')
+                        redis.call('HSET', new_pos_key, 'status', 'OPEN')
+                        redis.call('HSET', new_pos_key, 'opened_at', timestamp_ms)
+                        redis.call('HSET', new_pos_key, 'updated_at', timestamp_ms)
+                        redis.call('HSET', new_pos_key, 'sl', order.stop_loss and tostring(order.stop_loss) or 'null')
+                        redis.call('HSET', new_pos_key, 'tp', order.take_profit and tostring(order.take_profit) or 'null')
+                        redis.call('SADD', positions_key, position_id)
+                        redis.call('ZADD', symbol_open_key, fill_price_num, position_id)
+                        if order.stop_loss then
+                            redis.call('ZADD', 'pos:sl:' .. symbol, tonumber(order.stop_loss), position_id)
+                        end
+                        if order.take_profit then
+                            redis.call('ZADD', 'pos:tp:' .. symbol, tonumber(order.take_profit), position_id)
+                        end
+                        fill_action = "flipped"
+                    end
+                    break
+                end
+            end
+        end
+    end
+end
+
 -- Create new position if needed
 if not position_id then
     position_id = position_uuid
+    fill_action = "created"
     
     -- Store position as Hash (matches backend format)
     local pos_key = 'pos:by_id:' .. position_id
@@ -368,8 +491,22 @@ local result = {
     order_id = order_id,
     position_id = position_id,
     fill_price = fill_price,
-    fill_size = fill_size
+    fill_size = fill_size,
+    fill_action = fill_action or "created"
 }
+if closed_position_id then
+    result.closed_position_id = closed_position_id
+end
+if closed_position_size then
+    result.closed_position_size = closed_position_size
+    result.closed_position_side = closed_position_side
+end
+if realized_pnl and realized_pnl ~= "0" then
+    result.realized_pnl = realized_pnl
+end
+if closed_size_result then
+    result.closed_size = closed_size_result
+end
 
 return cjson.encode(result)
 

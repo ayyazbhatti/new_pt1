@@ -18,6 +18,8 @@ pub mod subjects {
     pub const EVENT_ORDER_UPDATED: &str = "evt.order.updated";
     pub const EVENT_POSITION_OPENED: &str = "event.position.opened";
     pub const EVENT_POSITION_CLOSED: &str = "event.position.closed";
+    /// For DB sync (auth-service, core-api); position state after fill/reduce/close
+    pub const EVT_POSITION_UPDATED: &str = "evt.position.updated";
     pub const EVENT_BALANCE_UPDATED: &str = "event.balance.updated";
     
     /// Parse symbol from tick subject (e.g., "ticks.BNBUSDT" -> "BNBUSDT", "ticks.BNBUSDT.uuid" -> ("BNBUSDT", "uuid"))

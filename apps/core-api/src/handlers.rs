@@ -109,7 +109,7 @@ pub async fn place_order(
     // Generate order_id before creating command
     let order_id = Uuid::new_v4();
 
-    // Create command (group_id / leverage from JWT in auth-service; core-api uses None)
+    // Create command (group_id / leverage / account_type from auth-service; core-api defaults)
     let cmd = PlaceOrderCommand {
         order_id,
         user_id,
@@ -128,6 +128,7 @@ pub async fn place_order(
         min_leverage: None,
         max_leverage: None,
         leverage_tiers: None,
+        account_type: Some("hedging".to_string()), // auth-service sets from user when orders go through auth
     };
 
     // Publish to NATS

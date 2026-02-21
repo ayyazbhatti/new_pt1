@@ -39,6 +39,9 @@ pub struct PlaceOrderCommand {
     /// Symbol leverage tiers (exposure -> max leverage); used at fill time with notional = size * price
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leverage_tiers: Option<Vec<LeverageTier>>,
+    /// Account mode: "hedging" (multiple positions per symbol) or "netting" (one net position per symbol). Default hedging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

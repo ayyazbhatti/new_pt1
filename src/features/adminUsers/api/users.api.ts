@@ -6,6 +6,10 @@ export interface UpdateUserGroupPayload {
   max_leverage?: number
 }
 
+export interface UpdateUserAccountTypePayload {
+  account_type: 'hedging' | 'netting'
+}
+
 export async function updateUserGroup(userId: string, payload: UpdateUserGroupPayload): Promise<void> {
   const body: Record<string, unknown> = { group_id: payload.group_id }
   if (payload.min_leverage != null && payload.max_leverage != null) {
@@ -15,6 +19,16 @@ export async function updateUserGroup(userId: string, payload: UpdateUserGroupPa
   await http(`/api/admin/users/${userId}/group`, {
     method: 'PUT',
     body: JSON.stringify(body),
+  })
+}
+
+export async function updateUserAccountType(
+  userId: string,
+  payload: UpdateUserAccountTypePayload
+): Promise<void> {
+  await http(`/api/admin/users/${userId}/account-type`, {
+    method: 'PUT',
+    body: JSON.stringify({ account_type: payload.account_type }),
   })
 }
 

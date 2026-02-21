@@ -21,6 +21,11 @@ pub struct UpdateUserGroupRequest {
     pub max_leverage: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserAccountTypeRequest {
+    pub account_type: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
@@ -35,6 +40,7 @@ pub struct ErrorDetail {
 pub fn create_admin_users_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/:id/group", put(update_user_group))
+        .route("/:id/account-type", put(update_user_account_type))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -207,6 +213,134 @@ async fn update_user_group(
     Ok(Json(serde_json::json!({
         "success": true,
         "message": "User group updated successfully"
+    })))
+}
+
+async fn update_user_account_type(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserAccountTypeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let account_type = payload.account_type.trim().to_lowercase();
+    if account_type != "hedging" && account_type != "netting" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_ACCOUNT_TYPE".to_string(),
+                    message: "account_type must be 'hedging' or 'netting'".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM positions WHERE user_id = $1 AND status = 'open'::position_status",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if open_count > 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "OPEN_POSITIONS".to_string(),
+                    message: "Cannot change account type: user has open positions. Close all positions first.".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let rows_affected = sqlx::query(
+        "UPDATE users SET account_type = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(&account_type)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if rows_affected.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found or already deleted".to_string(),
+                },
+            }),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Account type updated successfully"
     })))
 }
 

@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Shield, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Shield, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -92,6 +92,15 @@ export const adminNavItems: NavItem[] = [
     label: 'Reports',
     path: '/admin/reports',
     icon: FileText,
+  },
+]
+
+/** Agent app sidebar nav (e.g. /agent/leads) */
+export const agentNavItems: NavItem[] = [
+  {
+    label: 'Leads',
+    path: '/agent/leads',
+    icon: Contact,
   },
 ]
 

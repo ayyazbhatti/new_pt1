@@ -17,7 +17,7 @@ use redis::AsyncCommands;
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
 use crate::services::ledger_service;
-use crate::routes::deposits::{compute_and_cache_account_summary, publish_wallet_balance_updated};
+use crate::routes::deposits::{compute_and_cache_account_summary, publish_wallet_balance_updated, publish_wallet_balance_updated_nats, DepositsState};
 
 #[derive(Debug, Serialize)]
 pub struct FinanceOverviewResponse {
@@ -134,6 +134,7 @@ pub struct ApproveTransactionResponse {
 async fn approve_transaction(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
+    Extension(deposits_state): Extension<DepositsState>,
     Path(transaction_id): Path<Uuid>,
 ) -> Result<Json<ApproveTransactionResponse>, StatusCode> {
     // Check admin role
@@ -303,6 +304,8 @@ async fn approve_transaction(
         publish_wallet_balance_updated(&pool, &client, user_id).await;
         compute_and_cache_account_summary(&pool, &client, user_id).await;
     }
+    // Publish to NATS so gateway-ws can push wallet.balance.updated to the user's terminal (balance updates in real time)
+    publish_wallet_balance_updated_nats(&pool, deposits_state.nats.as_ref(), user_id).await;
 
     info!("Transaction approved: transaction_id={}, user_id={}, type={}, amount={}", 
           transaction_id, user_id, tx_type, net_amount);

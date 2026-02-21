@@ -183,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/markup", create_admin_markup_router(pool.clone()))
         .nest("/api/admin/swap", create_admin_swap_router(pool.clone()))
         .nest("/api/admin/users", create_admin_users_router(pool.clone()))
-        .nest("/api/admin/finance", create_finance_router(pool.clone()))
+        .nest("/api/admin/finance", create_finance_router(pool.clone()).layer(axum::extract::Extension(deposits_state.clone())))
         .nest("/api/admin/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
         .nest("/api/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
         .nest("/api/withdrawals", create_withdrawals_router(pool.clone(), withdrawals_state.redis.clone(), withdrawals_state.nats.clone()))

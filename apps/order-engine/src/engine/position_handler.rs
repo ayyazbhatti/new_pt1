@@ -139,7 +139,10 @@ impl PositionHandler {
             (symbol, side, group_id)
         };
 
+        // Ticks from data-provider are published as "ticks.SYMBOL" (no group), so they are cached under key "SYMBOL:".
+        // Positions can have a group_id, so lookup "SYMBOL:group_id" finds nothing. Fall back to symbol-level tick.
         let tick = self.cache.get_last_tick(&symbol, group_id.as_deref())
+            .or_else(|| self.cache.get_last_tick(&symbol, None))
             .context("No tick data available for symbol")?;
         
         // Determine exit price (BID/ASK model)

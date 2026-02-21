@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod lua;
+pub mod position_events;
 pub mod validation;
 pub mod tick_handler;
 pub mod order_handler;
@@ -10,6 +11,7 @@ pub mod warm_cache;
 
 pub use cache::*;
 pub use lua::*;
+pub use position_events::*;
 pub use validation::*;
 pub use tick_handler::*;
 pub use order_handler::*;

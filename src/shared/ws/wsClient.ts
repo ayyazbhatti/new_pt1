@@ -302,6 +302,7 @@ class WebSocketClient {
 // Singleton instance
 // @ts-ignore - Vite env types
 // In dev: use Vite proxy (same origin). Override with VITE_WS_URL if needed.
+// In dev we use Vite proxy (same origin → /ws → backend/ws-gateway on 3003). Default URL for direct connect.
 const WS_URL =
   import.meta.env?.VITE_WS_URL ||
   (import.meta.env.DEV && typeof location !== 'undefined'

@@ -20,6 +20,8 @@ function mapUserResponse(user: UserResponse): User {
     country: user.country || 'Unknown',
     group: user.group_id || '',
     groupName: user.group_name || 'No Group',
+    accountType: (user.account_type === 'netting' ? 'netting' : 'hedging') as 'hedging' | 'netting',
+    openPositionsCount: user.open_positions_count ?? 0,
     balance: 0, // TODO: Calculate from wallets table
     marginLevel: 0, // TODO: Calculate from positions
     status: user.status as 'active' | 'disabled' | 'suspended',
@@ -31,7 +33,7 @@ function mapUserResponse(user: UserResponse): User {
     leverageLimitMin: user.min_leverage ?? 1,
     leverageLimitMax: user.max_leverage ?? 500,
     currentExposure: 0, // TODO: Calculate from positions
-    openPositions: 0, // TODO: Count from positions table
+    openPositions: user.open_positions_count ?? 0,
     ordersCount: 0, // TODO: Count from orders table
     priceStreamProfile: 'Default', // TODO: Get from price_stream_profiles
     tradingEnabled: true, // TODO: Get from user_groups

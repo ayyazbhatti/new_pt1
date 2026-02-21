@@ -384,7 +384,7 @@ async fn create_admin_order(
 
     // Get user and symbol info
     let user_row = sqlx::query!(
-        r#"SELECT COALESCE(first_name, '') as first_name, COALESCE(last_name, '') as last_name, email, group_id FROM users WHERE id = $1"#,
+        r#"SELECT COALESCE(first_name, '') as first_name, COALESCE(last_name, '') as last_name, email, group_id, COALESCE(account_type, 'hedging') as "account_type!" FROM users WHERE id = $1"#,
         user_id
     )
     .fetch_optional(&pool)
@@ -532,6 +532,11 @@ async fn create_admin_order(
     let sl = req.stop_loss.or(req.stop_price).and_then(|p| Decimal::try_from(p).ok());
     let tp = req.take_profit.and_then(|p| Decimal::try_from(p).ok());
 
+    let account_type = if user_row.account_type == "netting" {
+        Some("netting".to_string())
+    } else {
+        Some("hedging".to_string())
+    };
     let place_order_cmd = PlaceOrderCommand {
         order_id,
         user_id,
@@ -550,6 +555,7 @@ async fn create_admin_order(
         min_leverage: None,
         max_leverage: None,
         leverage_tiers: None,
+        account_type,
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)

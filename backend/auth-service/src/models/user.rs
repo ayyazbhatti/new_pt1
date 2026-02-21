@@ -34,6 +34,8 @@ pub struct User {
     pub status: UserStatus,
     pub role: String, // VARCHAR in database, not enum
     pub group_id: Option<Uuid>,
+    #[serde(default)]
+    pub account_type: Option<String>, // 'hedging' | 'netting'; from users.account_type (migration 0019)
     pub min_leverage: Option<i32>,
     pub max_leverage: Option<i32>,
     pub referral_code: Option<String>,

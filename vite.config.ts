@@ -76,6 +76,7 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       // /ws-health must come before /ws so GET /ws-health is not matched by /ws
+      // Gateway WS: start-all-servers runs backend/ws-gateway on 3003, HTTP health on 9002
       '/ws-health': {
         target: 'http://localhost:9002',
         changeOrigin: true,

@@ -77,6 +77,10 @@ pub struct UserResponse {
     pub price_profile_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leverage_profile_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_positions_count: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +172,8 @@ async fn register(
                 max_leverage: user.max_leverage,
                 price_profile_name: None,
                 leverage_profile_name: None,
+                account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+                open_positions_count: None,
             },
         })),
         Err(e) => {
@@ -232,6 +238,8 @@ async fn login(
                 max_leverage: user.max_leverage,
                 price_profile_name: None,
                 leverage_profile_name: None,
+                account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+                open_positions_count: None,
             },
         })),
         Err(e) => Err((
@@ -347,6 +355,8 @@ async fn me(
                 max_leverage: user.max_leverage,
                 price_profile_name,
                 leverage_profile_name,
+                account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+                open_positions_count: None,
             }))
         },
         Err(e) => Err((
@@ -469,7 +479,28 @@ async fn list_users(
 
     match service.list_users(limit, offset).await {
         Ok(users) => {
-            // Fetch group names for all users
+            let user_ids: Vec<Uuid> = users.iter().map(|u| u.id).collect();
+            // Batch query: open position count per user (positions table, status = 'open')
+            let open_counts: std::collections::HashMap<Uuid, i32> = if user_ids.is_empty() {
+                std::collections::HashMap::new()
+            } else {
+                #[derive(sqlx::FromRow)]
+                struct PosCountRow {
+                    user_id: Uuid,
+                    count: i64,
+                }
+                let rows = sqlx::query_as::<_, PosCountRow>(
+                    "SELECT user_id, COUNT(*) AS count FROM positions WHERE status = 'open'::position_status AND user_id = ANY($1) GROUP BY user_id",
+                )
+                .bind(&user_ids)
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_default();
+                rows.into_iter()
+                    .map(|r| (r.user_id, r.count as i32))
+                    .collect()
+            };
+
             let mut user_responses: Vec<UserResponse> = Vec::new();
             for u in users {
                 let group_name: Option<String> = if let Some(group_id) = u.group_id {
@@ -484,6 +515,12 @@ async fn list_users(
                 } else {
                     None
                 };
+
+                let account_type = u
+                    .account_type
+                    .filter(|s| s == "hedging" || s == "netting")
+                    .or_else(|| Some("hedging".to_string()));
+                let open_positions_count = open_counts.get(&u.id).copied();
 
                 user_responses.push(UserResponse {
                     id: u.id,
@@ -503,6 +540,8 @@ async fn list_users(
                     max_leverage: u.max_leverage,
                     price_profile_name: None,
                     leverage_profile_name: None,
+                    account_type,
+                    open_positions_count,
                 });
             }
             Ok(Json(user_responses))

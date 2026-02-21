@@ -1,19 +1,22 @@
 use anyhow::{Context, Result};
 use async_nats::Message;
 use contracts::{commands::PlaceOrderCommand, VersionedMessage};
+use contracts::enums::PositionStatus;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
+use rust_decimal::Decimal;
 
-use crate::engine::{OrderCache, LuaScripts, Validator};
+use crate::engine::{OrderCache, LuaScripts, Validator, position_events};
 use crate::models::{Order, OrderCommand, OrderAcceptedEvent, OrderRejectedEvent, OrderFilledEvent};
 use crate::nats::NatsClient;
 use crate::observability::Metrics;
 use crate::subjects::subjects as nats_subjects;
 use crate::utils::{generate_order_id, now};
-use rust_decimal::Decimal;
 
 pub struct OrderHandler {
     cache: Arc<OrderCache>,
@@ -169,6 +172,7 @@ impl OrderHandler {
                     min_leverage: cmd.min_leverage,
                     max_leverage: cmd.max_leverage,
                     leverage_tiers,
+                    account_type: cmd.account_type.or_else(|| Some("hedging".to_string())),
                 };
                 
                 // Store order in Redis
@@ -236,11 +240,20 @@ impl OrderHandler {
                                     info!("✅ Market order {} filled immediately at {}", order_id, fill_price);
                                     self.metrics.inc_orders_filled();
                                     
-                                    // Get position_id from result
+                                    let fill_action = result.get("fill_action").and_then(|v| v.as_str()).unwrap_or("created");
                                     let position_id = result
                                         .get("position_id")
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| Uuid::parse_str(s).ok());
+                                    let closed_position_id = result
+                                        .get("closed_position_id")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| Uuid::parse_str(s).ok());
+                                    let closed_size = result.get("closed_position_size")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                                        .unwrap_or(order.size);
+                                    let realized_pnl = result.get("realized_pnl").and_then(|v| v.as_str()).and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(Decimal::ZERO);
                                     
                                     // Publish order filled event
                                     let filled_event = OrderFilledEvent {
@@ -259,8 +272,7 @@ impl OrderHandler {
                                         error!("Failed to publish order filled event: {}", e);
                                     }
                                     
-                                    // Also publish evt.order.updated for PostgreSQL persistence
-                                    let order_updated_event = contracts::events::OrderUpdatedEvent {
+                                    if let Err(e) = self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &contracts::events::OrderUpdatedEvent {
                                         order_id,
                                         user_id: cmd.user_id,
                                         status: contracts::enums::OrderStatus::Filled,
@@ -268,15 +280,75 @@ impl OrderHandler {
                                         avg_fill_price: Some(fill_price),
                                         reason: None,
                                         ts: now(),
-                                    };
-                                    
-                                    if let Err(e) = self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event).await {
+                                    }).await {
                                         error!("Failed to publish order updated event: {}", e);
-                                    } else {
-                                        info!("📤 Published evt.order.updated for market order: order_id={}, status=FILLED", order_id);
                                     }
                                     
-                                    // Remove from pending orders cache
+                                    // Netting: position closed (full close or flip)
+                                    if let Some(closed_id) = closed_position_id {
+                                        let closed_side = result.get("closed_position_side").and_then(|v| v.as_str()).unwrap_or("LONG");
+                                        let pos_side = if closed_side == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+                                        let closed_event = crate::models::PositionClosedEvent {
+                                            position_id: closed_id,
+                                            user_id: cmd.user_id,
+                                            symbol: cmd.symbol.clone(),
+                                            side: pos_side,
+                                            closed_size,
+                                            exit_price: fill_price,
+                                            realized_pnl,
+                                            correlation_id: correlation_id.clone(),
+                                            ts: now(),
+                                            trigger_reason: None,
+                                        };
+                                        let _ = self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &closed_event).await;
+                                        let _ = position_events::publish_position_updated(self.nats.as_ref(), &mut conn, closed_id, Some(PositionStatus::Closed)).await;
+                                    }
+                                    // Position opened (created or flipped)
+                                    if let Some(pos_id) = position_id {
+                                        if fill_action == "created" {
+                                            let pos_event = crate::models::PositionOpenedEvent {
+                                                position_id: pos_id,
+                                                user_id: cmd.user_id,
+                                                symbol: cmd.symbol.clone(),
+                                                side: match cmd.side { contracts::enums::Side::Buy => contracts::enums::PositionSide::Long, contracts::enums::Side::Sell => contracts::enums::PositionSide::Short },
+                                                size: order.size,
+                                                entry_price: fill_price,
+                                                leverage: Decimal::from(100),
+                                                margin_used: Decimal::ZERO,
+                                                correlation_id: correlation_id.clone(),
+                                                ts: now(),
+                                            };
+                                            let _ = self.nats.publish_event(nats_subjects::EVENT_POSITION_OPENED, &pos_event).await;
+                                        }
+                                        if fill_action == "flipped" {
+                                            let raw: HashMap<String, String> = redis::cmd("HGETALL").arg(format!("pos:by_id:{}", pos_id)).query_async(&mut conn).await.unwrap_or_default();
+                                            let size = raw.get("size").and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(order.size);
+                                            let entry = raw.get("entry_price").or(raw.get("avg_price")).and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(fill_price);
+                                            let side_str = raw.get("side").map(|s| s.as_str()).unwrap_or("LONG");
+                                            let pos_side = if side_str == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+                                            let pos_event = crate::models::PositionOpenedEvent {
+                                                position_id: pos_id,
+                                                user_id: cmd.user_id,
+                                                symbol: cmd.symbol.clone(),
+                                                side: pos_side,
+                                                size,
+                                                entry_price: entry,
+                                                leverage: Decimal::from(100),
+                                                margin_used: Decimal::ZERO,
+                                                correlation_id: correlation_id.clone(),
+                                                ts: now(),
+                                            };
+                                            let _ = self.nats.publish_event(nats_subjects::EVENT_POSITION_OPENED, &pos_event).await;
+                                        }
+                                        let _ = position_events::publish_position_updated(self.nats.as_ref(), &mut conn, pos_id, None).await;
+                                    }
+                                    
+                                    let mut updated_order = order.clone();
+                                    updated_order.status = contracts::enums::OrderStatus::Filled;
+                                    updated_order.filled_size = order.size;
+                                    updated_order.average_fill_price = Some(fill_price);
+                                    updated_order.filled_at = Some(now());
+                                    self.cache.update_order(updated_order);
                                     self.cache.remove_pending_order(&cmd.symbol, order_id);
                                 }
                             }

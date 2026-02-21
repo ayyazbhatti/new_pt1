@@ -13,7 +13,7 @@ import { Eye, Edit, Shield, X } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { updateUserGroup } from '../api/users.api'
+import { updateUserGroup, updateUserAccountType } from '../api/users.api'
 
 interface UsersTableProps {
   users: User[]
@@ -23,6 +23,7 @@ interface UsersTableProps {
 export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const [updatingGroups, setUpdatingGroups] = useState<Set<string>>(new Set())
+  const [updatingAccountTypes, setUpdatingAccountTypes] = useState<Set<string>>(new Set())
 
   // Fetch all groups for the dropdown
   const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
@@ -79,6 +80,31 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       toast.error(errorMessage)
     } finally {
       setUpdatingGroups((prev) => {
+        const next = new Set(prev)
+        next.delete(userId)
+        return next
+      })
+    }
+  }
+
+  const handleAccountTypeChange = async (
+    userId: string,
+    userName: string,
+    newAccountType: 'hedging' | 'netting'
+  ) => {
+    setUpdatingAccountTypes((prev) => new Set(prev).add(userId))
+    try {
+      await updateUserAccountType(userId, { account_type: newAccountType })
+      if (onUserUpdate) {
+        onUserUpdate(userId, { accountType: newAccountType })
+      }
+      toast.success(`User ${userName} account type changed to ${newAccountType === 'hedging' ? 'Hedging' : 'Netting'}`)
+    } catch (error: any) {
+      const errorMessage =
+        error?.response?.data?.error?.message || error?.message || 'Failed to update account type'
+      toast.error(errorMessage)
+    } finally {
+      setUpdatingAccountTypes((prev) => {
         const next = new Set(prev)
         next.delete(userId)
         return next
@@ -218,6 +244,52 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        )
+      },
+    },
+    {
+      accessorKey: 'accountType',
+      header: 'Account Type',
+      cell: ({ row }) => {
+        const user = row.original
+        const currentType = user.accountType ?? 'hedging'
+        const isUpdating = updatingAccountTypes.has(user.id)
+        const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
+        const disabled = isUpdating || hasOpenPositions
+        return (
+          <div className="whitespace-nowrap min-w-[130px]">
+            <Select
+              value={currentType}
+              onValueChange={(value) =>
+                handleAccountTypeChange(user.id, user.name, value as 'hedging' | 'netting')
+              }
+              disabled={disabled}
+            >
+              <SelectTrigger
+                className="h-8 text-sm"
+                title={
+                  hasOpenPositions
+                    ? 'Cannot change account type while user has open positions'
+                    : undefined
+                }
+              >
+                <SelectValue
+                  placeholder={
+                    isUpdating ? 'Updating...' : 'Select type'
+                  }
+                >
+                  {currentType === 'netting' ? 'Netting' : 'Hedging'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="hedging">Hedging</SelectItem>
+                <SelectItem value="netting">Netting</SelectItem>
+              </SelectContent>
+            </Select>
+            {hasOpenPositions && (
+              <p className="text-[10px] text-muted mt-0.5">Open positions</p>
+            )}
           </div>
         )
       },

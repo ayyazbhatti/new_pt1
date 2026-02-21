@@ -996,6 +996,41 @@ pub async fn publish_wallet_balance_updated(
     }
 }
 
+/// Publish wallet.balance.updated to NATS so gateway-ws can push real-time balance to the user (e.g. after finance transaction approve).
+pub async fn publish_wallet_balance_updated_nats(
+    pool: &PgPool,
+    nats: &async_nats::Client,
+    user_id: Uuid,
+) {
+    match calculate_wallet_balance(pool, user_id).await {
+        Ok(balance) => {
+            let main_balance = balance.available + balance.locked;
+            let balance_event = serde_json::json!({
+                "userId": balance.user_id,
+                "currency": balance.currency,
+                "balance": main_balance,
+                "available": balance.available,
+                "locked": balance.locked,
+                "equity": balance.equity,
+                "marginUsed": balance.margin_used,
+                "margin_used": balance.margin_used,
+                "freeMargin": balance.free_margin,
+                "free_margin": balance.free_margin,
+                "updatedAt": balance.updated_at,
+            });
+            if let Ok(balance_msg) = VersionedMessage::new("wallet.balance.updated", &balance_event) {
+                if let Ok(payload) = serde_json::to_vec(&balance_msg) {
+                    let _ = nats.publish("wallet.balance.updated".to_string(), payload.into()).await;
+                    info!("Published wallet.balance.updated to NATS for user_id={}", user_id);
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to calculate balance for NATS publish (user {}): {}", user_id, e);
+        }
+    }
+}
+
 async fn get_account_summary(
     State(pool): State<PgPool>,
     Extension(deposits_state): Extension<DepositsState>,

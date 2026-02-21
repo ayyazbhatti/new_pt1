@@ -178,11 +178,11 @@ async fn place_order(
 
     let symbol_id = symbol_row.id;
 
-    // Fetch user leverage limits and symbol tiers for order-engine (effective leverage at fill time)
+    // Fetch user leverage limits and account_type for order-engine
     #[derive(sqlx::FromRow)]
-    struct UserLeverageRow { min_leverage: Option<i32>, max_leverage: Option<i32> }
+    struct UserLeverageRow { min_leverage: Option<i32>, max_leverage: Option<i32>, account_type: Option<String> }
     let user_lev = sqlx::query_as::<_, UserLeverageRow>(
-        r#"SELECT min_leverage, max_leverage FROM users WHERE id = $1"#,
+        r#"SELECT min_leverage, max_leverage, account_type FROM users WHERE id = $1"#,
     )
     .bind(user_id)
     .fetch_optional(&pool)
@@ -191,9 +191,12 @@ async fn place_order(
         error!("Failed to fetch user leverage: {}", e);
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let (user_min_lev, user_max_lev) = user_lev
-        .map(|r| (r.min_leverage, r.max_leverage))
-        .unwrap_or((None, None));
+    let (user_min_lev, user_max_lev, account_type) = user_lev
+        .map(|r| (r.min_leverage, r.max_leverage, r.account_type))
+        .unwrap_or((None, None, None));
+    let account_type = account_type
+        .filter(|s| s == "hedging" || s == "netting")
+        .or_else(|| Some("hedging".to_string()));
 
     #[derive(sqlx::FromRow)]
     struct ProfileRow { leverage_profile_id: Option<Uuid> }
@@ -416,6 +419,7 @@ async fn place_order(
         min_leverage: user_min_lev,
         max_leverage: user_max_lev,
         leverage_tiers: leverage_tiers,
+        account_type: account_type,
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)

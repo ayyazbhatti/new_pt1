@@ -1,14 +1,16 @@
 use anyhow::{Context, Result};
 use async_nats::Message;
 use contracts::{TickEvent, VersionedMessage};
+use contracts::enums::{PositionSide, PositionStatus};
 use redis::aio::ConnectionManager;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::str::FromStr;
 use tracing::{debug, error, info, warn, instrument};
 use uuid::Uuid;
 use rust_decimal::Decimal;
 
-use crate::engine::{OrderCache, LuaScripts, SltpHandler};
+use crate::engine::{OrderCache, LuaScripts, SltpHandler, position_events};
 use crate::models::{Tick, Order};
 use crate::nats::NatsClient;
 use crate::observability::Metrics;
@@ -228,11 +230,20 @@ impl TickHandler {
             return Err(anyhow::anyhow!("Lua script error: {}", error_msg));
         }
         
-        // Get position_id from result
+        let fill_action = result.get("fill_action").and_then(|v| v.as_str()).unwrap_or("created");
         let position_id = result
             .get("position_id")
             .and_then(|v| v.as_str())
             .and_then(|s| Uuid::parse_str(s).ok());
+        let closed_position_id = result
+            .get("closed_position_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+        let closed_size = result.get("closed_position_size")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Decimal::from_str_exact(s).ok())
+            .unwrap_or(fill_size);
+        let _realized_pnl = result.get("realized_pnl").and_then(|v| v.as_str()).and_then(|s| Decimal::from_str_exact(s).ok());
         
         // Publish order filled event
         let event = crate::models::OrderFilledEvent {
@@ -249,7 +260,7 @@ impl TickHandler {
         
         self.nats.publish_event(nats_subjects::EVENT_ORDER_FILLED, &event).await?;
         
-        // Also publish evt.order.updated for PostgreSQL persistence (core-api listens to evt.*)
+        // Also publish evt.order.updated for PostgreSQL persistence
         let order_updated_event = contracts::events::OrderUpdatedEvent {
             order_id: order.id,
             user_id: order.user_id,
@@ -260,35 +271,71 @@ impl TickHandler {
             ts: now(),
         };
         match self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event).await {
-            Ok(_) => {
-                info!("📤 Published evt.order.updated for PostgreSQL persistence: order_id={}, status=FILLED", order.id);
-            }
-            Err(e) => {
-                error!("❌ Failed to publish evt.order.updated for order {}: {}", order.id, e);
-                // Don't fail the fill if event publishing fails - order is already filled
-            }
+            Ok(_) => { info!("📤 Published evt.order.updated order_id={}, status=FILLED", order.id); }
+            Err(e) => { error!("❌ Failed to publish evt.order.updated for order {}: {}", order.id, e); }
         }
         
-        // Publish position opened event if new position
-        if let Some(pos_id) = position_id {
-            // Check if this is a new position (would need to query Redis)
-            // For now, assume it's new if order was just filled
-            let pos_event = crate::models::PositionOpenedEvent {
-                position_id: pos_id,
+        // Netting: publish position closed when we reduced to zero or flipped
+        if let Some(closed_id) = closed_position_id {
+            let closed_side = result.get("closed_position_side").and_then(|v| v.as_str()).unwrap_or("LONG");
+            let pos_side = if closed_side == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+            let closed_event = crate::models::PositionClosedEvent {
+                position_id: closed_id,
                 user_id: order.user_id,
                 symbol: order.symbol.clone(),
-                side: match order.side {
-                    contracts::enums::Side::Buy => contracts::enums::PositionSide::Long,
-                    contracts::enums::Side::Sell => contracts::enums::PositionSide::Short,
-                },
-                size: fill_size,
-                entry_price: fill_price,
-                leverage: Decimal::from(100),
-                margin_used: Decimal::ZERO, // Would calculate properly
+                side: pos_side,
+                closed_size,
+                exit_price: fill_price,
+                realized_pnl: _realized_pnl.unwrap_or(Decimal::ZERO),
                 correlation_id: order.idempotency_key.clone(),
                 ts: now(),
+                trigger_reason: None,
             };
-            self.nats.publish_event(nats_subjects::EVENT_POSITION_OPENED, &pos_event).await?;
+            self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &closed_event).await?;
+            let _ = position_events::publish_position_updated(self.nats.as_ref(), conn, closed_id, Some(PositionStatus::Closed)).await;
+        }
+        
+        // Publish position opened only when a new position was created (not when adding to existing)
+        if let Some(pos_id) = position_id {
+            if fill_action == "created" {
+                let pos_event = crate::models::PositionOpenedEvent {
+                    position_id: pos_id,
+                    user_id: order.user_id,
+                    symbol: order.symbol.clone(),
+                    side: match order.side {
+                        contracts::enums::Side::Buy => contracts::enums::PositionSide::Long,
+                        contracts::enums::Side::Sell => contracts::enums::PositionSide::Short,
+                    },
+                    size: fill_size,
+                    entry_price: fill_price,
+                    leverage: Decimal::from(100),
+                    margin_used: Decimal::ZERO,
+                    correlation_id: order.idempotency_key.clone(),
+                    ts: now(),
+                };
+                self.nats.publish_event(nats_subjects::EVENT_POSITION_OPENED, &pos_event).await?;
+            }
+            if fill_action == "flipped" {
+                let raw: HashMap<String, String> = redis::cmd("HGETALL").arg(format!("pos:by_id:{}", pos_id)).query_async(conn).await.unwrap_or_default();
+                let size = raw.get("size").and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(fill_size);
+                let entry = raw.get("entry_price").or(raw.get("avg_price")).and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(fill_price);
+                let side_str = raw.get("side").map(|s| s.as_str()).unwrap_or("LONG");
+                let pos_side = if side_str == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+                let pos_event = crate::models::PositionOpenedEvent {
+                    position_id: pos_id,
+                    user_id: order.user_id,
+                    symbol: order.symbol.clone(),
+                    side: pos_side,
+                    size,
+                    entry_price: entry,
+                    leverage: Decimal::from(100),
+                    margin_used: Decimal::ZERO,
+                    correlation_id: order.idempotency_key.clone(),
+                    ts: now(),
+                };
+                self.nats.publish_event(nats_subjects::EVENT_POSITION_OPENED, &pos_event).await?;
+            }
+            let _ = position_events::publish_position_updated(self.nats.as_ref(), conn, pos_id, None).await;
         }
         
         // Update cache

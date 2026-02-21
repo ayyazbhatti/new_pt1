@@ -16,6 +16,8 @@ export interface UserResponse {
   group_name?: string | null
   min_leverage?: number | null
   max_leverage?: number | null
+  account_type?: string | null
+  open_positions_count?: number | null
 }
 
 export interface ListUsersParams {

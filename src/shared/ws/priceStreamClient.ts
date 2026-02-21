@@ -1,10 +1,18 @@
 /**
  * WebSocket client for live prices.
- * - Gateway (e.g. port 3003): expects type 'subscribe' + auth. Set token via setAuthToken().
- * - Data-provider (e.g. VITE_DATA_PROVIDER_WS_URL): expects action 'subscribe', no auth.
+ * Connects to gateway-ws (same as main app WS). Gateway forwards ticks from Redis price:ticks (published by data-provider).
+ * - In dev we use same-origin /ws so Vite proxies to gateway (3003). Default direct URL: 3003.
+ * - Override with VITE_DATA_PROVIDER_WS_URL for a separate price-only WS (action 'subscribe', no auth).
  */
-const DEFAULT_PRICE_WS_URL = 'ws://localhost:3003/ws'
-
+function getDefaultPriceWsUrl(): string {
+  if (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_DATA_PROVIDER_WS_URL) {
+    return (import.meta as any).env.VITE_DATA_PROVIDER_WS_URL
+  }
+  if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV && typeof location !== 'undefined') {
+    return `ws://${location.host}/ws?group=default`
+  }
+  return 'ws://localhost:3003/ws?group=default'
+}
 export interface PriceTick {
   symbol: string
   bid: string
@@ -14,9 +22,9 @@ export interface PriceTick {
 
 type TickListener = (tick: PriceTick) => void
 
-/** True when URL is likely the gateway (3003). Use gateway protocol (type + auth). */
+/** True when URL is the gateway (port 8090/3003 or same-origin /ws proxy). Use gateway protocol (type + auth). */
 function isGatewayUrl(url: string): boolean {
-  return /[:/]3003[/?]/.test(url) || url.includes('localhost:3003')
+  return /[:/]8090[/?]/.test(url) || /[:/]3003[/?]/.test(url) || url.includes('localhost:8090') || url.includes('localhost:3003') || (url.includes('/ws') && typeof location !== 'undefined' && url.startsWith('ws://' + location.host))
 }
 
 class PriceStreamClient {
@@ -31,7 +39,7 @@ class PriceStreamClient {
   private subscribedSymbols = new Set<string>()
 
   constructor(url?: string) {
-    this.url = url ?? (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_DATA_PROVIDER_WS_URL) ?? DEFAULT_PRICE_WS_URL
+    this.url = url ?? (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_DATA_PROVIDER_WS_URL) ?? getDefaultPriceWsUrl()
   }
 
   setAuthToken(token: string | null): void {

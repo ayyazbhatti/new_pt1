@@ -10,6 +10,8 @@ export interface User {
   name?: string
   role: string
   status: string
+  /** Optional permissions list (e.g. from admin/me); used by permissions.ts */
+  permissions?: string[]
 }
 
 interface AuthState {

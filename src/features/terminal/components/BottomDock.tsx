@@ -9,6 +9,7 @@ import { getPositions, Position, updatePositionSltp, closePosition } from '../ap
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { useWalletStore } from '@/shared/store/walletStore'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
@@ -262,9 +263,42 @@ export function BottomDock() {
             if (!mounted || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return
             setTimeout(() => {
               if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'subscribe', symbols: [], channels: ['positions', 'orders'] }))
+                ws.send(JSON.stringify({ type: 'subscribe', symbols: [], channels: ['positions', 'orders', 'balances', 'wallet'] }))
               }
             }, 500)
+          } else if (data.type === 'wallet.balance.updated') {
+            const payload = data.payload
+            if (payload && typeof payload === 'object') {
+              const pl = payload as Record<string, unknown>
+              const normalizeUserId = (id: string | undefined | null): string => {
+                if (!id) return ''
+                return String(id).trim().toLowerCase().replace(/-/g, '')
+              }
+              const eventUserId = normalizeUserId((pl.userId ?? pl.user_id) as string | undefined)
+              const currentUserId = normalizeUserId(useAuthStore.getState().user?.id as string | undefined)
+              if (eventUserId && currentUserId && eventUserId === currentUserId) {
+                const newBalance = Number(pl.balance ?? pl.available ?? 0)
+                const currentBalance = useWalletStore.getState().balance
+                const isInitialLoad = currentBalance === 0
+                useWalletStore.getState().setLoading(false)
+                useWalletStore.getState().setWalletData({
+                  balance: newBalance,
+                  currency: (pl.currency as string) ?? 'USD',
+                  available: Number(pl.available ?? pl.balance ?? 0),
+                  locked: Number(pl.locked ?? 0),
+                  equity: Number(pl.equity ?? pl.balance ?? 0),
+                  margin_used: Number(pl.margin_used ?? pl.marginUsed ?? 0),
+                  free_margin: Number(pl.free_margin ?? pl.freeMargin ?? 0),
+                })
+                if (!isInitialLoad && currentBalance !== newBalance) {
+                  const isIncrease = newBalance > currentBalance
+                  const msg = isIncrease
+                    ? `Deposit approved – balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    : `Balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  toast.success(msg, { duration: 3000 })
+                }
+              }
+            }
           } else if (data.type === 'auth_error') {
             console.error('❌ WebSocket authentication failed:', data.error)
             toast.error(`WebSocket auth failed: ${data.error}`)
@@ -1138,12 +1172,17 @@ export function BottomDock() {
               <button
                 onClick={async () => {
                   if (!closePositionId) return
+                  const idToClose = closePositionId
                   try {
-                    await closePosition(closePositionId)
-                    toast.success(`Position ${closePositionId.slice(0, 8)}... closed successfully`)
-                  setClosePositionDialogOpen(false)
-                  setClosePositionId(null)
-                    fetchPositions(true)
+                    await closePosition(idToClose)
+                    toast.success(`Position ${idToClose.slice(0, 8)}... closed successfully`)
+                    setClosePositionDialogOpen(false)
+                    setClosePositionId(null)
+                    // Optimistic update: remove from list immediately so it disappears
+                    setPositions((prev) => prev.filter((p) => p.id !== idToClose))
+                    // Refetch after delay so order-engine has time to process and list stays in sync
+                    setTimeout(() => fetchPositions(true), 500)
+                    setTimeout(() => fetchPositions(true), 1200)
                   } catch (error: any) {
                     toast.error(`Failed to close position: ${error.message}`)
                   }

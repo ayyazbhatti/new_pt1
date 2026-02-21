@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tower_http::cors::CorsLayer;
 use tracing::{info, error, warn};
+use redis::AsyncCommands;
 
 mod health;
 
@@ -18,6 +19,12 @@ mod health;
 struct AppState {
     nats_client: async_nats::Client,
     last_ticks: Arc<RwLock<HashMap<String, TickEvent>>>,
+}
+
+/// Optional Redis client for publishing to price:ticks (so ws-gateway can forward to frontend).
+fn redis_client() -> Option<Arc<redis::Client>> {
+    let url = std::env::var("REDIS_URL").ok()?;
+    redis::Client::open(url).ok().map(Arc::new)
 }
 
 // Binance ticker response
@@ -90,10 +97,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "XRPUSD", "DOTUSD", "MATICUSD", "AVAXUSD", "LINKUSD",
         "UNIUSD", "ATOMUSD",
     ];
+    let redis = redis_client();
+    if redis.is_some() {
+        info!("Redis configured: will publish to price:ticks for ws-gateway");
+    }
     for symbol in symbols {
         let nats = nats_client.clone();
         let ticks = last_ticks.clone();
-        tokio::spawn(fetch_real_ticks(symbol.to_string(), nats, ticks));
+        let redis = redis.clone();
+        tokio::spawn(fetch_real_ticks(symbol.to_string(), nats, ticks, redis));
     }
 
     // Start HTTP server
@@ -116,6 +128,7 @@ async fn fetch_real_ticks(
     symbol: String,
     nats: async_nats::Client,
     last_ticks: Arc<RwLock<HashMap<String, TickEvent>>>,
+    redis: Option<Arc<redis::Client>>,
 ) {
     let mut interval = interval(Duration::from_millis(500)); // Fetch every 500ms (2 times per second)
     let mut seq = 0u64;
@@ -163,6 +176,22 @@ async fn fetch_real_ticks(
                                                     error!("Failed to publish tick for {}: {}", symbol, e);
                                                 } else {
                                                     info!("Published real tick for {}: bid={}, ask={}", symbol, bid, ask);
+                                                }
+                                            }
+                                        }
+
+                                        // Publish to Redis price:ticks so ws-gateway can forward to frontend (left sidebar live prices)
+                                        if let Some(rd) = &redis {
+                                            let ts_ms = tick.ts.timestamp_millis();
+                                            let payload = serde_json::json!({
+                                                "symbol": binance_symbol,
+                                                "bid": tick.bid.to_string(),
+                                                "ask": tick.ask.to_string(),
+                                                "ts": ts_ms,
+                                            });
+                                            if let Ok(json) = serde_json::to_string(&payload) {
+                                                if let Ok(mut conn) = rd.get_async_connection().await {
+                                                    let _: Result<(), _> = conn.publish("price:ticks", &json).await;
                                                 }
                                             }
                                         }
