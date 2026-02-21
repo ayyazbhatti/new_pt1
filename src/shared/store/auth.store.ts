@@ -10,8 +10,10 @@ export interface User {
   name?: string
   role: string
   status: string
-  /** Optional permissions list (e.g. from admin/me); used by permissions.ts */
+  /** Effective permission keys (from API login/me); used by permissions.ts */
   permissions?: string[]
+  permissionProfileId?: string | null
+  permissionProfileName?: string | null
   /** 'full' | 'close_only' | 'disabled' - trading panel access */
   tradingAccess?: string
 }
@@ -65,6 +67,9 @@ export const useAuthStore = create<AuthState>()(
             role: response.user.role,
             status: response.user.status,
             tradingAccess: response.user.tradingAccess ?? 'full',
+            permissions: response.user.permissions,
+            permissionProfileId: response.user.permissionProfileId,
+            permissionProfileName: response.user.permissionProfileName,
           },
           isAuthenticated: true,
         })
@@ -89,6 +94,9 @@ export const useAuthStore = create<AuthState>()(
             role: response.user.role,
             status: response.user.status,
             tradingAccess: response.user.tradingAccess ?? 'full',
+            permissions: response.user.permissions,
+            permissionProfileId: response.user.permissionProfileId,
+            permissionProfileName: response.user.permissionProfileName,
           },
           isAuthenticated: true,
         })
@@ -144,6 +152,10 @@ export const useAuthStore = create<AuthState>()(
                 lastName: user.lastName,
                 role: user.role,
                 status: user.status,
+                tradingAccess: user.tradingAccess ?? 'full',
+                permissions: user.permissions,
+                permissionProfileId: user.permissionProfileId,
+                permissionProfileName: user.permissionProfileName,
               },
               isAuthenticated: true,
               isHydrated: true,
@@ -190,6 +202,9 @@ export const useAuthStore = create<AuthState>()(
               role: user.role,
               status: user.status,
               tradingAccess: user.tradingAccess ?? 'full',
+              permissions: user.permissions,
+              permissionProfileId: user.permissionProfileId,
+              permissionProfileName: user.permissionProfileName,
             },
           })
         } catch (error) {

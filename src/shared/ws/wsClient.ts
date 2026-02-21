@@ -114,7 +114,8 @@ class WebSocketClient {
             typeof payload === 'object' &&
             'userId' in payload &&
             'body' in payload
-          if (isChatShape && data.type !== 'chat.message' && data.type !== 'chat_message') {
+          const dataType = (data as { type: string }).type
+          if (isChatShape && dataType !== 'chat.message' && dataType !== 'chat_message') {
             console.log('📨 [wsClient] Chat-shaped message (unexpected type):', data.type, payload)
           }
           if (data.type === 'chat.message') {

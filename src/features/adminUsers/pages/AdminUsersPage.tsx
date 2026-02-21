@@ -1,5 +1,6 @@
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { UserKPICards, UserFiltersBar, UsersTable } from '../components'
 import { useModalStore } from '@/app/store'
 import { CreateEditUserModal } from '../modals/CreateEditUserModal'
@@ -45,11 +46,14 @@ function mapUserResponse(user: UserResponse): User {
     maxLeverageCap: 500, // TODO: Get from user_groups
     maxPositionSize: 0, // TODO: Get from user_groups
     maxDailyLoss: 0, // TODO: Get from risk settings
+    permissionProfileId: user.permission_profile_id ?? undefined,
+    permissionProfileName: user.permission_profile_name ?? undefined,
   }
 }
 
 export function AdminUsersPage() {
   const openModal = useModalStore((state) => state.openModal)
+  const canCreateUser = useCanAccess('users:create')
   
   // Fetch real users from API
   const { data: usersData, isLoading, error } = useQuery({
@@ -162,10 +166,12 @@ export function AdminUsersPage() {
               <Download className="h-4 w-4 mr-2" />
               Export CSV
             </Button>
-            <Button onClick={handleCreateUser}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create User
-            </Button>
+            {canCreateUser && (
+              <Button onClick={handleCreateUser}>
+                <Plus className="h-4 w-4 mr-2" />
+                Create User
+              </Button>
+            )}
           </div>
         }
       />

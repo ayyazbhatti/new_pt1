@@ -36,6 +36,12 @@ pub struct UpdateUserTradingAccessRequest {
     pub trading_access: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserPermissionProfileRequest {
+    /// UUID of permission profile, or null to unset.
+    pub permission_profile_id: Option<Uuid>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
@@ -53,6 +59,7 @@ pub fn create_admin_users_router(pool: PgPool) -> Router<PgPool> {
         .route("/:id/account-type", put(update_user_account_type))
         .route("/:id/margin-calculation-type", put(update_user_margin_calculation_type))
         .route("/:id/trading-access", put(update_user_trading_access))
+        .route("/:id/permission-profile", put(update_user_permission_profile))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -555,6 +562,110 @@ async fn update_user_trading_access(
     Ok(Json(serde_json::json!({
         "success": true,
         "message": "Trading access updated successfully"
+    })))
+}
+
+async fn update_user_permission_profile(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserPermissionProfileRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+
+    if let Some(profile_id) = payload.permission_profile_id {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM permission_profiles WHERE id = $1)",
+        )
+        .bind(profile_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        if !exists {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "PROFILE_NOT_FOUND".to_string(),
+                        message: "Permission profile not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE users SET permission_profile_id = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(payload.permission_profile_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Permission profile updated successfully"
     })))
 }
 

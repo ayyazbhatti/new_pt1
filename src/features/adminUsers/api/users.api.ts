@@ -59,3 +59,13 @@ export async function updateUserTradingAccess(
     body: JSON.stringify({ trading_access: payload.trading_access }),
   })
 }
+
+export async function updateUserPermissionProfile(
+  userId: string,
+  permissionProfileId: string | null
+): Promise<void> {
+  await http(`/api/admin/users/${userId}/permission-profile`, {
+    method: 'PUT',
+    body: JSON.stringify({ permission_profile_id: permissionProfileId }),
+  })
+}

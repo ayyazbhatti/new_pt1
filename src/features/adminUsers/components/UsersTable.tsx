@@ -13,6 +13,7 @@ import { Eye, Edit, Shield, X } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType, updateUserTradingAccess } from '../api/users.api'
 
 interface UsersTableProps {
@@ -22,6 +23,7 @@ interface UsersTableProps {
 
 export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
+  const canEditUser = useCanAccess('users:edit')
   const [updatingGroups, setUpdatingGroups] = useState<Set<string>>(new Set())
   const [updatingAccountTypes, setUpdatingAccountTypes] = useState<Set<string>>(new Set())
   const [updatingMarginCalculationTypes, setUpdatingMarginCalculationTypes] = useState<Set<string>>(new Set())
@@ -496,9 +498,11 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
             <Button variant="ghost" size="sm" onClick={() => handleView(user)} title="View">
               <Eye className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => handleEdit(user)} title="Edit">
-              <Edit className="h-4 w-4" />
-            </Button>
+            {canEditUser && (
+              <Button variant="ghost" size="sm" onClick={() => handleEdit(user)} title="Edit">
+                <Edit className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

@@ -24,21 +24,20 @@ export function AdminGuard({ children }: AdminGuardProps) {
     return <Navigate to="/login" replace />
   }
 
-  if (user?.role !== 'admin') {
+  const role = user?.role?.toLowerCase()
+  const allowedRoles = ['admin', 'manager', 'agent']
+  if (!role || !allowedRoles.includes(role)) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-background">
         <div className="text-center max-w-md">
           <h1 className="text-2xl font-bold text-text mb-2">Access Denied</h1>
-          <p className="text-text-muted mb-4">You do not have permission to access this page.</p>
+          <p className="text-text-muted mb-4">You do not have permission to access the admin area.</p>
           <div className="bg-surface-2 rounded-lg p-4 mb-4 text-left">
             <p className="text-sm text-text-dim mb-1">
               <span className="font-medium">Current user:</span> {user?.email || 'Unknown'}
             </p>
-            <p className="text-sm text-text-dim mb-1">
-              <span className="font-medium">Current role:</span> {user?.role || 'Unknown'}
-            </p>
             <p className="text-sm text-text-dim">
-              <span className="font-medium">Required role:</span> admin
+              <span className="font-medium">Current role:</span> {user?.role || 'Unknown'}
             </p>
           </div>
           <button
@@ -48,11 +47,8 @@ export function AdminGuard({ children }: AdminGuardProps) {
             }}
             className="px-4 py-2 bg-accent text-white rounded-md hover:bg-accent/90 transition-colors"
           >
-            Log out and sign in with admin account
+            Log out
           </button>
-          <p className="text-xs text-text-dim mt-4">
-            Admin credentials: admin@newpt.local / Admin@12345
-          </p>
         </div>
       </div>
     )

@@ -10,8 +10,9 @@ import { useModalStore } from '@/app/store'
 import { toast } from 'react-hot-toast'
 import { User, UserStatus } from '../types/users'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { updateUserGroup } from '../api/users.api'
+import { updateUserGroup, updateUserPermissionProfile } from '../api/users.api'
 import type { UserResponse } from '@/shared/api/users.api'
+import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
 
 const userSchema = z.object({
   firstName: z.string().min(1, 'First name is required'),
@@ -23,6 +24,7 @@ const userSchema = z.object({
   status: z.enum(['active', 'disabled']),
   minLeverage: z.number().min(1, 'Min leverage must be at least 1').max(1000, 'Min leverage must be at most 1000'),
   maxLeverage: z.number().min(1, 'Max leverage must be at least 1').max(1000, 'Max leverage must be at most 1000'),
+  permissionProfile: z.string().optional(),
 }).refine((data) => data.minLeverage <= data.maxLeverage, {
   message: 'Min leverage must be less than or equal to max leverage',
   path: ['maxLeverage'],
@@ -41,9 +43,13 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
   const queryClient = useQueryClient()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Fetch groups dynamically - fetch all groups to include disabled ones when editing
+  // Fetch groups and permission profiles
   const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
-    page_size: 100, // Get a reasonable number of groups
+    page_size: 100,
+  })
+  const { data: permissionProfiles = [] } = useQuery({
+    queryKey: ['permission-profiles'],
+    queryFn: listPermissionProfiles,
   })
 
   // Subscribe to users list so we get latest cache (e.g. after optimistic group update)
@@ -59,6 +65,8 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       groupName: found.group_name || user.groupName,
       leverageLimitMin: found.min_leverage ?? user.leverageLimitMin ?? 1,
       leverageLimitMax: found.max_leverage ?? user.leverageLimitMax ?? 500,
+      permissionProfileId: found.permission_profile_id ?? user.permissionProfileId,
+      permissionProfileName: found.permission_profile_name ?? user.permissionProfileName,
     }
   }, [user, usersList])
 
@@ -68,6 +76,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
 
   const formUser = displayUser ?? user
   const defaultGroup = formUser?.group || ''
+  const defaultPermissionProfile = formUser?.permissionProfileId || ''
   const defaultStatus = (formUser?.status === 'suspended' ? 'disabled' : formUser?.status) || 'active'
   const defaultMinLeverage = formUser?.leverageLimitMin ?? 1
   const defaultMaxLeverage = formUser?.leverageLimitMax ?? 500
@@ -91,6 +100,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       status: defaultStatus,
       minLeverage: defaultMinLeverage,
       maxLeverage: defaultMaxLeverage,
+      permissionProfile: defaultPermissionProfile,
     },
   })
 
@@ -107,8 +117,9 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       status: defaultStatus,
       minLeverage: defaultMinLeverage,
       maxLeverage: defaultMaxLeverage,
+      permissionProfile: defaultPermissionProfile,
     })
-  }, [formUser?.id, defaultGroup, defaultStatus, defaultMinLeverage, defaultMaxLeverage, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country])
+  }, [formUser?.id, defaultGroup, defaultPermissionProfile, defaultStatus, defaultMinLeverage, defaultMaxLeverage, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country])
 
   const group = watch('group')
   const groups = groupsData?.items || []
@@ -122,20 +133,31 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           min_leverage: data.minLeverage,
           max_leverage: data.maxLeverage,
         })
+        const permId = data.permissionProfile?.trim() || null
+        await updateUserPermissionProfile(user.id, permId)
         const groupName = groups.find((g) => g.id === data.group)?.name ?? ''
-        // Update table state immediately so leverage (and group) show without reload
+        const permissionProfileName = permId ? permissionProfiles.find((p) => p.id === permId)?.name ?? undefined : undefined
         onUserUpdate?.(user.id, {
           group: data.group,
           groupName,
           leverageLimitMin: data.minLeverage,
           leverageLimitMax: data.maxLeverage,
+          permissionProfileId: permId ?? undefined,
+          permissionProfileName,
         })
-        // Keep cache in sync for re-opened modal and other consumers
         queryClient.setQueryData<UserResponse[]>(['users'], (old) => {
           if (!old) return old
           return old.map((u) =>
             u.id === user.id
-              ? { ...u, group_id: data.group, group_name: groupName, min_leverage: data.minLeverage, max_leverage: data.maxLeverage }
+              ? {
+                  ...u,
+                  group_id: data.group,
+                  group_name: groupName,
+                  min_leverage: data.minLeverage,
+                  max_leverage: data.maxLeverage,
+                  permission_profile_id: permId,
+                  permission_profile_name: permissionProfileName ?? null,
+                }
               : u
           )
         })
@@ -211,20 +233,42 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           {errors.group && <p className="mt-1 text-sm text-danger">{errors.group.message}</p>}
         </div>
       </div>
-      <div>
-        <label className="text-sm font-medium text-text mb-2 block">Initial Status *</label>
-        <Select
-          value={watch('status')}
-          onValueChange={(value) => setValue('status', value as 'active' | 'disabled')}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="disabled">Disabled</SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm font-medium text-text mb-2 block">Permission profile</label>
+          <Select
+            value={watch('permissionProfile') || 'none'}
+            onValueChange={(value) => setValue('permissionProfile', value === 'none' ? '' : value)}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="No profile" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No profile</SelectItem>
+              {permissionProfiles.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="mt-1 text-xs text-text-muted">Optional. Assign a profile to grant permissions (e.g. for managers).</p>
+        </div>
+        <div>
+          <label className="text-sm font-medium text-text mb-2 block">Initial Status *</label>
+          <Select
+            value={watch('status')}
+            onValueChange={(value) => setValue('status', value as 'active' | 'disabled')}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="disabled">Disabled</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>

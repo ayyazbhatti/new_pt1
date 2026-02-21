@@ -4,10 +4,16 @@ import { adminNavItems } from '@/app/config'
 import { cn } from '@/shared/utils'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/shared/ui/button'
+import { useAuthStore } from '@/shared/store/auth.store'
+import { canAccess } from '@/shared/utils/permissions'
 
 export function Sidebar() {
   const sidebarOpen = useUIStore((state) => state.sidebarOpen)
   const toggleSidebar = useUIStore((state) => state.toggleSidebar)
+  const user = useAuthStore((state) => state.user)
+  const visibleItems = adminNavItems.filter(
+    (item) => !item.permission || canAccess(item.permission, user)
+  )
 
   return (
     <aside
@@ -33,7 +39,7 @@ export function Sidebar() {
       {/* Scrollable Menu */}
       <nav className="flex-1 overflow-y-auto py-4">
         <div className="space-y-1 px-2">
-          {adminNavItems.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon
             return (
               <NavLink

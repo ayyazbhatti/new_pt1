@@ -85,6 +85,12 @@ pub struct UserResponse {
     pub trading_access: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_positions_count: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -171,7 +177,7 @@ async fn register(
                 last_login_at: user.last_login_at,
                 referral_code: user.referral_code.clone(),
                 group_id: user.group_id,
-                group_name: None, // Will be populated if needed
+                group_name: None,
                 min_leverage: user.min_leverage,
                 max_leverage: user.max_leverage,
                 price_profile_name: None,
@@ -180,6 +186,9 @@ async fn register(
                 margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
                 trading_access: user.trading_access.or_else(|| Some("full".to_string())),
                 open_positions_count: None,
+                permission_profile_id: None,
+                permission_profile_name: None,
+                permissions: Some(vec![]),
             },
         })),
         Err(e) => {
@@ -208,7 +217,7 @@ async fn login(
     headers: axum::http::HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let service = AuthService::new(pool);
+    let service = AuthService::new(pool.clone());
 
     // Extract user agent and IP
     let user_agent = headers
@@ -223,33 +232,52 @@ async fn login(
         .login(&payload.email, &payload.password, user_agent, ip.as_deref())
         .await
     {
-        Ok((user, access_token, refresh_token)) => Ok(Json(AuthResponse {
-            access_token,
-            refresh_token,
-            user: UserResponse {
-                id: user.id,
-                email: user.email,
-                first_name: user.first_name,
-                last_name: user.last_name,
-                role: user.role,
-                status: user.status.into(),
-                phone: user.phone.clone(),
-                country: user.country.clone(),
-                created_at: Some(user.created_at),
-                last_login_at: user.last_login_at,
-                referral_code: user.referral_code.clone(),
-                group_id: user.group_id,
-                group_name: None, // Will be populated if needed
-                min_leverage: user.min_leverage,
-                max_leverage: user.max_leverage,
-                price_profile_name: None,
-                leverage_profile_name: None,
-                account_type: user.account_type.or_else(|| Some("hedging".to_string())),
-                margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
-                trading_access: user.trading_access.or_else(|| Some("full".to_string())),
-                open_positions_count: None,
-            },
-        })),
+        Ok((user, access_token, refresh_token)) => {
+            let perm_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
+            let permissions = perm_service
+                .get_effective_permissions(&user.role, user.permission_profile_id)
+                .await;
+            let permission_profile_name: Option<String> = if let Some(profile_id) = user.permission_profile_id {
+                sqlx::query_scalar::<_, String>("SELECT name FROM permission_profiles WHERE id = $1")
+                    .bind(profile_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+            Ok(Json(AuthResponse {
+                access_token,
+                refresh_token,
+                user: UserResponse {
+                    id: user.id,
+                    email: user.email,
+                    first_name: user.first_name,
+                    last_name: user.last_name,
+                    role: user.role,
+                    status: user.status.into(),
+                    phone: user.phone.clone(),
+                    country: user.country.clone(),
+                    created_at: Some(user.created_at),
+                    last_login_at: user.last_login_at,
+                    referral_code: user.referral_code.clone(),
+                    group_id: user.group_id,
+                    group_name: None,
+                    min_leverage: user.min_leverage,
+                    max_leverage: user.max_leverage,
+                    price_profile_name: None,
+                    leverage_profile_name: None,
+                    account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+                    margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
+                    trading_access: user.trading_access.or_else(|| Some("full".to_string())),
+                    open_positions_count: None,
+                    permission_profile_id: user.permission_profile_id,
+                    permission_profile_name,
+                    permissions: Some(permissions),
+                },
+            }))
+        }
         Err(e) => Err((
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
@@ -345,6 +373,21 @@ async fn me(
                     (None, None, None)
                 };
 
+            let perm_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
+            let permissions = perm_service
+                .get_effective_permissions(&user.role, user.permission_profile_id)
+                .await;
+            let permission_profile_name: Option<String> = if let Some(profile_id) = user.permission_profile_id {
+                sqlx::query_scalar::<_, String>("SELECT name FROM permission_profiles WHERE id = $1")
+                    .bind(profile_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+
             Ok(Json(UserResponse {
                 id: user.id,
                 email: user.email,
@@ -367,6 +410,9 @@ async fn me(
                 margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
                 trading_access: user.trading_access.or_else(|| Some("full".to_string())),
                 open_positions_count: None,
+                permission_profile_id: user.permission_profile_id,
+                permission_profile_name,
+                permissions: Some(permissions),
             }))
         },
         Err(e) => Err((
@@ -511,6 +557,8 @@ async fn list_users(
                     .collect()
             };
 
+            let permission_profiles_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
+
             let mut user_responses: Vec<UserResponse> = Vec::new();
             for u in users {
                 let group_name: Option<String> = if let Some(group_id) = u.group_id {
@@ -525,6 +573,27 @@ async fn list_users(
                 } else {
                     None
                 };
+
+                let (permission_profile_name, permissions): (Option<String>, Option<Vec<String>>) =
+                    if let Some(profile_id) = u.permission_profile_id {
+                        let name = sqlx::query_scalar::<_, String>(
+                            "SELECT name FROM permission_profiles WHERE id = $1",
+                        )
+                        .bind(profile_id)
+                        .fetch_optional(&pool)
+                        .await
+                        .ok()
+                        .flatten();
+                        let perms = permission_profiles_service
+                            .get_effective_permissions(&u.role, Some(profile_id))
+                            .await;
+                        (name, Some(perms))
+                    } else {
+                        let perms = permission_profiles_service
+                            .get_effective_permissions(&u.role, None)
+                            .await;
+                        (None, Some(perms))
+                    };
 
                 let account_type = u
                     .account_type
@@ -562,6 +631,9 @@ async fn list_users(
                     margin_calculation_type,
                     trading_access,
                     open_positions_count,
+                    permission_profile_id: u.permission_profile_id,
+                    permission_profile_name,
+                    permissions,
                 });
             }
             Ok(Json(user_responses))

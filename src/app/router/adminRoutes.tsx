@@ -2,7 +2,6 @@ import { RouteObject } from 'react-router-dom'
 import { DashboardPage } from '@/features/dashboard'
 import { AdminUsersPage } from '@/features/adminUsers'
 import { GroupsPage } from '@/features/groups'
-import { RiskPage } from '@/features/risk'
 import { AdminTradingPage } from '@/features/adminTrading'
 import { SymbolsPage } from '@/features/symbols'
 import { SwapRulesPage } from '@/features/swap'
@@ -16,6 +15,7 @@ import { ReportsPage } from '@/features/reports'
 import { LeverageProfilesPage } from '@/features/leverageProfiles'
 import { AdminMarkupPage } from '@/features/adminMarkup'
 import { AdminTransactionsPage } from '@/features/admin/transactions'
+import { ManagersPage } from '@/features/managers'
 
 export const adminRoutes: RouteObject[] = [
   {
@@ -31,12 +31,12 @@ export const adminRoutes: RouteObject[] = [
     element: <GroupsPage />,
   },
   {
-    path: '/admin/trading',
-    element: <AdminTradingPage />,
+    path: '/admin/manager',
+    element: <ManagersPage />,
   },
   {
-    path: '/admin/risk',
-    element: <RiskPage />,
+    path: '/admin/trading',
+    element: <AdminTradingPage />,
   },
   {
     path: '/admin/leverage-profiles',

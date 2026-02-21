@@ -1,0 +1,21 @@
+export type ManagerStatus = 'active' | 'disabled'
+
+export interface Manager {
+  id: string
+  userId: string
+  userName: string
+  userEmail: string
+  permissionProfileId: string
+  permissionProfileName: string
+  status: ManagerStatus
+  createdAt: string
+  lastLoginAt?: string
+  notes?: string
+}
+
+/** User from users table that can be promoted to manager (for Create Manager dropdown) */
+export interface UserOption {
+  id: string
+  name: string
+  email: string
+}

@@ -1,4 +1,5 @@
 import { ContentShell, PageHeader } from '@/shared/layout'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { GroupsTable } from '../components/GroupsTable'
 import { GroupFormDialog } from '../components/GroupFormDialog'
 import { Button } from '@/shared/ui/button'
@@ -28,6 +29,7 @@ function debounce<T extends (...args: any[]) => void>(func: T, wait: number) {
 export function GroupsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const canEditGroups = useCanAccess('groups:edit')
 
   // Get params from URL
   const search = searchParams.get('search') || ''
@@ -149,10 +151,12 @@ export function GroupsPage() {
             <Button variant="ghost" size="sm" onClick={() => refetch()} title="Refresh">
               <RefreshCw className="h-4 w-4" />
             </Button>
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Group
-            </Button>
+            {canEditGroups && (
+              <Button onClick={() => setCreateDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Create Group
+              </Button>
+            )}
           </div>
         }
       />
@@ -224,10 +228,12 @@ export function GroupsPage() {
           title="No groups found"
           description="Create your first user group to get started"
           action={
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Group
-            </Button>
+            canEditGroups ? (
+              <Button onClick={() => setCreateDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Create Group
+              </Button>
+            ) : undefined
           }
         />
       ) : (

@@ -10,6 +10,7 @@ import { AssignSymbolsModal } from '../modals/AssignSymbolsModal'
 import { Eye, Edit, Trash2, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { useModalStore } from '@/app/store'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { formatDistanceToNow } from 'date-fns'
 import { useUpdateGroupPriceProfile } from '../hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
@@ -27,6 +28,7 @@ const NONE_PROFILE_VALUE = '__none__'
 
 export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate, onRefresh }: GroupsTableProps) {
   const openModal = useModalStore((state) => state.openModal)
+  const canEditGroups = useCanAccess('groups:edit')
   const updatePriceProfile = useUpdateGroupPriceProfile()
   const [viewingGroup, setViewingGroup] = useState<UserGroup | null>(null)
   const [editingGroup, setEditingGroup] = useState<UserGroup | null>(null)
@@ -176,23 +178,27 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
             >
               <Eye className="h-4 w-4" />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleEdit(group)}
-              title="Edit"
-            >
-              <Edit className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleDelete(group)}
-              title="Delete"
-              className="text-danger hover:text-danger"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {canEditGroups && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleEdit(group)}
+                  title="Edit"
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDelete(group)}
+                  title="Delete"
+                  className="text-danger hover:text-danger"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </>
+            )}
           </div>
         )
       },

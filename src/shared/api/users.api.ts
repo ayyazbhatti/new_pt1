@@ -20,6 +20,8 @@ export interface UserResponse {
   margin_calculation_type?: string | null
   trading_access?: string | null
   open_positions_count?: number | null
+  permission_profile_id?: string | null
+  permission_profile_name?: string | null
 }
 
 export interface ListUsersParams {
@@ -37,6 +39,16 @@ export async function listUsers(params?: ListUsersParams): Promise<UserResponse[
   
   return http<UserResponse[]>(endpoint, {
     method: 'GET',
+  })
+}
+
+export async function updateUserPermissionProfile(
+  userId: string,
+  permissionProfileId: string | null
+): Promise<void> {
+  await http(`/api/admin/users/${userId}/permission-profile`, {
+    method: 'PUT',
+    body: JSON.stringify({ permission_profile_id: permissionProfileId }),
   })
 }
 

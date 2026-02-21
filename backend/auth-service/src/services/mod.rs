@@ -9,4 +9,5 @@ pub mod order_event_handler;
 pub mod position_event_handler;
 pub mod price_tick_summary_handler;
 pub mod ledger_service;
+pub mod permission_profiles_service;
 

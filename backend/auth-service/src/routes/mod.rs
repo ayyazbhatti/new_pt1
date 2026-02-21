@@ -6,6 +6,8 @@ pub mod admin_symbols;
 pub mod admin_markup;
 pub mod admin_swap;
 pub mod admin_users;
+pub mod admin_managers;
+pub mod admin_permission_profiles;
 pub mod deposits;
 pub mod withdrawals;
 pub mod orders;

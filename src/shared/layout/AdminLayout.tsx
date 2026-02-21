@@ -4,6 +4,7 @@ import { Topbar } from './Topbar'
 import { ModalHost } from './ModalHost'
 import { useUIStore } from '@/app/store'
 import { cn } from '@/shared/utils'
+import { AdminRouteGuard } from '@/shared/components/guards/AdminRouteGuard'
 
 interface AdminLayoutProps {
   children: ReactNode
@@ -23,7 +24,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
             sidebarOpen ? 'ml-0' : 'ml-0'
           )}
         >
-          {children}
+          <AdminRouteGuard>{children}</AdminRouteGuard>
         </main>
       </div>
       <ModalHost />

@@ -41,6 +41,8 @@ export interface User {
   maxLeverageCap: number
   maxPositionSize: number
   maxDailyLoss: number
+  permissionProfileId?: string | null
+  permissionProfileName?: string | null
 }
 
 export interface UserWallet {

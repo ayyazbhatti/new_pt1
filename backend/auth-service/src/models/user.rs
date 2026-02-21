@@ -50,6 +50,9 @@ pub struct User {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
+    /// When set, effective permissions = this profile's grants (for manager/agent).
+    #[serde(default)]
+    pub permission_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

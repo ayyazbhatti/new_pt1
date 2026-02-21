@@ -12,6 +12,9 @@ export interface AuthResponse {
     role: string
     status: string
     trading_access?: string | null
+    permission_profile_id?: string | null
+    permission_profile_name?: string | null
+    permissions?: string[] | null
   }
 }
 
@@ -33,6 +36,9 @@ export interface UserResponse {
   price_profile_name?: string
   leverage_profile_name?: string
   trading_access?: string | null
+  permission_profile_id?: string | null
+  permission_profile_name?: string | null
+  permissions?: string[] | null
 }
 
 export async function login(email: string, password: string): Promise<{
@@ -46,6 +52,9 @@ export async function login(email: string, password: string): Promise<{
     role: string
     status: string
     tradingAccess?: string
+    permissions?: string[]
+    permissionProfileId?: string | null
+    permissionProfileName?: string | null
   }
 }> {
   const response = await http<AuthResponse>('/api/auth/login', {
@@ -64,6 +73,9 @@ export async function login(email: string, password: string): Promise<{
       role: response.user.role,
       status: response.user.status,
       tradingAccess: response.user.trading_access ?? 'full',
+      permissions: response.user.permissions ?? undefined,
+      permissionProfileId: response.user.permission_profile_id ?? undefined,
+      permissionProfileName: response.user.permission_profile_name ?? undefined,
     },
   }
 }
@@ -79,6 +91,9 @@ export async function register(data: RegisterData): Promise<{
     role: string
     status: string
     tradingAccess?: string
+    permissions?: string[]
+    permissionProfileId?: string | null
+    permissionProfileName?: string | null
   }
 }> {
   const response = await http<AuthResponse>('/api/auth/register', {
@@ -104,6 +119,9 @@ export async function register(data: RegisterData): Promise<{
       role: response.user.role,
       status: response.user.status,
       tradingAccess: response.user.trading_access ?? 'full',
+      permissions: response.user.permissions ?? undefined,
+      permissionProfileId: response.user.permission_profile_id ?? undefined,
+      permissionProfileName: response.user.permission_profile_name ?? undefined,
     },
   }
 }
@@ -141,6 +159,9 @@ export interface MeResponse {
   leverageProfileName?: string
   /** 'full' | 'close_only' | 'disabled' - trading panel access */
   tradingAccess?: string
+  permissions?: string[]
+  permissionProfileId?: string | null
+  permissionProfileName?: string | null
 }
 
 export async function me(): Promise<MeResponse> {
@@ -162,6 +183,9 @@ export async function me(): Promise<MeResponse> {
     priceProfileName: response.price_profile_name,
     leverageProfileName: response.leverage_profile_name,
     tradingAccess: response.trading_access ?? 'full',
+    permissions: response.permissions ?? undefined,
+    permissionProfileId: response.permission_profile_id ?? undefined,
+    permissionProfileName: response.permission_profile_name ?? undefined,
   }
 }
 
