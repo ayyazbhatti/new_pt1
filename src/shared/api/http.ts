@@ -71,8 +71,8 @@ async function refreshAccessToken(): Promise<string> {
   return refreshPromise
 }
 
-// Endpoints where 401 means "invalid credentials" — do not try token refresh
-const SKIP_REFRESH_ON_401 = ['/api/auth/login', '/api/auth/register']
+// Endpoints where 401 means "invalid credentials" or "already logged out" — do not try token refresh
+const SKIP_REFRESH_ON_401 = ['/api/auth/login', '/api/auth/register', '/api/auth/logout']
 
 export async function http<T>(
   endpoint: string,

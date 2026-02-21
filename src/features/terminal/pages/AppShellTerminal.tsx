@@ -5,6 +5,7 @@ import { CenterWorkspace } from '../components/CenterWorkspace'
 import { RightTradingPanel } from '../components/RightTradingPanel'
 import { SettingsPanel } from '../components/SettingsPanel'
 import { PaymentPanel } from '../components/PaymentPanel'
+import { ChatPanel } from '../components/ChatPanel'
 import { useTerminalStore } from '../store'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
@@ -169,6 +170,7 @@ export function AppShellTerminal() {
 
   const settingsPanelOpen = useTerminalStore((s) => s.settingsPanelOpen)
   const paymentPanelOpen = useTerminalStore((s) => s.paymentPanelOpen)
+  const chatPanelOpen = useTerminalStore((s) => s.chatPanelOpen)
 
   return (
     <>
@@ -181,7 +183,7 @@ export function AppShellTerminal() {
         center={<CenterWorkspace />}
         right={<RightTradingPanel />}
         rightPanel={
-          paymentPanelOpen ? <PaymentPanel /> : settingsPanelOpen ? <SettingsPanel /> : undefined
+          chatPanelOpen ? <ChatPanel /> : paymentPanelOpen ? <PaymentPanel /> : settingsPanelOpen ? <SettingsPanel /> : undefined
         }
       />
       <MarginCallModal

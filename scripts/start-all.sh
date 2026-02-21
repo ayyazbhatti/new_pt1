@@ -34,12 +34,12 @@ echo "==> Starting core-api (port 3004)..."
 (cargo run -p core-api) &
 CORE_PID=$!
 
-echo "==> Starting gateway-ws (port 8090)..."
+echo "==> Starting gateway-ws (port 3003, matches Vite proxy)..."
 if [ -z "${JWT_SECRET:-}" ]; then
   echo "  WARNING: JWT_SECRET is not set. WebSocket auth will fail and real-time balance updates will not work."
   echo "  Set JWT_SECRET in .env (same value as auth-service) or export it before running this script."
 fi
-(PORT=8090 cargo run -p gateway-ws) &
+(PORT=3003 cargo run -p gateway-ws) &
 GW_PID=$!
 
 echo "==> Starting email-worker..."
@@ -55,6 +55,6 @@ echo "All started. PIDs: auth=$AUTH_PID core=$CORE_PID gateway=$GW_PID email=$EM
 echo "  App:        http://localhost:5173"
 echo "  Auth API:   http://localhost:3000"
 echo "  Leads API:  http://localhost:3004"
-echo "  WebSocket:  ws://localhost:8090"
+echo "  WebSocket:  ws://localhost:3003/ws (proxied via Vite at ws://localhost:5173/ws)"
 echo "To stop: kill $AUTH_PID $CORE_PID $GW_PID $EMAIL_PID $VITE_PID"
 wait

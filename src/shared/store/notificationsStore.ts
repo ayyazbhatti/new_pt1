@@ -76,13 +76,17 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
         unreadCount: response.unreadCount || 0,
       })
     } catch (error: any) {
+      const status = error?.response?.status
+      // 401 = session expired or invalid; auth store will clear and redirect to login — don't log as error
+      if (status === 401) {
+        set({ items: [], unreadCount: 0 })
+        return
+      }
       // Gracefully handle 404/500 - endpoint not implemented yet or server error
-      if (error?.response?.status === 404 || error?.response?.status === 500) {
-        // Only log in development
+      if (status === 404 || status === 500) {
         if (import.meta.env.DEV) {
           console.debug('Notifications endpoint not available yet. Backend implementation pending.')
         }
-        // Initialize with empty state
         set({ items: [], unreadCount: 0 })
       } else {
         console.error('Failed to load notifications:', error)

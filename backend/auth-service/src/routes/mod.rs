@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod chat;
 pub mod admin_groups;
 pub mod admin_leverage_profiles;
 pub mod admin_symbols;

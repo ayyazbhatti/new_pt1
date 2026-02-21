@@ -266,4 +266,19 @@ export type WsInboundEvent =
       ask: string
       ts: number
     }
+  | {
+      type: 'chat.message'
+      payload: {
+        id: string
+        userId: string
+        senderType: 'user' | 'support'
+        senderId: string | null
+        body: string
+        createdAt: string
+      }
+    }
+  | {
+      type: 'error'
+      message: string
+    }
 

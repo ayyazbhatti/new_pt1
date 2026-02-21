@@ -270,8 +270,11 @@ async fn forward_events(state: AppState) {
     // Subscribe to wallet balance updates
     let mut sub_wallet = state.nats.subscribe("wallet.balance.updated".to_string()).await
         .expect("Failed to subscribe to wallet.balance.updated events");
+    // Subscribe to chat (user + support) so real-time chat works
+    let mut sub_chat = state.nats.subscribe("chat.>".to_string()).await
+        .expect("Failed to subscribe to chat.>");
 
-    info!("Event forwarder started - subscribed to evt.*, event.*, deposit.request.*, and wallet.balance.updated");
+    info!("Event forwarder started - subscribed to evt.*, event.*, deposit.request.*, wallet.balance.updated, and chat.>");
 
     loop {
         tokio::select! {
@@ -295,7 +298,45 @@ async fn forward_events(state: AppState) {
                     process_event_message(msg, &state).await;
                 }
             }
+            msg_opt = sub_chat.next() => {
+                if let Some(msg) = msg_opt {
+                    process_chat_message(msg, &state).await;
+                }
+            }
         }
+    }
+}
+
+async fn process_chat_message(msg: async_nats::Message, state: &AppState) {
+    let bytes = msg.payload.to_vec();
+    let subject = msg.subject.as_str();
+    info!("📨 [chat] NATS message received subject={} size={} (forwarding to all WS clients)", subject, bytes.len());
+
+    let event_json = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Chat forwarder: invalid JSON on {}: {}", subject, e);
+            return;
+        }
+    };
+    let json = match serde_json::to_string(&event_json) {
+        Ok(j) => j,
+        Err(e) => {
+            error!("Chat forwarder: failed to serialize: {}", e);
+            return;
+        }
+    };
+    let senders = state.senders.read().await;
+    let mut count: u32 = 0;
+    for (_sid, tx) in senders.iter() {
+        if tx.send(axum::extract::ws::Message::Text(json.clone())).is_ok() {
+            count += 1;
+        }
+    }
+    if count == 0 {
+        warn!("📨 [chat] Forwarded {} to 0 sessions (no WebSocket clients connected?)", subject);
+    } else {
+        info!("📨 [chat] Forwarded {} to {} session(s)", subject, count);
     }
 }
 

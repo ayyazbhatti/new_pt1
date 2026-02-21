@@ -46,8 +46,12 @@ export function LoginPage() {
       await login(data.email, data.password)
       toast.success('Welcome back!')
       navigate('/')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Login failed. Please try again.')
+    } catch (error: unknown) {
+      const msg =
+        (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+        (error instanceof Error ? error.message : null) ||
+        'Login failed. Check your email and password, and that your account is active.'
+      toast.error(msg)
     } finally {
       setIsLoading(false)
     }

@@ -1,4 +1,4 @@
-import { Search, Grid3x3, Bell, CreditCard, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
+import { Search, Grid3x3, Bell, CreditCard, MessageCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
@@ -40,6 +40,8 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
     setSettingsPanelOpen,
     paymentPanelOpen,
     setPaymentPanelOpen,
+    chatPanelOpen,
+    setChatPanelOpen,
   } = useTerminalStore()
 
   const { user, logout } = useAuthStore()
@@ -275,6 +277,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             <button
               onClick={() => {
                 setSettingsPanelOpen(false)
+                setChatPanelOpen(false)
                 setPaymentPanelOpen(!paymentPanelOpen)
               }}
               className={cn(
@@ -284,6 +287,20 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               title="Deposit history"
             >
               <CreditCard className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => {
+                setSettingsPanelOpen(false)
+                setPaymentPanelOpen(false)
+                setChatPanelOpen(!chatPanelOpen)
+              }}
+              className={cn(
+                'p-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group',
+                chatPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-white/5 text-text-muted group-hover:text-text'
+              )}
+              title="Chat"
+            >
+              <MessageCircle className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -536,7 +553,11 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
       {/* Bottom Nav */}
       <div className="shrink-0 px-4 py-2.5 border-t border-white/5 space-y-0.5">
         <button
-          onClick={() => setSettingsPanelOpen(!settingsPanelOpen)}
+          onClick={() => {
+            setChatPanelOpen(false)
+            setPaymentPanelOpen(false)
+            setSettingsPanelOpen(!settingsPanelOpen)
+          }}
           className="w-full text-left text-xs font-medium text-text-muted/70 hover:text-text hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
         >
           Settings

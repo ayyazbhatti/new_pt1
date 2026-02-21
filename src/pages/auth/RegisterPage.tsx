@@ -72,8 +72,12 @@ export function RegisterPage() {
       })
       toast.success('Account created successfully!')
       navigate('/')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Registration failed. Please try again.')
+    } catch (error: unknown) {
+      const msg =
+        (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+        (error instanceof Error ? error.message : null) ||
+        'Registration failed. Check the form and try again.'
+      toast.error(msg)
     } finally {
       setIsLoading(false)
     }

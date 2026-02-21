@@ -49,7 +49,12 @@ class WebSocketClient {
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data) as WsInboundEvent
-          
+          const msgType = (data as Record<string, unknown>).type ?? '(no type)'
+          console.log('[wsClient] Message type:', msgType)
+          if (msgType === 'chat.message' || msgType === 'chat_message') {
+            console.log('[wsClient] ✅ CHAT MESSAGE received:', (data as Record<string, unknown>).payload)
+          }
+
           // Handle authentication responses
           if (data.type === 'auth_success') {
             this.isAuthenticated = true
@@ -65,13 +70,13 @@ class WebSocketClient {
               setTimeout(() => {
                 if (this.ws?.readyState === WebSocket.OPEN && this.isAuthenticated) {
                   if (user.role === 'admin') {
-                    // Subscribe to deposits and notifications for admin users
+                    // Subscribe to deposits, notifications, and support chat for admin users
                     this.ws.send(JSON.stringify({
                       type: 'subscribe',
-                      channels: ['deposits', 'notifications'],
+                      channels: ['deposits', 'notifications', 'support'],
                       symbols: []
                     }))
-                    console.log('📡 Auto-subscribed admin to deposits and notifications channels')
+                    console.log('📡 Auto-subscribed admin to deposits, notifications, and support channels')
                   } else {
                     // Subscribe to balances and wallet updates for regular users
                     // Note: Wallet balance updates are sent to all authenticated connections,
@@ -102,6 +107,21 @@ class WebSocketClient {
           // Log all messages for debugging (filter important ones)
           if (data.type === 'wallet.balance.updated' || data.type === 'deposit.request.approved' || data.type === 'auth_success') {
             console.log('📨 [wsClient] Received message:', data.type, data)
+          }
+          const payload = (data as Record<string, unknown>).payload ?? data
+          const isChatShape =
+            payload &&
+            typeof payload === 'object' &&
+            'userId' in payload &&
+            'body' in payload
+          if (isChatShape && data.type !== 'chat.message' && data.type !== 'chat_message') {
+            console.log('📨 [wsClient] Chat-shaped message (unexpected type):', data.type, payload)
+          }
+          if (data.type === 'chat.message') {
+            console.log('📨 [wsClient] Chat message payload:', (data as { type: string; payload?: unknown }).payload)
+          }
+          if (data.type === 'error') {
+            console.warn('⚠️ [wsClient] Server sent error:', (data as { type: string; message?: string }).message)
           }
           if (data.type === 'tick') {
             console.log('📨 [wsClient] Tick received:', (data as any).symbol, 'handlers=', this.handlers.size)

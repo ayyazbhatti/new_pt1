@@ -27,6 +27,7 @@ use routes::admin_symbols::create_admin_symbols_router;
 use routes::admin_markup::create_admin_markup_router;
 use routes::admin_swap::create_admin_swap_router;
 use routes::admin_users::create_admin_users_router;
+use routes::chat::{create_admin_chat_router, create_user_chat_router};
 use routes::deposits::create_deposits_router;
 use routes::withdrawals::create_withdrawals_router;
 use routes::orders::create_orders_router;
@@ -190,7 +191,12 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/wallet", routes::deposits::create_wallet_router(pool.clone(), deposits_state.clone()))
         .nest("/api/account", routes::deposits::create_account_router(pool.clone(), deposits_state.clone()))
         .nest("/api/notifications", routes::deposits::create_notifications_router(pool.clone(), deposits_state.clone()))
-        .nest("/v1/users", routes::deposits::create_positions_router(pool.clone(), deposits_state.clone()))
+        .nest(
+            "/v1/users",
+            routes::deposits::create_positions_router(pool.clone(), deposits_state.clone())
+                .merge(create_user_chat_router(pool.clone(), deposits_state.clone())),
+        )
+        .nest("/api/admin/chat", create_admin_chat_router(pool.clone(), deposits_state.clone()))
         .nest("/api/orders", create_orders_router(pool.clone(), orders_state.clone()))
         .nest("/v1/orders", create_orders_router(pool.clone(), orders_state.clone())) // Keep v1 for backward compatibility
         .layer(cors)

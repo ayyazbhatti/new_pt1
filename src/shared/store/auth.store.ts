@@ -105,9 +105,13 @@ export const useAuthStore = create<AuthState>()(
           try {
             const { logout: logoutApi } = await import('@/shared/api/auth.api')
             await logoutApi(state.refreshToken)
-          } catch (error) {
-            // Ignore logout errors
-            console.error('Logout error:', error)
+          } catch (error: unknown) {
+            // Expected when session already expired or refresh token invalid — clear locally only
+            const msg = error instanceof Error ? error.message : String(error)
+            const isExpected = msg.includes('Invalid refresh token') || msg.includes('Unauthorized') || msg.includes('401')
+            if (!isExpected) {
+              console.error('Logout error:', error)
+            }
           }
         }
         set({

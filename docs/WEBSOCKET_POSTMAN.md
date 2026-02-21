@@ -1,6 +1,36 @@
 # Gateway WebSocket – Postman testing
 
-Use this to test the **gateway-ws** connection (balance, wallet, positions, orders) in Postman.
+Use this to test the **gateway-ws** connection (balance, wallet, positions, orders, **live chat**) in Postman.
+
+---
+
+## WebSocket URL for live chat (and all real-time features)
+
+**Same WebSocket is used for live chat, balance, ticks, etc.**
+
+| How you run the app | WS URL to use in Postman / test client |
+|---------------------|----------------------------------------|
+| **Direct to gateway** (gateway on default port) | `ws://localhost:3003/ws?group=default` |
+| **Via Vite dev server** (browser uses this) | `ws://localhost:5173/ws?group=default` |
+| **Custom gateway port** (e.g. `PORT=8090`) | `ws://localhost:8090/ws?group=default` |
+| **Override in app** (you set `VITE_WS_URL`) | Use the same URL you set (e.g. `ws://localhost:3003/ws?group=default`) |
+
+**To test chat:** Connect to one of the URLs above, then:
+
+1. **Auth:** send `{"type":"auth","token":"<JWT access token>"}` (get token from `POST http://localhost:3000/api/auth/login`).
+2. **Admin:** send `{"type":"subscribe","channels":["deposits","notifications","support"],"symbols":[]}` so you receive `chat.message` for new user messages.
+3. **User:** no extra subscribe needed for receiving support replies; auth is enough.
+4. Send a chat message via **HTTP** (user: `POST /v1/users/me/chat`, admin: `POST /api/admin/chat/conversations/:userId/messages`). You should see a WebSocket frame with `"type":"chat.message"` and a `payload` (id, userId, senderType, body, createdAt).
+
+**Real-time chat fix (Feb 2026):** Chat NATS messages are now handled in the same gateway event loop as `wallet.balance.updated` (subscribe to `chat.>` in the main `forward_events` loop). This ensures chat is delivered over WebSocket the same way as balance updates. Start the app with `./scripts/start-all.sh` (or run auth-service and gateway-ws with the same `.env` so `JWT_SECRET` and `NATS_URL` are set).
+
+**Script test (no Postman):** From the repo root, run with your JWT (do not paste the token in chat; use env or a local file):
+
+```bash
+CHAT_TEST_JWT="<your JWT>" node scripts/test-ws-chat.js
+```
+
+Use `CHAT_TEST_WS_URL` if your app uses a different WS URL (e.g. `ws://localhost:5173/ws?group=default`). In another terminal, send a message (e.g. `curl -X POST http://localhost:3000/v1/users/me/chat -H "Authorization: Bearer <JWT>" -H "Content-Type: application/json" -d '{"message":"hi"}'`). If the pipeline works, the script prints `CHAT MESSAGE RECEIVED` and the payload.
 
 ---
 
@@ -15,11 +45,12 @@ To test realtime balance for **mawetyzo@mailinator.com**:
      `{ "email": "mawetyzo@mailinator.com", "password": "<that user's password>" }`
    - From the response, copy `accessToken`.
 
-2. **WebSocket URL** (use the one where gateway-ws is running):
-   - **If you use `scripts/start-all.sh` or Vite proxy:**  
-     `ws://localhost:8090/ws?group=default`
-   - **If gateway runs with default PORT (e.g. `cargo run -p gateway-ws`):**  
+2. **WebSocket URL** (gateway runs on **3003**; Vite proxies `/ws` to it):
+   - **Via Vite (browser / same origin):**  
+     `ws://localhost:5173/ws?group=default` (Vite proxies to 3003)
+   - **Direct to gateway:**  
      `ws://localhost:3003/ws?group=default`
+   - **start-all.sh** uses `PORT=3003` so it matches the Vite proxy.
 
 3. **In Postman:** Connect to that URL, then send:
    - Auth: `{"type":"auth","token":"<paste accessToken here>"}`
@@ -42,11 +73,11 @@ For WebSocket auth (and thus real-time balance) to work, **gateway-ws** must be 
 
 | Environment | URL |
 |-------------|-----|
-| **Direct to gateway** | `ws://localhost:8090/ws?group=default` |
-| **Via Vite proxy (dev)** | `ws://localhost:5173/ws?group=default` (or your Vite host/port) |
+| **Via Vite proxy (dev)** | `ws://localhost:5173/ws?group=default` (proxied to gateway on 3003) |
+| **Direct to gateway** | `ws://localhost:3003/ws?group=default` |
 | **Override** | Set `VITE_WS_URL` in frontend; use that same URL in Postman |
 
-Default gateway port in code is **3003** (`PORT` env); your Vite proxy may point to **8090**. Use the URL where **gateway-ws** is actually running.
+Gateway default port is **3003** (see `apps/gateway-ws/src/main.rs`). **start-all.sh** runs the gateway with `PORT=3003` so it matches the Vite proxy in `vite.config.ts`. No need to set `VITE_WS_URL` when using start-all or when running the gateway with default port.
 
 ---
 
