@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -22,6 +22,7 @@ export const adminNavItems: NavItem[] = [
   { label: 'Transactions', path: '/admin/transactions', icon: Receipt, permission: 'finance:view' },
   { label: 'Bonus', path: '/admin/bonus', icon: Gift, permission: 'bonus:view' },
   { label: 'Affiliate', path: '/admin/affiliate', icon: UsersRound, permission: 'affiliate:view' },
+  { label: 'Tags', path: '/admin/tag', icon: Tag, permission: 'users:view' },
   { label: 'Permissions', path: '/admin/permissions', icon: KeyRound, permission: 'permissions:view' },
   { label: 'Support', path: '/admin/support', icon: Headphones, permission: 'support:view' },
   { label: 'System', path: '/admin/system', icon: Settings, permission: 'system:view' },

@@ -16,6 +16,7 @@ import { LeverageProfilesPage } from '@/features/leverageProfiles'
 import { AdminMarkupPage } from '@/features/adminMarkup'
 import { AdminTransactionsPage } from '@/features/admin/transactions'
 import { ManagersPage } from '@/features/managers'
+import { TagsPage } from '@/features/tags'
 
 export const adminRoutes: RouteObject[] = [
   {
@@ -74,6 +75,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/affiliate',
     element: <AffiliatePage />,
+  },
+  {
+    path: '/admin/tag',
+    element: <TagsPage />,
   },
   {
     path: '/admin/permissions',
