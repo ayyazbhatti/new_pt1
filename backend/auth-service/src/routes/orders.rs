@@ -28,10 +28,12 @@ pub struct OrdersState {
     pub nats: Arc<async_nats::Client>,
 }
 
-/// Error type for place_order: status-only or 403 with INSUFFICIENT_FREE_MARGIN body.
+/// Error type for place_order: status-only or 403 with body (margin / trading restricted).
 pub enum PlaceOrderError {
     Status(StatusCode),
     InsufficientMargin { required_margin: String, free_margin: String },
+    /// Trading access is not "full" (close_only or disabled) — return 403 with message.
+    TradingRestricted { message: String },
 }
 
 impl IntoResponse for PlaceOrderError {
@@ -42,6 +44,12 @@ impl IntoResponse for PlaceOrderError {
                 let body = serde_json::json!({
                     "error": "INSUFFICIENT_FREE_MARGIN",
                     "message": format!("Estimated margin ({}) exceeds free margin ({}).", required_margin, free_margin)
+                });
+                (StatusCode::FORBIDDEN, Json(body)).into_response()
+            }
+            PlaceOrderError::TradingRestricted { message } => {
+                let body = serde_json::json!({
+                    "error": { "code": "TRADING_DISABLED", "message": message }
                 });
                 (StatusCode::FORBIDDEN, Json(body)).into_response()
             }
@@ -178,11 +186,11 @@ async fn place_order(
 
     let symbol_id = symbol_row.id;
 
-    // Fetch user leverage limits and account_type for order-engine
+    // Fetch user leverage limits, account_type, and trading_access for order-engine
     #[derive(sqlx::FromRow)]
-    struct UserLeverageRow { min_leverage: Option<i32>, max_leverage: Option<i32>, account_type: Option<String> }
+    struct UserLeverageRow { min_leverage: Option<i32>, max_leverage: Option<i32>, account_type: Option<String>, trading_access: Option<String> }
     let user_lev = sqlx::query_as::<_, UserLeverageRow>(
-        r#"SELECT min_leverage, max_leverage, account_type FROM users WHERE id = $1"#,
+        r#"SELECT min_leverage, max_leverage, account_type, COALESCE(trading_access, 'full') as trading_access FROM users WHERE id = $1"#,
     )
     .bind(user_id)
     .fetch_optional(&pool)
@@ -191,9 +199,17 @@ async fn place_order(
         error!("Failed to fetch user leverage: {}", e);
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let (user_min_lev, user_max_lev, account_type) = user_lev
-        .map(|r| (r.min_leverage, r.max_leverage, r.account_type))
-        .unwrap_or((None, None, None));
+    let (user_min_lev, user_max_lev, account_type, trading_access) = user_lev
+        .as_ref()
+        .map(|r| (r.min_leverage, r.max_leverage, r.account_type.clone(), r.trading_access.clone()))
+        .unwrap_or((None, None, None, Some("full".to_string())));
+    let trading_access = trading_access.as_deref().unwrap_or("full");
+    if trading_access != "full" {
+        error!("Place order rejected: user {} has trading_access={}", user_id, trading_access);
+        return Err(PlaceOrderError::TradingRestricted {
+            message: "Trading is disabled. You cannot open new positions.".to_string(),
+        });
+    }
     let account_type = account_type
         .filter(|s| s == "hedging" || s == "netting")
         .or_else(|| Some("hedging".to_string()));

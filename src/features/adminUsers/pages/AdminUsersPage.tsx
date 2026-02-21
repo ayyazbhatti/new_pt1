@@ -21,6 +21,8 @@ function mapUserResponse(user: UserResponse): User {
     group: user.group_id || '',
     groupName: user.group_name || 'No Group',
     accountType: (user.account_type === 'netting' ? 'netting' : 'hedging') as 'hedging' | 'netting',
+    marginCalculationType: (user.margin_calculation_type === 'net' ? 'net' : 'hedged') as 'hedged' | 'net',
+    tradingAccess: (user.trading_access === 'close_only' ? 'close_only' : user.trading_access === 'disabled' ? 'disabled' : 'full') as 'full' | 'close_only' | 'disabled',
     openPositionsCount: user.open_positions_count ?? 0,
     balance: 0, // TODO: Calculate from wallets table
     marginLevel: 0, // TODO: Calculate from positions

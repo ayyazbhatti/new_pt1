@@ -12,6 +12,8 @@ export interface User {
   status: string
   /** Optional permissions list (e.g. from admin/me); used by permissions.ts */
   permissions?: string[]
+  /** 'full' | 'close_only' | 'disabled' - trading panel access */
+  tradingAccess?: string
 }
 
 interface AuthState {
@@ -62,6 +64,7 @@ export const useAuthStore = create<AuthState>()(
             lastName: response.user.lastName,
             role: response.user.role,
             status: response.user.status,
+            tradingAccess: response.user.tradingAccess ?? 'full',
           },
           isAuthenticated: true,
         })
@@ -85,6 +88,7 @@ export const useAuthStore = create<AuthState>()(
             lastName: response.user.lastName,
             role: response.user.role,
             status: response.user.status,
+            tradingAccess: response.user.tradingAccess ?? 'full',
           },
           isAuthenticated: true,
         })
@@ -181,6 +185,7 @@ export const useAuthStore = create<AuthState>()(
               lastName: user.lastName,
               role: user.role,
               status: user.status,
+              tradingAccess: user.tradingAccess ?? 'full',
             },
           })
         } catch (error) {

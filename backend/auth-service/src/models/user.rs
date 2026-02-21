@@ -36,6 +36,12 @@ pub struct User {
     pub group_id: Option<Uuid>,
     #[serde(default)]
     pub account_type: Option<String>, // 'hedging' | 'netting'; from users.account_type (migration 0019)
+    /// 'hedged' | 'net'; how total margin is computed (sum of all positions vs per-symbol net then sum)
+    #[serde(default)]
+    pub margin_calculation_type: Option<String>,
+    /// 'full' | 'close_only' | 'disabled'; trading panel access
+    #[serde(default)]
+    pub trading_access: Option<String>,
     pub min_leverage: Option<i32>,
     pub max_leverage: Option<i32>,
     pub referral_code: Option<String>,

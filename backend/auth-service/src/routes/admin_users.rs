@@ -26,6 +26,16 @@ pub struct UpdateUserAccountTypeRequest {
     pub account_type: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserMarginCalculationTypeRequest {
+    pub margin_calculation_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserTradingAccessRequest {
+    pub trading_access: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
@@ -41,6 +51,8 @@ pub fn create_admin_users_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/:id/group", put(update_user_group))
         .route("/:id/account-type", put(update_user_account_type))
+        .route("/:id/margin-calculation-type", put(update_user_margin_calculation_type))
+        .route("/:id/trading-access", put(update_user_trading_access))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -341,6 +353,208 @@ async fn update_user_account_type(
     Ok(Json(serde_json::json!({
         "success": true,
         "message": "Account type updated successfully"
+    })))
+}
+
+async fn update_user_margin_calculation_type(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserMarginCalculationTypeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let margin_calculation_type = payload.margin_calculation_type.trim().to_lowercase();
+    if margin_calculation_type != "hedged" && margin_calculation_type != "net" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_MARGIN_CALCULATION_TYPE".to_string(),
+                    message: "margin_calculation_type must be 'hedged' or 'net'".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM positions WHERE user_id = $1 AND status = 'open'::position_status",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if open_count > 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "OPEN_POSITIONS".to_string(),
+                    message: "Cannot change margin calculation type: user has open positions. Close all positions first.".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE users SET margin_calculation_type = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(&margin_calculation_type)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Margin calculation type updated successfully"
+    })))
+}
+
+async fn update_user_trading_access(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserTradingAccessRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let trading_access = payload.trading_access.trim().to_lowercase();
+    if trading_access != "full" && trading_access != "close_only" && trading_access != "disabled" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_TRADING_ACCESS".to_string(),
+                    message: "trading_access must be 'full', 'close_only', or 'disabled'".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE users SET trading_access = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(&trading_access)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Trading access updated successfully"
     })))
 }
 

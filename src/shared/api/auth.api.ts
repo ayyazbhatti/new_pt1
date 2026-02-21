@@ -11,6 +11,7 @@ export interface AuthResponse {
     last_name: string
     role: string
     status: string
+    trading_access?: string | null
   }
 }
 
@@ -31,6 +32,7 @@ export interface UserResponse {
   max_leverage?: number
   price_profile_name?: string
   leverage_profile_name?: string
+  trading_access?: string | null
 }
 
 export async function login(email: string, password: string): Promise<{
@@ -43,6 +45,7 @@ export async function login(email: string, password: string): Promise<{
     lastName: string
     role: string
     status: string
+    tradingAccess?: string
   }
 }> {
   const response = await http<AuthResponse>('/api/auth/login', {
@@ -60,6 +63,7 @@ export async function login(email: string, password: string): Promise<{
       lastName: response.user.last_name,
       role: response.user.role,
       status: response.user.status,
+      tradingAccess: response.user.trading_access ?? 'full',
     },
   }
 }
@@ -74,6 +78,7 @@ export async function register(data: RegisterData): Promise<{
     lastName: string
     role: string
     status: string
+    tradingAccess?: string
   }
 }> {
   const response = await http<AuthResponse>('/api/auth/register', {
@@ -98,6 +103,7 @@ export async function register(data: RegisterData): Promise<{
       lastName: response.user.last_name,
       role: response.user.role,
       status: response.user.status,
+      tradingAccess: response.user.trading_access ?? 'full',
     },
   }
 }
@@ -133,6 +139,8 @@ export interface MeResponse {
   maxLeverage?: number
   priceProfileName?: string
   leverageProfileName?: string
+  /** 'full' | 'close_only' | 'disabled' - trading panel access */
+  tradingAccess?: string
 }
 
 export async function me(): Promise<MeResponse> {
@@ -153,6 +161,7 @@ export async function me(): Promise<MeResponse> {
     maxLeverage: response.max_leverage,
     priceProfileName: response.price_profile_name,
     leverageProfileName: response.leverage_profile_name,
+    tradingAccess: response.trading_access ?? 'full',
   }
 }
 

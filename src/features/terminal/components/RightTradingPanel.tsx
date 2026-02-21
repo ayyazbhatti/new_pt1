@@ -79,6 +79,8 @@ function formatTierNotional(value: string): string {
 
 export function RightTradingPanel() {
   const { selectedSymbol, setSelectedSymbol, symbols } = useTerminalStore()
+  const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
+  const canPlaceOrder = tradingAccess === 'full'
   const { data: meData } = useQuery({ queryKey: ['auth', 'me'], queryFn: me })
   const {
     data: symbolLeverage,
@@ -733,14 +735,20 @@ export function RightTradingPanel() {
         setTakeProfit('')
         setUseSlTp(false)
       }
-    } catch (error: any) {
-      const data = error?.response?.data
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string | { code?: string; message?: string }; message?: string }; status?: number }; message?: string }
+      const data = err?.response?.data
+      const status = err?.response?.status
+      const apiMessage = typeof data?.error === 'object' && data?.error?.message
+        ? data.error.message
+        : data?.message ?? (typeof data?.error === 'object' ? (data.error as { message?: string }).message : undefined)
+      const is403 = status === 403 || (typeof err?.message === 'string' && err.message.includes('403'))
       const errorMessage =
-        data?.message ||
-        data?.error?.message ||
-        error?.message ||
-        'Failed to place order'
-      toast.error(data?.error === 'INSUFFICIENT_FREE_MARGIN' ? errorMessage : `Order failed: ${errorMessage}`)
+        apiMessage ||
+        (is403 ? 'Trading is disabled. You cannot open new positions.' : null) ||
+        (error instanceof Error ? error.message : 'Failed to place order')
+      const showPlain = data?.error === 'INSUFFICIENT_FREE_MARGIN' || is403 || apiMessage
+      toast.error(showPlain ? errorMessage : `Order failed: ${errorMessage}`)
       console.error('Order placement error:', error)
     } finally {
       setIsSubmitting(false)
@@ -1132,13 +1140,20 @@ export function RightTradingPanel() {
             </div>
           </div>
 
+          {!canPlaceOrder && (
+            <div className="mb-2 text-xs text-warning text-center py-2 px-2 rounded bg-warning/10">
+              {tradingAccess === 'close_only'
+                ? 'Opening new positions is disabled. You can only close existing positions.'
+                : 'Trading is disabled. You cannot open or close positions.'}
+            </div>
+          )}
           {/* Action Buttons - Enhanced */}
           <div className="grid grid-cols-2 gap-3">
             <Button 
               variant="success" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-success/20 hover:shadow-success/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleBuy}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || !canPlaceOrder}
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (
@@ -1153,7 +1168,7 @@ export function RightTradingPanel() {
               variant="danger" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-danger/20 hover:shadow-danger/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleSell}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || !canPlaceOrder}
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (

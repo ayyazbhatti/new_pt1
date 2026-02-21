@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json, Response},
     routing::{get, post, put},
     Router,
     Extension,
@@ -565,10 +565,12 @@ pub(crate) async fn get_price_from_redis(
 /// Returns (margin_used, unrealized_pnl, realized_pnl). Uses "margin" and "status" from pos:by_id:* hashes.
 /// When `price_overrides` is set, unrealized PnL for open positions is computed from (bid, ask) for (symbol, group_id) instead of stored value.
 /// When `price_overrides` is None, tries to read current price from Redis (prices:SYMBOL:GROUP_ID, written by order-engine) so UnR PnL is not stuck at 0.
+/// `margin_calculation_type`: "hedged" = sum of all position margins; "net" = per (symbol, group_id) net size then margin = |net_size|*price/leverage, sum.
 async fn fetch_position_aggregates_from_redis(
     redis: &redis::Client,
     user_id: Uuid,
     price_overrides: Option<&PriceOverrides>,
+    margin_calculation_type: &str,
 ) -> Option<(Decimal, Decimal, Decimal)> {
     let mut conn = match redis.get_async_connection().await {
         Ok(c) => c,
@@ -588,6 +590,10 @@ async fn fetch_position_aggregates_from_redis(
     let mut margin_used = Decimal::ZERO;
     let mut unrealized_pnl = Decimal::ZERO;
     let mut realized_pnl = Decimal::ZERO;
+    // For net margin: group by (symbol, group_id) -> (total_abs_size, net_signed_size, total_margin)
+    type NetKey = (String, String);
+    let mut net_groups: HashMap<NetKey, (Decimal, Decimal, Decimal)> = HashMap::new();
+
     for pos_id_str in position_ids {
         let pos_id = match Uuid::parse_str(&pos_id_str) {
             Ok(u) => u,
@@ -610,7 +616,27 @@ async fn fetch_position_aggregates_from_redis(
 
         let is_open = status.eq_ignore_ascii_case("open");
         if is_open {
-            margin_used += margin;
+            if margin_calculation_type.eq_ignore_ascii_case("net") {
+                let symbol: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
+                let group_id: String = conn.hget(&pos_key, "group_id").await.ok().flatten().unwrap_or_default();
+                let size_str: Option<String> = conn.hget(&pos_key, "size").await.ok().flatten();
+                let size: Decimal = size_str
+                    .as_deref()
+                    .and_then(|s| Decimal::from_str(s).ok())
+                    .unwrap_or(Decimal::ZERO);
+                let side: Option<String> = conn.hget(&pos_key, "side").await.ok().flatten();
+                let signed = match side.as_deref() {
+                    Some("LONG") => size,
+                    Some("SHORT") => -size,
+                    _ => size,
+                };
+                let entry = net_groups.entry((symbol, group_id)).or_insert((Decimal::ZERO, Decimal::ZERO, Decimal::ZERO));
+                entry.0 += size;           // total_abs_size (we use size as abs for long/short)
+                entry.1 += signed;         // net_signed_size
+                entry.2 += margin;         // total_margin (hedged sum for this symbol group)
+            } else {
+                margin_used += margin;
+            }
 
             let unreal: Decimal = if let Some(overrides) = price_overrides {
                 let symbol: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
@@ -682,7 +708,84 @@ async fn fetch_position_aggregates_from_redis(
             unrealized_pnl += unreal;
         }
     }
+
+    if margin_calculation_type.eq_ignore_ascii_case("net") && !net_groups.is_empty() {
+        for (_key, (total_abs_size, net_signed_size, total_margin)) in net_groups {
+            if total_abs_size > Decimal::ZERO {
+                let net_ratio = (net_signed_size.abs() / total_abs_size).min(Decimal::ONE);
+                margin_used += net_ratio * total_margin;
+            }
+        }
+    }
+
     Some((margin_used, unrealized_pnl, realized_pnl))
+}
+
+/// DB fallback for position aggregates. Returns (margin_used, realized_pnl, unrealized_pnl).
+/// When margin_calculation_type is "net", margin_used is computed per symbol (net size then sum of net margins).
+async fn fetch_position_aggregates_from_db(
+    pool: &PgPool,
+    user_id: Uuid,
+    margin_calculation_type: &str,
+) -> anyhow::Result<(Decimal, Decimal, Decimal)> {
+    let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status"#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+        r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let total_margin_used = if margin_calculation_type.eq_ignore_ascii_case("net") {
+        #[derive(sqlx::FromRow)]
+        struct SymbolMarginRow {
+            total_abs_size: Decimal,
+            net_signed_size: Decimal,
+            total_margin: Decimal,
+        }
+        let rows = sqlx::query_as::<_, SymbolMarginRow>(
+            r#"
+            SELECT
+                COALESCE(SUM(size), 0)::numeric AS total_abs_size,
+                COALESCE(SUM(CASE WHEN side = 'long' THEN size ELSE -size END), 0)::numeric AS net_signed_size,
+                COALESCE(SUM(margin_used), 0)::numeric AS total_margin
+            FROM positions
+            WHERE user_id = $1 AND status = 'open'::position_status
+            GROUP BY symbol_id
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                if r.total_abs_size > Decimal::ZERO {
+                    (r.net_signed_size.abs() / r.total_abs_size).min(Decimal::ONE) * r.total_margin
+                } else {
+                    Decimal::ZERO
+                }
+            })
+            .fold(Decimal::ZERO, |a, b| a + b)
+    } else {
+        sqlx::query_scalar::<_, Decimal>(
+            r#"SELECT COALESCE(SUM(margin_used), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or(Decimal::ZERO)
+    };
+
+    Ok((
+        total_margin_used,
+        total_realized_pnl.unwrap_or(Decimal::ZERO),
+        total_unrealized_pnl.unwrap_or(Decimal::ZERO),
+    ))
 }
 
 /// Fast DB-only free margin for place_order when Redis cache is cold.
@@ -703,19 +806,33 @@ pub(crate) async fn get_free_margin_from_db_fast(pool: &PgPool, user_id: Uuid) -
     .flatten();
     let balance = balance.unwrap_or(Decimal::ZERO);
 
-    #[derive(sqlx::FromRow)]
-    struct OpenRow { margin_used: Option<Decimal>, pnl: Option<Decimal> }
-    let open: Option<OpenRow> = sqlx::query_as(
-        r#"SELECT COALESCE(SUM(margin_used), 0)::numeric AS margin_used, COALESCE(SUM(pnl), 0)::numeric AS pnl FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+    let margin_calculation_type: String = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(margin_calculation_type, 'hedged') FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await
     .ok()
-    .flatten();
-    let (margin_used, unrealized_pnl) = open
-        .map(|r| (r.margin_used.unwrap_or(Decimal::ZERO), r.pnl.unwrap_or(Decimal::ZERO)))
-        .unwrap_or((Decimal::ZERO, Decimal::ZERO));
+    .flatten()
+    .unwrap_or_else(|| "hedged".to_string());
+
+    let (margin_used, unrealized_pnl) = match fetch_position_aggregates_from_db(pool, user_id, &margin_calculation_type).await {
+        Ok((m, _real, unreal)) => (m, unreal),
+        Err(_) => {
+            #[derive(sqlx::FromRow)]
+            struct OpenRow { margin_used: Option<Decimal>, pnl: Option<Decimal> }
+            let open: Option<OpenRow> = sqlx::query_as(
+                r#"SELECT COALESCE(SUM(margin_used), 0)::numeric AS margin_used, COALESCE(SUM(pnl), 0)::numeric AS pnl FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+            )
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            open.map(|r| (r.margin_used.unwrap_or(Decimal::ZERO), r.pnl.unwrap_or(Decimal::ZERO)))
+                .unwrap_or((Decimal::ZERO, Decimal::ZERO))
+        }
+    };
     let equity = balance + unrealized_pnl;
     let free_margin = if equity >= margin_used {
         equity - margin_used
@@ -834,6 +951,14 @@ pub(crate) async fn compute_account_summary_inner(
     user_id: Uuid,
     price_overrides: Option<&PriceOverrides>,
 ) -> anyhow::Result<AccountSummary> {
+    let margin_calculation_type: String = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(margin_calculation_type, 'hedged') FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_else(|| "hedged".to_string());
+
     // Deposits and withdrawals always from DB
     let total_deposits: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
         r#"
@@ -864,7 +989,7 @@ pub(crate) async fn compute_account_summary_inner(
     // Position-derived metrics: prefer Redis (same source as Positions tab) so margin/PnL match UI
     let (realized_pnl, unrealized_pnl, margin_used) = if let Some(rd) = redis {
         if let Some((margin, unreal, real)) =
-            fetch_position_aggregates_from_redis(rd, user_id, price_overrides).await
+            fetch_position_aggregates_from_redis(rd, user_id, price_overrides, &margin_calculation_type).await
         {
             (real, unreal, margin)
         } else {
@@ -873,53 +998,21 @@ pub(crate) async fn compute_account_summary_inner(
                 "Account summary: using DB fallback for position aggregates (user {}). Ensure auth-service uses same Redis as order-engine.",
                 user_id
             );
-            let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-                r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status"#,
-            )
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?;
-            let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-                r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
-            )
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?;
-            let total_margin_used: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-                r#"SELECT COALESCE(SUM(margin_used), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
-            )
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?;
+            let (total_margin_used, total_realized_pnl, total_unrealized_pnl) =
+                fetch_position_aggregates_from_db(pool, user_id, &margin_calculation_type).await?;
             (
-                total_realized_pnl.unwrap_or(Decimal::ZERO),
-                total_unrealized_pnl.unwrap_or(Decimal::ZERO),
-                total_margin_used.unwrap_or(Decimal::ZERO),
+                total_realized_pnl,
+                total_unrealized_pnl,
+                total_margin_used,
             )
         }
     } else {
-        let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-            r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status"#,
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?;
-        let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-            r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?;
-        let total_margin_used: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-            r#"SELECT COALESCE(SUM(margin_used), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?;
+        let (total_margin_used, total_realized_pnl, total_unrealized_pnl) =
+            fetch_position_aggregates_from_db(pool, user_id, &margin_calculation_type).await?;
         (
-            total_realized_pnl.unwrap_or(Decimal::ZERO),
-            total_unrealized_pnl.unwrap_or(Decimal::ZERO),
-            total_margin_used.unwrap_or(Decimal::ZERO),
+            total_realized_pnl,
+            total_unrealized_pnl,
+            total_margin_used,
         )
     };
 
@@ -2232,51 +2325,75 @@ pub struct ClosePositionResponse {
 }
 
 async fn close_position(
-    State(_pool): State<PgPool>,
+    State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Extension(deposits_state): Extension<DepositsState>,
     Path((user_id, position_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<ClosePositionRequest>,
-) -> Result<Json<ClosePositionResponse>, StatusCode> {
+) -> Result<Json<ClosePositionResponse>, Response> {
     // Users can only close their own positions, admins can close any
     let is_own_position = claims.sub == user_id;
     let is_admin = claims.role == "admin";
-    
+
     if !is_own_position && !is_admin {
         error!("Forbidden: user_id={}, claims.sub={}, claims.role={}", user_id, claims.sub, claims.role);
-        return Err(StatusCode::FORBIDDEN);
+        return Err(StatusCode::FORBIDDEN.into_response());
+    }
+
+    // When user closes own position, enforce trading_access: disabled => cannot close
+    if is_own_position && !is_admin {
+        let trading_access: Option<String> = sqlx::query_scalar(
+            "SELECT COALESCE(trading_access, 'full') FROM users WHERE id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to fetch trading_access: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })?;
+        let access = trading_access.as_deref().unwrap_or("full");
+        if access == "disabled" {
+            error!("Close position rejected: user {} has trading_access=disabled", user_id);
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": { "code": "TRADING_DISABLED", "message": "Trading is disabled. You cannot close positions." }
+                })),
+            ).into_response());
+        }
     }
 
     // Verify position exists and belongs to user
     let mut conn = deposits_state.redis.get_async_connection().await
         .map_err(|e| {
             error!("Failed to get Redis connection: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })?;
 
     let pos_key = Keys::position_by_id(position_id);
     let pos_data: std::collections::HashMap<String, String> = conn.hgetall(&pos_key).await
         .map_err(|e| {
             error!("Failed to get position data: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })?;
 
     if pos_data.is_empty() {
         error!("Position not found: {}", position_id);
-        return Err(StatusCode::NOT_FOUND);
+        return Err(StatusCode::NOT_FOUND.into_response());
     }
 
     let pos_user_id: Option<String> = pos_data.get("user_id").cloned();
     if pos_user_id.as_deref() != Some(&user_id.to_string()) {
         error!("Position {} does not belong to user {}", position_id, user_id);
-        return Err(StatusCode::FORBIDDEN);
+        return Err(StatusCode::FORBIDDEN.into_response());
     }
 
     let pos_status: Option<String> = pos_data.get("status").cloned();
     let is_open = pos_status.as_deref().map_or(false, |s| s.eq_ignore_ascii_case("OPEN"));
     if !is_open {
         error!("Position {} is not open (status: {:?})", position_id, pos_status);
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into_response());
     }
 
     // Parse close size if provided
@@ -2296,7 +2413,7 @@ async fn close_position(
 
     if let Err(e) = deposits_state.nats.publish("cmd.position.close".to_string(), cmd.to_string().into()).await {
         error!("Failed to publish close position command: {}", e);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
     info!("Published close position command: position_id={}, user_id={}, size={:?}", 
           position_id, user_id, close_size);

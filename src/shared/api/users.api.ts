@@ -17,6 +17,8 @@ export interface UserResponse {
   min_leverage?: number | null
   max_leverage?: number | null
   account_type?: string | null
+  margin_calculation_type?: string | null
+  trading_access?: string | null
   open_positions_count?: number | null
 }
 

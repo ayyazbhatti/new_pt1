@@ -6,6 +6,17 @@ import { toast } from 'react-hot-toast'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Input, Skeleton } from '@/shared/ui'
 import { getPositions, Position, updatePositionSltp, closePosition } from '../api/positions.api'
+
+/** User-friendly message for close position errors (403 = trading disabled, else use API message). */
+function closePositionErrorMessage(err: unknown): string {
+  const anyErr = err as { response?: { data?: { error?: { message?: string } }; status?: number }; message?: string }
+  const apiMessage = anyErr.response?.data?.error?.message
+  if (apiMessage) return apiMessage
+  if (anyErr.response?.status === 403 || (typeof anyErr.message === 'string' && anyErr.message.includes('403'))) {
+    return 'Trading is disabled. You cannot close positions.'
+  }
+  return err instanceof Error ? err.message : 'Failed to close position'
+}
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
@@ -48,6 +59,8 @@ export function BottomDock() {
   const bottomDockRef = useRef<HTMLDivElement>(null)
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
   const { accountSummary } = useAccountSummary()
+  const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
+  const canClosePosition = tradingAccess !== 'disabled'
   const [formulaTooltip, setFormulaTooltip] = useState<{ formula: string; rect: DOMRect } | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
@@ -483,9 +496,9 @@ export function BottomDock() {
           {activeTab === 'positions' && (
             <button
               onClick={() => setCloseAllDialogOpen(true)}
-              disabled={positions.filter(p => p.status === 'OPEN').length === 0}
+              disabled={!canClosePosition || positions.filter(p => p.status === 'OPEN').length === 0}
               className="px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5 border border-transparent disabled:opacity-50 disabled:pointer-events-none"
-              title="Close All Positions"
+              title={!canClosePosition ? 'Trading is disabled' : 'Close All Positions'}
             >
               <XCircle className="h-3.5 w-3.5" />
               <span>Close All</span>
@@ -613,11 +626,45 @@ export function BottomDock() {
                             : (entryPrice - livePrice) * sizeNum)
                         : parseFloat(pos.unrealized_pnl || '0') // Fallback to stored value if no live price
                       
+                      const openEditPositionPopup = () => {
+                        const currentPos = positions.find(p => p.id === pos.id)
+                        if (!currentPos) return
+                        setEditingPosition(currentPos)
+                        setEditItem({ type: 'position', id: pos.id })
+                        const slPrice = currentPos.sl && currentPos.sl !== 'null' ? currentPos.sl : ''
+                        const tpPrice = currentPos.tp && currentPos.tp !== 'null' ? currentPos.tp : ''
+                        setEditSl(slPrice)
+                        setEditTp(tpPrice)
+                        if (slPrice) {
+                          const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                          const sizeNum = parseFloat(currentPos.size || '0')
+                          const slPriceNum = parseFloat(slPrice)
+                          const slAmount = currentPos.side === 'LONG'
+                            ? (entryPrice - slPriceNum) * sizeNum
+                            : (slPriceNum - entryPrice) * sizeNum
+                          setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
+                        } else {
+                          setEditSlAmount('')
+                        }
+                        if (tpPrice) {
+                          const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                          const sizeNum = parseFloat(currentPos.size || '0')
+                          const tpPriceNum = parseFloat(tpPrice)
+                          const tpAmount = currentPos.side === 'LONG'
+                            ? (tpPriceNum - entryPrice) * sizeNum
+                            : (entryPrice - tpPriceNum) * sizeNum
+                          setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
+                        } else {
+                          setEditTpAmount('')
+                        }
+                        setEditDialogOpen(true)
+                      }
                       return (
                         <tr 
                           key={pos.id} 
+                          onClick={openEditPositionPopup}
                           className={cn(
-                            "border-b border-white/5 hover:bg-surface-2/40 transition-all duration-200",
+                            "border-b border-white/5 hover:bg-surface-2/40 transition-all duration-200 cursor-pointer",
                             index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
                           )}
                         >
@@ -653,45 +700,12 @@ export function BottomDock() {
                           </td>
                           <td className="px-4 py-3 font-mono text-text/70">{pos.sl ? `$${parseFloat(pos.sl).toFixed(2)}` : '-'}</td>
                           <td className="px-4 py-3 font-mono text-text/70">{pos.tp ? `$${parseFloat(pos.tp).toFixed(2)}` : '-'}</td>
-                          <td className="px-4 py-3">
+                          <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center gap-1">
                               <button
-                                onClick={() => {
-                                  const currentPos = positions.find(p => p.id === pos.id)
-                                  if (currentPos) {
-                                    setEditingPosition(currentPos)
-                                  setEditItem({ type: 'position', id: pos.id })
-                                    const slPrice = currentPos.sl && currentPos.sl !== 'null' ? currentPos.sl : ''
-                                    const tpPrice = currentPos.tp && currentPos.tp !== 'null' ? currentPos.tp : ''
-                                    setEditSl(slPrice)
-                                    setEditTp(tpPrice)
-                                    
-                                    // Calculate dollar amounts from prices
-                                    if (slPrice) {
-                                      const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
-                                      const sizeNum = parseFloat(currentPos.size || '0')
-                                      const slPriceNum = parseFloat(slPrice)
-                                      const slAmount = currentPos.side === 'LONG' 
-                                        ? (entryPrice - slPriceNum) * sizeNum // Loss for LONG
-                                        : (slPriceNum - entryPrice) * sizeNum // Loss for SHORT
-                                      setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
-                                    } else {
-                                      setEditSlAmount('')
-                                    }
-                                    
-                                    if (tpPrice) {
-                                      const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
-                                      const sizeNum = parseFloat(currentPos.size || '0')
-                                      const tpPriceNum = parseFloat(tpPrice)
-                                      const tpAmount = currentPos.side === 'LONG'
-                                        ? (tpPriceNum - entryPrice) * sizeNum // Profit for LONG
-                                        : (entryPrice - tpPriceNum) * sizeNum // Profit for SHORT
-                                      setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
-                                    } else {
-                                      setEditTpAmount('')
-                                    }
-                                  setEditDialogOpen(true)
-                                  }
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  openEditPositionPopup()
                                 }}
                                 className="p-2 hover:bg-accent/20 rounded-lg transition-all duration-200 text-accent hover:text-accent/80 hover:scale-110 active:scale-95"
                                 title="Edit Position"
@@ -699,12 +713,15 @@ export function BottomDock() {
                                 <Edit className="h-3.5 w-3.5" />
                               </button>
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (!canClosePosition) return
                                   setClosePositionId(pos.id)
                                   setClosePositionDialogOpen(true)
                                 }}
-                                className="p-2 hover:bg-danger/20 rounded-lg transition-all duration-200 text-danger hover:text-danger/80 hover:scale-110 active:scale-95"
-                                title="Close Position"
+                                disabled={!canClosePosition}
+                                className="p-2 hover:bg-danger/20 rounded-lg transition-all duration-200 text-danger hover:text-danger/80 hover:scale-110 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+                                title={!canClosePosition ? 'Trading is disabled' : 'Close Position'}
                               >
                                 <X className="h-3.5 w-3.5" />
                               </button>
@@ -1119,8 +1136,7 @@ export function BottomDock() {
                         await closePosition(pos.id)
                         closed++
                       } catch (err: unknown) {
-                        const message = err instanceof Error ? err.message : 'Unknown error'
-                        failedPositions.push({ id: pos.id, symbol: pos.symbol, error: message })
+                        failedPositions.push({ id: pos.id, symbol: pos.symbol, error: closePositionErrorMessage(err) })
                       }
                     }
                     if (closed > 0) {
@@ -1183,8 +1199,8 @@ export function BottomDock() {
                     // Refetch after delay so order-engine has time to process and list stays in sync
                     setTimeout(() => fetchPositions(true), 500)
                     setTimeout(() => fetchPositions(true), 1200)
-                  } catch (error: any) {
-                    toast.error(`Failed to close position: ${error.message}`)
+                  } catch (error: unknown) {
+                    toast.error(closePositionErrorMessage(error))
                   }
                 }}
                 className="px-4 py-2 text-sm bg-danger text-white hover:bg-danger/90 rounded transition-colors"

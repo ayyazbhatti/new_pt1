@@ -2,6 +2,8 @@ export type UserStatus = 'active' | 'disabled' | 'suspended'
 export type KYCStatus = 'none' | 'pending' | 'verified' | 'rejected'
 export type RiskFlag = 'normal' | 'high' | 'review'
 export type AccountType = 'hedging' | 'netting'
+export type MarginCalculationType = 'hedged' | 'net'
+export type TradingAccess = 'full' | 'close_only' | 'disabled'
 export type WalletType = 'spot' | 'margin' | 'funding'
 export type Currency = 'USD' | 'EUR' | 'BTC' | 'USDT'
 export type DocStatus = 'pending' | 'approved' | 'rejected'
@@ -15,6 +17,8 @@ export interface User {
   group: string
   groupName: string
   accountType: AccountType
+  marginCalculationType: MarginCalculationType
+  tradingAccess: TradingAccess
   openPositionsCount: number
   balance: number
   marginLevel: number

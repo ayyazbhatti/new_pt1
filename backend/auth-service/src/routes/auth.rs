@@ -80,6 +80,10 @@ pub struct UserResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_calculation_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trading_access: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub open_positions_count: Option<i32>,
 }
 
@@ -173,6 +177,8 @@ async fn register(
                 price_profile_name: None,
                 leverage_profile_name: None,
                 account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+                margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
+                trading_access: user.trading_access.or_else(|| Some("full".to_string())),
                 open_positions_count: None,
             },
         })),
@@ -239,6 +245,8 @@ async fn login(
                 price_profile_name: None,
                 leverage_profile_name: None,
                 account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+                margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
+                trading_access: user.trading_access.or_else(|| Some("full".to_string())),
                 open_positions_count: None,
             },
         })),
@@ -356,6 +364,8 @@ async fn me(
                 price_profile_name,
                 leverage_profile_name,
                 account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+                margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
+                trading_access: user.trading_access.or_else(|| Some("full".to_string())),
                 open_positions_count: None,
             }))
         },
@@ -520,6 +530,14 @@ async fn list_users(
                     .account_type
                     .filter(|s| s == "hedging" || s == "netting")
                     .or_else(|| Some("hedging".to_string()));
+                let margin_calculation_type = u
+                    .margin_calculation_type
+                    .filter(|s| s == "hedged" || s == "net")
+                    .or_else(|| Some("hedged".to_string()));
+                let trading_access = u
+                    .trading_access
+                    .filter(|s| s == "full" || s == "close_only" || s == "disabled")
+                    .or_else(|| Some("full".to_string()));
                 let open_positions_count = open_counts.get(&u.id).copied();
 
                 user_responses.push(UserResponse {
@@ -541,6 +559,8 @@ async fn list_users(
                     price_profile_name: None,
                     leverage_profile_name: None,
                     account_type,
+                    margin_calculation_type,
+                    trading_access,
                     open_positions_count,
                 });
             }

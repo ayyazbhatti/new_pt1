@@ -13,7 +13,7 @@ import { Eye, Edit, Shield, X } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { updateUserGroup, updateUserAccountType } from '../api/users.api'
+import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType, updateUserTradingAccess } from '../api/users.api'
 
 interface UsersTableProps {
   users: User[]
@@ -24,6 +24,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const [updatingGroups, setUpdatingGroups] = useState<Set<string>>(new Set())
   const [updatingAccountTypes, setUpdatingAccountTypes] = useState<Set<string>>(new Set())
+  const [updatingMarginCalculationTypes, setUpdatingMarginCalculationTypes] = useState<Set<string>>(new Set())
+  const [updatingTradingAccess, setUpdatingTradingAccess] = useState<Set<string>>(new Set())
 
   // Fetch all groups for the dropdown
   const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
@@ -105,6 +107,57 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       toast.error(errorMessage)
     } finally {
       setUpdatingAccountTypes((prev) => {
+        const next = new Set(prev)
+        next.delete(userId)
+        return next
+      })
+    }
+  }
+
+  const handleMarginCalculationTypeChange = async (
+    userId: string,
+    userName: string,
+    newMarginType: 'hedged' | 'net'
+  ) => {
+    setUpdatingMarginCalculationTypes((prev) => new Set(prev).add(userId))
+    try {
+      await updateUserMarginCalculationType(userId, { margin_calculation_type: newMarginType })
+      if (onUserUpdate) {
+        onUserUpdate(userId, { marginCalculationType: newMarginType })
+      }
+      toast.success(`Margin for ${userName} set to ${newMarginType === 'net' ? 'Net (per symbol)' : 'Sum (all positions)'}`)
+    } catch (error: any) {
+      const errorMessage =
+        error?.response?.data?.error?.message || error?.message || 'Failed to update margin calculation type'
+      toast.error(errorMessage)
+    } finally {
+      setUpdatingMarginCalculationTypes((prev) => {
+        const next = new Set(prev)
+        next.delete(userId)
+        return next
+      })
+    }
+  }
+
+  const handleTradingAccessChange = async (
+    userId: string,
+    userName: string,
+    newAccess: 'full' | 'close_only' | 'disabled'
+  ) => {
+    setUpdatingTradingAccess((prev) => new Set(prev).add(userId))
+    try {
+      await updateUserTradingAccess(userId, { trading_access: newAccess })
+      if (onUserUpdate) {
+        onUserUpdate(userId, { tradingAccess: newAccess })
+      }
+      const label = newAccess === 'full' ? 'Full access' : newAccess === 'close_only' ? 'Close only' : 'Trading disabled'
+      toast.success(`Trading access for ${userName} set to ${label}`)
+    } catch (error: any) {
+      const errorMessage =
+        error?.response?.data?.error?.message || error?.message || 'Failed to update trading access'
+      toast.error(errorMessage)
+    } finally {
+      setUpdatingTradingAccess((prev) => {
         const next = new Set(prev)
         next.delete(userId)
         return next
@@ -290,6 +343,83 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
             {hasOpenPositions && (
               <p className="text-[10px] text-muted mt-0.5">Open positions</p>
             )}
+          </div>
+        )
+      },
+    },
+    {
+      accessorKey: 'marginCalculationType',
+      header: 'Total margin',
+      cell: ({ row }) => {
+        const user = row.original
+        const currentType = user.marginCalculationType ?? 'hedged'
+        const isUpdating = updatingMarginCalculationTypes.has(user.id)
+        const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
+        const disabled = isUpdating || hasOpenPositions
+        return (
+          <div className="whitespace-nowrap min-w-[100px]">
+            <Select
+              value={currentType}
+              onValueChange={(value) =>
+                handleMarginCalculationTypeChange(user.id, user.name, value as 'hedged' | 'net')
+              }
+              disabled={disabled}
+            >
+              <SelectTrigger
+                className="h-8 text-sm"
+                title={
+                  hasOpenPositions
+                    ? 'Cannot change margin type while user has open positions'
+                    : undefined
+                }
+              >
+                <SelectValue
+                  placeholder={
+                    isUpdating ? 'Updating...' : 'Select'
+                  }
+                >
+                  {currentType === 'net' ? 'Net (per symbol)' : 'Sum (all positions)'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="hedged">Sum (all positions)</SelectItem>
+                <SelectItem value="net">Net (per symbol)</SelectItem>
+              </SelectContent>
+            </Select>
+            {hasOpenPositions && (
+              <p className="text-[10px] text-muted mt-0.5">Open positions</p>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      accessorKey: 'tradingAccess',
+      header: 'Trading access',
+      cell: ({ row }) => {
+        const user = row.original
+        const currentAccess = user.tradingAccess ?? 'full'
+        const isUpdating = updatingTradingAccess.has(user.id)
+        return (
+          <div className="whitespace-nowrap min-w-[140px]">
+            <Select
+              value={currentAccess}
+              onValueChange={(value) =>
+                handleTradingAccessChange(user.id, user.name, value as 'full' | 'close_only' | 'disabled')
+              }
+              disabled={isUpdating}
+            >
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue placeholder={isUpdating ? 'Updating...' : 'Select'}>
+                  {currentAccess === 'full' ? 'Full access' : currentAccess === 'close_only' ? 'Close only' : 'Trading disabled'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="full">Full access</SelectItem>
+                <SelectItem value="close_only">Close only</SelectItem>
+                <SelectItem value="disabled">Trading disabled</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         )
       },

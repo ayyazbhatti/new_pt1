@@ -32,3 +32,30 @@ export async function updateUserAccountType(
   })
 }
 
+export interface UpdateUserMarginCalculationTypePayload {
+  margin_calculation_type: 'hedged' | 'net'
+}
+
+export async function updateUserMarginCalculationType(
+  userId: string,
+  payload: UpdateUserMarginCalculationTypePayload
+): Promise<void> {
+  await http(`/api/admin/users/${userId}/margin-calculation-type`, {
+    method: 'PUT',
+    body: JSON.stringify({ margin_calculation_type: payload.margin_calculation_type }),
+  })
+}
+
+export interface UpdateUserTradingAccessPayload {
+  trading_access: 'full' | 'close_only' | 'disabled'
+}
+
+export async function updateUserTradingAccess(
+  userId: string,
+  payload: UpdateUserTradingAccessPayload
+): Promise<void> {
+  await http(`/api/admin/users/${userId}/trading-access`, {
+    method: 'PUT',
+    body: JSON.stringify({ trading_access: payload.trading_access }),
+  })
+}
