@@ -19,6 +19,7 @@ use uuid::Uuid;
 use rust_decimal::Decimal;
 use chrono::{DateTime, Utc};
 
+mod auth;
 mod session;
 
 #[derive(Clone)]
@@ -26,6 +27,7 @@ struct AppState {
     nats: async_nats::Client,
     sessions: Arc<RwLock<HashMap<Uuid, session::Session>>>,
     senders: Arc<RwLock<HashMap<Uuid, mpsc::UnboundedSender<axum::extract::ws::Message>>>>,
+    jwt_secret: String,
 }
 
 #[tokio::main]
@@ -38,6 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = common::config::AppConfig::from_env()
         .map_err(|e| format!("Config error: {}", e))?;
 
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .map_err(|_| "JWT_SECRET must be set (use same value as auth-service for WebSocket auth)")?;
+
+    info!("JWT_SECRET is set (real-time balance and WebSocket auth enabled)");
     info!("Connecting to NATS at {}", config.nats_url);
     let nats = async_nats::connect(&config.nats_url).await?;
     info!("Connected to NATS");
@@ -46,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         nats: nats.clone(),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         senders: Arc::new(RwLock::new(HashMap::new())),
+        jwt_secret,
     };
 
     // Start NATS event forwarder
@@ -149,22 +156,34 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, state: AppState) {
                                 }
                             }
                         }
-                        WsClientMessage::TypeAuth { token: _, .. } | WsClientMessage::OpAuth { token: _, .. } => {
-                            // TODO: Validate JWT token
-                            let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
-                            session.user_id = Some(user_id);
-                            info!("Session {} authenticated", session_id);
-                            
-                            // Send auth_success response
-                            let response = WsServerMessage::AuthSuccess {
-                                user_id: user_id.to_string(),
-                                group_id: Some("default".to_string()),
-                            };
-                            if let Ok(json) = serde_json::to_string(&response) {
-                                info!("Sending auth_success to session {}", session_id);
-                                let _ = tx_clone.send(axum::extract::ws::Message::Text(json));
-                            } else {
-                                error!("Failed to serialize auth_success response");
+                        WsClientMessage::TypeAuth { token, .. } | WsClientMessage::OpAuth { token, .. } => {
+                            match auth::verify_access_token(token.trim(), &state.jwt_secret) {
+                                Ok(user_id) => {
+                                    session.user_id = Some(user_id);
+                                    {
+                                        let mut sessions = state.sessions.write().await;
+                                        if let Some(s) = sessions.get_mut(&session_id) {
+                                            *s = session.clone();
+                                        }
+                                    }
+                                    info!("Session {} authenticated as user {}", session_id, user_id);
+                                    let response = WsServerMessage::AuthSuccess {
+                                        user_id: user_id.to_string(),
+                                        group_id: Some("default".to_string()),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&response) {
+                                        let _ = tx_clone.send(axum::extract::ws::Message::Text(json));
+                                    } else {
+                                        error!("Failed to serialize auth_success response");
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Session {} auth failed: {}", session_id, e);
+                                    let response = WsServerMessage::AuthError { error: e };
+                                    if let Ok(json) = serde_json::to_string(&response) {
+                                        let _ = tx_clone.send(axum::extract::ws::Message::Text(json));
+                                    }
+                                }
                             }
                         }
                         WsClientMessage::OpSubscribe { topic, .. } => {
@@ -359,6 +378,37 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
                             }
                         }
                     }
+                    "event.position.closed" => {
+                        // Order-engine publishes this when a position is closed (manual or SL/TP).
+                        // Frontend BottomDock expects type "position_update" with status CLOSED to remove from list.
+                        if let Ok(payload) = serde_json::from_value::<serde_json::Value>(versioned.payload.clone()) {
+                            let event_user_id_str = payload.get("user_id").and_then(|v| v.as_str());
+                            if event_user_id_str.map(|s| Uuid::parse_str(s).ok()) == Some(Some(user_id))
+                                && session.subscriptions.contains("positions")
+                            {
+                                let position_id = payload.get("position_id").and_then(|v| v.as_str()).unwrap_or("");
+                                let symbol = payload.get("symbol").and_then(|v| v.as_str()).unwrap_or("");
+                                let side = payload.get("side").and_then(|v| v.as_str()).unwrap_or("");
+                                let closed_size = payload.get("closed_size").and_then(|v| v.as_str()).unwrap_or("0");
+                                let trigger_reason = payload.get("trigger_reason").and_then(|v| v.as_str());
+                                let position_update = serde_json::json!({
+                                    "type": "position_update",
+                                    "position_id": position_id,
+                                    "status": "CLOSED",
+                                    "symbol": symbol,
+                                    "side": side,
+                                    "quantity": closed_size,
+                                    "trigger_reason": trigger_reason,
+                                });
+                                if let Some(tx) = senders.get(session_id) {
+                                    if let Ok(json) = serde_json::to_string(&position_update) {
+                                        let _ = tx.send(axum::extract::ws::Message::Text(json));
+                                        info!("✅ Forwarded position closed to session {} (position {})", session_id, position_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     "evt.balance.updated" | "event.balance.updated" => {
                         if let Ok(event) = versioned.deserialize_payload::<BalanceUpdatedEvent>() {
                             if event.user_id == user_id && session.subscriptions.contains("balances") {
@@ -369,27 +419,34 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
                     }
                     "wallet.balance.updated" => {
                         // Wallet balance updates should go to the specific user
-                        // The payload is a JSON object with userId
+                        // Payload may have "userId" (camelCase) or "user_id" (snake_case)
                         info!("📨 Received wallet.balance.updated event from NATS");
-                        if let Ok(payload_json) = serde_json::from_value::<serde_json::Value>(versioned.payload.clone()) {
-                            // Extract userId from payload to match with session user
-                            if let Some(event_user_id_str) = payload_json.get("userId").and_then(|v| v.as_str()) {
+                        if let Ok(mut payload_json) = serde_json::from_value::<serde_json::Value>(versioned.payload.clone()) {
+                            let event_user_id_str = payload_json
+                                .get("userId")
+                                .or_else(|| payload_json.get("user_id"))
+                                .and_then(|v| v.as_str());
+                            if let Some(event_user_id_str) = event_user_id_str {
                                 info!("📨 wallet.balance.updated event userId: {}", event_user_id_str);
                                 if let Ok(event_user_id) = Uuid::parse_str(event_user_id_str) {
-                                    // Send to user if they match and are subscribed to balances
-                                    let has_subscription = session.subscriptions.contains("balances") 
-                                        || session.subscriptions.contains("wallet") 
+                                    let has_subscription = session.subscriptions.contains("balances")
+                                        || session.subscriptions.contains("wallet")
                                         || session.subscriptions.contains("notifications");
-                                    info!("📨 Checking session {} (user: {:?}): event_user_id={}, session_user_id={:?}, has_subscription={}, subscriptions={:?}", 
-                                          session_id, user_id, event_user_id, user_id, has_subscription, session.subscriptions);
-                                    
+                                    info!("📨 Checking session {} (user: {:?}): event_user_id={}, has_subscription={}, subscriptions={:?}",
+                                          session_id, user_id, event_user_id, has_subscription, session.subscriptions);
+
                                     if event_user_id == user_id && has_subscription {
-                                        // Send as wallet.balance.updated event matching frontend format
+                                        // Ensure payload has "balance" for frontend (some publishers send only "available")
+                                        if payload_json.get("balance").is_none() {
+                                            let available_val = payload_json.get("available").cloned();
+                                            if let (Some(av), Some(obj)) = (available_val, payload_json.as_object_mut()) {
+                                                obj.insert("balance".to_string(), av);
+                                            }
+                                        }
                                         let event_json = serde_json::json!({
                                             "type": "wallet.balance.updated",
                                             "payload": payload_json
                                         });
-                                        // Send directly to this session
                                         if let Some(tx) = senders.get(session_id) {
                                             if let Ok(json) = serde_json::to_string(&event_json) {
                                                 let _ = tx.send(axum::extract::ws::Message::Text(json));
@@ -411,7 +468,7 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
                                     error!("❌ Failed to parse userId from wallet.balance.updated event: {}", event_user_id_str);
                                 }
                             } else {
-                                error!("❌ wallet.balance.updated event missing userId field");
+                                error!("❌ wallet.balance.updated event missing userId/user_id field");
                             }
                         } else {
                             error!("❌ Failed to parse wallet.balance.updated payload as JSON");
