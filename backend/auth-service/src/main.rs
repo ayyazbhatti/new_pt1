@@ -29,6 +29,7 @@ use routes::admin_swap::create_admin_swap_router;
 use routes::admin_users::create_admin_users_router;
 use routes::admin_managers::create_admin_managers_router;
 use routes::admin_permission_profiles::create_admin_permission_profiles_router;
+use routes::admin_tags::create_admin_tags_router;
 use routes::chat::{create_admin_chat_router, create_user_chat_router};
 use routes::deposits::create_deposits_router;
 use routes::withdrawals::create_withdrawals_router;
@@ -188,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/users", create_admin_users_router(pool.clone()))
         .nest("/api/admin/managers", create_admin_managers_router(pool.clone()))
         .nest("/api/admin/permission-profiles", create_admin_permission_profiles_router(pool.clone()))
+        .nest("/api/admin/tags", create_admin_tags_router(pool.clone()))
         .nest("/api/admin/finance", create_finance_router(pool.clone()).layer(axum::extract::Extension(deposits_state.clone())))
         .nest("/api/admin/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))
         .nest("/api/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))

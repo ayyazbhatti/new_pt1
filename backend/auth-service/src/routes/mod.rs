@@ -8,6 +8,7 @@ pub mod admin_swap;
 pub mod admin_users;
 pub mod admin_managers;
 pub mod admin_permission_profiles;
+pub mod admin_tags;
 pub mod deposits;
 pub mod withdrawals;
 pub mod orders;
