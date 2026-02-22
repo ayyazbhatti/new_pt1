@@ -305,10 +305,14 @@ async fn create_manager(
         )
     })?;
 
-    sqlx::query("UPDATE users SET permission_profile_id = $1, updated_at = NOW() WHERE id = $2")
-        .bind(payload.permission_profile_id)
-        .bind(payload.user_id)
-        .execute(&pool)
+    // Set role to 'manager' so the user can access the admin panel (AdminGuard allows admin, manager, agent).
+    // Do not overwrite role if user is already 'admin'.
+    sqlx::query(
+        "UPDATE users SET role = CASE WHEN role = 'admin' THEN role ELSE 'manager' END, permission_profile_id = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(payload.permission_profile_id)
+    .bind(payload.user_id)
+    .execute(&pool)
         .await
         .map_err(|e| {
             (
@@ -464,12 +468,18 @@ async fn update_manager(
         )
     })?;
 
-    let user_profile_value = if new_status == "active" {
-        Some(new_profile_id)
+    // When active: set role to 'manager' and permission_profile_id so they can access admin panel (never overwrite 'admin').
+    // When disabled: set role to 'user' and clear permission_profile_id (never overwrite 'admin').
+    let (role_sql, user_profile_value) = if new_status == "active" {
+        ("CASE WHEN role = 'admin' THEN role ELSE 'manager' END", Some(new_profile_id))
     } else {
-        None
+        ("CASE WHEN role = 'admin' THEN role ELSE 'user' END", None)
     };
-    sqlx::query("UPDATE users SET permission_profile_id = $1, updated_at = NOW() WHERE id = $2")
+    let update_sql = format!(
+        "UPDATE users SET role = {}, permission_profile_id = $1, updated_at = NOW() WHERE id = $2",
+        role_sql
+    );
+    sqlx::query(&update_sql)
         .bind(user_profile_value)
         .bind(user_id)
         .execute(&pool)
@@ -595,7 +605,8 @@ async fn delete_manager(
             )
         })?;
 
-    sqlx::query("UPDATE users SET permission_profile_id = NULL, updated_at = NOW() WHERE id = $1")
+    // Revoke manager admin access: set role to 'user' and clear permission_profile_id (never overwrite 'admin')
+    sqlx::query("UPDATE users SET role = CASE WHEN role = 'admin' THEN role ELSE 'user' END, permission_profile_id = NULL, updated_at = NOW() WHERE id = $1")
         .bind(user_id)
         .execute(&pool)
         .await

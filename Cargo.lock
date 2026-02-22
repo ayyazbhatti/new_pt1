@@ -986,6 +986,7 @@ dependencies = [
  "chrono",
  "common",
  "contracts",
+ "dotenv",
  "futures-util",
  "jsonwebtoken",
  "rust_decimal",

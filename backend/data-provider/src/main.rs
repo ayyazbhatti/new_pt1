@@ -178,25 +178,42 @@ async fn main() -> anyhow::Result<()> {
                     if let Some(nats_client) = &nats_for_ticks_clone {
                         use contracts::{TickEvent, VersionedMessage};
                         use chrono::Utc;
-                        for group_id in &group_ids {
-                            let (bid, ask) = match markup_engine_clone
-                                .apply_markup(symbol, group_id, price_state.bid, price_state.ask)
-                                .await
-                            {
-                                Some(p) => p,
-                                None => (price_state.bid, price_state.ask),
-                            };
+                        if group_ids.is_empty() {
+                            // No price groups: publish once per symbol so gateway-ws (ticks.>) can forward to frontend
                             let tick_event = TickEvent {
                                 symbol: symbol.clone(),
-                                bid,
-                                ask,
+                                bid: price_state.bid,
+                                ask: price_state.ask,
                                 ts: Utc::now(),
                                 seq: ts as u64,
                             };
-                            let subject = format!("ticks.{}.{}", symbol, group_id);
+                            let subject = format!("ticks.{}", symbol);
                             if let Ok(msg) = VersionedMessage::new("tick", &tick_event) {
                                 if let Ok(payload) = serde_json::to_vec(&msg) {
                                     let _ = nats_client.publish(subject.clone(), payload.into()).await;
+                                }
+                            }
+                        } else {
+                            for group_id in &group_ids {
+                                let (bid, ask) = match markup_engine_clone
+                                    .apply_markup(symbol, group_id, price_state.bid, price_state.ask)
+                                    .await
+                                {
+                                    Some(p) => p,
+                                    None => (price_state.bid, price_state.ask),
+                                };
+                                let tick_event = TickEvent {
+                                    symbol: symbol.clone(),
+                                    bid,
+                                    ask,
+                                    ts: Utc::now(),
+                                    seq: ts as u64,
+                                };
+                                let subject = format!("ticks.{}.{}", symbol, group_id);
+                                if let Ok(msg) = VersionedMessage::new("tick", &tick_event) {
+                                    if let Ok(payload) = serde_json::to_vec(&msg) {
+                                        let _ = nats_client.publish(subject.clone(), payload.into()).await;
+                                    }
                                 }
                             }
                         }

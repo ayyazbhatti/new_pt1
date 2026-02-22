@@ -32,6 +32,10 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load .env from current dir (e.g. repo root when running via start-all.sh) so JWT_SECRET
+    // matches auth-service and WebSocket auth succeeds.
+    dotenv::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_env_filter("gateway-ws=debug")
         .json()
@@ -559,11 +563,12 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
 async fn forward_ticks(state: AppState) {
     use futures_util::StreamExt;
     
-    info!("Starting tick forwarder - subscribing to ticks.*");
-    let mut sub = state.nats.subscribe("ticks.*".to_string()).await
+    // Subscribe to ticks.> to receive ticks.SYMBOL (one token) and ticks.SYMBOL.group_id (two tokens from data-provider)
+    info!("Starting tick forwarder - subscribing to ticks.>");
+    let mut sub = state.nats.subscribe("ticks.>".to_string()).await
         .expect("Failed to subscribe to ticks");
 
-    info!("Tick forwarder started and subscribed to ticks.*");
+    info!("Tick forwarder started and subscribed to ticks.>");
 
     while let Some(msg) = sub.next().await {
         let bytes = msg.payload.to_vec();

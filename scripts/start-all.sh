@@ -30,6 +30,10 @@ echo "==> Starting auth-service (port 3000)..."
 (cd "$REPO_ROOT/backend/auth-service" && cargo run --bin auth-service) &
 AUTH_PID=$!
 
+echo "==> Starting data-provider (port 3001)..."
+(HTTP_PORT=3001 REDIS_URL="${REDIS_URL:-redis://localhost:6379}" NATS_URL="${NATS_URL:-nats://localhost:4222}" cd "$REPO_ROOT/backend/data-provider" && cargo run) &
+DATA_PROVIDER_PID=$!
+
 echo "==> Starting core-api (port 3004)..."
 (cargo run -p core-api) &
 CORE_PID=$!
@@ -51,10 +55,11 @@ npm run dev &
 VITE_PID=$!
 
 echo ""
-echo "All started. PIDs: auth=$AUTH_PID core=$CORE_PID gateway=$GW_PID email=$EMAIL_PID vite=$VITE_PID"
-echo "  App:        http://localhost:5173"
-echo "  Auth API:   http://localhost:3000"
-echo "  Leads API:  http://localhost:3004"
-echo "  WebSocket:  ws://localhost:3003/ws (proxied via Vite at ws://localhost:5173/ws)"
-echo "To stop: kill $AUTH_PID $CORE_PID $GW_PID $EMAIL_PID $VITE_PID"
+echo "All started. PIDs: auth=$AUTH_PID data-provider=$DATA_PROVIDER_PID core=$CORE_PID gateway=$GW_PID email=$EMAIL_PID vite=$VITE_PID"
+echo "  App:          http://localhost:5173"
+echo "  Auth API:     http://localhost:3000"
+echo "  Data Provider:  http://localhost:3001/health"
+echo "  Leads API:    http://localhost:3004"
+echo "  WebSocket:    ws://localhost:3003/ws (proxied via Vite at ws://localhost:5173/ws)"
+echo "To stop: kill $AUTH_PID $DATA_PROVIDER_PID $CORE_PID $GW_PID $EMAIL_PID $VITE_PID"
 wait
