@@ -27,7 +27,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { listOrders, cancelOrder, Order } from '@/features/terminal/api/orders.api'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 function StatCard({
   title,

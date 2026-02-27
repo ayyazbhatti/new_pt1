@@ -8,7 +8,7 @@ import { listPermissionProfiles } from '@/features/permissions/api/permissionPro
 import { listUsers } from '@/shared/api/users.api'
 import { listManagers } from '../api/managers.api'
 import type { CreateManagerPayload } from '../api/managers.api'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 interface CreateManagerModalProps {
   onCreated?: (payload: CreateManagerPayload) => void | Promise<void>

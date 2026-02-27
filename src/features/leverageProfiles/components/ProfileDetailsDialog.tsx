@@ -15,7 +15,7 @@ import { Skeleton, Spinner } from '@/shared/ui/loading'
 import { Edit, Trash2, Plus, X } from 'lucide-react'
 import { Input } from '@/shared/ui/input'
 import { formatDistanceToNow } from 'date-fns'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 const tierFormSchema = z.object({
   tier_index: z.number().min(1, 'Tier index must be >= 1'),

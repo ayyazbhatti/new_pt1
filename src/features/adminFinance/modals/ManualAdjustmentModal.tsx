@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card } from '@/shared/ui/card'
 import { Wallet, AdjustmentType, ReasonCategory, Currency, WalletType } from '../types/finance'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { formatCurrency } from '../utils/formatters'
 
 interface ManualAdjustmentModalProps {

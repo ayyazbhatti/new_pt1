@@ -318,6 +318,91 @@ pub fn send_email_sync(
     Ok(())
 }
 
+/// Sends an HTML email. Blocking; run inside `spawn_blocking`.
+pub fn send_email_html_sync(
+    config: &EmailConfig,
+    to: &str,
+    subject: &str,
+    body_html: &str,
+) -> Result<(), anyhow::Error> {
+    let to = to.trim();
+    if to.is_empty() {
+        anyhow::bail!("Recipient address is empty");
+    }
+    let from_addr = format!("{} <{}>", config.from_name, config.from_email);
+    let from_mailbox = from_addr
+        .parse()
+        .map_err(|e: lettre::address::AddressError| anyhow::anyhow!("Invalid from address: {}", e))?;
+    let to_mailbox = to
+        .parse()
+        .map_err(|e: lettre::address::AddressError| anyhow::anyhow!("Invalid to address: {}", e))?;
+
+    let content_type = ContentType::parse("text/html; charset=utf-8")
+        .map_err(|e| anyhow::anyhow!("Invalid content type: {}", e))?;
+    let email = Message::builder()
+        .from(from_mailbox)
+        .to(to_mailbox)
+        .subject(subject)
+        .header(content_type)
+        .body(body_html.to_string())
+        .map_err(|e| anyhow::anyhow!("Failed to build message: {}", e))?;
+
+    let port: u16 = config
+        .smtp_port
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Invalid SMTP port"))?;
+    let host = config.smtp_host.as_str();
+    let encryption = config.smtp_encryption.to_lowercase();
+
+    const SMTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+    let mailer = match encryption.as_str() {
+        "ssl" => {
+            let mut builder = SmtpTransport::relay(host).map_err(|e| anyhow::anyhow!("SMTP relay: {}", e))?;
+            builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
+            if !config.smtp_username.is_empty() {
+                let password = config.smtp_password.as_deref().unwrap_or("");
+                builder = builder.credentials(Credentials::new(
+                    config.smtp_username.clone(),
+                    password.to_string(),
+                ));
+            }
+            builder.build()
+        }
+        "tls" | "starttls" => {
+            let mut builder =
+                SmtpTransport::starttls_relay(host).map_err(|e| anyhow::anyhow!("SMTP STARTTLS: {}", e))?;
+            builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
+            if !config.smtp_username.is_empty() {
+                let password = config.smtp_password.as_deref().unwrap_or("");
+                builder = builder.credentials(Credentials::new(
+                    config.smtp_username.clone(),
+                    password.to_string(),
+                ));
+            }
+            builder.build()
+        }
+        _ => {
+            let mut builder = SmtpTransport::builder_dangerous(host)
+                .port(port)
+                .timeout(Some(SMTP_TIMEOUT));
+            if !config.smtp_username.is_empty() {
+                let password = config.smtp_password.as_deref().unwrap_or("");
+                builder = builder.credentials(Credentials::new(
+                    config.smtp_username.clone(),
+                    password.to_string(),
+                ));
+            }
+            builder.build()
+        }
+    };
+
+    mailer
+        .send(&email)
+        .map_err(|e| anyhow::anyhow!("SMTP send failed: {}", e))?;
+    Ok(())
+}
+
 /// Sends a single test email using the given config. Blocking; run inside `spawn_blocking`.
 pub fn send_test_email_sync(config: &EmailConfig, to: &str) -> Result<(), anyhow::Error> {
     send_email_sync(

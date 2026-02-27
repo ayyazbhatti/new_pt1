@@ -254,6 +254,54 @@ export async function updateProfile(
   return mapUserResponseToMe(response)
 }
 
+// --- Password reset (OTP flow) ---
+
+export interface PasswordResetRequestResponse {
+  success: boolean
+  message?: string
+  error?: string
+}
+
+export async function requestPasswordResetOTP(email: string): Promise<PasswordResetRequestResponse> {
+  return http<PasswordResetRequestResponse>('/api/auth/password-reset/request', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export interface PasswordResetVerifyResponse {
+  success: boolean
+  reset_token?: string
+  message?: string
+  error?: string
+}
+
+export async function verifyPasswordResetOTP(
+  email: string,
+  otp: string
+): Promise<PasswordResetVerifyResponse> {
+  return http<PasswordResetVerifyResponse>('/api/auth/password-reset/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email, otp }),
+  })
+}
+
+export interface PasswordResetConfirmResponse {
+  success: boolean
+  message?: string
+  error?: string
+}
+
+export async function confirmPasswordReset(
+  resetToken: string,
+  newPassword: string
+): Promise<PasswordResetConfirmResponse> {
+  return http<PasswordResetConfirmResponse>('/api/auth/password-reset/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ reset_token: resetToken, new_password: newPassword }),
+  })
+}
+
 /** Tier from symbol-leverage endpoint (snake_case from API). */
 export interface SymbolLeverageTier {
   tier_index: number

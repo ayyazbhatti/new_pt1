@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { me, updateProfile, type UpdateProfilePayload } from '@/shared/api/auth.api'
 import { useAuthStore } from '@/shared/store/auth.store'
 

@@ -9,7 +9,7 @@ import { useModalStore } from '@/app/store'
 import { Plus, Upload, Download } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { Card } from '@/shared/ui/card'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useSearchParams } from 'react-router-dom'
 
 export function MarkupRulesPage() {

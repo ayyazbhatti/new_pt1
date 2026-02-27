@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
 import type { Manager } from '../types/manager'
 import type { UpdateManagerPayload } from '../api/managers.api'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 interface EditManagerModalProps {
   manager: Manager

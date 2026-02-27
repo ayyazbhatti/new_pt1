@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use tower::ServiceBuilder;
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber;
@@ -271,11 +271,10 @@ async fn main() -> anyhow::Result<()> {
     let http_listener = tokio::net::TcpListener::bind(&http_addr).await?;
     info!("✅ HTTP server listening on {}", http_addr);
 
-    axum::serve(
-        http_listener,
-        health_app.layer(ServiceBuilder::new().layer(TraceLayer::new_for_http())),
-    )
-    .await?;
+    let app = health_app
+        .layer(CorsLayer::permissive()) // Allow browser (e.g. localhost:5173) to fetch /prices
+        .layer(TraceLayer::new_for_http());
+    axum::serve(http_listener, app).await?;
 
     Ok(())
 }

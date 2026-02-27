@@ -8,7 +8,7 @@ import { CreateEditProfileModal } from '../modals/CreateEditProfileModal'
 import { PriceStreamProfile } from '../types/pricing'
 import { mockPriceProfiles } from '../mocks/priceProfiles.mock'
 import { Edit, X, Plus } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { formatDateTime } from '../utils/formatters'
 
 export function PriceStreamProfilesPanel() {

@@ -13,7 +13,7 @@ import { CreateEditUserModal } from './CreateEditUserModal'
 import { ManualAdjustmentModal } from '@/features/adminFinance/modals/ManualAdjustmentModal'
 import { mockUserWallets, mockKYCDocuments, mockActivityLogs } from '../mocks/users.mock'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { Edit, X, CheckCircle } from 'lucide-react'
 
 interface UserDetailsModalProps {

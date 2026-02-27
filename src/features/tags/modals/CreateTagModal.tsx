@@ -5,7 +5,7 @@ import { Label } from '@/shared/ui/label'
 import { Textarea } from '@/shared/ui/textarea'
 import { useModalStore } from '@/app/store'
 import { nameToSlug, PRESET_COLORS } from '../utils/slug'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 const DEFAULT_COLOR = '#8b5cf6'
 

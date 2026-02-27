@@ -5,7 +5,7 @@ import { Switch } from '@/shared/ui/Switch'
 import { Input } from '@/shared/ui/input'
 import { AdminSymbol, GroupMarkup } from '../types/symbol'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { ColumnDef } from '@tanstack/react-table'
 import { mockGroups } from '@/features/groups/mocks/groups.mock'
 

@@ -20,7 +20,7 @@ import { EditTagModal } from '../modals/EditTagModal'
 import { DeleteTagModal } from '../modals/DeleteTagModal'
 import type { Tag } from '../types/tag'
 import { Plus } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 const TAGS_QUERY_KEY = ['tags'] as const
 

@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, UserCircle, BarChart3, ClipboardList, CalendarDays } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -34,7 +34,7 @@ export const adminNavItems: NavItem[] = [
 /** User panel sidebar nav (/user/dashboard, etc.) – no permission filter; any authenticated user sees these */
 export const userNavItems: NavItem[] = [
   { label: 'Dashboard', path: '/user/dashboard', icon: LayoutDashboard },
-  { label: 'Profile', path: '/user/profile', icon: UserCircle },
+  { label: 'Profile', path: '/user/profile', icon: User },
   { label: 'Positions', path: '/user/positions', icon: BarChart3 },
   { label: 'Orders', path: '/user/orders', icon: ClipboardList },
   { label: 'Appointments', path: '/user/appointments', icon: CalendarDays },

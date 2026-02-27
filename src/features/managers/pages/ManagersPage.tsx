@@ -17,7 +17,7 @@ import { ManagerFiltersBar } from '../components/ManagerFiltersBar'
 import { ManagersTable } from '../components/ManagersTable'
 import { CreateManagerModal } from '../modals/CreateManagerModal'
 import { Download, UserPlus } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 const MANAGERS_QUERY_KEY = ['managers'] as const
 

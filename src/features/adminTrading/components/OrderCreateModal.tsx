@@ -8,7 +8,7 @@ import { useAdminTradingStore } from '../store/adminTrading.store'
 import { createAdminOrder } from '../api/orders'
 import { CreateOrderRequest } from '../types'
 import { searchAdminUsers } from '../api/lookups'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { Loader2 } from 'lucide-react'
 
 export function OrderCreateModal() {

@@ -6,7 +6,7 @@ import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 const userSchema = z.object({
   name: z.string().min(1, 'Name is required'),

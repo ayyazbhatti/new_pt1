@@ -1,263 +1,260 @@
+import { useState, useEffect, useMemo } from 'react'
 import { ContentShell, PageHeader } from '@/shared/layout'
-import { ProfilesTable } from '../components/ProfilesTable'
-import { ProfileFormDialog } from '../components/ProfileFormDialog'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useLeverageProfilesList } from '../hooks/useLeverageProfiles'
-import { Plus, RefreshCw, X } from 'lucide-react'
-import { useState, useEffect, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { Skeleton } from '@/shared/ui/loading'
-import { EmptyState } from '@/shared/ui/empty'
+import { LeverageProfileCard } from '../components/LeverageProfileCard'
+import { ProfileFormDialog } from '../components/ProfileFormDialog'
+import { DeleteProfileDialog } from '../components/DeleteProfileDialog'
+import { ManageTiersModal } from '../modals/ManageTiersModal'
+import { ArchiveConfirmModal } from '../modals/ArchiveConfirmModal'
+import { Plus, Scale, CheckCircle, BarChart3, X } from 'lucide-react'
+import { useModalStore } from '@/app/store'
+import { LeverageProfile } from '../types/leverageProfile'
+import { cn } from '@/shared/utils'
 
-// Simple debounce implementation
-function debounce<T extends (...args: any[]) => void>(func: T, wait: number) {
-  let timeout: NodeJS.Timeout | null = null
-  const debounced = (...args: Parameters<T>) => {
-    if (timeout) clearTimeout(timeout)
-    timeout = setTimeout(() => func(...args), wait)
-  }
-  debounced.cancel = () => {
-    if (timeout) clearTimeout(timeout)
-  }
-  return debounced
-}
+const STORAGE_SEARCH_KEY = 'leverage-tiers-management-search'
 
 export function LeverageProfilesPage() {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchTerm, setSearchTerm] = useState(() => localStorage.getItem(STORAGE_SEARCH_KEY) ?? '')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived'>('all')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
-
-  // Get params from URL
-  const search = searchParams.get('search') || ''
-  const status = searchParams.get('status') || 'all'
-  const page = parseInt(searchParams.get('page') || '1', 10)
-  const pageSize = parseInt(searchParams.get('page_size') || '20', 10)
-  const sort = searchParams.get('sort') || 'updated_desc'
-
-  // Fetch profiles
-  const { data, isLoading, error, refetch } = useLeverageProfilesList({
-    search: search || undefined,
-    status: status !== 'all' ? status : undefined,
-    page,
-    page_size: pageSize,
-    sort,
-  })
-
-  // Debounced search
-  const [searchInput, setSearchInput] = useState(search)
-  const debouncedSetSearch = useMemo(
-    () =>
-      debounce((value: string) => {
-        setSearchParams((prev) => {
-          const newParams = new URLSearchParams(prev)
-          if (value) {
-            newParams.set('search', value)
-          } else {
-            newParams.delete('search')
-          }
-          newParams.set('page', '1') // Reset to first page
-          return newParams
-        })
-      }, 300),
-    [setSearchParams]
-  )
+  const [editingProfile, setEditingProfile] = useState<LeverageProfile | null>(null)
+  const [deleteProfile, setDeleteProfile] = useState<LeverageProfile | null>(null)
+  const [archiveProfile, setArchiveProfile] = useState<LeverageProfile | null>(null)
+  const [manageTiersProfile, setManageTiersProfile] = useState<LeverageProfile | null>(null)
 
   useEffect(() => {
-    debouncedSetSearch(searchInput)
-    return () => {
-      debouncedSetSearch.cancel()
-    }
-  }, [searchInput, debouncedSetSearch])
+    if (searchTerm) localStorage.setItem(STORAGE_SEARCH_KEY, searchTerm)
+    else localStorage.removeItem(STORAGE_SEARCH_KEY)
+  }, [searchTerm])
 
-  const handleStatusChange = (value: string) => {
-    setSearchParams((prev) => {
-      const newParams = new URLSearchParams(prev)
-      if (value !== 'all') {
-        newParams.set('status', value)
-      } else {
-        newParams.delete('status')
-      }
-      newParams.set('page', '1')
-      return newParams
-    })
+  const listParams = useMemo(
+    () => ({
+      search: searchTerm.trim() || undefined,
+      status: statusFilter === 'all' ? undefined : statusFilter === 'archived' ? 'disabled' : 'active',
+      page: 1,
+      page_size: 500,
+    }),
+    [searchTerm, statusFilter]
+  )
+
+  const { data, isLoading, refetch } = useLeverageProfilesList(listParams)
+  const profiles = data?.items ?? []
+  const totalProfiles = data?.total ?? 0
+  const activeCount = useMemo(() => profiles.filter((p) => p.status === 'active').length, [profiles])
+  const totalTiers = useMemo(
+    () => profiles.reduce((acc, p) => acc + (p.tiersCount ?? 0), 0),
+    [profiles]
+  )
+
+  const handleManageTiers = (profile: LeverageProfile) => {
+    setManageTiersProfile(profile)
   }
 
-  const handleSortChange = (value: string) => {
-    setSearchParams((prev) => {
-      const newParams = new URLSearchParams(prev)
-      newParams.set('sort', value)
-      return newParams
-    })
+  const handleEdit = (profile: LeverageProfile) => {
+    setEditingProfile(profile)
   }
 
-  const handlePageSizeChange = (value: string) => {
-    setSearchParams((prev) => {
-      const newParams = new URLSearchParams(prev)
-      newParams.set('page_size', value)
-      newParams.set('page', '1')
-      return newParams
-    })
+  const handleArchive = (profile: LeverageProfile) => {
+    setArchiveProfile(profile)
   }
 
-  const handleClearFilters = () => {
-    setSearchInput('')
-    setSearchParams({})
+  const handleUnarchive = (profile: LeverageProfile) => {
+    setArchiveProfile(profile)
   }
 
-  const handlePageChange = (newPage: number) => {
-    setSearchParams((prev) => {
-      const newParams = new URLSearchParams(prev)
-      newParams.set('page', newPage.toString())
-      return newParams
-    })
+  const handleDelete = (profile: LeverageProfile) => {
+    setDeleteProfile(profile)
   }
-
-  const profiles = data?.items || []
-  const total = data?.total || 0
-  const totalPages = Math.ceil(total / pageSize)
 
   return (
     <ContentShell>
       <PageHeader
-        title="Leverage Profiles"
-        description="Create profiles, define tiered leverage limits, and assign to symbols"
+        title="Leverage Profiles & Tiers"
+        description="Configure leverage profiles with margin-based tiers and assign them to groups"
         actions={
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => refetch()} title="Refresh">
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Profile
-            </Button>
-          </div>
+          <Button onClick={() => setCreateDialogOpen(true)} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-2" />
+            Create Profile
+          </Button>
         }
       />
 
-      {/* Filters */}
-      <div className="sticky top-0 z-10 bg-surface-1 border-b border-border p-4 space-y-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex-1 min-w-[200px]">
-            <Input
-              placeholder="Search by name..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-            />
-          </div>
-
-          <Select value={status} onValueChange={handleStatusChange}>
-            <SelectTrigger className="w-[140px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="disabled">Disabled</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select value={sort} onValueChange={handleSortChange}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="updated_desc">Updated</SelectItem>
-              <SelectItem value="name_asc">Name</SelectItem>
-              <SelectItem value="created_desc">Created</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
-            <SelectTrigger className="w-[100px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="10">10</SelectItem>
-              <SelectItem value="20">20</SelectItem>
-              <SelectItem value="50">50</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Button variant="ghost" size="sm" onClick={handleClearFilters}>
-            <X className="h-4 w-4 mr-1" />
-            Clear
-          </Button>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="pt-4">
-      {isLoading ? (
-        <div className="p-4 space-y-3">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 w-full" />
-          ))}
-        </div>
-      ) : error ? (
-        <div className="p-8 text-center">
-          <p className="text-danger mb-2">Failed to load profiles</p>
-          <p className="text-sm text-text-muted">{error instanceof Error ? error.message : 'Unknown error'}</p>
-        </div>
-      ) : profiles.length === 0 ? (
-        <EmptyState
-          title="No profiles found"
-          description="Create your first leverage profile to get started"
-          action={
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Profile
-            </Button>
-          }
-        />
-      ) : (
-        <>
-          <ProfilesTable profiles={profiles} onRefresh={() => refetch()} />
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between p-4 border-t border-border">
-              <div className="text-sm text-text-muted">
-                Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, total)} of {total} profiles
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handlePageChange(page - 1)}
-                  disabled={page === 1}
-                >
-                  Previous
-                </Button>
-                <span className="text-sm text-text">
-                  Page {page} of {totalPages}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handlePageChange(page + 1)}
-                  disabled={page >= totalPages}
-                >
-                  Next
-                </Button>
-              </div>
+      {/* Stats row */}
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-blue-400/10 p-2 sm:p-3">
+              <Scale className="h-5 w-5 sm:h-6 sm:w-6 text-blue-400" />
             </div>
-          )}
-        </>
-      )}
+            <div>
+              <p className="text-xs sm:text-sm text-slate-400">Total Profiles</p>
+              <p className="text-xl sm:text-2xl font-bold text-white">{totalProfiles}</p>
+            </div>
+          </div>
+        </div>
+        <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-green-400/10 p-2 sm:p-3">
+              <CheckCircle className="h-5 w-5 sm:h-6 sm:w-6 text-green-400" />
+            </div>
+            <div>
+              <p className="text-xs sm:text-sm text-slate-400">Active Profiles</p>
+              <p className="text-xl sm:text-2xl font-bold text-white">{activeCount}</p>
+            </div>
+          </div>
+        </div>
+        <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-orange-400/10 p-2 sm:p-3">
+              <BarChart3 className="h-5 w-5 sm:h-6 sm:w-6 text-orange-400" />
+            </div>
+            <div>
+              <p className="text-xs sm:text-sm text-slate-400">Total Tiers</p>
+              <p className="text-xl sm:text-2xl font-bold text-white">{totalTiers}</p>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Create Dialog */}
+      {/* Leverage profiles block */}
+      <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
+        <h2 className="text-lg font-semibold text-white">Leverage Profiles</h2>
+        <p className="text-sm text-slate-400 mt-0.5">Manage leverage profiles and their associated tiers.</p>
+
+        <div className="mt-4 flex flex-wrap items-end gap-4">
+          <div className="flex-1 min-w-[200px]">
+            <label className="mb-1 block text-xs text-slate-400">Search</label>
+            <div className="relative">
+              <Input
+                placeholder="Search profiles by name or notes..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="border-slate-600 bg-slate-700 text-white placeholder:text-slate-400 pr-8"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="w-36">
+            <label className="mb-1 block text-xs text-slate-400">Status</label>
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as 'all' | 'active' | 'archived')}>
+              <SelectTrigger className="border-slate-600 bg-slate-700 text-white">
+                <SelectValue placeholder="All Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="archived">Archived</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="mt-6 space-y-3">
+          {isLoading ? (
+            <div className="py-12 text-center text-slate-400">Loading profiles...</div>
+          ) : profiles.length === 0 ? (
+            <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-12 text-center">
+              <p className="text-slate-400 font-medium">
+                {searchTerm || statusFilter !== 'all' ? 'No profiles found.' : 'No profiles found.'}
+              </p>
+              <p className="text-sm text-slate-500 mt-1">
+                {searchTerm || statusFilter !== 'all'
+                  ? 'Try adjusting your search or filter.'
+                  : 'Create your first leverage profile to get started.'}
+              </p>
+              {!searchTerm && statusFilter === 'all' && (
+                <Button
+                  className="mt-4 bg-blue-600 hover:bg-blue-700"
+                  onClick={() => setCreateDialogOpen(true)}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Profile
+                </Button>
+              )}
+            </div>
+          ) : (
+            profiles.map((profile) => (
+              <LeverageProfileCard
+                key={profile.id}
+                profile={profile}
+                onManageTiers={handleManageTiers}
+                onEdit={handleEdit}
+                onArchive={handleArchive}
+                onUnarchive={handleUnarchive}
+                onDelete={handleDelete}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Create dialog */}
       <ProfileFormDialog
         mode="create"
         open={createDialogOpen}
         onOpenChange={(open) => {
           setCreateDialogOpen(open)
-          if (!open) {
-            refetch()
-          }
+          if (!open) refetch()
         }}
       />
+
+      {/* Edit dialog */}
+      <ProfileFormDialog
+        mode="edit"
+        initial={editingProfile ?? undefined}
+        open={!!editingProfile}
+        onOpenChange={(open) => {
+          if (!open) setEditingProfile(null)
+          refetch()
+        }}
+      />
+
+      {/* Delete dialog */}
+      {deleteProfile && (
+        <DeleteProfileDialog
+          profile={deleteProfile}
+          open={!!deleteProfile}
+          onOpenChange={(open) => {
+            if (!open) setDeleteProfile(null)
+            refetch()
+          }}
+        />
+      )}
+
+      {/* Archive confirm modal */}
+      {archiveProfile && (
+        <ArchiveConfirmModal
+          profile={archiveProfile}
+          open={!!archiveProfile}
+          onOpenChange={(open) => {
+            if (!open) setArchiveProfile(null)
+            refetch()
+          }}
+        />
+      )}
+
+      {/* Manage Tiers modal */}
+      {manageTiersProfile && (
+        <ManageTiersModal
+          profile={manageTiersProfile}
+          open={!!manageTiersProfile}
+          onOpenChange={(open) => {
+            if (!open) setManageTiersProfile(null)
+            refetch()
+          }}
+        />
+      )}
     </ContentShell>
   )
 }

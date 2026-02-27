@@ -18,7 +18,7 @@ import { ModifySltpModal } from '../components/ModifySltpModal'
 import { useAdminWebSocket } from '../hooks/useAdminWebSocket'
 import { useDebouncedCallback } from '@/shared/hooks/useDebounce'
 import { cn } from '@/shared/utils'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 export function AdminTradingPage() {
   const {

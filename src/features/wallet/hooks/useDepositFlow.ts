@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useWalletStore } from '@/shared/store/walletStore'
 import { useNotificationsStore } from '@/shared/store/notificationsStore'
 import { useAuthStore } from '@/shared/store/auth.store'

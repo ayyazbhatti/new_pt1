@@ -3,7 +3,7 @@ import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { AdminOrder, AdminPosition, AdminAuditLog } from '../types'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 // Throttle mark price updates to avoid excessive re-renders
 const MARK_PRICE_THROTTLE_MS = 100 // Update UI every 100ms max

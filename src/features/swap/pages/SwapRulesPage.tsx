@@ -8,7 +8,7 @@ import { useModalStore } from '@/app/store'
 import { Plus, Upload, Download } from 'lucide-react'
 import { useState, useMemo } from 'react'
 import { Card } from '@/shared/ui/card'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useSwapRulesList, useUpdateSwapRule } from '../hooks/useSwapRules'
 import type { ListSwapRulesParams } from '../types/swap'
 

@@ -14,7 +14,7 @@ import {
   BarChart3,
   ChevronRight,
 } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
 

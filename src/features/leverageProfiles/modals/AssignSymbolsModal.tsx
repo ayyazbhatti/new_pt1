@@ -5,7 +5,7 @@ import { Switch } from '@/shared/ui/Switch'
 import { Badge } from '@/shared/ui/badge'
 import { LeverageProfile } from '../types/leverageProfile'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { ColumnDef } from '@tanstack/react-table'
 import { mockSymbolsForAssignment, SymbolForAssignment } from '../mocks/symbols.mock'
 

@@ -5,7 +5,7 @@ import { Button } from '@/shared/ui/button'
 import { Label } from '@/shared/ui/label'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { modifyPositionSltp } from '../api/positions'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { Loader2 } from 'lucide-react'
 
 export function ModifySltpModal() {

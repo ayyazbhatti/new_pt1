@@ -8,7 +8,7 @@ import { EditMarkupRuleModal } from '../modals/EditMarkupRuleModal'
 import { PreviewMarkupModal } from '../modals/PreviewMarkupModal'
 import { ConfirmDeleteModal } from '../modals/ConfirmDeleteModal'
 import { Eye, Edit, X, Trash2 } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useMemo } from 'react'
 
 interface MarkupRulesTableProps {

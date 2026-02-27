@@ -3,7 +3,7 @@ import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import { LeverageTier } from '../types/leverageProfile'
 import { Trash2, Edit } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 interface TiersTableProps {
   tiers: LeverageTier[]
@@ -43,9 +43,10 @@ export function TiersTable({ tiers, onTierDelete, onTierUpdate, onTierEdit }: Ti
       header: 'Margin From',
       cell: ({ row }) => {
         const tier = row.original
+        const val = (tier.from ?? Number(tier.notionalFrom)) || 0
         return (
           <span className="font-mono text-text">
-            ${tier.from.toLocaleString()}
+            ${val.toLocaleString()}
           </span>
         )
       },
@@ -55,9 +56,10 @@ export function TiersTable({ tiers, onTierDelete, onTierUpdate, onTierEdit }: Ti
       header: 'Margin To',
       cell: ({ row }) => {
         const tier = row.original
+        const val = tier.to ?? (tier.notionalTo != null ? Number(tier.notionalTo) : null)
         return (
           <span className="font-mono text-text">
-            ${tier.to.toLocaleString()}
+            {val != null ? `$${val.toLocaleString()}` : '—'}
           </span>
         )
       },
@@ -67,9 +69,10 @@ export function TiersTable({ tiers, onTierDelete, onTierUpdate, onTierEdit }: Ti
       header: 'Leverage',
       cell: ({ row }) => {
         const tier = row.original
+        const lev = tier.leverage ?? tier.maxLeverage ?? 0
         return (
           <span className="font-mono font-semibold">
-            1:{tier.leverage}
+            {lev}:1
           </span>
         )
       },

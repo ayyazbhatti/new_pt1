@@ -5,15 +5,18 @@ use axum::{
     routing::{get, patch, post},
     Router,
 };
+use chrono::Utc;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
+use crate::services::email_templates_service::EmailTemplatesService;
+use crate::utils::hash::{hash_password, hash_token};
 use crate::models::leverage_profile::LeverageProfileTier;
 use crate::services::auth_service::AuthService;
-use crate::services::email_config_service::{send_email_sync, EmailConfigService};
-use crate::services::email_templates_service::EmailTemplatesService;
+use crate::services::email_config_service::{send_email_html_sync, send_email_sync, EmailConfigService};
 use crate::utils::jwt::Claims;
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +48,45 @@ pub struct RefreshRequest {
 #[derive(Debug, Deserialize)]
 pub struct LogoutRequest {
     pub refresh_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetRequestRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetVerifyRequest {
+    pub email: String,
+    pub otp: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetConfirmRequest {
+    #[serde(rename = "reset_token")]
+    pub reset_token: String,
+    #[serde(rename = "new_password")]
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PasswordResetGenericResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PasswordResetVerifyResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,12 +189,450 @@ pub struct ReferredUserResponse {
     pub level: i32,
 }
 
+/// Escape for HTML text content (prevents XSS if name/site contain < or &).
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Builds a professional HTML body for the password reset OTP email.
+fn build_password_reset_email_html(site_name: &str, first_name: &str, otp: &str) -> String {
+    let site = escape_html(site_name);
+    let name = escape_html(first_name);
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reset your password</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#f4f4f5; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 560px; background-color:#ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden;">
+          <tr>
+            <td style="padding: 32px 40px 24px; border-bottom: 1px solid #e5e7eb;">
+              <h1 style="margin:0; font-size: 20px; font-weight: 600; color: #111827;">{}</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 40px;">
+              <p style="margin:0 0 20px; color: #374151;">Hi {},</p>
+              <p style="margin:0 0 24px; color: #374151;">You requested to reset your password. Use the verification code below to continue. This code expires in <strong>10 minutes</strong>.</p>
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 0 24px;">
+                <tr>
+                  <td style="background-color: #f0f4f8; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px 28px; text-align: center;">
+                    <span style="font-size: 28px; font-weight: 700; letter-spacing: 6px; color: #0f172a; font-family: 'SF Mono', Monaco, 'Courier New', monospace;">{}</span>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:0; font-size: 14px; color: #6b7280;">Enter this code on the password reset page to set a new password.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 24px 40px 32px; background-color: #f9fafb; border-top: 1px solid #e5e7eb;">
+              <p style="margin:0; font-size: 13px; color: #6b7280;">If you did not request a password reset, you can safely ignore this email. Your password will remain unchanged.</p>
+              <p style="margin: 16px 0 0; font-size: 13px; color: #9ca3af;">— {} Team</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"#,
+        site, name, otp, site
+    )
+}
+
+/// Loads SMTP config and password_reset template, substitutes {{user_name}}, {{site_name}}, {{otp}} / {{reset_link}}, sends email. Runs in spawn_blocking for SMTP.
+async fn send_password_reset_otp_email(
+    pool: &PgPool,
+    to_email: &str,
+    user_id: Uuid,
+    otp: &str,
+) -> Result<(), anyhow::Error> {
+    tracing::info!("Attempting to send password reset OTP email to {}", to_email);
+    let config = match EmailConfigService::new(pool.clone()).get_with_password().await? {
+        Some(c) => c,
+        None => {
+            tracing::warn!(
+                "Password reset email NOT sent: no row in platform_email_config. \
+                For testing, use OTP: {} (see server log above)",
+                otp
+            );
+            return Ok(());
+        }
+    };
+    // Skip if still the default placeholder (migration inserts one row with smtp.example.com)
+    if config.smtp_host.trim() == "smtp.example.com" && config.smtp_username.trim().is_empty() {
+        tracing::warn!(
+            "Password reset email NOT sent: SMTP is still the default (smtp.example.com). \
+            Save your real SMTP settings in Admin → Settings → Email (tab Email configuration). \
+            For testing, use OTP: {} (see server log above)",
+            otp
+        );
+        return Ok(());
+    }
+    tracing::info!(
+        "SMTP config found ({}:{}), sending password reset OTP email to {}",
+        config.smtp_host,
+        config.smtp_port,
+        to_email
+    );
+    let first_name: String = sqlx::query_scalar(
+        "SELECT first_name FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_else(|| "User".to_string());
+    let site_name = config.from_name.trim();
+    let site_name = if site_name.is_empty() {
+        "Platform"
+    } else {
+        site_name
+    };
+    let templates = EmailTemplatesService::new(pool.clone()).get_all().await?;
+    let subject = match templates.get("password_reset") {
+        Some(t) => t
+            .subject
+            .replace("{{user_name}}", &first_name)
+            .replace("{{site_name}}", site_name),
+        None => "Reset your password".to_string(),
+    };
+    let body_html = build_password_reset_email_html(site_name, &first_name, otp);
+    let config = config.clone();
+    let to_email = to_email.to_string();
+    tokio::task::spawn_blocking(move || {
+        tracing::info!("Sending password reset OTP email to {}", to_email);
+        send_email_html_sync(&config, &to_email, &subject, &body_html)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("join: {}", e))??;
+    Ok(())
+}
+
+async fn password_reset_request(
+    State(pool): State<PgPool>,
+    axum::Json(payload): axum::Json<PasswordResetRequestRequest>,
+) -> Result<Json<PasswordResetGenericResponse>, (StatusCode, Json<PasswordResetGenericResponse>)> {
+    let email = payload.email.trim().to_lowercase();
+    if email.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PasswordResetGenericResponse {
+                success: false,
+                message: None,
+                error: Some("Email is required".to_string()),
+            }),
+        ));
+    }
+    let user_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL",
+    )
+    .bind(&email)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("password_reset request db error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PasswordResetGenericResponse {
+                success: false,
+                message: None,
+                error: Some("Failed to process request".to_string()),
+            }),
+        )
+    })?;
+    let user_id = match user_id {
+        Some(id) => id,
+        None => {
+            // Don't reveal whether email exists
+            return Ok(Json(PasswordResetGenericResponse {
+                success: true,
+                message: Some("If an account exists, an OTP has been sent.".to_string()),
+                error: None,
+            }));
+        }
+    };
+    let otp: String = (0..6)
+        .map(|_| rand::thread_rng().gen_range(0..10).to_string())
+        .collect();
+    let otp_hash = hash_token(&otp);
+    let expires_at = Utc::now() + chrono::Duration::minutes(10);
+    sqlx::query(
+        r#"
+        INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind(user_id)
+    .bind(&otp_hash)
+    .bind(expires_at)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("password_reset insert token error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PasswordResetGenericResponse {
+                success: false,
+                message: None,
+                error: Some("Failed to process request".to_string()),
+            }),
+        )
+    })?;
+    tracing::info!("Password reset OTP for {} (user_id={}): {}", email, user_id, otp);
+    // Send OTP by email (fire-and-forget; uses same SMTP/template config as admin settings)
+    let pool_email = pool.clone();
+    let email_to = email.clone();
+    let otp_to_send = otp.clone();
+    tokio::spawn(async move {
+        match send_password_reset_otp_email(&pool_email, &email_to, user_id, &otp_to_send).await {
+            Ok(()) => tracing::info!("Password reset OTP email sent to {}", email_to),
+            Err(e) => {
+                tracing::warn!(
+                    "Password reset email FAILED for {}: {}. \
+                    Check Admin → Settings → Email (host, port, encryption, username/password). \
+                    OTP for testing: {}",
+                    email_to, e, otp_to_send
+                );
+            }
+        }
+    });
+    Ok(Json(PasswordResetGenericResponse {
+        success: true,
+        message: Some("OTP sent to your email.".to_string()),
+        error: None,
+    }))
+}
+
+async fn password_reset_verify(
+    State(pool): State<PgPool>,
+    axum::Json(payload): axum::Json<PasswordResetVerifyRequest>,
+) -> Result<Json<PasswordResetVerifyResponse>, (StatusCode, Json<PasswordResetVerifyResponse>)> {
+    let email = payload.email.trim().to_lowercase();
+    let otp = payload.otp.trim();
+    if email.is_empty() || otp.len() != 6 || !otp.chars().all(|c| c.is_ascii_digit()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PasswordResetVerifyResponse {
+                success: false,
+                reset_token: None,
+                message: None,
+                error: Some("Invalid email or OTP".to_string()),
+            }),
+        ));
+    }
+    let user_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL",
+    )
+    .bind(&email)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("password_reset verify db error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PasswordResetVerifyResponse {
+                success: false,
+                reset_token: None,
+                message: None,
+                error: Some("Verification failed".to_string()),
+            }),
+        )
+    })?;
+    let user_id = match user_id {
+        Some(id) => id,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(PasswordResetVerifyResponse {
+                    success: false,
+                    reset_token: None,
+                    message: None,
+                    error: Some("Invalid email or OTP".to_string()),
+                }),
+            ));
+        }
+    };
+    let otp_hash = hash_token(otp);
+    let now = Utc::now();
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM password_reset_tokens
+        WHERE user_id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > $3
+        "#,
+    )
+    .bind(user_id)
+    .bind(&otp_hash)
+    .bind(now)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("password_reset verify fetch error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PasswordResetVerifyResponse {
+                success: false,
+                reset_token: None,
+                message: None,
+                error: Some("Verification failed".to_string()),
+            }),
+        )
+    })?;
+    let (token_id,) = match row {
+        Some(r) => r,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(PasswordResetVerifyResponse {
+                    success: false,
+                    reset_token: None,
+                    message: None,
+                    error: Some("Invalid or expired OTP".to_string()),
+                }),
+            ));
+        }
+    };
+    let reset_token = Uuid::new_v4().to_string();
+    let reset_token_hash = hash_token(&reset_token);
+    let new_expires = now + chrono::Duration::minutes(15);
+    sqlx::query(
+        r#"
+        UPDATE password_reset_tokens SET token_hash = $1, expires_at = $2 WHERE id = $3
+        "#,
+    )
+    .bind(&reset_token_hash)
+    .bind(new_expires)
+    .bind(token_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("password_reset verify update error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PasswordResetVerifyResponse {
+                success: false,
+                reset_token: None,
+                message: None,
+                error: Some("Verification failed".to_string()),
+            }),
+        )
+    })?;
+    Ok(Json(PasswordResetVerifyResponse {
+        success: true,
+        reset_token: Some(reset_token),
+        message: None,
+        error: None,
+    }))
+}
+
+async fn password_reset_confirm(
+    State(pool): State<PgPool>,
+    axum::Json(payload): axum::Json<PasswordResetConfirmRequest>,
+) -> Result<Json<PasswordResetGenericResponse>, (StatusCode, Json<PasswordResetGenericResponse>)> {
+    if payload.new_password.len() < 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PasswordResetGenericResponse {
+                success: false,
+                message: None,
+                error: Some("Password must be at least 8 characters".to_string()),
+            }),
+        ));
+    }
+    let reset_token_hash = hash_token(&payload.reset_token);
+    let now = Utc::now();
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        r#"
+        SELECT user_id FROM password_reset_tokens
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
+        "#,
+    )
+    .bind(&reset_token_hash)
+    .bind(now)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("password_reset confirm fetch error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PasswordResetGenericResponse {
+                success: false,
+                message: None,
+                error: Some("Failed to update password".to_string()),
+            }),
+        )
+    })?;
+    let (user_id,) = match row {
+        Some(r) => r,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(PasswordResetGenericResponse {
+                    success: false,
+                    message: None,
+                    error: Some("Invalid or expired reset link".to_string()),
+                }),
+            ));
+        }
+    };
+    let password_hash = hash_password(&payload.new_password).map_err(|e| {
+        tracing::error!("password_reset confirm hash error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PasswordResetGenericResponse {
+                success: false,
+                message: None,
+                error: Some("Failed to update password".to_string()),
+            }),
+        )
+    })?;
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&password_hash)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("password_reset confirm update user error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PasswordResetGenericResponse {
+                    success: false,
+                    message: None,
+                    error: Some("Failed to update password".to_string()),
+                }),
+            )
+        })?;
+    let _ = sqlx::query(
+        "UPDATE password_reset_tokens SET used_at = $1 WHERE token_hash = $2",
+    )
+    .bind(now)
+    .bind(&reset_token_hash)
+    .execute(&pool)
+    .await;
+    Ok(Json(PasswordResetGenericResponse {
+        success: true,
+        message: Some("Password updated successfully.".to_string()),
+        error: None,
+    }))
+}
+
 pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
     // Public routes (no auth required)
     let public_routes = Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
-        .route("/refresh", post(refresh));
+        .route("/refresh", post(refresh))
+        .route("/password-reset/request", post(password_reset_request))
+        .route("/password-reset/verify", post(password_reset_verify))
+        .route("/password-reset/confirm", post(password_reset_confirm));
     
     // Protected routes (auth required) – more specific /me/referrals and /me/symbol-leverage before /me
     let protected_routes = Router::new()

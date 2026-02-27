@@ -27,6 +27,8 @@ function toCamelCaseProfile(obj: any): LeverageProfile {
 }
 
 function toCamelCaseTier(obj: any): LeverageTier {
+  const fromNum = parseFloat(obj.notional_from) || 0
+  const toNum = obj.notional_to != null ? parseFloat(obj.notional_to) : null
   return {
     id: obj.id,
     profileId: obj.profile_id,
@@ -37,6 +39,9 @@ function toCamelCaseTier(obj: any): LeverageTier {
     initialMarginPercent: obj.initial_margin_percent,
     maintenanceMarginPercent: obj.maintenance_margin_percent,
     updatedAt: obj.updated_at,
+    from: fromNum,
+    to: toNum,
+    leverage: obj.max_leverage,
   }
 }
 

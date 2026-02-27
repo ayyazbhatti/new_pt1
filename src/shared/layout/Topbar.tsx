@@ -1,6 +1,6 @@
 import { Search, User, Activity, LogOut } from 'lucide-react'
 import { useNavigate, Link } from 'react-router-dom'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { NotificationBell } from '@/shared/components/NotificationBell'

@@ -10,7 +10,7 @@ import { EditManagerModal } from '../modals/EditManagerModal'
 import { DeleteManagerModal } from '../modals/DeleteManagerModal'
 import { Pencil, UserX, UserCheck, Trash2 } from 'lucide-react'
 import { useCanAccess } from '@/shared/utils/permissions'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { RoleBadge } from '@/features/auth/components/RoleBadge'
 
 interface ManagersTableProps {

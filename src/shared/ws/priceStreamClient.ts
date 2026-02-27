@@ -27,6 +27,25 @@ function isGatewayUrl(url: string): boolean {
   return /[:/]8090[/?]/.test(url) || /[:/]3003[/?]/.test(url) || url.includes('localhost:8090') || url.includes('localhost:3003') || (url.includes('/ws') && typeof location !== 'undefined' && url.startsWith('ws://' + location.host))
 }
 
+/** HTTP base URL for data-provider (e.g. http://localhost:9004) for GET /prices snapshot. Empty if using gateway. */
+export function getDataProviderPricesBaseUrl(): string {
+  const env = typeof import.meta !== 'undefined' && (import.meta as any).env
+  const httpUrl = env?.VITE_DATA_PROVIDER_HTTP_URL
+  if (httpUrl && typeof httpUrl === 'string' && httpUrl.length > 0) return httpUrl.replace(/\/+$/, '')
+  const wsUrl = env?.VITE_DATA_PROVIDER_WS_URL
+  if (wsUrl && typeof wsUrl === 'string') {
+    try {
+      const u = new URL(wsUrl)
+      // Data-provider HTTP is on 9004 when WS is on 9003 (see backend config default)
+      const port = u.port === '9003' ? '9004' : u.port || '9004'
+      return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.hostname}:${port}`
+    } catch {
+      return 'http://localhost:9004'
+    }
+  }
+  return ''
+}
+
 class PriceStreamClient {
   private ws: WebSocket | null = null
   private url: string
@@ -65,8 +84,11 @@ class PriceStreamClient {
         this.authenticated = !gatewayMode
         if (gatewayMode && this.authToken) {
           this.ws?.send(JSON.stringify({ type: 'auth', token: this.authToken }))
-        } else if (!gatewayMode && this.pendingSymbols.length > 0) {
-          this.sendSubscribe(this.pendingSymbols)
+        } else if (!gatewayMode) {
+          // Re-subscribe all symbols so we get ticks after reconnect (server-side connection stays in sync)
+          const all = [...new Set([...this.subscribedSymbols, ...this.pendingSymbols])]
+          this.pendingSymbols = []
+          if (all.length > 0) this.sendSubscribe(all)
         }
       }
       this.ws.onmessage = (event) => {
@@ -92,10 +114,10 @@ class PriceStreamClient {
       this.ws.onclose = () => {
         this.ws = null
         this.authenticated = false
-        if (this.reconnectAttempts < 10) {
-          this.reconnectAttempts++
-          this.reconnectTimeout = setTimeout(() => this.connect(), Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000))
-        }
+        // Keep reconnecting so connection stays server-based and recovers from drops
+        this.reconnectAttempts++
+        const delay = Math.min(1000 * Math.pow(2, Math.min(this.reconnectAttempts, 6)), 15000)
+        this.reconnectTimeout = setTimeout(() => this.connect(), delay)
       }
     } catch (_) {
       this.ws = null

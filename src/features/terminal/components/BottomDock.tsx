@@ -2,7 +2,7 @@ import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge,
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/shared/utils'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Input, Skeleton } from '@/shared/ui'
 import { getPositions, Position, updatePositionSltp, closePosition } from '../api/positions.api'

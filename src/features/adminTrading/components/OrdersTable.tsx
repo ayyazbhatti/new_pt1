@@ -8,7 +8,7 @@ import { MoreHorizontal, X, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { cancelAdminOrder, forceCancelAdminOrder } from '../api/orders'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 
 interface OrdersTableProps {

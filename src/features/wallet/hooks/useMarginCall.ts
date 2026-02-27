@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import type { AccountSummaryResponse } from '../api'
 
 const DEFAULT_THRESHOLD = 50

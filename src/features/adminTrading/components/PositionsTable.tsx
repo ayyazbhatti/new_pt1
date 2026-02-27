@@ -9,7 +9,7 @@ import { MoreHorizontal, X, Edit, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { closeAdminPosition, liquidatePosition } from '../api/positions'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 
 /** Fixed column widths so header and body columns stay aligned when cells are empty */

@@ -3,7 +3,7 @@ import { useWebSocketSubscription } from '../ws/wsHooks'
 import { WsInboundEvent } from '../ws/wsEvents'
 import { useWalletStore } from '../store/walletStore'
 import { useAuthStore } from '../store/auth.store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 /**
  * Global hook to listen for wallet balance updates from WebSocket

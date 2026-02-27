@@ -1,11 +1,11 @@
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::Json,
     routing::get,
     Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -34,6 +34,19 @@ struct FeedStatusResponse {
     connected_symbols: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PricesQuery {
+    pub symbols: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PriceItem {
+    symbol: String,
+    bid: String,
+    ask: String,
+    ts: u64,
+}
+
 pub fn create_health_router(
     broadcaster: Arc<Broadcaster>,
     feed: Arc<BinanceFeed>,
@@ -44,6 +57,7 @@ pub fn create_health_router(
         .route("/health", get(health_handler))
         .route("/metrics", get(metrics_handler))
         .route("/feed/status", get(feed_status_handler))
+        .route("/prices", get(prices_handler))
         .with_state((broadcaster, feed, region, start_time))
 }
 
@@ -95,5 +109,34 @@ async fn feed_status_handler(
         provider: "binance".to_string(),
         connected_symbols: vec![],
     }))
+}
+
+async fn prices_handler(
+    State((_, feed, _, _)): State<(Arc<Broadcaster>, Arc<BinanceFeed>, String, SystemTime)>,
+    Query(query): Query<PricesQuery>,
+) -> Result<Json<Vec<PriceItem>>, StatusCode> {
+    let symbols: Vec<String> = query
+        .symbols
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if symbols.is_empty() {
+        return Ok(Json(vec![]));
+    }
+    let mut out = Vec::with_capacity(symbols.len());
+    for symbol in symbols {
+        if let Some(state) = feed.get_price(&symbol).await {
+            out.push(PriceItem {
+                symbol: symbol.clone(),
+                bid: state.bid.to_string(),
+                ask: state.ask.to_string(),
+                ts: state.ts,
+            });
+        }
+    }
+    Ok(Json(out))
 }
 

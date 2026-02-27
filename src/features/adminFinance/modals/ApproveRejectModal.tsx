@@ -4,7 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/shared/ui/input'
 import { Transaction } from '../types/finance'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { approveTransaction, rejectTransaction } from '../api/finance.api'
 import { Loader2 } from 'lucide-react'
 

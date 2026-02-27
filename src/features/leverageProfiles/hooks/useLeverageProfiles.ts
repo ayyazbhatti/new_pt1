@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import {
   listLeverageProfiles,
   createLeverageProfile,
@@ -21,15 +21,16 @@ import {
   SetProfileSymbolsPayload,
 } from '../types/leverageProfile'
 
-// Query key factory
-const queryKeys = {
+// Query key factory (export for cache invalidation from modals)
+export const leverageProfilesQueryKeys = {
   all: ['adminLeverageProfiles'] as const,
-  lists: () => [...queryKeys.all, 'list'] as const,
-  list: (params?: ListLeverageProfilesParams) => [...queryKeys.lists(), params] as const,
-  detail: (id: string) => [...queryKeys.all, 'detail', id] as const,
-  tiers: (profileId: string) => [...queryKeys.all, 'tiers', profileId] as const,
-  symbols: (profileId: string) => [...queryKeys.all, 'symbols', profileId] as const,
+  lists: () => [...leverageProfilesQueryKeys.all, 'list'] as const,
+  list: (params?: ListLeverageProfilesParams) => [...leverageProfilesQueryKeys.lists(), params] as const,
+  detail: (id: string) => [...leverageProfilesQueryKeys.all, 'detail', id] as const,
+  tiers: (profileId: string) => [...leverageProfilesQueryKeys.all, 'tiers', profileId] as const,
+  symbols: (profileId: string) => [...leverageProfilesQueryKeys.all, 'symbols', profileId] as const,
 }
+const queryKeys = leverageProfilesQueryKeys
 
 export function useLeverageProfilesList(params?: ListLeverageProfilesParams) {
   return useQuery({

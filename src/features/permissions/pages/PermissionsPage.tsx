@@ -10,7 +10,7 @@ import { Input } from '@/shared/ui/input'
 import { ModalShell } from '@/shared/ui/modal'
 import { Checkbox } from '@/shared/ui/Checkbox'
 import { KeyRound, Plus, Pencil, Trash2, Shield, Check } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
 import {
   listPermissionProfiles,

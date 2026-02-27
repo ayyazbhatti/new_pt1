@@ -5,7 +5,7 @@ import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { Switch } from '@/shared/ui/Switch'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useState } from 'react'
 
 const profileSchema = z.object({

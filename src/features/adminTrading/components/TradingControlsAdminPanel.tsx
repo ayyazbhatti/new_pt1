@@ -10,7 +10,7 @@ import { SymbolControl, GroupControl, AuditLogEntry } from '../types/adminTradin
 import { mockSymbolControls, mockGroupControls, mockAuditLog } from '../mocks/tradingControls.mock'
 import { mockGroups } from '../mocks/groups.mock'
 import { mockSymbols } from '../mocks/symbols.mock'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { formatDateTime } from '../utils/formatters'
 
 export function TradingControlsAdminPanel() {

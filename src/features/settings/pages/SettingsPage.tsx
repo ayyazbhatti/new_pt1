@@ -27,7 +27,7 @@ import {
 } from 'lucide-react'
 import { DataTable, type ColumnDef } from '@/shared/ui/table'
 import { ModalShell } from '@/shared/ui/modal'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import {
   getEmailConfig,
   updateEmailConfig,

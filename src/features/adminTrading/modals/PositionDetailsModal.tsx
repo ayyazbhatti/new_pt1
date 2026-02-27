@@ -5,7 +5,7 @@ import { Badge } from '@/shared/ui/badge'
 import { Position } from '../types/adminTrading'
 import { useModalStore } from '@/app/store'
 import { formatDateTime, formatPercent } from '../utils/formatters'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 interface PositionDetailsModalProps {
   position: Position

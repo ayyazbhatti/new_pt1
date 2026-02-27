@@ -6,7 +6,7 @@ import { Label } from '@/shared/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { closeAdminPosition } from '../api/positions'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { Loader2 } from 'lucide-react'
 
 export function ClosePositionModal() {

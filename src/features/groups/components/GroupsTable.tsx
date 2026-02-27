@@ -11,7 +11,7 @@ import { Eye, Edit, Trash2, Settings, Copy, Tag, ChevronDown } from 'lucide-reac
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { cn } from '@/shared/utils'
 import { formatDistanceToNow } from 'date-fns'

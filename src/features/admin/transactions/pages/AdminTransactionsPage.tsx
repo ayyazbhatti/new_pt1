@@ -9,7 +9,7 @@ import {
 import { useModalStore } from '@/app/store'
 import { ManualAdjustmentModal } from '@/features/adminFinance/modals/ManualAdjustmentModal'
 import { Download, Plus } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useState } from 'react'
 
 const STORAGE_KEY_TRANSACTIONS_TAB = 'admin.transactions.activeTab'

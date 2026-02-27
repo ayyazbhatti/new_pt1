@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { LeverageTier } from '../types/leverageProfile'
 
 const tierSchema = z

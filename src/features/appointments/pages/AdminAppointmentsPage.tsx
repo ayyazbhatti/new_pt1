@@ -34,7 +34,7 @@ import {
 } from '../api/appointments.api'
 import { Calendar, List, Plus, X } from 'lucide-react'
 import { cn } from '@/shared/utils'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 const STORAGE_SEARCH_KEY = 'admin-appointments-search'
 const PAGE_SIZES = [10, 20, 50, 100, 200]

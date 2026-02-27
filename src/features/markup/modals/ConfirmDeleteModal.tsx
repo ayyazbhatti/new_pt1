@@ -1,7 +1,7 @@
 import { Button } from '@/shared/ui/button'
 import { MarkupRule } from '../types/markup'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 interface ConfirmDeleteModalProps {
   rule: MarkupRule

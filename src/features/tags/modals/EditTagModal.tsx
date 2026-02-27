@@ -6,7 +6,7 @@ import { Textarea } from '@/shared/ui/textarea'
 import { useModalStore } from '@/app/store'
 import { PRESET_COLORS } from '../utils/slug'
 import type { Tag } from '../types/tag'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 export interface UpdateTagPayload {
   name: string

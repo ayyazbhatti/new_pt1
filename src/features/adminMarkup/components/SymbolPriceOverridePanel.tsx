@@ -9,7 +9,7 @@ import { SymbolOverrideModal } from '../modals/SymbolOverrideModal'
 import { SymbolPriceOverride } from '../types/pricing'
 import { mockSymbolOverrides } from '../mocks/symbolOverrides.mock'
 import { Edit, X, Search } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { useMemo } from 'react'
 
 export function SymbolPriceOverridePanel() {

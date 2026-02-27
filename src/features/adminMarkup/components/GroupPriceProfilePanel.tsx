@@ -8,7 +8,7 @@ import { AssignGroupProfileModal } from '../modals/AssignGroupProfileModal'
 import { GroupPriceProfile } from '../types/pricing'
 import { mockGroupProfiles } from '../mocks/groupProfiles.mock'
 import { Edit } from 'lucide-react'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 
 export function GroupPriceProfilePanel() {
   const openModal = useModalStore((state) => state.openModal)

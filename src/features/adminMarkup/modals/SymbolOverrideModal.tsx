@@ -4,7 +4,7 @@ import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
 import { SymbolPriceOverride } from '../types/pricing'
 import { useModalStore } from '@/app/store'
-import { toast } from 'react-hot-toast'
+import { toast } from '@/shared/components/common'
 import { mockPriceProfiles } from '../mocks/priceProfiles.mock'
 
 interface SymbolOverrideModalProps {

@@ -1,4 +1,5 @@
 import { ReactNode } from 'react'
+import { ToastProvider } from '@/shared/components/common'
 import { QueryProvider } from './QueryProvider'
 import { ThemeProvider } from './ThemeProvider'
 
@@ -10,7 +11,9 @@ export function Providers({ children }: ProvidersProps) {
   return (
     <ThemeProvider>
       <QueryProvider>
-        {children}
+        <ToastProvider>
+          {children}
+        </ToastProvider>
       </QueryProvider>
     </ThemeProvider>
   )

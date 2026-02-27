@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { priceStreamClient } from '@/shared/ws/priceStreamClient'
+import { priceStreamClient, getDataProviderPricesBaseUrl } from '@/shared/ws/priceStreamClient'
 import { useAuthStore } from '@/shared/store/auth.store'
 
 interface PriceData {
@@ -165,6 +165,28 @@ export function usePriceStream(symbols: string[]) {
     subscribeFnRef.current = subscribeToSymbols
     unsubscribeFnRef.current = unsubscribeFromSymbols
   }, [subscribeToSymbols, unsubscribeFromSymbols])
+
+  // Server-side snapshot: fetch current prices on load so UI shows values immediately instead of 0.00
+  useEffect(() => {
+    const base = getDataProviderPricesBaseUrl()
+    if (!base || symbols.length === 0) return
+    const symbolsParam = symbols.map((s) => s.toUpperCase().trim()).filter(Boolean)
+    if (symbolsParam.length === 0) return
+    const url = `${base}/prices?symbols=${encodeURIComponent(symbolsParam.join(','))}`
+    let cancelled = false
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((arr: Array<{ symbol: string; bid: string; ask: string; ts: number }> | null) => {
+        if (cancelled || !Array.isArray(arr)) return
+        arr.forEach((item) => {
+          notifySubscribers(item.symbol, { bid: item.bid, ask: item.ask, ts: item.ts })
+        })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [symbols.join(',')])
 
   // Subscribe to data-provider when symbols are available (no auth delay)
   useEffect(() => {
