@@ -12,4 +12,5 @@ pub mod ledger_service;
 pub mod permission_profiles_service;
 pub mod email_config_service;
 pub mod email_templates_service;
+pub mod appointment_service;
 

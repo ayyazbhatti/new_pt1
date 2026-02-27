@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, UserCircle, BarChart3, ClipboardList } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, UserCircle, BarChart3, ClipboardList, CalendarDays } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -25,6 +25,7 @@ export const adminNavItems: NavItem[] = [
   { label: 'Affiliate', path: '/admin/affiliate', icon: UsersRound, permission: 'affiliate:view' },
   { label: 'Permissions', path: '/admin/permissions', icon: KeyRound, permission: 'permissions:view' },
   { label: 'Support', path: '/admin/support', icon: Headphones, permission: 'support:view' },
+  { label: 'Appointments', path: '/admin/appointments', icon: CalendarDays, permission: 'dashboard:view' },
   { label: 'System', path: '/admin/system', icon: Settings, permission: 'system:view' },
   { label: 'Settings', path: '/admin/settings', icon: Settings, permission: 'settings:view' },
   { label: 'Reports', path: '/admin/reports', icon: FileText, permission: 'reports:view' },
@@ -36,6 +37,7 @@ export const userNavItems: NavItem[] = [
   { label: 'Profile', path: '/user/profile', icon: UserCircle },
   { label: 'Positions', path: '/user/positions', icon: BarChart3 },
   { label: 'Orders', path: '/user/orders', icon: ClipboardList },
+  { label: 'Appointments', path: '/user/appointments', icon: CalendarDays },
   { label: 'Affiliate', path: '/user/affiliate', icon: UsersRound },
   { label: 'Support', path: '/user/support', icon: Headphones },
   { label: 'Deposit', path: '/user/deposit', icon: ArrowDownToLine },

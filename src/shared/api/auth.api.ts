@@ -57,6 +57,7 @@ export async function login(email: string, password: string): Promise<{
     permissions?: string[]
     permissionProfileId?: string | null
     permissionProfileName?: string | null
+    referralCode?: string | null
   }
 }> {
   const response = await http<AuthResponse>('/api/auth/login', {

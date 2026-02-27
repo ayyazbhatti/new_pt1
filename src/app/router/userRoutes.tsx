@@ -9,6 +9,7 @@ import {
   UserOrdersPage,
   UserSupportPage,
 } from '@/features/userPanel'
+import { UserAppointmentsPage } from '@/features/appointments'
 
 export const userRoutes: RouteObject[] = [
   {
@@ -26,6 +27,10 @@ export const userRoutes: RouteObject[] = [
   {
     path: '/user/orders',
     element: <UserOrdersPage />,
+  },
+  {
+    path: '/user/appointments',
+    element: <UserAppointmentsPage />,
   },
   {
     path: '/user/affiliate',

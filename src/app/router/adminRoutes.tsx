@@ -17,6 +17,7 @@ import { AdminMarkupPage } from '@/features/adminMarkup'
 import { AdminTransactionsPage } from '@/features/admin/transactions'
 import { ManagersPage } from '@/features/managers'
 import { TagsPage } from '@/features/tags'
+import { AdminAppointmentsPage } from '@/features/appointments'
 
 export const adminRoutes: RouteObject[] = [
   {
@@ -79,6 +80,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/tag',
     element: <TagsPage />,
+  },
+  {
+    path: '/admin/appointments',
+    element: <AdminAppointmentsPage />,
   },
   {
     path: '/admin/permissions',

@@ -16,6 +16,8 @@ export interface User {
   permissionProfileName?: string | null
   /** 'full' | 'close_only' | 'disabled' - trading panel access */
   tradingAccess?: string
+  /** Referral code for affiliate / share link */
+  referralCode?: string | null
 }
 
 interface AuthState {
