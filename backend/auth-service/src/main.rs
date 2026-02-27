@@ -40,6 +40,7 @@ use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
 use routes::symbols::create_symbols_router;
 use routes::finance::create_finance_router;
+use routes::admin_settings::create_admin_settings_router;
 use services::order_event_handler::OrderEventHandler;
 
 #[tokio::main]
@@ -192,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/managers", create_admin_managers_router(pool.clone()))
         .nest("/api/admin/permission-profiles", create_admin_permission_profiles_router(pool.clone()))
         .nest("/api/admin/affiliate", create_admin_affiliate_router(pool.clone()))
+        .nest("/api/admin/settings", create_admin_settings_router(pool.clone()))
         .nest("/api/admin/tags", create_admin_tags_router(pool.clone()))
         .nest("/api/admin/finance", create_finance_router(pool.clone()).layer(axum::extract::Extension(deposits_state.clone())))
         .nest("/api/admin/deposits", routes::deposits::create_deposits_router(pool.clone(), deposits_state.clone()))

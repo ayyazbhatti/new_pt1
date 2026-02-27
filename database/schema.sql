@@ -418,6 +418,28 @@ CREATE TABLE price_snapshots (
     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- Platform email (SMTP) configuration for admin settings (single row per env)
+CREATE TABLE IF NOT EXISTS platform_email_config (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    smtp_host VARCHAR(255) NOT NULL DEFAULT 'smtp.example.com',
+    smtp_port INTEGER NOT NULL DEFAULT 587,
+    smtp_encryption VARCHAR(20) NOT NULL DEFAULT 'tls',
+    smtp_username VARCHAR(255) NOT NULL DEFAULT '',
+    smtp_password TEXT,
+    from_email VARCHAR(255) NOT NULL DEFAULT 'noreply@example.com',
+    from_name VARCHAR(255) NOT NULL DEFAULT 'Platform',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Platform email templates (welcome, password_reset, etc.)
+CREATE TABLE IF NOT EXISTS platform_email_templates (
+    template_id VARCHAR(64) PRIMARY KEY,
+    subject TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ============================================================
 -- INDEXES
 -- ============================================================

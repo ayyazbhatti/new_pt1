@@ -7,6 +7,7 @@ import {
   UserWithdrawPage,
   UserPositionsPage,
   UserOrdersPage,
+  UserSupportPage,
 } from '@/features/userPanel'
 
 export const userRoutes: RouteObject[] = [
@@ -29,6 +30,10 @@ export const userRoutes: RouteObject[] = [
   {
     path: '/user/affiliate',
     element: <UserAffiliatePage />,
+  },
+  {
+    path: '/user/support',
+    element: <UserSupportPage />,
   },
   {
     path: '/user/deposit',

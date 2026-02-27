@@ -12,6 +12,8 @@ use uuid::Uuid;
 use crate::middleware::auth_middleware;
 use crate::models::leverage_profile::LeverageProfileTier;
 use crate::services::auth_service::AuthService;
+use crate::services::email_config_service::{send_email_sync, EmailConfigService};
+use crate::services::email_templates_service::EmailTemplatesService;
 use crate::utils::jwt::Claims;
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +170,77 @@ pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
+/// Async helper: load config + welcome template and build subject/body. Returns None if skipped.
+async fn load_welcome_email_payload(
+    pool: &PgPool,
+    to_email: &str,
+    first_name: &str,
+) -> Result<Option<(crate::services::email_config_service::EmailConfig, String, String)>, anyhow::Error> {
+    let config = match EmailConfigService::new(pool.clone()).get_with_password().await? {
+        Some(c) => c,
+        None => {
+            tracing::warn!(
+                "Welcome email skipped for {}: no SMTP config in platform_email_config. Configure in Admin → Settings → Email.",
+                to_email
+            );
+            return Ok(None);
+        }
+    };
+    let templates = EmailTemplatesService::new(pool.clone()).get_all().await?;
+    let welcome = match templates.get("welcome") {
+        Some(t) => t,
+        None => {
+            tracing::warn!(
+                "Welcome email skipped for {}: no 'welcome' template in platform_email_templates. Run migrations.",
+                to_email
+            );
+            return Ok(None);
+        }
+    };
+    let site_name = config.from_name.trim();
+    let site_name = if site_name.is_empty() { "Platform" } else { site_name };
+    let subject = welcome
+        .subject
+        .replace("{{user_name}}", first_name)
+        .replace("{{site_name}}", site_name);
+    let body = welcome
+        .body
+        .replace("{{user_name}}", first_name)
+        .replace("{{site_name}}", site_name);
+    Ok(Some((config, subject, body)))
+}
+
+/// Loads welcome template and SMTP config, substitutes placeholders, and sends the email.
+/// Runs DB load + SMTP send in a single spawn_blocking so one thread does both (avoids pool queue delay).
+/// Called in a spawned task after signup; errors are logged only.
+/// Also used by admin "resend welcome email" endpoint.
+pub(crate) async fn send_welcome_email_after_signup(
+    pool: &PgPool,
+    to_email: &str,
+    first_name: &str,
+) -> Result<(), anyhow::Error> {
+    let pool = pool.clone();
+    let to_email = to_email.to_string();
+    let first_name = first_name.to_string();
+    // Single blocking task: load config/template then send. Avoids waiting for pool twice and keeps send immediate after load.
+    let result = tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Runtime::new().map_err(|e| anyhow::anyhow!("Runtime: {}", e))?;
+        let payload = rt.block_on(load_welcome_email_payload(&pool, &to_email, &first_name))?;
+        match payload {
+            Some((config, subject, body)) => {
+                tracing::info!("Sending welcome email to {}", to_email);
+                send_email_sync(&config, &to_email, &subject, &body)?;
+                tracing::info!("Welcome email sent successfully to {}", to_email);
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("join: {}", e))?;
+    result
+}
+
 async fn register(
     State(pool): State<PgPool>,
     Json(payload): Json<RegisterRequest>,
@@ -206,7 +279,20 @@ async fn register(
         )
         .await
     {
-        Ok((user, access_token, refresh_token)) => Ok(Json(AuthResponse {
+        Ok((user, access_token, refresh_token)) => {
+            // Fire-and-forget: send welcome email (do not block or fail registration)
+            let pool_welcome = pool.clone();
+            let to_email = user.email.clone();
+            let first_name = user.first_name.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    send_welcome_email_after_signup(&pool_welcome, &to_email, &first_name).await
+                {
+                    tracing::warn!("Welcome email failed for {}: {}", to_email, e);
+                }
+            });
+
+            Ok(Json(AuthResponse {
             access_token,
             refresh_token,
             user: UserResponse {
@@ -235,7 +321,8 @@ async fn register(
                 permission_profile_name: None,
                 permissions: Some(vec![]),
             },
-        })),
+        }))
+        }
         Err(e) => {
             let code = if e.to_string().contains("already registered") {
                 "EMAIL_EXISTS"

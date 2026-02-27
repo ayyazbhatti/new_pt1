@@ -18,4 +18,5 @@ pub mod admin_positions;
 pub mod admin_audit;
 pub mod symbols;
 pub mod finance;
+pub mod admin_settings;
 

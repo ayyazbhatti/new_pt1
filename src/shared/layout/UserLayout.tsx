@@ -20,7 +20,7 @@ export function UserLayout({ children }: UserLayoutProps) {
         <Topbar showTerminalLink showLogout />
         <main
           className={cn(
-            'flex-1 overflow-y-auto transition-all duration-300',
+            'flex flex-col flex-1 min-h-0 overflow-y-auto transition-all duration-300',
             sidebarOpen ? 'ml-0' : 'ml-0'
           )}
         >

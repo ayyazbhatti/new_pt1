@@ -68,6 +68,9 @@ async-nats = "0.32"
 # Decimal
 rust_decimal = { version = "1.33", features = ["serde-float"] }
 
+# Email (SMTP) for test email in admin settings (sync send in spawn_blocking)
+lettre = "0.11"
+
 # Contracts and models (path dependencies)
 contracts = { path = "../../crates/contracts" }
 redis-model = { path = "../../crates/redis-model" }

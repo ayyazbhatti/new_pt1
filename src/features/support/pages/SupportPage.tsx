@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ContentShell, PageHeader } from '@/shared/layout'
-import { Input } from '@/shared/ui'
-import { MessageCircle, Send, User } from 'lucide-react'
+import { Input, Button, ModalShell } from '@/shared/ui'
+import { MessageCircle, Send, User, UserPlus, Search, Loader2 } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import {
   getAdminConversations,
@@ -11,6 +11,7 @@ import {
 } from '../api/supportChat.api'
 import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
+import { listUsers, type UserResponse } from '@/shared/api/users.api'
 
 type ChatMessage = { id: string; sender: 'support' | 'user'; name: string; text: string; time: string }
 
@@ -21,6 +22,8 @@ type ConversationSummary = {
   lastMessage: string
   lastTime: string
 }
+
+type SelectedUserInfo = { userId: string; userName: string; userEmail: string }
 
 function formatTime(iso: string): string {
   try {
@@ -52,6 +55,11 @@ export function SupportPage() {
   const selectedUserId = searchParams.get('userId')
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [messagesByUser, setMessagesByUser] = useState<Record<string, ChatMessage[]>>({})
+  const [selectedUserInfo, setSelectedUserInfo] = useState<SelectedUserInfo | null>(null)
+  const [selectUserModalOpen, setSelectUserModalOpen] = useState(false)
+  const [allUsers, setAllUsers] = useState<UserResponse[]>([])
+  const [usersLoading, setUsersLoading] = useState(false)
+  const [userSearch, setUserSearch] = useState('')
   const [inputValue, setInputValue] = useState('')
   const [loadingConversations, setLoadingConversations] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -59,7 +67,9 @@ export function SupportPage() {
   const [error, setError] = useState<string | null>(null)
   const knownIdsByUser = useRef<Record<string, Set<string>>>({})
   const conversationsRef = useRef<ConversationSummary[]>([])
+  const selectedUserDisplayRef = useRef<{ userId: string; userName: string; userEmail: string } | null>(null)
   const messageInputRef = useRef<HTMLInputElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   conversationsRef.current = conversations
 
   // Ensure WebSocket is connected on Support page (so we receive new user messages in real time)
@@ -79,6 +89,24 @@ export function SupportPage() {
       .finally(() => setLoadingConversations(false))
   }, [])
 
+  // Keep display ref in sync for message-load callback (conversation list or selected "new" user)
+  useEffect(() => {
+    if (!selectedUserId) {
+      selectedUserDisplayRef.current = null
+      return
+    }
+    const fromConv = conversations.find((c) => c.userId === selectedUserId)
+    if (fromConv) {
+      selectedUserDisplayRef.current = { userId: fromConv.userId, userName: fromConv.userName, userEmail: fromConv.userEmail }
+      return
+    }
+    if (selectedUserInfo?.userId === selectedUserId) {
+      selectedUserDisplayRef.current = { userId: selectedUserInfo.userId, userName: selectedUserInfo.userName, userEmail: selectedUserInfo.userEmail }
+      return
+    }
+    selectedUserDisplayRef.current = { userId: selectedUserId, userName: 'User', userEmail: selectedUserId }
+  }, [selectedUserId, selectedUserInfo, conversations])
+
   // Load messages when selecting a user
   useEffect(() => {
     if (!selectedUserId) return
@@ -86,8 +114,8 @@ export function SupportPage() {
     setLoadingMessages(true)
     getAdminConversationMessages(selectedUserId)
       .then((list) => {
-        const conv = conversationsRef.current.find((c) => c.userId === selectedUserId)
-        const userName = conv?.userName
+        const display = selectedUserDisplayRef.current
+        const userName = display?.userId === selectedUserId ? display.userName : undefined
         const msgs = list.map((dto) => dtoToMessage(dto, userName))
         setMessagesByUser((prev) => ({ ...prev, [selectedUserId]: msgs }))
         if (!knownIdsByUser.current[selectedUserId]) knownIdsByUser.current[selectedUserId] = new Set()
@@ -145,15 +173,59 @@ export function SupportPage() {
     return unsubscribe
   }, [])
 
-  const selected = selectedUserId
-    ? conversations.find((c) => c.userId === selectedUserId)
-    : null
+  const selected =
+    selectedUserId && selectedUserInfo?.userId === selectedUserId
+      ? { userId: selectedUserInfo.userId, userName: selectedUserInfo.userName, userEmail: selectedUserInfo.userEmail }
+      : selectedUserId
+        ? conversations.find((c) => c.userId === selectedUserId) ?? null
+        : null
   const selectedMessages = selectedUserId ? messagesByUser[selectedUserId] ?? [] : []
 
-  const setSelectedUserId = useCallback((userId: string | null) => {
+  // Scroll to bottom when messages load or when new messages arrive so latest is visible
+  useEffect(() => {
+    if (!selectedUserId || loadingMessages) return
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [selectedUserId, loadingMessages, selectedMessages.length])
+
+  const setSelectedUserId = useCallback((userId: string | null, userInfo?: SelectedUserInfo | null) => {
+    if (userInfo !== undefined) setSelectedUserInfo(userInfo ?? null)
     if (userId) setSearchParams({ userId }, { replace: true })
     else setSearchParams({}, { replace: true })
   }, [setSearchParams])
+
+  // Load users when opening "Select user" modal
+  useEffect(() => {
+    if (!selectUserModalOpen) return
+    setUsersLoading(true)
+    listUsers({ limit: 500 })
+      .then(setAllUsers)
+      .catch(() => setAllUsers([]))
+      .finally(() => setUsersLoading(false))
+  }, [selectUserModalOpen])
+
+  const filteredUsers = useMemo(() => {
+    if (!userSearch.trim()) return allUsers
+    const q = userSearch.trim().toLowerCase()
+    return allUsers.filter(
+      (u) =>
+        u.email?.toLowerCase().includes(q) ||
+        u.first_name?.toLowerCase().includes(q) ||
+        u.last_name?.toLowerCase().includes(q)
+    )
+  }, [allUsers, userSearch])
+
+  const handleSelectUser = useCallback((u: UserResponse) => {
+    const inList = conversations.some((c) => c.userId === u.id)
+    if (inList) {
+      setSelectedUserInfo(null)
+    } else {
+      const userName = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || 'User'
+      setSelectedUserInfo({ userId: u.id, userName, userEmail: u.email ?? '' })
+    }
+    setSearchParams({ userId: u.id }, { replace: true })
+    setSelectUserModalOpen(false)
+    setUserSearch('')
+  }, [setSearchParams, conversations])
 
   const handleSend = useCallback(async () => {
     const trimmed = inputValue.trim()
@@ -210,6 +282,16 @@ export function SupportPage() {
             <p className="text-xs text-text-muted mt-0.5">
               {loadingConversations ? 'Loading...' : `${conversations.length} open`}
             </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full mt-2 gap-2"
+              onClick={() => setSelectUserModalOpen(true)}
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              New chat
+            </Button>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
             {error && <p className="text-xs text-red-400/90 px-4 py-2">{error}</p>}
@@ -217,7 +299,7 @@ export function SupportPage() {
               <button
                 key={conv.userId}
                 type="button"
-                onClick={() => setSelectedUserId(conv.userId)}
+                onClick={() => setSelectedUserId(conv.userId, null)}
                 className={cn(
                   'w-full text-left px-4 py-3 border-b border-border/50 hover:bg-white/5 transition-colors',
                   selectedUserId === conv.userId && 'bg-accent/10 border-l-2 border-l-accent'
@@ -252,29 +334,32 @@ export function SupportPage() {
                 {loadingMessages ? (
                   <p className="text-xs text-text-muted">Loading messages...</p>
                 ) : (
-                  selectedMessages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={cn(
-                        'flex flex-col max-w-[85%]',
-                        msg.sender === 'user' ? 'items-start' : 'items-end ml-auto'
-                      )}
-                    >
+                  <>
+                    {selectedMessages.map((msg) => (
                       <div
+                        key={msg.id}
                         className={cn(
-                          'rounded-lg px-3 py-2 text-xs',
-                          msg.sender === 'user'
-                            ? 'bg-white/5 text-text border border-border'
-                            : 'bg-accent/15 text-text border border-accent/30'
+                          'flex flex-col max-w-[85%]',
+                          msg.sender === 'user' ? 'items-start' : 'items-end ml-auto'
                         )}
                       >
-                        <div className="font-medium text-[10px] uppercase tracking-wider text-text-muted mb-0.5">
-                          {(msg.sender === 'user' ? selected?.userName : msg.name) ?? msg.name} · {msg.time}
+                        <div
+                          className={cn(
+                            'rounded-lg px-3 py-2 text-xs',
+                            msg.sender === 'user'
+                              ? 'bg-white/5 text-text border border-border'
+                              : 'bg-accent/15 text-text border border-accent/30'
+                          )}
+                        >
+                          <p className="text-sm leading-snug whitespace-pre-wrap">{msg.text}</p>
+                          <div className="font-medium text-[10px] uppercase tracking-wider text-text-muted mt-1.5 text-right">
+                            {(msg.sender === 'user' ? selected?.userName : msg.name) ?? msg.name} · {msg.time}
+                          </div>
                         </div>
-                        <p className="text-sm leading-snug">{msg.text}</p>
                       </div>
-                    </div>
-                  ))
+                    ))}
+                    <div ref={messagesEndRef} className="shrink-0 h-px" aria-hidden />
+                  </>
                 )}
               </div>
               <div className="shrink-0 p-4 border-t border-border bg-surface-2/30">
@@ -313,6 +398,65 @@ export function SupportPage() {
           )}
         </div>
       </div>
+
+      <ModalShell
+        open={selectUserModalOpen}
+        onOpenChange={setSelectUserModalOpen}
+        onClose={() => { setSelectUserModalOpen(false); setUserSearch('') }}
+        title="Select user"
+        description="Choose a user to start a new chat."
+        size="md"
+      >
+        <div className="flex flex-col gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+            <Input
+              type="text"
+              placeholder="Search by name or email..."
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <div className="max-h-[60vh] overflow-auto border border-border rounded-lg divide-y divide-border">
+            {usersLoading ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-text-muted">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm">Loading users...</span>
+              </div>
+            ) : filteredUsers.length === 0 ? (
+              <p className="text-sm text-text-muted py-6 text-center">No users found</p>
+            ) : (
+              filteredUsers.map((u) => {
+                const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || '—'
+                const isInConversations = conversations.some((c) => c.userId === u.id)
+                return (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => handleSelectUser(u)}
+                    className={cn(
+                      'w-full text-left px-4 py-3 hover:bg-white/5 transition-colors flex items-center gap-3',
+                      selectedUserId === u.id && 'bg-accent/10'
+                    )}
+                  >
+                    <div className="shrink-0 h-9 w-9 rounded-lg bg-surface-2 flex items-center justify-center text-accent">
+                      <User className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-sm text-text truncate">{name}</div>
+                      <div className="text-xs text-text-muted truncate">{u.email}</div>
+                      {isInConversations && (
+                        <span className="text-[10px] text-text-muted mt-0.5">Has conversation</span>
+                      )}
+                    </div>
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      </ModalShell>
     </ContentShell>
   )
 }

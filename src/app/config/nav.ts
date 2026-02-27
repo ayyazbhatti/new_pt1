@@ -37,6 +37,7 @@ export const userNavItems: NavItem[] = [
   { label: 'Positions', path: '/user/positions', icon: BarChart3 },
   { label: 'Orders', path: '/user/orders', icon: ClipboardList },
   { label: 'Affiliate', path: '/user/affiliate', icon: UsersRound },
+  { label: 'Support', path: '/user/support', icon: Headphones },
   { label: 'Deposit', path: '/user/deposit', icon: ArrowDownToLine },
   { label: 'Withdraw', path: '/user/withdraw', icon: ArrowUpFromLine },
 ]

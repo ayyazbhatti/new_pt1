@@ -53,6 +53,9 @@ pub struct User {
     /// When set, effective permissions = this profile's grants (for manager/agent).
     #[serde(default)]
     pub permission_profile_id: Option<Uuid>,
+    /// Soft delete; NULL = active. Must match users table for SELECT * / FromRow.
+    #[serde(skip_serializing)]
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

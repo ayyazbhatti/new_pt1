@@ -10,4 +10,6 @@ pub mod position_event_handler;
 pub mod price_tick_summary_handler;
 pub mod ledger_service;
 pub mod permission_profiles_service;
+pub mod email_config_service;
+pub mod email_templates_service;
 
