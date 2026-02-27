@@ -3,8 +3,8 @@ import { Button } from '@/shared/ui/button'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { UserKPICards, UserFiltersBar, UsersTable } from '../components'
 import { useModalStore } from '@/app/store'
-import { CreateEditUserModal } from '../modals/CreateEditUserModal'
-import { Download, Plus } from 'lucide-react'
+import { CreateEditUserModal, MultiUserMetricsModal } from '../modals'
+import { Download, Plus, Activity } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -132,6 +132,8 @@ export function AdminUsersPage() {
     toast.success('Export functionality coming soon')
   }
 
+  const [multiUserMetricsOpen, setMultiUserMetricsOpen] = useState(false)
+
   if (isLoading) {
     return (
       <ContentShell>
@@ -162,6 +164,23 @@ export function AdminUsersPage() {
         description="Manage client accounts, trading permissions, KYC, risk status, and groups."
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setMultiUserMetricsOpen(true)}
+              className="hidden sm:inline-flex"
+            >
+              <Activity className="h-4 w-4 mr-2" />
+              Multi-User Metrics
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setMultiUserMetricsOpen(true)}
+              className="sm:hidden"
+              title="Metrics"
+            >
+              <Activity className="h-4 w-4" />
+            </Button>
             <Button variant="outline" onClick={handleExport} disabled>
               <Download className="h-4 w-4 mr-2" />
               Export CSV
@@ -178,6 +197,10 @@ export function AdminUsersPage() {
       <UserKPICards users={displayUsers} />
       <UserFiltersBar filters={filters} onFilterChange={setFilters} />
       <UsersTable users={filteredUsers} onUserUpdate={handleUserUpdate} />
+      <MultiUserMetricsModal
+        open={multiUserMetricsOpen}
+        onOpenChange={setMultiUserMetricsOpen}
+      />
     </ContentShell>
   )
 }
