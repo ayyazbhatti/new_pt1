@@ -1,4 +1,4 @@
-import { Search, Grid3x3, Bell, CreditCard, MessageCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
+import { Search, LayoutDashboard, Bell, CreditCard, MessageCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
@@ -267,9 +267,15 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             <div className="text-xs text-text-muted/80 mt-0.5">Trading Account</div>
           </div>
           <div className="flex items-center gap-0.5">
-            <button className="p-2 hover:bg-white/5 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group">
-              <Grid3x3 className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
-            </button>
+            <a
+              href="/user/dashboard"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="User panel (new tab)"
+              className="p-2 hover:bg-white/5 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group inline-flex"
+            >
+              <LayoutDashboard className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
+            </a>
             <button className="p-2 hover:bg-white/5 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 relative group">
               <Bell className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
               <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-danger ring-2 ring-[#0f172a]"></span>

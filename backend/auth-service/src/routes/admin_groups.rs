@@ -25,6 +25,8 @@ pub struct CreateGroupRequest {
     pub status: String,
     pub margin_call_level: Option<f64>,
     pub stop_out_level: Option<f64>,
+    /// Optional signup link slug (e.g. "golduser"). 3-20 chars, alphanumeric. If empty, auto-generated (5-7 chars).
+    pub signup_slug: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,6 +36,8 @@ pub struct UpdateGroupRequest {
     pub status: String,
     pub margin_call_level: Option<f64>,
     pub stop_out_level: Option<f64>,
+    /// Optional signup link slug. Set to null/empty to clear; 3-20 alphanumeric to set.
+    pub signup_slug: Option<Option<String>>,
 }
 
 /// Reference to a profile (price stream or leverage) for embedding in group list.
@@ -52,6 +56,8 @@ pub struct GroupListItem {
     pub price_profile: Option<ProfileRef>,
     /// Assigned leverage profile (id + name). Null if none assigned.
     pub leverage_profile: Option<ProfileRef>,
+    /// Tag IDs assigned to this group (entity_type = 'group').
+    pub tag_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,14 +86,27 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
-pub fn create_admin_groups_router(pool: PgPool) -> Router<PgPool> {
+/// Router for GET/PUT group tags only. Mount at `/api/admin/group-tags` so path is `/:id` (no conflict with groups `/:id`).
+pub fn create_admin_group_tags_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
+        .route("/:id", get(get_group_tags).put(put_group_tags))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .with_state(pool)
+}
+
+pub fn create_admin_groups_router(pool: PgPool) -> Router<PgPool> {
+    // Register /:id/tags first via merge so it is matched before the generic /:id
+    let tags_router = Router::new()
+        .route("/:id/tags", get(get_group_tags).put(put_group_tags))
+        .with_state(pool.clone());
+    Router::new()
+        .merge(tags_router)
         .route("/", get(list_groups).post(create_group))
-        .route("/:id", get(get_group).put(update_group).delete(delete_group))
         .route("/:id/usage", get(get_group_usage))
         .route("/:id/price-profile", put(update_group_price_profile))
         .route("/:id/leverage-profile", put(update_group_leverage_profile))
         .route("/:id/symbols", get(get_group_symbols).put(update_group_symbols))
+        .route("/:id", get(get_group).put(update_group).delete(delete_group))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -149,6 +168,12 @@ async fn list_groups(
                 .await
                 .unwrap_or_default();
 
+            let group_ids: Vec<Uuid> = groups.iter().map(|g| g.id).collect();
+            let group_tag_ids = service
+                .get_tag_ids_for_groups(&group_ids)
+                .await
+                .unwrap_or_default();
+
             let items: Vec<GroupListItem> = groups
                 .into_iter()
                 .map(|group| {
@@ -160,10 +185,12 @@ async fn list_groups(
                         name: leverage_names.get(&id).cloned().unwrap_or_else(|| "Unknown".to_string()),
                         id,
                     });
+                    let tag_ids = group_tag_ids.get(&group.id).cloned().unwrap_or_default();
                     GroupListItem {
                         group,
                         price_profile,
                         leverage_profile,
+                        tag_ids,
                     }
                 })
                 .collect();
@@ -253,6 +280,7 @@ async fn create_group(
             &payload.status,
             payload.margin_call_level,
             payload.stop_out_level,
+            payload.signup_slug.as_deref(),
         )
         .await
     {
@@ -306,6 +334,7 @@ async fn update_group(
             &payload.status,
             payload.margin_call_level,
             payload.stop_out_level,
+            payload.signup_slug.as_ref().map(|o| o.as_deref()),
         )
         .await
     {
@@ -879,5 +908,106 @@ async fn update_group_symbols(
         "success": true,
         "message": "Group symbol settings saved"
     })))
+}
+
+#[derive(Debug, Serialize)]
+pub struct GroupTagsResponse {
+    pub tag_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutGroupTagsRequest {
+    pub tag_ids: Vec<Uuid>,
+}
+
+async fn get_group_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<GroupTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AdminGroupsService::new(pool);
+    let group_ids = vec![id];
+    let map = service.get_tag_ids_for_groups(&group_ids).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let tag_ids = map.get(&id).cloned().unwrap_or_default();
+    Ok(Json(GroupTagsResponse { tag_ids }))
+}
+
+async fn put_group_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<PutGroupTagsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can access this endpoint".to_string(),
+                },
+            }),
+        ));
+    }
+    let group_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1)")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    if !group_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "GROUP_NOT_FOUND".to_string(),
+                    message: "Group not found".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AdminGroupsService::new(pool);
+    if let Err(e) = service.set_group_tags(id, &payload.tag_ids).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_GROUP_TAGS_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        ));
+    }
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 

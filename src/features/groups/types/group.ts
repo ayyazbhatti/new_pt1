@@ -6,6 +6,10 @@ export type UserGroup = {
   name: string
   description: string | null
   status: 'active' | 'disabled'
+  /** Unique slug for signup link (e.g. "golduser"). URL: /register?ref=<signupSlug> */
+  signupSlug?: string | null
+  /** Tag IDs assigned to this group (from list API). */
+  tagIds?: string[]
   priceProfileId?: string | null
   leverageProfileId?: string | null
   /** Set when returned from list groups API (assigned price stream profile). */
@@ -52,6 +56,8 @@ export interface CreateGroupPayload {
   status: 'active' | 'disabled'
   margin_call_level?: number | null
   stop_out_level?: number | null
+  /** Optional. Custom slug (3-20 alphanumeric). If empty, backend auto-generates 5-7 chars. */
+  signup_slug?: string | null
 }
 
 export interface UpdateGroupPayload extends CreateGroupPayload {}

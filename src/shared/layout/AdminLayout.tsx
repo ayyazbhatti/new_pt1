@@ -5,6 +5,7 @@ import { ModalHost } from './ModalHost'
 import { useUIStore } from '@/app/store'
 import { cn } from '@/shared/utils'
 import { AdminRouteGuard } from '@/shared/components/guards/AdminRouteGuard'
+import { adminNavItems } from '@/app/config'
 
 interface AdminLayoutProps {
   children: ReactNode
@@ -15,9 +16,9 @@ export function AdminLayout({ children }: AdminLayoutProps) {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-text">
-      <Sidebar />
+      <Sidebar navItems={adminNavItems} title="Admin Panel" />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Topbar />
+        <Topbar showLogout />
         <main
           className={cn(
             'flex-1 overflow-y-auto transition-all duration-300',

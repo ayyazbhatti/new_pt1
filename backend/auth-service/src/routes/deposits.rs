@@ -2021,6 +2021,57 @@ async fn get_user_positions(
         }
     }
 
+    // Enrich open positions with server-computed unrealized PnL from Redis prices (no polling; real-time via WebSocket still overwrites when client has ticks)
+    for pos_value in positions.iter_mut() {
+        if let Some(obj) = pos_value.as_object_mut() {
+            let status = obj
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !status.eq_ignore_ascii_case("open") {
+                continue;
+            }
+            let symbol = obj
+                .get("symbol")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let group_id = obj
+                .get("group_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let size = obj
+                .get("size")
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0.0);
+            let avg_price = obj
+                .get("avg_price")
+                .or_else(|| obj.get("entry_price"))
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0.0);
+            let side = obj.get("side").and_then(|v| v.as_str()).unwrap_or("");
+            if symbol.is_empty() || size <= 0.0 || avg_price <= 0.0 {
+                continue;
+            }
+            if let Some((bid, ask)) =
+                get_price_from_redis(&deposits_state.redis, &symbol, &group_id).await
+            {
+                let size_d = Decimal::from_str(&size.to_string()).unwrap_or(Decimal::ZERO);
+                let avg_d = Decimal::from_str(&avg_price.to_string()).unwrap_or(Decimal::ZERO);
+                let unrealized_pnl = match side {
+                    "LONG" => (bid - avg_d) * size_d,
+                    "SHORT" => (avg_d - ask) * size_d,
+                    _ => Decimal::ZERO,
+                };
+                obj.insert(
+                    "unrealized_pnl".to_string(),
+                    serde_json::Value::String(unrealized_pnl.to_string()),
+                );
+            }
+        }
+    }
+
     Ok(Json(PositionsResponse { positions }))
 }
 

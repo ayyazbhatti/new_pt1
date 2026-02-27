@@ -123,6 +123,8 @@ export function SupportPage() {
       const msg = dtoToMessage(dto, userName)
       setMessagesByUser((prev) => {
         const list = prev[uid] ?? []
+        // Defensive dedupe: avoid duplicate messages when the same WS event is delivered twice (e.g. multiple handlers or re-delivery)
+        if (list.some((m) => m.id === id)) return prev
         return { ...prev, [uid]: [...list, msg] }
       })
       if ((payload.senderType ?? payload.sender_type) === 'user') {
@@ -163,10 +165,11 @@ export function SupportPage() {
       const msg = dtoToMessage(created, selected?.userName)
       if (!knownIdsByUser.current[selectedUserId]) knownIdsByUser.current[selectedUserId] = new Set()
       knownIdsByUser.current[selectedUserId].add(created.id)
-      setMessagesByUser((prev) => ({
-        ...prev,
-        [selectedUserId]: [...(prev[selectedUserId] ?? []), msg],
-      }))
+      setMessagesByUser((prev) => {
+        const list = prev[selectedUserId] ?? []
+        if (list.some((m) => m.id === created.id)) return prev
+        return { ...prev, [selectedUserId]: [...list, msg] }
+      })
       setConversations((prev) =>
         prev.map((c) =>
           c.userId === selectedUserId

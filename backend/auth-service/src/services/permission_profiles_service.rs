@@ -266,18 +266,14 @@ impl PermissionProfilesService {
         Ok(())
     }
 
-    /// Returns effective permission keys for a user: from profile if set, else empty for non-admin; admin always gets all keys.
-    /// Caller should pass role and permission_profile_id from the user row.
+    /// Returns effective permission keys for a user from their assigned permission profile.
+    /// Admin and manager are treated the same: both get only the permissions granted by their profile.
+    /// If no profile is assigned, returns empty (user must have a profile to access admin pages).
     pub async fn get_effective_permissions(
         &self,
-        role: &str,
+        _role: &str,
         permission_profile_id: Option<Uuid>,
     ) -> Vec<String> {
-        let role_lower = role.to_lowercase();
-        if role_lower == "admin" {
-            return ALL_PERMISSION_KEYS.iter().map(|s| (*s).to_string()).collect();
-        }
-
         let Some(profile_id) = permission_profile_id else {
             return Vec::new();
         };

@@ -18,10 +18,17 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const [selectedUserId, setSelectedUserId] = useState<string>('')
   const [selectedProfileId, setSelectedProfileId] = useState<string>('')
+  const [selectedRole, setSelectedRole] = useState<string>('manager')
   const [userSearch, setUserSearch] = useState('')
   const [profileSearch, setProfileSearch] = useState('')
   const [notes, setNotes] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const roleOptions = [
+    { value: 'manager', label: 'Manager' },
+    { value: 'agent', label: 'Agent' },
+    { value: 'admin', label: 'Admin' },
+  ]
 
   const { data: profiles = [] } = useQuery({
     queryKey: ['permission-profiles'],
@@ -84,6 +91,7 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
       const payload: CreateManagerPayload = {
         user_id: selectedUserId,
         permission_profile_id: selectedProfileId,
+        role: selectedRole,
         notes: notes.trim() || null,
       }
       await onCreated?.(payload)
@@ -145,6 +153,26 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
           </SelectContent>
         </Select>
         <p className="text-xs text-text-muted mt-1">Only users not already managers are listed.</p>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-text mb-1.5">Role</label>
+        <Select
+          value={selectedRole}
+          onValueChange={setSelectedRole}
+          required
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Select role" />
+          </SelectTrigger>
+          <SelectContent>
+            {roleOptions.map((r) => (
+              <SelectItem key={r.value} value={r.value}>
+                {r.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-text-muted mt-1">Admin: full access. Manager: admin access. Agent: limited access (e.g. leads).</p>
       </div>
       <div>
         <label className="block text-sm font-medium text-text mb-1.5">Permission profile</label>

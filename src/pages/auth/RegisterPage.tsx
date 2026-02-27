@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'react-hot-toast'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { Input } from '@/shared/ui/input'
@@ -43,8 +43,13 @@ const countries = ['Pakistan', 'UAE', 'UK', 'US', 'Turkey']
 
 export function RegisterPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { register: registerUser } = useAuthStore()
   const [isLoading, setIsLoading] = useState(false)
+
+  // Signup link: ?ref=<slug> (e.g. golduser) or legacy ?group=<uuid>
+  const refFromLink = useMemo(() => searchParams.get('ref')?.trim() || undefined, [searchParams])
+  const groupIdFromLink = useMemo(() => searchParams.get('group')?.trim() || undefined, [searchParams])
 
   const {
     register,
@@ -55,6 +60,7 @@ export function RegisterPage() {
     resolver: zodResolver(registerSchema),
     defaultValues: {
       agreeToTerms: false,
+      referralCode: refFromLink ?? '',
     },
   })
 
@@ -68,10 +74,12 @@ export function RegisterPage() {
         password: data.password,
         confirmPassword: data.confirmPassword,
         country: data.country,
-        referralCode: data.referralCode,
+        // Use ref from URL as referral code so backend sets referred_by_user_id; manual field as override
+        referralCode: refFromLink || data.referralCode,
+        ...(groupIdFromLink ? { groupId: groupIdFromLink } : {}),
       })
       toast.success('Account created successfully!')
-      navigate('/')
+      navigate('/user/dashboard')
     } catch (error: unknown) {
       const msg =
         (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
@@ -86,7 +94,10 @@ export function RegisterPage() {
   return (
     <div className="min-h-screen h-screen overflow-hidden bg-[#0f1218] flex items-center justify-center p-6">
       <AuthCard>
-        <AuthHeader title="Create account" subtitle="Open your trading account in minutes" />
+        <AuthHeader
+          title="Create account"
+          subtitle={refFromLink ? "You're signing up via a referral link" : groupIdFromLink ? "You're signing up via a group link" : 'Open your trading account in minutes'}
+        />
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">

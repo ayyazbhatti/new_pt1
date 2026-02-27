@@ -7,6 +7,8 @@ import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useGroupsList } from '../hooks/useGroups'
 import { useMarkupProfiles } from '@/features/adminMarkup/hooks/useMarkup'
+import { useQuery } from '@tanstack/react-query'
+import { listTags } from '@/features/tags/api/tags.api'
 import type { UserGroup } from '../types/group'
 import { Plus, RefreshCw, X } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
@@ -63,11 +65,20 @@ export function GroupsPage() {
 
   const displayGroups = groupsState.length > 0 ? groupsState : groupsFromApi
 
-  const handleGroupUpdate = (groupId: string, updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile'>>) => {
+  const handleGroupUpdate = (
+    groupId: string,
+    updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'tagIds'>>
+  ) => {
     setGroupsState((prev) =>
       prev.map((g) => (g.id === groupId ? { ...g, ...updates } : g))
     )
   }
+
+  const { data: tagsList = [] } = useQuery({
+    queryKey: ['admin', 'tags'],
+    queryFn: () => listTags(),
+  })
+  const allTags = tagsList.map((t) => ({ id: t.id, name: t.name }))
 
   // Debounced search
   const [searchInput, setSearchInput] = useState(search)
@@ -212,6 +223,7 @@ export function GroupsPage() {
       </div>
 
       {/* Table */}
+      <div className="pt-4">
       {isLoading ? (
         <div className="p-4 space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -241,6 +253,7 @@ export function GroupsPage() {
           <GroupsTable
             groups={displayGroups}
             availablePriceProfiles={availablePriceProfiles}
+            allTags={allTags}
             onGroupUpdate={handleGroupUpdate}
             onRefresh={() => refetch()}
           />
@@ -276,6 +289,7 @@ export function GroupsPage() {
           )}
         </>
       )}
+      </div>
 
       {/* Create Dialog */}
       <GroupFormDialog

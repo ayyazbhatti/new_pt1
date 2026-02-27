@@ -46,8 +46,8 @@ const TableCell = memo(({ cell, onRowClick, dense }: { cell: any; onRowClick?: (
     </td>
   )
 }, (prev, next) => {
-  // For price cells and cells with controlled inputs (e.g. Select), allow re-renders
-  const isLiveCell =
+  // For price cells, cells with controlled inputs (e.g. Select), and tags dropdown (open state), allow re-renders
+  const isLiveOrInteractiveCell =
     prev.cell.column.id === 'livePrice' ||
     next.cell.column.id === 'livePrice' ||
     prev.cell.column.id === 'leverageProfileName' ||
@@ -55,8 +55,10 @@ const TableCell = memo(({ cell, onRowClick, dense }: { cell: any; onRowClick?: (
     prev.cell.column.id === 'bid' ||
     next.cell.column.id === 'bid' ||
     prev.cell.column.id === 'ask' ||
-    next.cell.column.id === 'ask'
-  if (isLiveCell) {
+    next.cell.column.id === 'ask' ||
+    prev.cell.column.id === 'tags' ||
+    next.cell.column.id === 'tags'
+  if (isLiveOrInteractiveCell) {
     return false
   }
   

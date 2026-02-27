@@ -11,6 +11,7 @@ import { DeleteManagerModal } from '../modals/DeleteManagerModal'
 import { Pencil, UserX, UserCheck, Trash2 } from 'lucide-react'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from 'react-hot-toast'
+import { RoleBadge } from '@/features/auth/components/RoleBadge'
 
 interface ManagersTableProps {
   managers: Manager[]
@@ -84,6 +85,15 @@ export function ManagersTable({
       header: 'Email',
       cell: ({ row }) => (
         <span className="text-sm text-text-muted whitespace-nowrap">{row.original.userEmail}</span>
+      ),
+    },
+    {
+      accessorKey: 'role',
+      header: 'Role',
+      cell: ({ row }) => (
+        <div className="whitespace-nowrap">
+          <RoleBadge role={row.original.role} />
+        </div>
       ),
     },
     {

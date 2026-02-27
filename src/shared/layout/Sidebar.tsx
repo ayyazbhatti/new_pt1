@@ -1,17 +1,24 @@
 import { NavLink } from 'react-router-dom'
 import { useUIStore } from '@/app/store'
-import { adminNavItems } from '@/app/config'
+import type { NavItem } from '@/app/config'
 import { cn } from '@/shared/utils'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/shared/ui/button'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { canAccess } from '@/shared/utils/permissions'
 
-export function Sidebar() {
+export interface SidebarProps {
+  /** Nav items to show (e.g. adminNavItems or userNavItems) */
+  navItems: NavItem[]
+  /** Title shown in sidebar header when expanded (e.g. "Admin Panel" or "User Panel") */
+  title: string
+}
+
+export function Sidebar({ navItems, title }: SidebarProps) {
   const sidebarOpen = useUIStore((state) => state.sidebarOpen)
   const toggleSidebar = useUIStore((state) => state.toggleSidebar)
   const user = useAuthStore((state) => state.user)
-  const visibleItems = adminNavItems.filter(
+  const visibleItems = navItems.filter(
     (item) => !item.permission || canAccess(item.permission, user)
   )
 
@@ -24,7 +31,7 @@ export function Sidebar() {
     >
       {/* Logo/Header - Fixed */}
       <div className="flex h-16 items-center justify-between border-b border-border px-4">
-        {sidebarOpen && <div className="text-lg font-semibold text-text">Admin Panel</div>}
+        {sidebarOpen && <div className="text-lg font-semibold text-text">{title}</div>}
         <Button
           variant="ghost"
           size="sm"

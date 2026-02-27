@@ -1,0 +1,7 @@
+export { UserDashboardPage } from './UserDashboardPage'
+export { UserProfilePage } from './UserProfilePage'
+export { UserAffiliatePage } from './UserAffiliatePage'
+export { UserDepositPage } from './UserDepositPage'
+export { UserWithdrawPage } from './UserWithdrawPage'
+export { UserPositionsPage } from './UserPositionsPage'
+export { UserOrdersPage } from './UserOrdersPage'

@@ -187,6 +187,7 @@ export function LeverageProfilesPage() {
       </div>
 
       {/* Table */}
+      <div className="pt-4">
       {isLoading ? (
         <div className="p-4 space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -244,6 +245,7 @@ export function LeverageProfilesPage() {
           )}
         </>
       )}
+      </div>
 
       {/* Create Dialog */}
       <ProfileFormDialog

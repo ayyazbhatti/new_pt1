@@ -7,26 +7,42 @@ import { UserGroup, ProfileRef } from '../types/group'
 import { GroupFormDialog } from './GroupFormDialog'
 import { DeleteGroupDialog } from './DeleteGroupDialog'
 import { AssignSymbolsModal } from '../modals/AssignSymbolsModal'
-import { Eye, Edit, Trash2, Settings } from 'lucide-react'
-import { useState } from 'react'
+import { Eye, Edit, Trash2, Settings, Copy, Tag, ChevronDown } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useModalStore } from '@/app/store'
+import { toast } from 'react-hot-toast'
 import { useCanAccess } from '@/shared/utils/permissions'
+import { cn } from '@/shared/utils'
 import { formatDistanceToNow } from 'date-fns'
 import { useUpdateGroupPriceProfile } from '../hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
+import { Checkbox } from '@/shared/ui/Checkbox'
+import { setGroupTags } from '../api/groups.api'
 
 interface GroupsTableProps {
   groups: UserGroup[]
   availablePriceProfiles?: ProfileRef[]
   /** Callback to update group in parent state (same pattern as Admin Users page) so dropdown updates immediately */
-  onGroupUpdate?: (groupId: string, updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile'>>) => void
+  onGroupUpdate?: (
+    groupId: string,
+    updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'tagIds'>>
+  ) => void
   onRefresh?: () => void
+  /** All tags for the assign-tags dropdown */
+  allTags?: { id: string; name: string }[]
 }
 
 /** Sentinel for "None" – Radix Select forbids value="" on SelectItem */
 const NONE_PROFILE_VALUE = '__none__'
 
-export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate, onRefresh }: GroupsTableProps) {
+export function GroupsTable({
+  groups,
+  availablePriceProfiles = [],
+  onGroupUpdate,
+  onRefresh,
+  allTags = [],
+}: GroupsTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const canEditGroups = useCanAccess('groups:edit')
   const updatePriceProfile = useUpdateGroupPriceProfile()
@@ -36,6 +52,22 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [openTagsGroupId, setOpenTagsGroupId] = useState<string | null>(null)
+  const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
+  const [updatingTagsGroupId, setUpdatingTagsGroupId] = useState<string | null>(null)
+  const tagsDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (openTagsGroupId == null) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagsDropdownRef.current && !tagsDropdownRef.current.contains(e.target as Node)) {
+        setOpenTagsGroupId(null)
+        setOpenTagsAnchorRect(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [openTagsGroupId])
 
   const handleSettings = (group: UserGroup) => {
     openModal(
@@ -94,6 +126,48 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
       },
     },
     {
+      id: 'signupLink',
+      header: 'Signup link',
+      cell: ({ row }) => {
+        const group = row.original
+        const slug = group.signupSlug?.trim()
+        const signupUrl =
+          typeof window !== 'undefined' && slug
+            ? `${window.location.origin}/register?ref=${encodeURIComponent(slug)}`
+            : ''
+        const handleCopy = () => {
+          if (!signupUrl) return
+          navigator.clipboard.writeText(signupUrl).then(
+            () => toast.success('Signup link copied'),
+            () => toast.error('Failed to copy')
+          )
+        }
+        return (
+          <div className="flex items-center gap-1.5">
+            {slug ? (
+              <>
+                <span className="text-sm text-text-muted truncate max-w-[100px]" title={signupUrl}>
+                  ?ref={slug}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleCopy}
+                  title="Copy signup link"
+                  className="h-8 px-2"
+                >
+                  <Copy className="h-4 w-4 mr-1" />
+                  Copy
+                </Button>
+              </>
+            ) : (
+              <span className="text-sm text-text-muted">—</span>
+            )}
+          </div>
+        )
+      },
+    },
+    {
       id: 'priceProfile',
       header: 'Price profile',
       cell: ({ row }) => {
@@ -140,6 +214,47 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
               </SelectContent>
             </Select>
           </div>
+        )
+      },
+    },
+    {
+      id: 'tags',
+      header: 'Tags',
+      cell: ({ row }) => {
+        const group = row.original
+        const tagIds = group.tagIds ?? []
+        const isOpen = openTagsGroupId === group.id
+        const isUpdating = updatingTagsGroupId === group.id
+
+        const label =
+          tagIds.length > 0
+            ? `${tagIds.length} tag${tagIds.length === 1 ? '' : 's'}`
+            : 'Assign tags'
+
+        return (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 text-text"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (openTagsGroupId === group.id) {
+                setOpenTagsGroupId(null)
+                setOpenTagsAnchorRect(null)
+              } else {
+                setOpenTagsGroupId(group.id)
+                setOpenTagsAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect())
+              }
+            }}
+            disabled={isUpdating}
+          >
+            {isUpdating && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+            <Tag className="h-4 w-4 shrink-0" />
+            <span className="max-w-[80px] truncate">{label}</span>
+            <ChevronDown
+              className={cn('h-4 w-4 shrink-0 transition-transform', isOpen && 'rotate-180')}
+            />
+          </Button>
         )
       },
     },
@@ -205,10 +320,62 @@ export function GroupsTable({ groups, availablePriceProfiles = [], onGroupUpdate
     },
   ]
 
+  const openTagsGroup = openTagsGroupId ? groups.find((g) => g.id === openTagsGroupId) : null
+  const openTagsTagIds = openTagsGroup?.tagIds ?? []
+
+  const tagsDropdownPanel =
+    openTagsGroupId && openTagsAnchorRect ? (
+      createPortal(
+        <div
+          ref={tagsDropdownRef}
+          className="fixed z-[100] min-w-[180px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg"
+          style={{
+            left: openTagsAnchorRect.left,
+            top: openTagsAnchorRect.bottom + 4,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {allTags.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-text-muted">No tags defined</div>
+          ) : (
+            <div className="max-h-[220px] overflow-y-auto">
+              {allTags.map((tag) => (
+                <label
+                  key={tag.id}
+                  className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-surface-2"
+                >
+                  <Checkbox
+                    checked={openTagsTagIds.includes(tag.id)}
+                    onChange={(e) => {
+                      const checked = e.target.checked
+                      const next = checked
+                        ? [...openTagsTagIds, tag.id]
+                        : openTagsTagIds.filter((id) => id !== tag.id)
+                      setUpdatingTagsGroupId(openTagsGroupId)
+                      setGroupTags(openTagsGroupId, next)
+                        .then(() => {
+                          onGroupUpdate?.(openTagsGroupId, { tagIds: next })
+                          onRefresh?.()
+                          toast.success('Tags updated')
+                        })
+                        .catch(() => toast.error('Failed to update tags'))
+                        .finally(() => setUpdatingTagsGroupId(null))
+                    }}
+                  />
+                  <span className="text-text">{tag.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>,
+        document.body
+      )
+    ) : null
+
   return (
     <>
       <DataTable data={groups} columns={columns} />
-      
+      {tagsDropdownPanel}
       {viewingGroup && (
         <GroupFormDialog
           mode="view"

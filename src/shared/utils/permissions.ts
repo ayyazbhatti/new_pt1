@@ -15,7 +15,7 @@ export const LEAD_PERMISSIONS = {
   IMPORT: 'leads:import',
 } as const
 
-/** All permission keys (must match backend ALL_PERMISSION_KEYS). Used for admin bypass and nav/route guards. */
+/** All permission keys (must match backend ALL_PERMISSION_KEYS). Used for permission profile editing and nav/route guards. */
 export const ALL_PERMISSION_KEYS: readonly string[] = [
   'leads:view_all', 'leads:view_assigned', 'leads:create', 'leads:edit', 'leads:delete',
   'leads:assign', 'leads:change_stage', 'leads:export', 'leads:settings', 'leads:templates',
@@ -67,13 +67,11 @@ function getPermissionsForRole(role: string): string[] {
   return ROLE_PERMISSIONS[r] ?? [LEAD_PERMISSIONS.VIEW_ASSIGNED]
 }
 
+/** Admin and manager both get permissions only from their assigned profile (from API). No full-access bypass. */
 export function getCurrentUserPermissions(user: User | null): string[] {
   if (!user) return []
   if (user.permissions && user.permissions.length > 0) {
     return user.permissions
-  }
-  if (user.role?.toLowerCase() === 'admin') {
-    return [...ALL_PERMISSION_KEYS]
   }
   return getPermissionsForRole(user.role)
 }
@@ -89,11 +87,13 @@ export function useCanAccess(permissionKey: string): boolean {
   return canAccess(permissionKey, user)
 }
 
-/** Required permission to enter each admin path. Admin always bypasses. */
+/** Required permission to enter each admin path. Admin and manager both need the permission. */
 export const ADMIN_ROUTE_PERMISSIONS: Record<string, string> = {
   '/admin/dashboard': 'dashboard:view',
   '/admin/users': 'users:view',
   '/admin/groups': 'groups:view',
+  '/admin/manager': 'users:view',
+  '/admin/tag': 'users:view',
   '/admin/trading': 'trading:view',
   '/admin/risk': 'risk:view',
   '/admin/leverage-profiles': 'leverage_profiles:view',

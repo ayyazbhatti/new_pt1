@@ -30,11 +30,24 @@ struct AppState {
     jwt_secret: String,
 }
 
+/// Load .env so JWT_SECRET matches auth-service (WebSocket auth). Tries repo root then cwd.
+fn load_env() {
+    // 1) Repo root (relative to Cargo.toml): works whether run via `cargo run -p gateway-ws` or from any cwd
+    let repo_env = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.env");
+    if repo_env.exists() {
+        if let Ok(abs) = std::fs::canonicalize(&repo_env) {
+            dotenv::from_path(&abs).ok();
+        } else {
+            dotenv::from_path(&repo_env).ok();
+        }
+    }
+    // 2) Current dir (overrides if present)
+    dotenv::dotenv().ok();
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load .env from current dir (e.g. repo root when running via start-all.sh) so JWT_SECRET
-    // matches auth-service and WebSocket auth succeeds.
-    dotenv::dotenv().ok();
+    load_env();
 
     tracing_subscriber::fmt()
         .with_env_filter("gateway-ws=debug")

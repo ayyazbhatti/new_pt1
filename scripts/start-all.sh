@@ -43,7 +43,7 @@ if [ -z "${JWT_SECRET:-}" ]; then
   echo "  WARNING: JWT_SECRET is not set. WebSocket auth will fail and real-time balance updates will not work."
   echo "  Set JWT_SECRET in .env (same value as auth-service) or export it before running this script."
 fi
-(PORT=3003 cargo run -p gateway-ws) &
+(PORT=3003 JWT_SECRET="${JWT_SECRET}" cargo run -p gateway-ws) &
 GW_PID=$!
 
 echo "==> Starting email-worker..."

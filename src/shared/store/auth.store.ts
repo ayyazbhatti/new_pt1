@@ -42,6 +42,10 @@ export interface RegisterData {
   confirmPassword: string
   country?: string
   referralCode?: string
+  /** Group ID from signup link (?group=). Legacy. Prefer groupRef. */
+  groupId?: string
+  /** Signup link ref/slug (?ref=). New user assigned to group with this signup_slug. */
+  groupRef?: string
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -70,6 +74,7 @@ export const useAuthStore = create<AuthState>()(
             permissions: response.user.permissions,
             permissionProfileId: response.user.permissionProfileId,
             permissionProfileName: response.user.permissionProfileName,
+            referralCode: response.user.referralCode,
           },
           isAuthenticated: true,
         })
@@ -97,6 +102,7 @@ export const useAuthStore = create<AuthState>()(
             permissions: response.user.permissions,
             permissionProfileId: response.user.permissionProfileId,
             permissionProfileName: response.user.permissionProfileName,
+            referralCode: response.user.referralCode,
           },
           isAuthenticated: true,
         })
@@ -156,6 +162,7 @@ export const useAuthStore = create<AuthState>()(
                 permissions: user.permissions,
                 permissionProfileId: user.permissionProfileId,
                 permissionProfileName: user.permissionProfileName,
+                referralCode: user.referralCode,
               },
               isAuthenticated: true,
               isHydrated: true,
@@ -205,6 +212,7 @@ export const useAuthStore = create<AuthState>()(
               permissions: user.permissions,
               permissionProfileId: user.permissionProfileId,
               permissionProfileName: user.permissionProfileName,
+              referralCode: user.referralCode,
             },
           })
         } catch (error) {

@@ -19,13 +19,21 @@ pub struct Claims {
 
 /// Verify the access token and return the user id (sub) if valid.
 /// Returns an error string suitable for sending as auth_error to the client.
+/// Strips "Bearer " prefix if present so clients can send either raw token or "Bearer <token>".
 pub fn verify_access_token(token: &str, secret: &str) -> Result<Uuid, String> {
+    let token = token.trim().strip_prefix("Bearer ").unwrap_or(token.trim());
+    if token.is_empty() {
+        return Err("No token provided".to_string());
+    }
     let key = DecodingKey::from_secret(secret.as_bytes());
     let validation = Validation::default();
     let token_data = decode::<Claims>(token, &key, &validation).map_err(|e| {
         let msg = match e.kind() {
             jsonwebtoken::errors::ErrorKind::ExpiredSignature => "Token expired",
             jsonwebtoken::errors::ErrorKind::InvalidToken => "Invalid token",
+            jsonwebtoken::errors::ErrorKind::InvalidSignature => {
+                "Token validation failed (invalid signature — ensure gateway-ws and auth-service use the same JWT_SECRET)"
+            }
             _ => "Token validation failed",
         };
         msg.to_string()

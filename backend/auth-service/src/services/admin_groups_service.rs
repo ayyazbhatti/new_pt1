@@ -1,9 +1,35 @@
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
+use rand::Rng;
 use rust_decimal::prelude::FromPrimitive;
 use sqlx::PgPool;
 use uuid::Uuid;
 use crate::models::user_group::UserGroup;
+
+/// Generate a random alphanumeric slug of length 5-7 (lowercase + digits). Used when no custom slug provided.
+fn generate_signup_slug() -> String {
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::thread_rng();
+    let len = rng.gen_range(5..=7);
+    (0..len)
+        .map(|_| {
+            let i = rng.gen_range(0..CHARS.len());
+            CHARS[i] as char
+        })
+        .collect()
+}
+
+/// Validate custom signup slug: 3-20 chars, only a-z, A-Z, 0-9. Stored lowercase.
+fn normalize_and_validate_slug(slug: &str) -> anyhow::Result<String> {
+    let s = slug.trim().to_lowercase();
+    if s.len() < 3 || s.len() > 20 {
+        return Err(anyhow::anyhow!("Signup slug must be 3–20 characters"));
+    }
+    if !s.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(anyhow::anyhow!("Signup slug can only contain letters and numbers"));
+    }
+    Ok(s)
+}
 
 /// Group symbol row for list response (symbol_id, symbol_code, leverage_profile_id, leverage_profile_name, enabled).
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -22,7 +48,7 @@ pub struct GroupSymbolInput {
     pub enabled: bool,
 }
 
-/// Row without profile id columns (for DBs that haven't run migration 0009).
+/// Row without profile/signup_slug columns (for DBs that haven't run those migrations).
 #[derive(sqlx::FromRow)]
 struct UserGroupRowMinimal {
     id: Uuid,
@@ -40,6 +66,7 @@ impl From<UserGroupRowMinimal> for UserGroup {
             name: r.name,
             description: r.description,
             status: r.status,
+            signup_slug: None,
             default_price_profile_id: None,
             default_leverage_profile_id: None,
             margin_call_level: None,
@@ -131,7 +158,7 @@ impl AdminGroupsService {
         order_by: &str,
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
-            "SELECT id, name, description, status, default_price_profile_id, \
+            "SELECT id, name, description, status, signup_slug, default_price_profile_id, \
              default_leverage_profile_id, margin_call_level, stop_out_level, created_at, updated_at FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
@@ -210,6 +237,21 @@ impl AdminGroupsService {
         Ok(group)
     }
 
+    /// Resolve signup_slug to group id if group exists and is active. Used at register.
+    pub async fn resolve_group_id_by_signup_slug(&self, slug: &str) -> anyhow::Result<Option<Uuid>> {
+        let slug = slug.trim().to_lowercase();
+        if slug.is_empty() {
+            return Ok(None);
+        }
+        let id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM user_groups WHERE signup_slug = $1 AND status = 'active'",
+        )
+        .bind(&slug)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
     pub async fn create_group(
         &self,
         name: &str,
@@ -217,24 +259,46 @@ impl AdminGroupsService {
         status: &str,
         margin_call_level: Option<f64>,
         stop_out_level: Option<f64>,
+        signup_slug: Option<&str>,
     ) -> anyhow::Result<UserGroup> {
         // Validate
         if name.len() < 2 || name.len() > 40 {
             return Err(anyhow::anyhow!("Name must be between 2 and 40 characters"));
         }
 
+        let slug: Option<String> = match signup_slug {
+            Some(s) if !s.trim().is_empty() => Some(normalize_and_validate_slug(s)?),
+            _ => {
+                let mut candidate = generate_signup_slug();
+                for _ in 0..20 {
+                    let exists: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM user_groups WHERE signup_slug = $1)",
+                    )
+                    .bind(&candidate)
+                    .fetch_one(&self.pool)
+                    .await?;
+                    if !exists {
+                        break;
+                    }
+                    candidate = generate_signup_slug();
+                }
+                Some(candidate)
+            }
+        };
+
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
             INSERT INTO user_groups (
-                name, description, status, margin_call_level, stop_out_level
+                name, description, status, signup_slug, margin_call_level, stop_out_level
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *
             "#,
         )
         .bind(name)
         .bind(description)
         .bind(status)
+        .bind(&slug)
         .bind(margin_call_level.and_then(rust_decimal::Decimal::from_f64))
         .bind(stop_out_level.and_then(rust_decimal::Decimal::from_f64))
         .fetch_one(&self.pool)
@@ -251,11 +315,19 @@ impl AdminGroupsService {
         status: &str,
         margin_call_level: Option<f64>,
         stop_out_level: Option<f64>,
+        signup_slug: Option<Option<&str>>,
     ) -> anyhow::Result<UserGroup> {
         // Validate (same as create)
         if name.len() < 2 || name.len() > 40 {
             return Err(anyhow::anyhow!("Name must be between 2 and 40 characters"));
         }
+
+        let slug_value: Option<String> = match signup_slug {
+            None => None,
+            Some(None) => None,
+            Some(Some(s)) if s.trim().is_empty() => None,
+            Some(Some(s)) => Some(normalize_and_validate_slug(s)?),
+        };
 
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
@@ -266,6 +338,7 @@ impl AdminGroupsService {
                 status = $4,
                 margin_call_level = $5,
                 stop_out_level = $6,
+                signup_slug = $7,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -277,6 +350,7 @@ impl AdminGroupsService {
         .bind(status)
         .bind(margin_call_level.and_then(rust_decimal::Decimal::from_f64))
         .bind(stop_out_level.and_then(rust_decimal::Decimal::from_f64))
+        .bind(&slug_value)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Group not found"))?;
@@ -405,6 +479,46 @@ impl AdminGroupsService {
             .bind(s.symbol_id)
             .bind(s.leverage_profile_id)
             .bind(s.enabled)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Get tag IDs assigned to each group (entity_type = 'group'). Returns map group_id -> vec of tag_id.
+    pub async fn get_tag_ids_for_groups(&self, group_ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, Vec<Uuid>>> {
+        if group_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(sqlx::FromRow)]
+        struct Row { entity_id: Uuid, tag_id: Uuid }
+        let rows = sqlx::query_as::<_, Row>(
+            "SELECT entity_id, tag_id FROM tag_assignments WHERE entity_type = 'group' AND entity_id = ANY($1)",
+        )
+        .bind(group_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for r in rows {
+            map.entry(r.entity_id).or_default().push(r.tag_id);
+        }
+        Ok(map)
+    }
+
+    /// Replace tag assignments for a group. Removes existing and inserts the given tag_ids.
+    pub async fn set_group_tags(&self, group_id: Uuid, tag_ids: &[Uuid]) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM tag_assignments WHERE entity_type = 'group' AND entity_id = $1")
+            .bind(group_id)
+            .execute(&mut *tx)
+            .await?;
+        for tag_id in tag_ids {
+            sqlx::query(
+                "INSERT INTO tag_assignments (tag_id, entity_type, entity_id, created_at) VALUES ($1, 'group', $2, NOW())",
+            )
+            .bind(tag_id)
+            .bind(group_id)
             .execute(&mut *tx)
             .await?;
         }

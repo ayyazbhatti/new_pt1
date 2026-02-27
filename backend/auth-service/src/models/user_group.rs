@@ -9,6 +9,8 @@ pub struct UserGroup {
     pub name: String,
     pub description: Option<String>,
     pub status: String, // 'active' or 'disabled'
+    /// Unique slug for signup link (e.g. "golduser"). Used in /register?ref=<slug>. 3-20 chars, alphanumeric.
+    pub signup_slug: Option<String>,
     pub default_price_profile_id: Option<Uuid>,
     pub default_leverage_profile_id: Option<Uuid>,
     /// Margin call level as percentage (e.g. 50 = 50%). NULL = use platform default.

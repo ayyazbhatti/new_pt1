@@ -15,6 +15,7 @@ export interface AuthResponse {
     permission_profile_id?: string | null
     permission_profile_name?: string | null
     permissions?: string[] | null
+    referral_code?: string | null
   }
 }
 
@@ -39,6 +40,7 @@ export interface UserResponse {
   permission_profile_id?: string | null
   permission_profile_name?: string | null
   permissions?: string[] | null
+  referral_code?: string | null
 }
 
 export async function login(email: string, password: string): Promise<{
@@ -76,6 +78,7 @@ export async function login(email: string, password: string): Promise<{
       permissions: response.user.permissions ?? undefined,
       permissionProfileId: response.user.permission_profile_id ?? undefined,
       permissionProfileName: response.user.permission_profile_name ?? undefined,
+      referralCode: response.user.referral_code ?? undefined,
     },
   }
 }
@@ -94,6 +97,7 @@ export async function register(data: RegisterData): Promise<{
     permissions?: string[]
     permissionProfileId?: string | null
     permissionProfileName?: string | null
+    referralCode?: string
   }
 }> {
   const response = await http<AuthResponse>('/api/auth/register', {
@@ -104,7 +108,8 @@ export async function register(data: RegisterData): Promise<{
       email: data.email,
       password: data.password,
       country: data.country,
-      referral_code: data.referralCode,
+      referral_code: data.referralCode || undefined,
+      ...(data.groupRef ? { ref: data.groupRef } : data.groupId ? { group_id: data.groupId } : {}),
     }),
   })
 
@@ -122,6 +127,7 @@ export async function register(data: RegisterData): Promise<{
       permissions: response.user.permissions ?? undefined,
       permissionProfileId: response.user.permission_profile_id ?? undefined,
       permissionProfileName: response.user.permission_profile_name ?? undefined,
+      referralCode: response.user.referral_code ?? undefined,
     },
   }
 }
@@ -162,6 +168,7 @@ export interface MeResponse {
   permissions?: string[]
   permissionProfileId?: string | null
   permissionProfileName?: string | null
+  referralCode?: string | null
 }
 
 export async function me(): Promise<MeResponse> {
@@ -169,6 +176,44 @@ export async function me(): Promise<MeResponse> {
     method: 'GET',
   })
 
+  return mapUserResponseToMe(response)
+}
+
+/** Referred user (someone in your referral chain). level 1 = direct, 2 = referral of your referral, etc. */
+export interface ReferredUserDto {
+  id: string
+  email: string
+  first_name: string
+  last_name: string
+  created_at: string
+  level?: number
+}
+
+export interface ReferredUser {
+  id: string
+  email: string
+  firstName: string
+  lastName: string
+  createdAt: string
+  level: number
+}
+
+export async function getMyReferrals(): Promise<ReferredUser[]> {
+  const list = await http<ReferredUserDto[]>('/api/auth/me/referrals', {
+    method: 'GET',
+  })
+  return list.map((d) => ({
+    id: d.id,
+    email: d.email,
+    firstName: d.first_name,
+    lastName: d.last_name,
+    createdAt: d.created_at,
+    // Backend sends level (1=direct, 2=indirect, …); default 1 if missing (e.g. old API)
+    level: typeof d.level === 'number' ? d.level : 1,
+  }))
+}
+
+function mapUserResponseToMe(response: UserResponse): MeResponse {
   return {
     id: response.id,
     email: response.email,
@@ -186,7 +231,26 @@ export async function me(): Promise<MeResponse> {
     permissions: response.permissions ?? undefined,
     permissionProfileId: response.permission_profile_id ?? undefined,
     permissionProfileName: response.permission_profile_name ?? undefined,
+    referralCode: response.referral_code ?? undefined,
   }
+}
+
+export interface UpdateProfilePayload {
+  first_name?: string
+  last_name?: string
+}
+
+export async function updateProfile(
+  payload: UpdateProfilePayload
+): Promise<MeResponse> {
+  const body: UpdateProfilePayload = {}
+  if (payload.first_name !== undefined) body.first_name = payload.first_name.trim()
+  if (payload.last_name !== undefined) body.last_name = payload.last_name.trim()
+  const response = await http<UserResponse>('/api/auth/me', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+  return mapUserResponseToMe(response)
 }
 
 /** Tier from symbol-leverage endpoint (snake_case from API). */

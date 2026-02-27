@@ -22,6 +22,7 @@ pub struct ManagerResponse {
     pub user_id: Uuid,
     pub user_name: String,
     pub user_email: String,
+    pub user_role: String,
     pub permission_profile_id: Uuid,
     pub permission_profile_name: String,
     pub status: String,
@@ -41,6 +42,8 @@ pub struct ListManagersQuery {
 pub struct CreateManagerRequest {
     pub user_id: Uuid,
     pub permission_profile_id: Uuid,
+    #[serde(default)]
+    pub role: Option<String>,
     pub notes: Option<String>,
 }
 
@@ -91,6 +94,7 @@ struct ManagerRow {
     user_id: Uuid,
     user_name: String,
     user_email: String,
+    user_role: String,
     permission_profile_id: Uuid,
     permission_profile_name: String,
     status: String,
@@ -121,6 +125,7 @@ async fn list_managers(
         SELECT m.id, m.user_id, m.permission_profile_id, m.status, m.notes, m.created_at,
                CONCAT(u.first_name, ' ', u.last_name) AS user_name,
                u.email AS user_email,
+               u.role AS user_role,
                p.name AS permission_profile_name,
                u.last_login_at AS last_login_at
         FROM managers m
@@ -179,6 +184,7 @@ async fn list_managers(
             user_id: r.user_id,
             user_name: r.user_name,
             user_email: r.user_email,
+            user_role: r.user_role,
             permission_profile_id: r.permission_profile_id,
             permission_profile_name: r.permission_profile_name,
             status: r.status,
@@ -305,11 +311,17 @@ async fn create_manager(
         )
     })?;
 
-    // Set role to 'manager' so the user can access the admin panel (AdminGuard allows admin, manager, agent).
-    // Do not overwrite role if user is already 'admin'.
+    // Set role so the user can access the admin panel (AdminGuard allows admin, manager, agent).
+    // Use payload.role if it is manager|agent|admin, else default to 'manager'.
+    let new_role = payload
+        .role
+        .as_deref()
+        .filter(|r| *r == "manager" || *r == "agent" || *r == "admin")
+        .unwrap_or("manager");
     sqlx::query(
-        "UPDATE users SET role = CASE WHEN role = 'admin' THEN role ELSE 'manager' END, permission_profile_id = $1, updated_at = NOW() WHERE id = $2",
+        "UPDATE users SET role = $1, permission_profile_id = $2, updated_at = NOW() WHERE id = $3",
     )
+    .bind(new_role)
     .bind(payload.permission_profile_id)
     .bind(payload.user_id)
     .execute(&pool)
@@ -332,8 +344,8 @@ async fn create_manager(
         .await
         .unwrap_or_else(|_| "".to_string());
 
-    let user_row: (String, String, Option<DateTime<Utc>>) = sqlx::query_as(
-        "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at FROM users WHERE id = $1",
+    let user_row: (String, String, Option<DateTime<Utc>>, String) = sqlx::query_as(
+        "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at, role FROM users WHERE id = $1",
     )
     .bind(payload.user_id)
     .fetch_one(&pool)
@@ -357,6 +369,7 @@ async fn create_manager(
             user_id: payload.user_id,
             user_name: user_row.0,
             user_email: user_row.1,
+            user_role: user_row.3,
             permission_profile_id: payload.permission_profile_id,
             permission_profile_name: profile_name,
             status: "active".to_string(),
@@ -502,9 +515,9 @@ async fn update_manager(
         .await
         .unwrap_or_else(|_| "".to_string());
 
-    let (user_name, user_email, last_login_at): (String, String, Option<DateTime<Utc>>) =
+    let (user_name, user_email, last_login_at, user_role): (String, String, Option<DateTime<Utc>>, String) =
         sqlx::query_as(
-            "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at FROM users WHERE id = $1",
+            "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at, role FROM users WHERE id = $1",
         )
         .bind(user_id)
         .fetch_one(&pool)
@@ -542,6 +555,7 @@ async fn update_manager(
         user_id,
         user_name,
         user_email,
+        user_role,
         permission_profile_id: new_profile_id,
         permission_profile_name: profile_name,
         status: new_status.to_string(),

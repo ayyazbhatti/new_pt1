@@ -16,6 +16,7 @@ const groupSchema = z.object({
   status: z.enum(['active', 'disabled']),
   margin_call_level: z.number().min(0).max(1000).optional().nullable(),
   stop_out_level: z.number().min(0).max(1000).optional().nullable(),
+  signup_slug: z.string().max(20).optional().nullable(),
 })
 
 type GroupFormData = z.infer<typeof groupSchema>
@@ -47,6 +48,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           status: initial.status,
           margin_call_level: initial.marginCallLevel ?? undefined,
           stop_out_level: initial.stopOutLevel ?? undefined,
+          signup_slug: initial.signupSlug ?? '',
         }
       : {
           name: '',
@@ -54,6 +56,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           status: 'active',
           margin_call_level: undefined,
           stop_out_level: undefined,
+          signup_slug: '',
         },
   })
 
@@ -70,6 +73,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
         status: data.status,
         margin_call_level: data.margin_call_level ?? null,
         stop_out_level: data.stop_out_level ?? null,
+        signup_slug: data.signup_slug?.trim() || null,
       }
 
       if (mode === 'create') {
@@ -117,6 +121,18 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
             className="flex h-20 w-full rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 resize-none"
             disabled={isLoading || isReadOnly}
           />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="signup_slug">Signup link slug</Label>
+          <Input
+            id="signup_slug"
+            {...register('signup_slug')}
+            placeholder={mode === 'create' ? "e.g. golduser (or leave empty for auto 5-7 chars)" : "e.g. golduser (leave empty to clear)"}
+            disabled={isLoading || isReadOnly}
+            className="font-mono text-sm"
+          />
+          <p className="text-xs text-text-muted">Used in signup URL: /register?ref=<strong>{watch('signup_slug')?.trim() || '&lt;slug&gt;'}</strong>. 3-20 letters/numbers. Create: leave empty to auto-generate.</p>
         </div>
 
         <div className="space-y-2">

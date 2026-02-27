@@ -22,6 +22,8 @@ function toCamelCase(obj: any): UserGroup {
     name: obj.name,
     description: obj.description,
     status: obj.status,
+    signupSlug: obj.signup_slug ?? undefined,
+    tagIds: Array.isArray(obj.tag_ids) ? obj.tag_ids : [],
     priceProfileId: obj.default_price_profile_id,
     leverageProfileId: obj.default_leverage_profile_id,
     priceProfile: priceProfile ?? undefined,
@@ -35,13 +37,15 @@ function toCamelCase(obj: any): UserGroup {
 
 // Helper to convert camelCase to snake_case
 function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
-  return {
+  const out: Record<string, unknown> = {
     name: payload.name,
     description: payload.description ?? null,
     status: payload.status,
     margin_call_level: payload.margin_call_level ?? null,
     stop_out_level: payload.stop_out_level ?? null,
   }
+  if ('signup_slug' in payload) out.signup_slug = payload.signup_slug ?? null
+  return out
 }
 
 export async function listGroups(params?: ListGroupsParams): Promise<ListGroupsResponse> {
@@ -143,6 +147,20 @@ export async function updateGroupSymbols(
         enabled: Boolean(s.enabled),
       })),
     }),
+  })
+}
+
+/** Get tag IDs assigned to a group. Uses /api/admin/group-tags/:id to avoid route conflicts. */
+export async function getGroupTags(groupId: string): Promise<string[]> {
+  const res = await http<{ tag_ids: string[] }>(`/api/admin/group-tags/${groupId}`, { method: 'GET' })
+  return res.tag_ids ?? []
+}
+
+/** Assign tags to a group (replaces existing). Uses /api/admin/group-tags/:id to avoid route conflicts. */
+export async function setGroupTags(groupId: string, tagIds: string[]): Promise<void> {
+  await http(`/api/admin/group-tags/${groupId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tag_ids: tagIds }),
   })
 }
 

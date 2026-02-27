@@ -1,10 +1,12 @@
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { routes } from './routes'
 import { adminRoutes } from './adminRoutes'
+import { userRoutes } from './userRoutes'
 import { AppShell } from '../layout'
-import { AdminLayout } from '@/shared/layout'
+import { AdminLayout, UserLayout } from '@/shared/layout'
 import { AuthGuard } from '@/shared/components/guards/AuthGuard'
 import { AdminGuard } from '@/shared/components/guards/AdminGuard'
+import { UserGuard } from '@/shared/components/guards/UserGuard'
 
 const futureFlags = {
   v7_startTransition: true,
@@ -35,9 +37,23 @@ const router = createBrowserRouter(
         </AuthGuard>
       ),
     })),
+    ...userRoutes.map((route) => ({
+      ...route,
+      element: (
+        <AuthGuard>
+          <UserGuard>
+            <UserLayout>{route.element}</UserLayout>
+          </UserGuard>
+        </AuthGuard>
+      ),
+    })),
     {
       path: '/admin',
       element: <Navigate to="/admin/dashboard" replace />,
+    },
+    {
+      path: '/user',
+      element: <Navigate to="/user/dashboard" replace />,
     },
   ],
   {

@@ -10,7 +10,7 @@ interface AdminRouteGuardProps {
 
 /**
  * Renders children if the current admin route is allowed by the user's permissions.
- * Admin role always passes. Manager/agent must have the required permission for the path.
+ * Admin and manager are treated the same: both require the assigned permission for the path.
  */
 export function AdminRouteGuard({ children }: AdminRouteGuardProps) {
   const location = useLocation()
@@ -21,11 +21,6 @@ export function AdminRouteGuard({ children }: AdminRouteGuardProps) {
 
   if (!user) {
     return <Navigate to="/login" replace />
-  }
-
-  const isAdmin = user.role?.toLowerCase() === 'admin'
-  if (isAdmin) {
-    return <>{children}</>
   }
 
   if (!requiredPermission) {

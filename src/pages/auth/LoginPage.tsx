@@ -45,7 +45,14 @@ export function LoginPage() {
     try {
       await login(data.email, data.password)
       toast.success('Welcome back!')
-      navigate('/')
+      const user = useAuthStore.getState().user
+      const role = user?.role?.toLowerCase()
+      const adminPanelRoles = ['admin', 'manager', 'agent']
+      if (role && adminPanelRoles.includes(role)) {
+        navigate('/admin/dashboard')
+      } else {
+        navigate('/user/dashboard')
+      }
     } catch (error: unknown) {
       const msg =
         (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||

@@ -7,6 +7,7 @@ export interface ManagerDto {
   user_id: string
   user_name: string
   user_email: string
+  user_role: string
   permission_profile_id: string
   permission_profile_name: string
   status: string
@@ -21,6 +22,7 @@ function fromDto(d: ManagerDto): Manager {
     userId: d.user_id,
     userName: d.user_name,
     userEmail: d.user_email,
+    role: d.user_role,
     permissionProfileId: d.permission_profile_id,
     permissionProfileName: d.permission_profile_name,
     status: d.status === 'disabled' ? 'disabled' : 'active',
@@ -52,6 +54,7 @@ export async function listManagers(params?: ListManagersParams): Promise<Manager
 export interface CreateManagerPayload {
   user_id: string
   permission_profile_id: string
+  role?: string | null
   notes?: string | null
 }
 

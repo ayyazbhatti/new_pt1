@@ -5,6 +5,7 @@ export interface Manager {
   userId: string
   userName: string
   userEmail: string
+  role: string
   permissionProfileId: string
   permissionProfileName: string
   status: ManagerStatus

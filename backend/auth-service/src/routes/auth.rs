@@ -2,7 +2,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::{get, patch, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,11 @@ pub struct RegisterRequest {
     pub password: String,
     pub country: Option<String>,
     pub referral_code: Option<String>,
+    /// When set, the new user is assigned to this group (legacy; prefer ref/signup_slug). Must exist and be active.
+    pub group_id: Option<Uuid>,
+    /// Signup link slug (e.g. from ?ref=golduser). Resolved to group_id; takes precedence over group_id when present.
+    #[serde(rename = "ref")]
+    pub signup_ref: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,12 +119,30 @@ pub struct SymbolLeverageQuery {
     pub symbol_code: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateMeRequest {
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SymbolLeverageResponse {
     pub leverage_profile_name: Option<String>,
     pub leverage_profile_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tiers: Option<Vec<LeverageProfileTier>>,
+}
+
+/// One referred user in your referral chain. Level 1 = direct referral, 2 = referral of your referral, etc.
+#[derive(Debug, Serialize)]
+pub struct ReferredUserResponse {
+    pub id: Uuid,
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// 1 = direct referral, 2 = referral of your referral, etc.
+    pub level: i32,
 }
 
 pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
@@ -129,11 +152,12 @@ pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
         .route("/login", post(login))
         .route("/refresh", post(refresh));
     
-    // Protected routes (auth required) – more specific /me/symbol-leverage before /me
+    // Protected routes (auth required) – more specific /me/referrals and /me/symbol-leverage before /me
     let protected_routes = Router::new()
         .route("/logout", post(logout))
+        .route("/me/referrals", get(my_referrals))
         .route("/me/symbol-leverage", get(symbol_leverage))
-        .route("/me", get(me))
+        .route("/me", get(me).patch(update_me))
         .route("/users", get(list_users))
         .layer(axum::middleware::from_fn(auth_middleware));
     
@@ -148,7 +172,27 @@ async fn register(
     State(pool): State<PgPool>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let service = AuthService::new(pool);
+    let service = AuthService::new(pool.clone());
+
+    // Resolve ?ref=slug to group_id (takes precedence over group_id)
+    let group_id = if let Some(ref slug) = payload.signup_ref {
+        let slug = slug.trim();
+        if slug.is_empty() {
+            payload.group_id
+        } else {
+            let id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM user_groups WHERE signup_slug = $1 AND status = 'active'",
+            )
+            .bind(slug)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+            id.or(payload.group_id)
+        }
+    } else {
+        payload.group_id
+    };
 
     match service
         .register(
@@ -158,6 +202,7 @@ async fn register(
             &payload.password,
             payload.country.as_deref(),
             payload.referral_code.as_deref(),
+            group_id,
         )
         .await
     {
@@ -425,6 +470,213 @@ async fn me(
             }),
         )),
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct ReferredUserRow {
+    id: Uuid,
+    email: String,
+    first_name: String,
+    last_name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    level: i32,
+}
+
+async fn my_referrals(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+) -> Result<Json<Vec<ReferredUserResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    // Recursive CTE: level 1 = direct referrals, level 2 = referred by level 1, etc.
+    let rows = sqlx::query_as::<_, ReferredUserRow>(
+        r#"
+        WITH RECURSIVE referral_chain AS (
+            SELECT id, email,
+                   COALESCE(first_name, '') AS first_name,
+                   COALESCE(last_name, '') AS last_name,
+                   created_at,
+                   1 AS level
+            FROM users
+            WHERE referred_by_user_id = $1
+            UNION ALL
+            SELECT u.id, u.email,
+                   COALESCE(u.first_name, '') AS first_name,
+                   COALESCE(u.last_name, '') AS last_name,
+                   u.created_at,
+                   rc.level + 1
+            FROM users u
+            INNER JOIN referral_chain rc ON u.referred_by_user_id = rc.id
+        )
+        SELECT id, email, first_name, last_name, created_at, level
+        FROM referral_chain
+        ORDER BY level ASC, created_at DESC
+        "#,
+    )
+    .bind(claims.sub)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "LIST_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let list: Vec<ReferredUserResponse> = rows
+        .into_iter()
+        .map(|r| ReferredUserResponse {
+            id: r.id,
+            email: r.email,
+            first_name: r.first_name,
+            last_name: r.last_name,
+            created_at: r.created_at,
+            level: r.level,
+        })
+        .collect();
+    Ok(Json(list))
+}
+
+async fn update_me(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    axum::Json(payload): axum::Json<UpdateMeRequest>,
+) -> Result<Json<UserResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let first_name = payload.first_name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let last_name = payload.last_name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    if first_name.is_none() && last_name.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "VALIDATION".to_string(),
+                    message: "Provide at least one of first_name or last_name".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let rows = sqlx::query(
+        "UPDATE users SET first_name = COALESCE($1, first_name), last_name = COALESCE($2, last_name), updated_at = NOW() WHERE id = $3",
+    )
+    .bind(first_name)
+    .bind(last_name)
+    .bind(claims.sub)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if rows.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let service = AuthService::new(pool.clone());
+    let user = service.get_user_by_id(claims.sub).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FETCH_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    // Same response shape as me()
+    let (group_name, price_profile_name, leverage_profile_name): (Option<String>, Option<String>, Option<String>) =
+        if let Some(group_id) = user.group_id {
+            #[derive(sqlx::FromRow)]
+            struct GroupProfileRow {
+                group_name: Option<String>,
+                price_profile_name: Option<String>,
+                leverage_profile_name: Option<String>,
+            }
+            let row = sqlx::query_as::<_, GroupProfileRow>(
+                r#"
+                SELECT ug.name AS group_name, psp.name AS price_profile_name, lp.name AS leverage_profile_name
+                FROM user_groups ug
+                LEFT JOIN price_stream_profiles psp ON ug.default_price_profile_id = psp.id
+                LEFT JOIN leverage_profiles lp ON ug.default_leverage_profile_id = lp.id
+                WHERE ug.id = $1
+                "#,
+            )
+            .bind(group_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+            (
+                row.as_ref().and_then(|r| r.group_name.clone()),
+                row.as_ref().and_then(|r| r.price_profile_name.clone()),
+                row.as_ref().and_then(|r| r.leverage_profile_name.clone()),
+            )
+        } else {
+            (None, None, None)
+        };
+
+    let perm_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
+    let permissions = perm_service
+        .get_effective_permissions(&user.role, user.permission_profile_id)
+        .await;
+    let permission_profile_name: Option<String> = if let Some(profile_id) = user.permission_profile_id {
+        sqlx::query_scalar::<_, String>("SELECT name FROM permission_profiles WHERE id = $1")
+            .bind(profile_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    Ok(Json(UserResponse {
+        id: user.id,
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+        status: user.status.into(),
+        phone: user.phone,
+        country: user.country,
+        created_at: Some(user.created_at),
+        last_login_at: user.last_login_at,
+        referral_code: user.referral_code,
+        group_id: user.group_id,
+        group_name,
+        min_leverage: user.min_leverage,
+        max_leverage: user.max_leverage,
+        price_profile_name,
+        leverage_profile_name,
+        account_type: user.account_type.or_else(|| Some("hedging".to_string())),
+        margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
+        trading_access: user.trading_access.or_else(|| Some("full".to_string())),
+        open_positions_count: None,
+        permission_profile_id: user.permission_profile_id,
+        permission_profile_name,
+        permissions: Some(permissions),
+    }))
 }
 
 async fn symbol_leverage(

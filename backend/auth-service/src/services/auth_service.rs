@@ -23,6 +23,7 @@ impl AuthService {
         password: &str,
         country: Option<&str>,
         referral_code: Option<&str>,
+        group_id: Option<Uuid>,
     ) -> anyhow::Result<(User, String, String)> {
         // Validate password
         if password.len() < 8 {
@@ -64,11 +65,27 @@ impl AuthService {
         // Generate referral code for new user
         let user_referral_code = format!("REF{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
 
-        // Get default user group ID (or create it if it doesn't exist)
+        // Resolve group: use provided group_id if valid and active, else default
         let default_group_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
             .map_err(|_| anyhow::anyhow!("Invalid default group ID"))?;
-        
-        // Ensure default group exists
+
+        let assigned_group_id: Uuid = if let Some(gid) = group_id {
+            let valid = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1 AND status = 'active')",
+            )
+            .bind(gid)
+            .fetch_one(&self.pool)
+            .await?;
+            if valid {
+                gid
+            } else {
+                default_group_id
+            }
+        } else {
+            default_group_id
+        };
+
+        // Ensure default group exists (for when we use it)
         sqlx::query!(
             r#"
             INSERT INTO user_groups (id, name, description)
@@ -99,7 +116,7 @@ impl AuthService {
         .bind(UserStatus::Active)
         .bind(&user_referral_code)
         .bind(referred_by_user_id)
-        .bind(default_group_id)
+        .bind(assigned_group_id)
         .fetch_one(&self.pool)
         .await?;
 
