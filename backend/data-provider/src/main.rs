@@ -159,6 +159,10 @@ async fn main() -> anyhow::Result<()> {
                             .broadcast_price(symbol, Some(group_id.as_str()), bid, ask)
                             .await;
                     }
+                    // Always broadcast to symbol-only room so WS clients without a group get live ticks
+                    broadcaster_clone
+                        .broadcast_price(symbol, None, price_state.bid, price_state.ask)
+                        .await;
 
                     let ts = chrono::Utc::now().timestamp_millis();
                     let tick_json = serde_json::json!({
