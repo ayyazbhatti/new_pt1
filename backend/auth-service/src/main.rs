@@ -258,21 +258,38 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // On position closed, recompute account summary so margin_used reflects only open positions (0 when none).
+    // When trigger_reason is SL or TP, also create notifications and push via Redis (fire-and-forget).
     let nats_for_closed = nats_client.clone();
     let pool_for_closed = pool.clone();
     let redis_for_closed = redis.clone();
     tokio::spawn(async move {
         use futures::StreamExt;
-        use routes::deposits::compute_and_cache_account_summary;
+        use routes::deposits::{compute_and_cache_account_summary, create_sltp_notifications_and_push};
         match nats_for_closed.subscribe("event.position.closed".to_string()).await {
             Ok(mut subscriber) => {
                 info!("✅ Subscribed to event.position.closed for account summary refresh");
                 while let Some(msg) = subscriber.next().await {
                     if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&msg.payload.to_vec()) {
-                        if let Some(uid) = payload.get("user_id").and_then(|v| v.as_str()) {
+                        // Support VersionedMessage: { "v", "type", "payload": { user_id, trigger_reason, ... } }
+                        let inner = payload
+                            .get("payload")
+                            .cloned()
+                            .unwrap_or(payload);
+                        let user_id_str = inner.get("user_id").and_then(|v| v.as_str());
+                        if let Some(uid) = user_id_str {
                             if let Ok(user_id) = Uuid::parse_str(uid) {
                                 compute_and_cache_account_summary(&pool_for_closed, &redis_for_closed, user_id).await;
                             }
+                        }
+                        // If SL/TP trigger, spawn notification task (do not await)
+                        let trigger = inner.get("trigger_reason").and_then(|v| v.as_str());
+                        if trigger == Some("SL") || trigger == Some("TP") {
+                            let pool_spawn = pool_for_closed.clone();
+                            let redis_spawn = redis_for_closed.clone();
+                            let inner_clone = inner.clone();
+                            tokio::spawn(async move {
+                                create_sltp_notifications_and_push(pool_spawn, redis_spawn, inner_clone).await;
+                            });
                         }
                     }
                 }

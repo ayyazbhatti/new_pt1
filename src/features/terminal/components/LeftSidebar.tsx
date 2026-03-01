@@ -38,6 +38,8 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
     isLoading,
     settingsPanelOpen,
     setSettingsPanelOpen,
+    notificationPanelOpen,
+    setNotificationPanelOpen,
     paymentPanelOpen,
     setPaymentPanelOpen,
     chatPanelOpen,
@@ -276,13 +278,26 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             >
               <LayoutDashboard className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
             </a>
-            <button className="p-2 hover:bg-white/5 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 relative group">
-              <Bell className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
+            <button
+              onClick={() => {
+                setSettingsPanelOpen(false)
+                setChatPanelOpen(false)
+                setPaymentPanelOpen(false)
+                setNotificationPanelOpen(!notificationPanelOpen)
+              }}
+              className={cn(
+                'p-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 relative group',
+                notificationPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-white/5 text-text-muted group-hover:text-text'
+              )}
+              title="Notifications"
+            >
+              <Bell className="h-4 w-4" />
               <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-danger ring-2 ring-[#0f172a]"></span>
             </button>
             <button
               onClick={() => {
                 setSettingsPanelOpen(false)
+                setNotificationPanelOpen(false)
                 setChatPanelOpen(false)
                 setPaymentPanelOpen(!paymentPanelOpen)
               }}
@@ -297,6 +312,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             <button
               onClick={() => {
                 setSettingsPanelOpen(false)
+                setNotificationPanelOpen(false)
                 setPaymentPanelOpen(false)
                 setChatPanelOpen(!chatPanelOpen)
               }}
@@ -561,6 +577,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
         <button
           onClick={() => {
             setChatPanelOpen(false)
+            setNotificationPanelOpen(false)
             setPaymentPanelOpen(false)
             setSettingsPanelOpen(!settingsPanelOpen)
           }}

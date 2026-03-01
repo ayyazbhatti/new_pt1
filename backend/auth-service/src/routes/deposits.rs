@@ -30,6 +30,7 @@ pub type PriceOverrides = HashMap<(String, String), (Decimal, Decimal)>;
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::services::ledger_service;
+use crate::services::email_config_service::{send_email_html_sync, EmailConfigService};
 
 #[derive(Clone)]
 pub struct DepositsState {
@@ -916,6 +917,354 @@ pub async fn compute_and_cache_account_summary(
     user_id: Uuid,
 ) {
     compute_and_cache_account_summary_with_prices(pool, redis, user_id, None).await
+}
+
+/// Format a numeric string for display (2 decimal places).
+fn format_number_display(s: &str) -> String {
+    s.trim()
+        .parse::<f64>()
+        .map(|n| format!("{:.2}", n))
+        .unwrap_or_else(|_| s.to_string())
+}
+
+/// Format PnL for display: 2 decimals, with + prefix when positive.
+fn format_pnl_display(s: &str) -> String {
+    s.trim()
+        .parse::<f64>()
+        .map(|n| {
+            if n >= 0.0 {
+                format!("+{:.2}", n)
+            } else {
+                format!("{:.2}", n)
+            }
+        })
+        .unwrap_or_else(|_| s.to_string())
+}
+
+/// Escape minimal HTML entities for use in email template (symbol, side, etc.).
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Build HTML body for SL/TP notification email.
+fn build_sltp_email_html(
+    trigger_label: &str,
+    is_sl: bool,
+    symbol: &str,
+    side: &str,
+    realized_pnl_display: &str,
+    exit_price_display: &str,
+) -> String {
+    let symbol_esc = escape_html(symbol);
+    let side_esc = escape_html(side);
+    let pnl_esc = escape_html(realized_pnl_display);
+    let exit_esc = escape_html(exit_price_display);
+    let header_color = if is_sl { "#b91c1c" } else { "#059669" }; // red for SL, green for TP
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1f2937; max-width: 480px; margin: 0 auto; padding: 24px;">
+  <div style="border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+    <div style="background: {}; color: #fff; padding: 16px 20px;">
+      <h1 style="margin: 0; font-size: 18px; font-weight: 600;">{} Triggered</h1>
+    </div>
+    <div style="padding: 20px;">
+      <p style="margin: 0 0 16px; font-size: 14px;">Your position has been closed by the {} order.</p>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+        <tr><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; color: #6b7280;">Symbol</td><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 500;">{} {}</td></tr>
+        <tr><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; color: #6b7280;">Realized PnL</td><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 600; color: {};">{}</td></tr>
+        <tr><td style="padding: 10px 0; color: #6b7280;">Exit price</td><td style="padding: 10px 0; text-align: right; font-weight: 500;">{}</td></tr>
+      </table>
+      <p style="margin: 20px 0 0; font-size: 12px; color: #9ca3af;">This is an automated notification from your trading account.</p>
+    </div>
+  </div>
+</body>
+</html>"#,
+        header_color,
+        trigger_label,
+        trigger_label,
+        symbol_esc,
+        side_esc,
+        if realized_pnl_display.starts_with('-') {
+            "#b91c1c"
+        } else {
+            "#059669"
+        },
+        pnl_esc,
+        exit_esc
+    )
+}
+
+/// Creates SL/TP notifications (user + admins), inserts into DB, and publishes to Redis `notifications:push`
+/// for real-time WebSocket delivery. Called from event.position.closed handler when trigger_reason is SL or TP.
+/// Fire-and-forget: log errors, do not panic. Does not block the position-closed critical path.
+pub async fn create_sltp_notifications_and_push(
+    pool: PgPool,
+    redis: redis::Client,
+    inner_payload: serde_json::Value,
+) {
+    let user_id_str = match inner_payload.get("user_id").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => {
+            warn!("SL/TP notification: missing user_id in payload");
+            return;
+        }
+    };
+    let user_id = match Uuid::parse_str(user_id_str) {
+        Ok(u) => u,
+        Err(_) => {
+            warn!("SL/TP notification: invalid user_id {}", user_id_str);
+            return;
+        }
+    };
+    let trigger_reason = match inner_payload.get("trigger_reason").and_then(|v| v.as_str()) {
+        Some(r) => r,
+        None => {
+            warn!("SL/TP notification: missing trigger_reason");
+            return;
+        }
+    };
+    if trigger_reason != "SL" && trigger_reason != "TP" {
+        return;
+    }
+    let position_id = inner_payload
+        .get("position_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Dedupe: avoid creating the same notification twice (e.g. NATS redelivery or duplicate delivery)
+    let kind_check = if trigger_reason == "SL" { "POSITION_SL" } else { "POSITION_TP" };
+    let already_notified: Result<Option<bool>, _> = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+          SELECT 1 FROM notifications
+          WHERE user_id = $1 AND kind = $2 AND meta->>'positionId' = $3
+            AND created_at > NOW() - INTERVAL '2 minutes'
+        )
+        "#,
+    )
+    .bind(user_id)
+    .bind(kind_check)
+    .bind(&position_id)
+    .fetch_optional(&pool)
+    .await;
+    if let Ok(Some(true)) = already_notified {
+        info!(
+            "SL/TP notification skipped (already sent): user_id={}, position_id={}, trigger={}",
+            user_id, position_id, trigger_reason
+        );
+        return;
+    }
+    let symbol = inner_payload
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?")
+        .to_string();
+    let side = inner_payload
+        .get("side")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?")
+        .to_string();
+    let realized_pnl_str = inner_payload
+        .get("realized_pnl")
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => "0".to_string(),
+        })
+        .unwrap_or_else(|| "0".to_string());
+    let exit_price_str = inner_payload
+        .get("exit_price")
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => "0".to_string(),
+        })
+        .unwrap_or_else(|| "0".to_string());
+
+    // Format for display: 2 decimals; PnL with + prefix when positive
+    let realized_pnl_display = format_pnl_display(&realized_pnl_str);
+    let exit_price_display = format_number_display(&exit_price_str);
+
+    let (title, kind) = if trigger_reason == "SL" {
+        ("Stop Loss triggered", "POSITION_SL")
+    } else {
+        ("Take Profit triggered", "POSITION_TP")
+    };
+    let trigger_label = if trigger_reason == "SL" { "Stop Loss" } else { "Take Profit" };
+    let message = format!(
+        "{} {} · Closed by {} · PnL: {}  |  Exit: {}",
+        symbol, side, trigger_label, realized_pnl_display, exit_price_display
+    );
+    let now = Utc::now();
+    let meta = serde_json::json!({
+        "positionId": position_id,
+        "symbol": symbol,
+        "side": side,
+        "triggerReason": trigger_reason,
+        "realizedPnl": realized_pnl_str,
+        "exitPrice": exit_price_str,
+    });
+
+    // Insert notification for the user (trader)
+    let notification_id = Uuid::new_v4();
+    if let Err(e) = sqlx::query(
+        r#"
+        INSERT INTO notifications (id, user_id, kind, title, message, read, created_at, meta)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(notification_id)
+    .bind(user_id)
+    .bind(kind)
+    .bind(title)
+    .bind(&message)
+    .bind(false)
+    .bind(now)
+    .bind(&meta)
+    .execute(&pool)
+    .await
+    {
+        error!("SL/TP notification: failed to insert for user {}: {}", user_id, e);
+        return;
+    }
+
+    let notification_event = serde_json::json!({
+        "id": notification_id.to_string(),
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "createdAt": now.to_rfc3339(),
+        "read": false,
+        "userId": user_id.to_string(),
+        "meta": {
+            "positionId": position_id,
+            "symbol": symbol,
+            "side": side,
+            "triggerReason": trigger_reason,
+            "realizedPnl": realized_pnl_str,
+            "exitPrice": exit_price_str,
+        }
+    });
+
+    // Publish to Redis for user (gateway routes by userId)
+    if let Ok(mut conn) = redis.get_async_connection().await {
+        let payload_str = serde_json::to_string(&notification_event).unwrap_or_default();
+        let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
+    } else {
+        error!("SL/TP notification: Redis connection failed for user {}", user_id);
+    }
+
+    // Send email to user using admin-configured SMTP (fire-and-forget)
+    let user_email: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+    if let Some(ref to_email) = user_email {
+        let to_email = to_email.trim().to_string();
+        if !to_email.is_empty() {
+            if let Ok(Some(config)) = EmailConfigService::new(pool.clone()).get_with_password().await {
+                let subject = title.to_string();
+                let html_body = build_sltp_email_html(
+                    trigger_label,
+                    trigger_reason == "SL",
+                    &symbol,
+                    &side,
+                    &realized_pnl_display,
+                    &exit_price_display,
+                );
+                let email_user_id = user_id;
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        send_email_html_sync(&config, &to_email, &subject, &html_body)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(())) => info!("SL/TP email sent to user {}", email_user_id),
+                        Ok(Err(e)) => error!("SL/TP email failed for user {}: {}", email_user_id, e),
+                        Err(e) => error!("SL/TP email task join error: {}", e),
+                    }
+                });
+            }
+        }
+    }
+
+    // Query admins and create one notification per admin
+    let admin_rows = match sqlx::query(
+        r#"SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL LIMIT 50"#,
+    )
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("SL/TP notification: failed to query admins: {}", e);
+            return;
+        }
+    };
+
+    let meta_with_trader = serde_json::json!({
+        "positionId": position_id,
+        "symbol": symbol,
+        "side": side,
+        "triggerReason": trigger_reason,
+        "realizedPnl": realized_pnl_str,
+        "exitPrice": exit_price_str,
+        "targetUserId": user_id.to_string(),
+    });
+
+    for admin_row in admin_rows {
+        let admin_id: Uuid = admin_row.get(0);
+        let admin_notif_id = Uuid::new_v4();
+        if let Err(e) = sqlx::query(
+            r#"
+            INSERT INTO notifications (id, user_id, kind, title, message, read, created_at, meta)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(admin_notif_id)
+        .bind(admin_id)
+        .bind(kind)
+        .bind(title)
+        .bind(&message)
+        .bind(false)
+        .bind(now)
+        .bind(&meta_with_trader)
+        .execute(&pool)
+        .await
+        {
+            error!("SL/TP notification: failed to insert for admin {}: {}", admin_id, e);
+            continue;
+        }
+        let admin_event = serde_json::json!({
+            "id": admin_notif_id.to_string(),
+            "kind": kind,
+            "title": title,
+            "message": message,
+            "createdAt": now.to_rfc3339(),
+            "read": false,
+            "userId": admin_id.to_string(),
+            "meta": meta_with_trader,
+        });
+        if let Ok(mut conn) = redis.get_async_connection().await {
+            let payload_str = serde_json::to_string(&admin_event).unwrap_or_default();
+            let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
+        }
+    }
+
+    info!(
+        "SL/TP notification created: position_id={}, user_id={}, trigger_reason={}",
+        position_id, user_id, trigger_reason
+    );
 }
 
 /// Like compute_and_cache_account_summary but uses live (bid, ask) for unrealized PnL when overrides are provided (tick-driven).

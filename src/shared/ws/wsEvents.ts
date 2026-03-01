@@ -31,7 +31,7 @@ export type DepositRequestApprovedPayload = {
 
 export type NotificationPushPayload = {
   id: string
-  kind: 'DEPOSIT_REQUEST' | 'DEPOSIT_APPROVED' | 'WITHDRAWAL_APPROVED'
+  kind: 'DEPOSIT_REQUEST' | 'DEPOSIT_APPROVED' | 'WITHDRAWAL_APPROVED' | 'POSITION_SL' | 'POSITION_TP'
   title: string
   message: string
   createdAt: string

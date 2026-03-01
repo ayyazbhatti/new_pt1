@@ -9,6 +9,7 @@ interface TerminalStore {
   searchQuery: string
   activeTab: 'all' | 'watchlists'
   settingsPanelOpen: boolean
+  notificationPanelOpen: boolean
   paymentPanelOpen: boolean
   chatPanelOpen: boolean
   /** Show ask price line on chart (persisted in localStorage only). */
@@ -24,6 +25,7 @@ interface TerminalStore {
   setSearchQuery: (query: string) => void
   setActiveTab: (tab: 'all' | 'watchlists') => void
   setSettingsPanelOpen: (open: boolean) => void
+  setNotificationPanelOpen: (open: boolean) => void
   setPaymentPanelOpen: (open: boolean) => void
   setChatPanelOpen: (open: boolean) => void
   setChartShowAskPrice: (show: boolean) => void
@@ -127,6 +129,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
   settingsPanelOpen: false,
   setSettingsPanelOpen: (open) => set({ settingsPanelOpen: open }),
+  notificationPanelOpen: false,
+  setNotificationPanelOpen: (open) => set({ notificationPanelOpen: open }),
   paymentPanelOpen: false,
   setPaymentPanelOpen: (open) => set({ paymentPanelOpen: open }),
   chatPanelOpen: false,

@@ -4,6 +4,7 @@ import { LeftSidebar } from '../components/LeftSidebar'
 import { CenterWorkspace } from '../components/CenterWorkspace'
 import { RightTradingPanel } from '../components/RightTradingPanel'
 import { SettingsPanel } from '../components/SettingsPanel'
+import { NotificationsPanel } from '../components/NotificationsPanel'
 import { PaymentPanel } from '../components/PaymentPanel'
 import { ChatPanel } from '../components/ChatPanel'
 import { useTerminalStore } from '../store'
@@ -83,7 +84,7 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
 }
 
 export function AppShellTerminal() {
-  const { setSymbols, setLoading, symbols } = useTerminalStore()
+  const { setSymbols, setLoading, symbols, notificationPanelOpen, chatPanelOpen, paymentPanelOpen, settingsPanelOpen } = useTerminalStore()
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const { accountSummary } = useAccountSummary()
   const marginCall = useMarginCall(accountSummary ?? null)
@@ -168,10 +169,6 @@ export function AppShellTerminal() {
     setLoading(isLoading)
   }, [isLoading, setLoading])
 
-  const settingsPanelOpen = useTerminalStore((s) => s.settingsPanelOpen)
-  const paymentPanelOpen = useTerminalStore((s) => s.paymentPanelOpen)
-  const chatPanelOpen = useTerminalStore((s) => s.chatPanelOpen)
-
   return (
     <>
       <TerminalLayout
@@ -183,7 +180,7 @@ export function AppShellTerminal() {
         center={<CenterWorkspace />}
         right={<RightTradingPanel />}
         rightPanel={
-          chatPanelOpen ? <ChatPanel /> : paymentPanelOpen ? <PaymentPanel /> : settingsPanelOpen ? <SettingsPanel /> : undefined
+          notificationPanelOpen ? <NotificationsPanel /> : chatPanelOpen ? <ChatPanel /> : paymentPanelOpen ? <PaymentPanel /> : settingsPanelOpen ? <SettingsPanel /> : undefined
         }
       />
       <MarginCallModal

@@ -375,7 +375,12 @@ export function BottomDock() {
             const triggerReason = data.trigger_reason
             if (triggerReason === 'SL' || triggerReason === 'TP') {
               const triggerType = triggerReason === 'SL' ? 'Stop Loss' : 'Take Profit'
-              toast.success(`🎯 ${triggerType} Triggered! ${data.side || ''} ${data.symbol || ''} position closed`, { duration: 5000 })
+              const msg = `🎯 ${triggerType} Triggered! ${data.side || ''} ${data.symbol || ''} position closed`
+              if (triggerReason === 'SL') {
+                toast.error(msg, { duration: 5000 })
+              } else {
+                toast.success(msg, { duration: 5000 })
+              }
             }
           }
 

@@ -22,15 +22,25 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
   isLoading: false,
 
   push: (notification: Notification) => {
-    set((state) => {
-      const exists = state.items.some((item) => item.id === notification.id)
-      if (exists) {
-        return state
-      }
-      return {
-        items: [notification, ...state.items],
-        unreadCount: state.unreadCount + 1,
-      }
+    const state = get()
+    const id = notification?.id
+    if (!id || state.items.some((item) => item.id === id)) return
+    // For SL/TP, also dedupe by content (same position + message = same event, avoid duplicate display)
+    if (
+      (notification.kind === 'POSITION_SL' || notification.kind === 'POSITION_TP') &&
+      notification.meta?.positionId != null
+    ) {
+      const already = state.items.some(
+        (item) =>
+          (item.kind === 'POSITION_SL' || item.kind === 'POSITION_TP') &&
+          item.meta?.positionId === notification.meta?.positionId &&
+          item.message === notification.message
+      )
+      if (already) return
+    }
+    set({
+      items: [notification, ...state.items],
+      unreadCount: state.unreadCount + 1,
     })
   },
 
@@ -71,10 +81,19 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     set({ isLoading: true })
     try {
       const response = await fetchNotifications()
-      set({
-        items: response.items || [],
-        unreadCount: response.unreadCount || 0,
+      const raw = response.items || []
+      // Dedupe SL/TP by (kind, positionId, message) so we never show two for the same close event
+      const seen = new Set<string>()
+      const items = raw.filter((n) => {
+        if ((n.kind === 'POSITION_SL' || n.kind === 'POSITION_TP') && n.meta?.positionId != null) {
+          const key = `${n.kind}:${n.meta.positionId}:${n.message}`
+          if (seen.has(key)) return false
+          seen.add(key)
+        }
+        return true
       })
+      const unreadCount = items.filter((n) => !n.read).length
+      set({ items, unreadCount })
     } catch (error: any) {
       const status = error?.response?.status
       // 401 = session expired or invalid; auth store will clear and redirect to login — don't log as error
