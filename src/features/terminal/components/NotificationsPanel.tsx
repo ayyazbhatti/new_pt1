@@ -33,7 +33,7 @@ function formatRelativeTime(createdAt: string): string {
 
 /** Map API kind to display type for badge styling */
 function getKindType(kind: NotificationPushPayload['kind']): 'order' | 'sl' | 'deposit' | 'system' {
-  if (kind === 'POSITION_SL') return 'sl'
+  if (kind === 'POSITION_SL' || kind === 'POSITION_LIQUIDATED') return 'sl'
   if (kind === 'POSITION_TP') return 'order'
   if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED' || kind === 'WITHDRAWAL_APPROVED') return 'deposit'
   return 'system'
@@ -55,6 +55,7 @@ function getTypeColor(type: 'order' | 'sl' | 'deposit' | 'system'): string {
 function getTypeLabel(kind: NotificationPushPayload['kind']): string {
   if (kind === 'POSITION_SL') return 'SL'
   if (kind === 'POSITION_TP') return 'TP'
+  if (kind === 'POSITION_LIQUIDATED') return 'LIQ'
   if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED') return 'D'
   if (kind === 'WITHDRAWAL_APPROVED') return 'W'
   return '!'

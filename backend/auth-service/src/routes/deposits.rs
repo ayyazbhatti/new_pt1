@@ -999,6 +999,53 @@ fn build_sltp_email_html(
     )
 }
 
+/// Build HTML body for liquidation notification email (same style as SL/TP, danger/red).
+fn build_liquidation_email_html(
+    symbol: &str,
+    side: &str,
+    realized_pnl_display: &str,
+    exit_price_display: &str,
+) -> String {
+    let symbol_esc = escape_html(symbol);
+    let side_esc = escape_html(side);
+    let pnl_esc = escape_html(realized_pnl_display);
+    let exit_esc = escape_html(exit_price_display);
+    let header_color = "#b91c1c"; // red/danger
+    let pnl_color = if realized_pnl_display.starts_with('-') {
+        "#b91c1c"
+    } else {
+        "#059669"
+    };
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1f2937; max-width: 480px; margin: 0 auto; padding: 24px;">
+  <div style="border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+    <div style="background: {}; color: #fff; padding: 16px 20px;">
+      <h1 style="margin: 0; font-size: 18px; font-weight: 600;">Position Liquidated</h1>
+    </div>
+    <div style="padding: 20px;">
+      <p style="margin: 0 0 16px; font-size: 14px;">Your position was closed automatically due to liquidation (margin level fell below the required level).</p>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+        <tr><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; color: #6b7280;">Symbol</td><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 500;">{} {}</td></tr>
+        <tr><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; color: #6b7280;">Realized PnL</td><td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 600; color: {};">{}</td></tr>
+        <tr><td style="padding: 10px 0; color: #6b7280;">Exit price</td><td style="padding: 10px 0; text-align: right; font-weight: 500;">{}</td></tr>
+      </table>
+      <p style="margin: 20px 0 0; font-size: 12px; color: #9ca3af;">This is an automated notification from your trading account.</p>
+    </div>
+  </div>
+</body>
+</html>"#,
+        header_color,
+        symbol_esc,
+        side_esc,
+        pnl_color,
+        pnl_esc,
+        exit_esc
+    )
+}
+
 /// Creates SL/TP notifications (user + admins), inserts into DB, and publishes to Redis `notifications:push`
 /// for real-time WebSocket delivery. Called from event.position.closed handler when trigger_reason is SL or TP.
 /// Fire-and-forget: log errors, do not panic. Does not block the position-closed critical path.
@@ -1264,6 +1311,257 @@ pub async fn create_sltp_notifications_and_push(
     info!(
         "SL/TP notification created: position_id={}, user_id={}, trigger_reason={}",
         position_id, user_id, trigger_reason
+    );
+}
+
+/// Creates liquidation notifications (user + admins), inserts into DB, and publishes to Redis `notifications:push`
+/// for real-time WebSocket delivery. Called from event.position.closed handler when trigger_reason is "liquidated".
+/// Fire-and-forget: log errors, do not panic. Does not block the position-closed critical path.
+pub async fn create_liquidation_notifications_and_push(
+    pool: PgPool,
+    redis: redis::Client,
+    inner_payload: serde_json::Value,
+) {
+    let user_id_str = match inner_payload.get("user_id").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => {
+            warn!("Liquidation notification: missing user_id in payload");
+            return;
+        }
+    };
+    let user_id = match Uuid::parse_str(user_id_str) {
+        Ok(u) => u,
+        Err(_) => {
+            warn!("Liquidation notification: invalid user_id {}", user_id_str);
+            return;
+        }
+    };
+    let position_id = inner_payload
+        .get("position_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Dedupe: avoid creating the same notification twice (e.g. NATS redelivery or duplicate delivery)
+    let kind_check = "POSITION_LIQUIDATED";
+    let already_notified: Result<Option<bool>, _> = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+          SELECT 1 FROM notifications
+          WHERE user_id = $1 AND kind = $2 AND meta->>'positionId' = $3
+            AND created_at > NOW() - INTERVAL '2 minutes'
+        )
+        "#,
+    )
+    .bind(user_id)
+    .bind(kind_check)
+    .bind(&position_id)
+    .fetch_optional(&pool)
+    .await;
+    if let Ok(Some(true)) = already_notified {
+        info!(
+            "Liquidation notification skipped (already sent): user_id={}, position_id={}",
+            user_id, position_id
+        );
+        return;
+    }
+
+    let symbol = inner_payload
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?")
+        .to_string();
+    let side = inner_payload
+        .get("side")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?")
+        .to_string();
+    let realized_pnl_str = inner_payload
+        .get("realized_pnl")
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => "0".to_string(),
+        })
+        .unwrap_or_else(|| "0".to_string());
+    let exit_price_str = inner_payload
+        .get("exit_price")
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => "0".to_string(),
+        })
+        .unwrap_or_else(|| "0".to_string());
+
+    let realized_pnl_display = format_pnl_display(&realized_pnl_str);
+    let exit_price_display = format_number_display(&exit_price_str);
+
+    let title = "Position liquidated";
+    let kind = "POSITION_LIQUIDATED";
+    let message = format!(
+        "{} {} · Liquidated · PnL: {}  |  Exit: {}",
+        symbol, side, realized_pnl_display, exit_price_display
+    );
+    let now = Utc::now();
+    let meta = serde_json::json!({
+        "positionId": position_id,
+        "symbol": symbol,
+        "side": side,
+        "triggerReason": "liquidated",
+        "realizedPnl": realized_pnl_str,
+        "exitPrice": exit_price_str,
+    });
+
+    // Insert notification for the user (trader)
+    let notification_id = Uuid::new_v4();
+    if let Err(e) = sqlx::query(
+        r#"
+        INSERT INTO notifications (id, user_id, kind, title, message, read, created_at, meta)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(notification_id)
+    .bind(user_id)
+    .bind(kind)
+    .bind(title)
+    .bind(&message)
+    .bind(false)
+    .bind(now)
+    .bind(&meta)
+    .execute(&pool)
+    .await
+    {
+        error!("Liquidation notification: failed to insert for user {}: {}", user_id, e);
+        return;
+    }
+
+    let notification_event = serde_json::json!({
+        "id": notification_id.to_string(),
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "createdAt": now.to_rfc3339(),
+        "read": false,
+        "userId": user_id.to_string(),
+        "meta": {
+            "positionId": position_id,
+            "symbol": symbol,
+            "side": side,
+            "triggerReason": "liquidated",
+            "realizedPnl": realized_pnl_str,
+            "exitPrice": exit_price_str,
+        }
+    });
+
+    if let Ok(mut conn) = redis.get_async_connection().await {
+        let payload_str = serde_json::to_string(&notification_event).unwrap_or_default();
+        let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
+    } else {
+        error!("Liquidation notification: Redis connection failed for user {}", user_id);
+    }
+
+    // Send HTML email to user (fire-and-forget)
+    let user_email: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+    if let Some(ref to_email) = user_email {
+        let to_email = to_email.trim().to_string();
+        if !to_email.is_empty() {
+            if let Ok(Some(config)) = EmailConfigService::new(pool.clone()).get_with_password().await {
+                let subject = title.to_string();
+                let html_body = build_liquidation_email_html(
+                    &symbol,
+                    &side,
+                    &realized_pnl_display,
+                    &exit_price_display,
+                );
+                let email_user_id = user_id;
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        send_email_html_sync(&config, &to_email, &subject, &html_body)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(())) => info!("Liquidation email sent to user {}", email_user_id),
+                        Ok(Err(e)) => error!("Liquidation email failed for user {}: {}", email_user_id, e),
+                        Err(e) => error!("Liquidation email task join error: {}", e),
+                    }
+                });
+            }
+        }
+    }
+
+    // Notify admins
+    let admin_rows = match sqlx::query(
+        r#"SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL LIMIT 50"#,
+    )
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Liquidation notification: failed to query admins: {}", e);
+            return;
+        }
+    };
+
+    let meta_with_trader = serde_json::json!({
+        "positionId": position_id,
+        "symbol": symbol,
+        "side": side,
+        "triggerReason": "liquidated",
+        "realizedPnl": realized_pnl_str,
+        "exitPrice": exit_price_str,
+        "targetUserId": user_id.to_string(),
+    });
+
+    for admin_row in admin_rows {
+        let admin_id: Uuid = admin_row.get(0);
+        let admin_notif_id = Uuid::new_v4();
+        if let Err(e) = sqlx::query(
+            r#"
+            INSERT INTO notifications (id, user_id, kind, title, message, read, created_at, meta)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(admin_notif_id)
+        .bind(admin_id)
+        .bind(kind)
+        .bind(title)
+        .bind(&message)
+        .bind(false)
+        .bind(now)
+        .bind(&meta_with_trader)
+        .execute(&pool)
+        .await
+        {
+            error!("Liquidation notification: failed to insert for admin {}: {}", admin_id, e);
+            continue;
+        }
+        let admin_event = serde_json::json!({
+            "id": admin_notif_id.to_string(),
+            "kind": kind,
+            "title": title,
+            "message": message,
+            "createdAt": now.to_rfc3339(),
+            "read": false,
+            "userId": admin_id.to_string(),
+            "meta": meta_with_trader,
+        });
+        if let Ok(mut conn) = redis.get_async_connection().await {
+            let payload_str = serde_json::to_string(&admin_event).unwrap_or_default();
+            let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
+        }
+    }
+
+    info!(
+        "Liquidation notification created: position_id={}, user_id={}",
+        position_id, user_id
     );
 }
 

@@ -25,14 +25,18 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     const state = get()
     const id = notification?.id
     if (!id || state.items.some((item) => item.id === id)) return
-    // For SL/TP, also dedupe by content (same position + message = same event, avoid duplicate display)
+    // For SL/TP/liquidation, also dedupe by content (same position + message = same event, avoid duplicate display)
     if (
-      (notification.kind === 'POSITION_SL' || notification.kind === 'POSITION_TP') &&
+      (notification.kind === 'POSITION_SL' ||
+        notification.kind === 'POSITION_TP' ||
+        notification.kind === 'POSITION_LIQUIDATED') &&
       notification.meta?.positionId != null
     ) {
       const already = state.items.some(
         (item) =>
-          (item.kind === 'POSITION_SL' || item.kind === 'POSITION_TP') &&
+          (item.kind === 'POSITION_SL' ||
+            item.kind === 'POSITION_TP' ||
+            item.kind === 'POSITION_LIQUIDATED') &&
           item.meta?.positionId === notification.meta?.positionId &&
           item.message === notification.message
       )
@@ -82,10 +86,13 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     try {
       const response = await fetchNotifications()
       const raw = response.items || []
-      // Dedupe SL/TP by (kind, positionId, message) so we never show two for the same close event
+      // Dedupe SL/TP/liquidation by (kind, positionId, message) so we never show two for the same close event
       const seen = new Set<string>()
       const items = raw.filter((n) => {
-        if ((n.kind === 'POSITION_SL' || n.kind === 'POSITION_TP') && n.meta?.positionId != null) {
+        if (
+          (n.kind === 'POSITION_SL' || n.kind === 'POSITION_TP' || n.kind === 'POSITION_LIQUIDATED') &&
+          n.meta?.positionId != null
+        ) {
           const key = `${n.kind}:${n.meta.positionId}:${n.message}`
           if (seen.has(key)) return false
           seen.add(key)

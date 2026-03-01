@@ -1,8 +1,11 @@
+import { useCallback } from 'react'
 import { X, Settings as SettingsIcon, Palette, Bell, BarChart3, TrendingUp } from 'lucide-react'
 import { useTerminalStore } from '../store'
 import { Switch } from '@/shared/ui'
 import { Label } from '@/shared/ui/label'
 import { cn } from '@/shared/utils'
+import { updateTerminalPreferences } from '../api/preferences.api'
+import { toast } from '@/shared/components/common'
 
 const PANEL_WIDTH = 288
 
@@ -17,6 +20,57 @@ export function SettingsPanel() {
     chartShowClosedPositionMarker,
     setChartShowClosedPositionMarker,
   } = useTerminalStore()
+
+  const handleChartShowAskPrice = useCallback(
+    (checked: boolean) => {
+      const prev = chartShowAskPrice
+      setChartShowAskPrice(checked)
+      const state = useTerminalStore.getState()
+      updateTerminalPreferences({
+        chartShowAskPrice: state.chartShowAskPrice,
+        chartShowPositionMarker: state.chartShowPositionMarker,
+        chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+      }).catch(() => {
+        setChartShowAskPrice(prev)
+        toast.error('Failed to save settings. Please try again.')
+      })
+    },
+    [chartShowAskPrice, setChartShowAskPrice]
+  )
+
+  const handleChartShowPositionMarker = useCallback(
+    (checked: boolean) => {
+      const prev = chartShowPositionMarker
+      setChartShowPositionMarker(checked)
+      const state = useTerminalStore.getState()
+      updateTerminalPreferences({
+        chartShowAskPrice: state.chartShowAskPrice,
+        chartShowPositionMarker: state.chartShowPositionMarker,
+        chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+      }).catch(() => {
+        setChartShowPositionMarker(prev)
+        toast.error('Failed to save settings. Please try again.')
+      })
+    },
+    [chartShowPositionMarker, setChartShowPositionMarker]
+  )
+
+  const handleChartShowClosedPositionMarker = useCallback(
+    (checked: boolean) => {
+      const prev = chartShowClosedPositionMarker
+      setChartShowClosedPositionMarker(checked)
+      const state = useTerminalStore.getState()
+      updateTerminalPreferences({
+        chartShowAskPrice: state.chartShowAskPrice,
+        chartShowPositionMarker: state.chartShowPositionMarker,
+        chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+      }).catch(() => {
+        setChartShowClosedPositionMarker(prev)
+        toast.error('Failed to save settings. Please try again.')
+      })
+    },
+    [chartShowClosedPositionMarker, setChartShowClosedPositionMarker]
+  )
 
   if (!settingsPanelOpen) return null
 
@@ -70,7 +124,7 @@ export function SettingsPanel() {
                 <Switch
                   id="chart-show-ask"
                   checked={chartShowAskPrice}
-                  onCheckedChange={setChartShowAskPrice}
+                  onCheckedChange={handleChartShowAskPrice}
                 />
               </div>
               <p className="text-xs text-text-muted mt-0.5">Green dashed line and label on the chart</p>
@@ -81,7 +135,7 @@ export function SettingsPanel() {
                 <Switch
                   id="chart-show-position-marker"
                   checked={chartShowPositionMarker}
-                  onCheckedChange={setChartShowPositionMarker}
+                  onCheckedChange={handleChartShowPositionMarker}
                 />
               </div>
               <p className="text-xs text-text-muted mt-0.5">Blue dot where position was opened</p>
@@ -92,7 +146,7 @@ export function SettingsPanel() {
                 <Switch
                   id="chart-show-closed-position-marker"
                   checked={chartShowClosedPositionMarker}
-                  onCheckedChange={setChartShowClosedPositionMarker}
+                  onCheckedChange={handleChartShowClosedPositionMarker}
                 />
               </div>
               <p className="text-xs text-text-muted mt-0.5">Orange dot where position was closed (position history)</p>

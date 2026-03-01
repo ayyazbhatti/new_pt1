@@ -42,6 +42,7 @@ use routes::symbols::create_symbols_router;
 use routes::finance::create_finance_router;
 use routes::admin_settings::create_admin_settings_router;
 use routes::appointments::create_appointments_router;
+use routes::user_preferences::create_user_preferences_router;
 use routes::admin_appointments::create_admin_appointments_router;
 use services::order_event_handler::OrderEventHandler;
 
@@ -206,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/wallet", routes::deposits::create_wallet_router(pool.clone(), deposits_state.clone()))
         .nest("/api/account", routes::deposits::create_account_router(pool.clone(), deposits_state.clone()))
         .nest("/api/notifications", routes::deposits::create_notifications_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/user", create_user_preferences_router(pool.clone()))
         .nest(
             "/v1/users",
             routes::deposits::create_positions_router(pool.clone(), deposits_state.clone())
@@ -264,7 +266,7 @@ async fn main() -> anyhow::Result<()> {
     let redis_for_closed = redis.clone();
     tokio::spawn(async move {
         use futures::StreamExt;
-        use routes::deposits::{compute_and_cache_account_summary, create_sltp_notifications_and_push};
+        use routes::deposits::{compute_and_cache_account_summary, create_liquidation_notifications_and_push, create_sltp_notifications_and_push};
         match nats_for_closed.subscribe("event.position.closed".to_string()).await {
             Ok(mut subscriber) => {
                 info!("✅ Subscribed to event.position.closed for account summary refresh");
@@ -281,7 +283,7 @@ async fn main() -> anyhow::Result<()> {
                                 compute_and_cache_account_summary(&pool_for_closed, &redis_for_closed, user_id).await;
                             }
                         }
-                        // If SL/TP trigger, spawn notification task (do not await)
+                        // If SL/TP or liquidation trigger, spawn notification task (do not await)
                         let trigger = inner.get("trigger_reason").and_then(|v| v.as_str());
                         if trigger == Some("SL") || trigger == Some("TP") {
                             let pool_spawn = pool_for_closed.clone();
@@ -289,6 +291,13 @@ async fn main() -> anyhow::Result<()> {
                             let inner_clone = inner.clone();
                             tokio::spawn(async move {
                                 create_sltp_notifications_and_push(pool_spawn, redis_spawn, inner_clone).await;
+                            });
+                        } else if trigger == Some("liquidated") {
+                            let pool_spawn = pool_for_closed.clone();
+                            let redis_spawn = redis_for_closed.clone();
+                            let inner_clone = inner.clone();
+                            tokio::spawn(async move {
+                                create_liquidation_notifications_and_push(pool_spawn, redis_spawn, inner_clone).await;
                             });
                         }
                     }

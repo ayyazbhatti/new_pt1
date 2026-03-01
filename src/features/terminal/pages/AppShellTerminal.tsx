@@ -16,6 +16,8 @@ import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useMarginCall } from '@/features/wallet/hooks/useMarginCall'
 import { MarginCallModal } from '@/features/wallet/components/MarginCallModal'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
+import { useAuthStore } from '@/shared/store/auth.store'
+import { getTerminalPreferences } from '../api/preferences.api'
 
 // Map AdminSymbol to MockSymbol format
 function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: string; ask: string; ts: number }>): MockSymbol {
@@ -84,10 +86,36 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
 }
 
 export function AppShellTerminal() {
-  const { setSymbols, setLoading, symbols, notificationPanelOpen, chatPanelOpen, paymentPanelOpen, settingsPanelOpen } = useTerminalStore()
+  const {
+    setSymbols,
+    setLoading,
+    symbols,
+    notificationPanelOpen,
+    chatPanelOpen,
+    paymentPanelOpen,
+    settingsPanelOpen,
+    setChartShowAskPrice,
+    setChartShowPositionMarker,
+    setChartShowClosedPositionMarker,
+  } = useTerminalStore()
+  const { user } = useAuthStore()
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const { accountSummary } = useAccountSummary()
   const marginCall = useMarginCall(accountSummary ?? null)
+
+  // Load terminal preferences from server once (non-blocking; store already has localStorage values for first paint)
+  useEffect(() => {
+    if (!user?.id) return
+    getTerminalPreferences()
+      .then((res) => {
+        setChartShowAskPrice(res.preferences.chartShowAskPrice)
+        setChartShowPositionMarker(res.preferences.chartShowPositionMarker)
+        setChartShowClosedPositionMarker(res.preferences.chartShowClosedPositionMarker)
+      })
+      .catch(() => {
+        // Keep current store values (localStorage or defaults); optional: toast could go here
+      })
+  }, [user?.id, setChartShowAskPrice, setChartShowPositionMarker, setChartShowClosedPositionMarker])
 
   // Fetch enabled symbols
   const { data: symbolsData, isLoading } = useSymbolsList({
