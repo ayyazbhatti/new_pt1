@@ -51,7 +51,7 @@ export function LoginPage() {
       if (role && adminPanelRoles.includes(role)) {
         navigate('/admin/dashboard')
       } else {
-        navigate('/user/dashboard')
+        navigate('/')
       }
     } catch (error: unknown) {
       const msg =

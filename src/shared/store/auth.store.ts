@@ -30,6 +30,8 @@ interface AuthState {
   register: (data: RegisterData) => Promise<void>
   logout: () => Promise<void>
   setTokens: (accessToken: string, refreshToken: string) => void
+  /** Set tokens and clear user so hydrateFromStorage() will fetch user (for impersonation in a new tab). */
+  setImpersonationTokens: (accessToken: string, refreshToken: string) => void
   setUser: (user: User) => void
   hydrateFromStorage: () => Promise<void>
   refreshUser: () => Promise<void>
@@ -140,6 +142,10 @@ export const useAuthStore = create<AuthState>()(
 
       setTokens: (accessToken: string, refreshToken: string) => {
         set({ accessToken, refreshToken })
+      },
+
+      setImpersonationTokens: (accessToken: string, refreshToken: string) => {
+        set({ accessToken, refreshToken, user: null })
       },
 
       setUser: (user: User) => {

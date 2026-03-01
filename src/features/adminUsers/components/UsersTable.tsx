@@ -9,12 +9,12 @@ import { useModalStore } from '@/app/store'
 import { UserDetailsModal } from '../modals/UserDetailsModal'
 import { CreateEditUserModal } from '../modals/CreateEditUserModal'
 import { RestrictUserModal } from '../modals/RestrictUserModal'
-import { Eye, Edit, Shield, X } from 'lucide-react'
+import { Eye, Edit, Shield, X, LogIn } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
 import { useCanAccess } from '@/shared/utils/permissions'
-import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType, updateUserTradingAccess } from '../api/users.api'
+import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType, updateUserTradingAccess, impersonateUser } from '../api/users.api'
 
 interface UsersTableProps {
   users: User[]
@@ -191,6 +191,35 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
 
   const handleDisable = (user: User) => {
     toast.success(`User ${user.name} ${user.status === 'active' ? 'disabled' : 'enabled'}`)
+  }
+
+  const [loginLoading, setLoginLoading] = useState<Set<string>>(new Set())
+  const handleLoginAsUser = async (user: User) => {
+    setLoginLoading((prev) => new Set(prev).add(user.id))
+    try {
+      const { access_token, refresh_token } = await impersonateUser(user.id)
+      const params = new URLSearchParams({
+        access_token: access_token,
+        refresh_token: refresh_token,
+        redirect: '/',
+      })
+      const url = `${window.location.origin}/impersonate#${params.toString()}`
+      window.open(url, '_blank', 'noopener,noreferrer')
+      toast.success(`Opening trading terminal as ${user.name}`)
+    } catch (error: unknown) {
+      const msg =
+        (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message ||
+        (error as Error)?.message ||
+        'Failed to log in as user'
+      toast.error(msg)
+    } finally {
+      setLoginLoading((prev) => {
+        const next = new Set(prev)
+        next.delete(user.id)
+        return next
+      })
+    }
   }
 
   const getStatusBadge = (status: string) => {
@@ -495,6 +524,15 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const user = row.original
         return (
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleLoginAsUser(user)}
+              disabled={loginLoading.has(user.id)}
+              title="Login as user (open trading terminal)"
+            >
+              <LogIn className="h-4 w-4" />
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => handleView(user)} title="View">
               <Eye className="h-4 w-4" />
             </Button>

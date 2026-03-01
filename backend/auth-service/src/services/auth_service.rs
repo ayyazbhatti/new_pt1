@@ -263,6 +263,12 @@ impl AuthService {
         Ok(user)
     }
 
+    /// Create a session for the target user (for admin impersonation). Returns (access_token, refresh_token).
+    pub async fn impersonate(&self, target_user_id: Uuid) -> anyhow::Result<(String, String)> {
+        let user = self.get_user_by_id(target_user_id).await?;
+        self.create_session(&user).await
+    }
+
     async fn create_session(&self, user: &User) -> anyhow::Result<(String, String)> {
         self.create_session_with_metadata(user, None, None).await
     }

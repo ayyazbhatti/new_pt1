@@ -3,6 +3,7 @@ import { TerminalPage } from '@/features/terminal'
 import { TradingPage } from '@/features/trading'
 import { LoginPage } from '@/pages/auth/LoginPage'
 import { RegisterPage } from '@/pages/auth/RegisterPage'
+import { ImpersonatePage } from '@/pages/auth/ImpersonatePage'
 import { AuthGuard } from '@/shared/components/guards/AuthGuard'
 
 export const routes: RouteObject[] = [
@@ -13,6 +14,10 @@ export const routes: RouteObject[] = [
   {
     path: '/register',
     element: <RegisterPage />,
+  },
+  {
+    path: '/impersonate',
+    element: <ImpersonatePage />,
   },
   {
     path: '/',

@@ -69,3 +69,17 @@ export async function updateUserPermissionProfile(
     body: JSON.stringify({ permission_profile_id: permissionProfileId }),
   })
 }
+
+export interface ImpersonateResponse {
+  access_token: string
+  refresh_token: string
+}
+
+/** Get tokens to sign in as another user (admin only). Open /impersonate#access_token=...&refresh_token=... in a new tab to apply. */
+export async function impersonateUser(userId: string): Promise<ImpersonateResponse> {
+  const response = await http<ImpersonateResponse>(
+    `/api/admin/users/${userId}/impersonate`,
+    { method: 'POST' }
+  )
+  return response
+}

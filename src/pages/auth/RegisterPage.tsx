@@ -79,7 +79,7 @@ export function RegisterPage() {
         ...(groupIdFromLink ? { groupId: groupIdFromLink } : {}),
       })
       toast.success('Account created successfully!')
-      navigate('/user/dashboard')
+      navigate('/')
     } catch (error: unknown) {
       const msg =
         (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||

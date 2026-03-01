@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::put,
+    routing::{post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
+use crate::services::auth_service::AuthService;
 use crate::utils::jwt::Claims;
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +54,12 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ImpersonateResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
 pub fn create_admin_users_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/:id/group", put(update_user_group))
@@ -60,8 +67,43 @@ pub fn create_admin_users_router(pool: PgPool) -> Router<PgPool> {
         .route("/:id/margin-calculation-type", put(update_user_margin_calculation_type))
         .route("/:id/trading-access", put(update_user_trading_access))
         .route("/:id/permission-profile", put(update_user_permission_profile))
+        .route("/:id/impersonate", post(impersonate_user))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+async fn impersonate_user(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<ImpersonateResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can impersonate users".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AuthService::new(pool);
+    let (access_token, refresh_token) = service.impersonate(user_id).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "IMPERSONATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(Json(ImpersonateResponse {
+        access_token,
+        refresh_token,
+    }))
 }
 
 async fn update_user_group(
