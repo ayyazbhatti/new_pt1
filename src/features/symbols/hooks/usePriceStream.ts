@@ -209,6 +209,115 @@ export function usePriceStream(symbols: string[]) {
   }
 }
 
+/**
+ * Subscribe to the price stream for the given symbols and return only connection status.
+ * Does NOT register any price callback, so the component using this hook will not re-render
+ * when prices change. Use this in tables/lists so only the individual PriceCell (useSymbolPrice)
+ * components re-render on tick.
+ */
+export function usePriceStreamConnection(symbols: string[]) {
+  const subscribedSymbolsRef = useRef<Set<string>>(new Set())
+  const symbolsRef = useRef<string[]>([])
+  const subscribeFnRef = useRef<((symbols: string[]) => boolean) | null>(null)
+  const unsubscribeFnRef = useRef<((symbols: string[]) => void) | null>(null)
+
+  useEffect(() => {
+    symbolsRef.current = symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0)
+  }, [symbols.join(',')])
+
+  const performSubscriptionRef = useRef<() => void>()
+  performSubscriptionRef.current = () => {
+    const symbolsUpper = symbolsRef.current
+    const subscribeFn = subscribeFnRef.current
+    const unsubscribeFn = unsubscribeFnRef.current
+    if (symbolsUpper.length === 0) return
+    if (!subscribeFn || !unsubscribeFn) return
+    const symbolsToSubscribe = symbolsUpper.filter((s) => !subscribedSymbolsRef.current.has(s))
+    const symbolsToUnsubscribe = Array.from(subscribedSymbolsRef.current).filter((s) => !symbolsUpper.includes(s))
+    if (symbolsToUnsubscribe.length > 0) {
+      unsubscribeFn(symbolsToUnsubscribe)
+      symbolsToUnsubscribe.forEach((s) => subscribedSymbolsRef.current.delete(s))
+    }
+    if (symbolsToSubscribe.length > 0) {
+      const MAX = 50
+      for (let i = 0; i < symbolsToSubscribe.length; i += MAX) {
+        const batch = symbolsToSubscribe.slice(i, i + MAX)
+        if (subscribeFn(batch)) batch.forEach((s) => subscribedSymbolsRef.current.add(s))
+      }
+    }
+  }
+
+  const [isConnected, setIsConnected] = useState(priceStreamClient.isConnected())
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setIsConnected((prev) => {
+        const next = priceStreamClient.isConnected()
+        return next !== prev ? next : prev
+      })
+    }, 500)
+    return () => clearInterval(interval)
+  }, [])
+
+  const accessToken = useAuthStore((s) => s.accessToken)
+  useEffect(() => {
+    priceStreamClient.setAuthToken(accessToken)
+  }, [accessToken])
+
+  useEffect(() => {
+    const unsub = priceStreamClient.onTick((tick) => {
+      notifySubscribers(tick.symbol, { bid: tick.bid, ask: tick.ask, ts: tick.ts })
+    })
+    return unsub
+  }, [])
+
+  const subscribeToSymbols = useCallback((symbolsToSubscribe: string[]) => {
+    priceStreamClient.subscribe(symbolsToSubscribe)
+    setIsConnected(priceStreamClient.isConnected())
+    return true
+  }, [])
+
+  const unsubscribeFromSymbols = useCallback((symbolsToUnsubscribe: string[]) => {
+    priceStreamClient.unsubscribe(symbolsToUnsubscribe)
+  }, [])
+
+  useEffect(() => {
+    subscribeFnRef.current = subscribeToSymbols
+    unsubscribeFnRef.current = unsubscribeFromSymbols
+  }, [subscribeToSymbols, unsubscribeFromSymbols])
+
+  useEffect(() => {
+    const base = getDataProviderPricesBaseUrl()
+    if (!base || symbols.length === 0) return
+    const symbolsParam = symbols.map((s) => s.toUpperCase().trim()).filter(Boolean)
+    if (symbolsParam.length === 0) return
+    const url = `${base}/prices?symbols=${encodeURIComponent(symbolsParam.join(','))}`
+    let cancelled = false
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((arr: Array<{ symbol: string; bid: string; ask: string; ts: number }> | null) => {
+        if (cancelled || !Array.isArray(arr)) return
+        arr.forEach((item) => {
+          notifySubscribers(item.symbol, { bid: item.bid, ask: item.ask, ts: item.ts })
+        })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [symbols.join(',')])
+
+  useEffect(() => {
+    if (symbols.length === 0) return
+    if (performSubscriptionRef.current) performSubscriptionRef.current()
+  }, [symbols.join(',')])
+
+  const triggerResubscribe = useCallback(() => {
+    if (performSubscriptionRef.current && symbolsRef.current.length > 0) performSubscriptionRef.current()
+  }, [])
+
+  return { isConnected, triggerResubscribe }
+}
+
 // Hook for a single symbol price
 export function useSymbolPrice(symbol: string | null) {
   const [price, setPrice] = useState<PriceData | null>(null)

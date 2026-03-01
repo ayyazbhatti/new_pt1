@@ -14,8 +14,8 @@ import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLe
 import { useUpdateSymbol } from '../hooks/useSymbols'
 import { toast } from '@/shared/components/common'
 import { PriceCell } from './PriceCell'
-import { usePriceStream } from '../hooks/usePriceStream'
-import { useMemo, useEffect, useCallback } from 'react'
+import { usePriceStreamConnection } from '../hooks/usePriceStream'
+import { useMemo, useCallback } from 'react'
 
 interface SymbolsTableProps {
   symbols: AdminSymbol[]
@@ -51,25 +51,13 @@ export function SymbolsTable({
 
   // Get all symbol codes for price streaming (use provider symbol or symbol code, uppercase)
   const symbolCodes = useMemo(() => {
-    const codes = symbols
+    return symbols
       .map((s) => (s.providerSymbol || s.symbolCode).toUpperCase())
       .filter((code) => code && code.length > 0)
-    console.log('📋 SymbolsTable: Symbol codes to subscribe:', codes)
-    console.log('📋 SymbolsTable: Symbols data:', symbols.map(s => ({ 
-      code: s.symbolCode, 
-      provider: s.providerSymbol,
-      final: (s.providerSymbol || s.symbolCode).toUpperCase()
-    })))
-    return codes
   }, [symbols])
 
-  // Subscribe to price stream for current page symbols
-  const { isConnected } = usePriceStream(symbolCodes)
-  
-  // Debug: Log connection status
-  useEffect(() => {
-    console.log('🔌 SymbolsTable: WebSocket connection status:', isConnected, '| Symbols:', symbolCodes)
-  }, [isConnected, symbolCodes.join(',')])
+  // Subscribe to price stream (connection only – no state on tick, so table doesn't re-render when prices change)
+  const { isConnected } = usePriceStreamConnection(symbolCodes)
 
   // Memoize handlers to prevent re-renders on price updates
   const handleView = useCallback((symbol: AdminSymbol) => {
@@ -173,10 +161,10 @@ export function SymbolsTable({
       },
     },
     {
-      id: 'livePrice',
+      id: 'bid',
       header: (
         <div className="flex items-center gap-2">
-          <span>Live Price</span>
+          <span>Bid</span>
           {isConnected ? (
             <Badge variant="success" className="text-xs">
               Live
@@ -188,16 +176,21 @@ export function SymbolsTable({
           )}
         </div>
       ),
-      // Stable cell renderer - PriceCell is memoized internally
       cell: ({ row }) => {
         const symbol = row.original
-        // Use provider symbol if available, otherwise use symbol code
-        // Data provider expects uppercase symbols
         const symbolCode = (symbol.providerSymbol || symbol.symbolCode).toUpperCase()
-        // PriceCell is memoized, so it only re-renders when its own price updates
-        return <PriceCell symbol={symbolCode} />
+        return <PriceCell symbol={symbolCode} variant="bid" />
       },
-      // Enable cell-level memoization in TanStack Table
+      enableSorting: false,
+    },
+    {
+      id: 'ask',
+      header: 'Ask',
+      cell: ({ row }) => {
+        const symbol = row.original
+        const symbolCode = (symbol.providerSymbol || symbol.symbolCode).toUpperCase()
+        return <PriceCell symbol={symbolCode} variant="ask" />
+      },
       enableSorting: false,
     },
     {

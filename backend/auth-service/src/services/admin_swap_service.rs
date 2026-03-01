@@ -91,7 +91,7 @@ impl AdminSwapService {
         }
         if symbol_pattern.is_some() {
             bind_count += 1;
-            conditions.push(format!("s.code ILIKE ${}", bind_count));
+            conditions.push(format!("sr.symbol ILIKE ${}", bind_count));
         }
         if status.is_some() {
             bind_count += 1;
@@ -109,7 +109,7 @@ impl AdminSwapService {
         };
 
         let count_sql = format!(
-            "SELECT COUNT(*) FROM swap_rules sr LEFT JOIN symbols s ON s.id = sr.symbol_id {}",
+            "SELECT COUNT(*) FROM swap_rules sr {}",
             where_clause
         );
         let list_sql = format!(
@@ -118,25 +118,24 @@ impl AdminSwapService {
                 sr.id,
                 sr.group_id,
                 ug.name AS group_name,
-                s.code AS symbol,
-                COALESCE(s.market::text, 'forex') AS market,
-                sr.calc_mode::text AS calc_mode,
-                sr.unit::text AS unit,
+                sr.symbol,
+                sr.market,
+                sr.calc_mode,
+                sr.unit,
                 sr.long_rate,
                 sr.short_rate,
-                sr.rollover_time_utc::text AS rollover_time_utc,
+                sr.rollover_time_utc,
                 sr.triple_day,
-                sr.weekend_rule::text AS weekend_rule,
+                sr.weekend_rule,
                 sr.min_charge,
                 sr.max_charge,
-                sr.status::text AS status,
+                sr.status,
                 sr.notes,
                 sr.created_at,
                 sr.updated_at,
-                sr.created_by::text AS updated_by
+                sr.updated_by
             FROM swap_rules sr
             LEFT JOIN user_groups ug ON ug.id = sr.group_id
-            LEFT JOIN symbols s ON s.id = sr.symbol_id
             {}
             ORDER BY sr.updated_at DESC
             LIMIT {} OFFSET {}
@@ -182,25 +181,24 @@ impl AdminSwapService {
                 sr.id,
                 sr.group_id,
                 ug.name AS group_name,
-                s.code AS symbol,
-                COALESCE(s.market::text, 'forex') AS market,
-                sr.calc_mode::text AS calc_mode,
-                sr.unit::text AS unit,
+                sr.symbol,
+                sr.market,
+                sr.calc_mode,
+                sr.unit,
                 sr.long_rate,
                 sr.short_rate,
-                sr.rollover_time_utc::text AS rollover_time_utc,
+                sr.rollover_time_utc,
                 sr.triple_day,
-                sr.weekend_rule::text AS weekend_rule,
+                sr.weekend_rule,
                 sr.min_charge,
                 sr.max_charge,
-                sr.status::text AS status,
+                sr.status,
                 sr.notes,
                 sr.created_at,
                 sr.updated_at,
-                sr.created_by::text AS updated_by
+                sr.updated_by
             FROM swap_rules sr
             LEFT JOIN user_groups ug ON ug.id = sr.group_id
-            LEFT JOIN symbols s ON s.id = sr.symbol_id
             WHERE sr.id = $1
             "#,
         )
@@ -246,26 +244,20 @@ impl AdminSwapService {
             return Err(anyhow::anyhow!("Group not found"));
         }
 
-        // Resolve symbol code to symbol_id (table has symbol_id, not symbol)
-        let symbol_id: Uuid = sqlx::query_scalar("SELECT id FROM symbols WHERE code = $1 LIMIT 1")
-            .bind(symbol)
-            .fetch_optional(&self.pool)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Symbol not found: {}", symbol))?;
-
         let new_id: Uuid = sqlx::query_scalar(
             r#"
             INSERT INTO swap_rules (
-                group_id, symbol_id, calc_mode, unit,
+                group_id, symbol, market, calc_mode, unit,
                 long_rate, short_rate, rollover_time_utc, weekend_rule, status,
-                triple_day, min_charge, max_charge, notes, created_by
+                triple_day, min_charge, max_charge, notes, updated_by
             )
-            VALUES ($1, $2, $3::swap_calc_mode, $4::swap_unit, $5, $6, $7::time, $8::weekend_rule, $9::user_status, $10, $11, $12, $13, NULL)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL)
             RETURNING id
             "#,
         )
         .bind(group_id)
-        .bind(symbol_id)
+        .bind(symbol)
+        .bind(market)
         .bind(calc_mode)
         .bind(unit)
         .bind(long_rate)
@@ -325,6 +317,7 @@ impl AdminSwapService {
 
         let group_id = group_id.unwrap_or(existing.group_id);
         let symbol_code = symbol.unwrap_or(&existing.symbol);
+        let market_str = market.unwrap_or(&existing.market);
         let calc_mode = calc_mode.unwrap_or(&existing.calc_mode);
         let unit = unit.unwrap_or(&existing.unit);
         let long_rate = long_rate.unwrap_or(existing.long_rate);
@@ -337,25 +330,20 @@ impl AdminSwapService {
         let status = status.unwrap_or(&existing.status);
         let notes = notes.unwrap_or(existing.notes.as_deref());
 
-        let symbol_id: Uuid = sqlx::query_scalar("SELECT id FROM symbols WHERE code = $1 LIMIT 1")
-            .bind(symbol_code)
-            .fetch_optional(&self.pool)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Symbol not found: {}", symbol_code))?;
-
         sqlx::query(
             r#"
             UPDATE swap_rules SET
-                group_id = $2, symbol_id = $3, calc_mode = $4::swap_calc_mode, unit = $5::swap_unit,
-                long_rate = $6, short_rate = $7, rollover_time_utc = $8::time, weekend_rule = $9::weekend_rule,
-                triple_day = $10, min_charge = $11, max_charge = $12, status = $13::user_status,
-                notes = $14, updated_at = NOW()
+                group_id = $2, symbol = $3, market = $4, calc_mode = $5, unit = $6,
+                long_rate = $7, short_rate = $8, rollover_time_utc = $9, weekend_rule = $10,
+                triple_day = $11, min_charge = $12, max_charge = $13, status = $14,
+                notes = $15, updated_at = NOW()
             WHERE id = $1
             "#,
         )
         .bind(id)
         .bind(group_id)
-        .bind(symbol_id)
+        .bind(symbol_code)
+        .bind(market_str)
         .bind(calc_mode)
         .bind(unit)
         .bind(long_rate)

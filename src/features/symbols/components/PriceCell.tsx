@@ -2,12 +2,15 @@ import { memo, useMemo } from 'react'
 import { useSymbolPrice } from '../hooks/usePriceStream'
 import { cn } from '@/shared/utils'
 
+export type PriceCellVariant = 'both' | 'bid' | 'ask'
+
 interface PriceCellProps {
   symbol: string
+  variant?: PriceCellVariant
   className?: string
 }
 
-function PriceCellComponent({ symbol, className }: PriceCellProps) {
+function PriceCellComponent({ symbol, variant = 'both', className }: PriceCellProps) {
   const symbolUpper = symbol?.toUpperCase().trim() || ''
   const price = useSymbolPrice(symbolUpper)
 
@@ -29,15 +32,29 @@ function PriceCellComponent({ symbol, className }: PriceCellProps) {
     }
   }, [price?.bid, price?.ask])
 
+  const placeholder = '--'
   if (!price || !formattedPrices) {
+    if (variant === 'bid') {
+      return <span className={cn('text-sm text-text-muted font-mono opacity-50', className)}>{placeholder}</span>
+    }
+    if (variant === 'ask') {
+      return <span className={cn('text-sm text-text-muted font-mono opacity-50', className)}>{placeholder}</span>
+    }
     return (
       <div className={cn('text-sm text-text-muted font-mono', className)}>
         <div className="flex flex-col gap-0.5">
-          <span className="opacity-50">--</span>
-          <span className="opacity-50">--</span>
+          <span className="opacity-50">{placeholder}</span>
+          <span className="opacity-50">{placeholder}</span>
         </div>
       </div>
     )
+  }
+
+  if (variant === 'bid') {
+    return <span className={cn('text-sm font-mono text-success', className)}>{formattedPrices.bid}</span>
+  }
+  if (variant === 'ask') {
+    return <span className={cn('text-sm font-mono text-danger', className)}>{formattedPrices.ask}</span>
   }
 
   return (
