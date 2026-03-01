@@ -97,7 +97,7 @@ interface EditSymbolModalProps {
 export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const updateSymbol = useUpdateSymbol()
-  const { data: leverageProfiles } = useLeverageProfilesList()
+  const { data: leverageProfiles } = useLeverageProfilesList({ page_size: 500 })
 
   // Defensive check: ensure symbol data exists
   if (!symbol) {
@@ -229,25 +229,39 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
           </div>
           <div>
             <Label>Leverage Profile</Label>
-            <Select
-              value={watch('leverage_profile_id') || 'none'}
-              onValueChange={(value) =>
-                setValue('leverage_profile_id', value === 'none' ? null : value)
-              }
-              disabled={readOnly || isSubmitting}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="No profile" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No Profile</SelectItem>
-                {leverageProfiles?.items.map((profile) => (
-                  <SelectItem key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {(() => {
+              const currentId = watch('leverage_profile_id')
+              const profileId = currentId != null ? String(currentId) : null
+              const value = profileId ?? 'none'
+              const profileIds = new Set((leverageProfiles?.items ?? []).map((p) => String(p.id)))
+              const hasCurrentInList = profileId != null && profileIds.has(profileId)
+              return (
+                <Select
+                  value={value}
+                  onValueChange={(v) =>
+                    setValue('leverage_profile_id', v === 'none' ? null : v)
+                  }
+                  disabled={readOnly || isSubmitting}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="No profile" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No Profile</SelectItem>
+                    {profileId && !hasCurrentInList && (
+                      <SelectItem value={profileId} key={profileId}>
+                        {symbol.leverageProfileName ?? 'Unknown profile'}
+                      </SelectItem>
+                    )}
+                    {leverageProfiles?.items?.map((profile) => (
+                      <SelectItem key={profile.id} value={String(profile.id)}>
+                        {profile.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )
+            })()}
           </div>
         </div>
 

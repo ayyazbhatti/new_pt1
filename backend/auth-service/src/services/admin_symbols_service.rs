@@ -1,7 +1,17 @@
 use crate::models::symbol::{Symbol, SymbolWithProfile};
 use anyhow::Result;
+use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// Default for tick_size when not provided (DB column is NOT NULL).
+fn default_tick_size() -> Decimal {
+    Decimal::new(1, 2) // 0.01
+}
+/// Default for lot_min when not provided (DB column is NOT NULL).
+fn default_lot_min() -> Decimal {
+    Decimal::new(1, 2) // 0.01
+}
 
 pub struct AdminSymbolsService {
     pool: PgPool,
@@ -283,17 +293,21 @@ impl AdminSymbolsService {
             return Err(anyhow::anyhow!("Symbol code must be between 2 and 50 characters"));
         }
 
-        // Parse optional decimal fields
-        let tick_size_decimal = tick_size.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let lot_min_decimal = lot_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let lot_max_decimal = lot_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let default_pip_position_decimal = default_pip_position.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let pip_position_min_decimal = pip_position_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let pip_position_max_decimal = pip_position_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        // Parse optional decimal fields; use DB-compatible defaults for NOT NULL columns when omitted
+        let tick_size_decimal = tick_size
+            .and_then(|s| s.parse::<Decimal>().ok())
+            .unwrap_or_else(default_tick_size);
+        let lot_min_decimal = lot_min
+            .and_then(|s| s.parse::<Decimal>().ok())
+            .unwrap_or_else(default_lot_min);
+        let lot_max_decimal = lot_max.and_then(|s| s.parse::<Decimal>().ok());
+        let default_pip_position_decimal = default_pip_position.and_then(|s| s.parse::<Decimal>().ok());
+        let pip_position_min_decimal = pip_position_min.and_then(|s| s.parse::<Decimal>().ok());
+        let pip_position_max_decimal = pip_position_max.and_then(|s| s.parse::<Decimal>().ok());
 
         // Validate lot_min < lot_max if both provided
-        if let (Some(min), Some(max)) = (lot_min_decimal, lot_max_decimal) {
-            if min >= max {
+        if let Some(max) = lot_max_decimal {
+            if lot_min_decimal >= max {
                 return Err(anyhow::anyhow!("lot_min must be less than lot_max"));
             }
         }
@@ -356,17 +370,21 @@ impl AdminSymbolsService {
         trading_enabled: bool,
         leverage_profile_id: Option<Uuid>,
     ) -> Result<Symbol> {
-        // Parse optional decimal fields
-        let tick_size_decimal = tick_size.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let lot_min_decimal = lot_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let lot_max_decimal = lot_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let default_pip_position_decimal = default_pip_position.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let pip_position_min_decimal = pip_position_min.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-        let pip_position_max_decimal = pip_position_max.and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+        // Parse optional decimal fields; use DB-compatible defaults for NOT NULL columns when omitted
+        let tick_size_decimal = tick_size
+            .and_then(|s| s.parse::<Decimal>().ok())
+            .unwrap_or_else(default_tick_size);
+        let lot_min_decimal = lot_min
+            .and_then(|s| s.parse::<Decimal>().ok())
+            .unwrap_or_else(default_lot_min);
+        let lot_max_decimal = lot_max.and_then(|s| s.parse::<Decimal>().ok());
+        let default_pip_position_decimal = default_pip_position.and_then(|s| s.parse::<Decimal>().ok());
+        let pip_position_min_decimal = pip_position_min.and_then(|s| s.parse::<Decimal>().ok());
+        let pip_position_max_decimal = pip_position_max.and_then(|s| s.parse::<Decimal>().ok());
 
         // Validate lot_min < lot_max if both provided
-        if let (Some(min), Some(max)) = (lot_min_decimal, lot_max_decimal) {
-            if min >= max {
+        if let Some(max) = lot_max_decimal {
+            if lot_min_decimal >= max {
                 return Err(anyhow::anyhow!("lot_min must be less than lot_max"));
             }
         }

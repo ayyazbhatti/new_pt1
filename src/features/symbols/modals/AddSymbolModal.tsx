@@ -89,7 +89,7 @@ type SymbolFormData = z.infer<typeof symbolSchema>
 export function AddSymbolModal() {
   const closeModal = useModalStore((state) => state.closeModal)
   const createSymbol = useCreateSymbol()
-  const { data: leverageProfiles } = useLeverageProfilesList()
+  const { data: leverageProfiles } = useLeverageProfilesList({ page_size: 500 })
 
   const {
     register,
@@ -177,7 +177,7 @@ export function AddSymbolModal() {
           <div>
             <Label>Leverage Profile</Label>
             <Select
-              value={watch('leverage_profile_id') || 'none'}
+              value={watch('leverage_profile_id') ?? 'none'}
               onValueChange={(value) =>
                 setValue('leverage_profile_id', value === 'none' ? null : value)
               }
@@ -188,8 +188,8 @@ export function AddSymbolModal() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">No Profile</SelectItem>
-                {leverageProfiles?.items.map((profile) => (
-                  <SelectItem key={profile.id} value={profile.id}>
+                {leverageProfiles?.items?.map((profile) => (
+                  <SelectItem key={profile.id} value={String(profile.id)}>
                     {profile.name}
                   </SelectItem>
                 ))}

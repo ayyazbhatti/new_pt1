@@ -29,8 +29,8 @@ function toCamelCaseSymbol(obj: any): AdminSymbol {
     pipPositionMax: obj.pip_position_max ? parseFloat(obj.pip_position_max) : null,
     isEnabled: obj.is_enabled,
     tradingEnabled: obj.trading_enabled,
-    leverageProfileId: obj.leverage_profile_id,
-    leverageProfileName: obj.leverage_profile_name,
+    leverageProfileId: obj.leverage_profile_id != null ? String(obj.leverage_profile_id) : null,
+    leverageProfileName: obj.leverage_profile_name != null ? String(obj.leverage_profile_name) : null,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
   }

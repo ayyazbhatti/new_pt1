@@ -47,7 +47,7 @@ export function SymbolsTable({
   const toggleEnabled = useToggleSymbolEnabled()
   const deleteSymbol = useDeleteSymbol()
   const updateSymbol = useUpdateSymbol()
-  const { data: leverageProfiles } = useLeverageProfilesList()
+  const { data: leverageProfiles, isLoading: leverageProfilesLoading } = useLeverageProfilesList({ page_size: 500 })
 
   // Get all symbol codes for price streaming (use provider symbol or symbol code, uppercase)
   const symbolCodes = useMemo(() => {
@@ -206,21 +206,43 @@ export function SymbolsTable({
       header: 'Leverage Profile',
       cell: ({ row }) => {
         const symbol = row.original
+        const profileId = symbol.leverageProfileId != null ? String(symbol.leverageProfileId) : null
+        const value = profileId ?? 'none'
+        const profileIds = new Set((leverageProfiles?.items ?? []).map((p) => String(p.id)))
+        const hasCurrentInList = profileId != null && profileIds.has(profileId)
+        const selectedProfile = leverageProfiles?.items?.find((p) => String(p.id) === profileId)
+        const displayLabel =
+          value === 'none'
+            ? 'No Profile'
+            : (selectedProfile?.name ?? symbol.leverageProfileName ?? 'Unknown profile')
+        if (leverageProfilesLoading) {
+          return (
+            <div className="flex h-10 w-[180px] items-center rounded-lg border border-border bg-surface-1 px-3 py-2">
+              <span className="text-sm text-text-muted">Loading...</span>
+            </div>
+          )
+        }
         return (
           <Select
-            value={symbol.leverageProfileId || 'none'}
-            onValueChange={(value) =>
-              handleLeverageProfileChange(symbol, value === 'none' ? null : value)
+            key={`${symbol.id}-${leverageProfiles?.items?.length ?? 0}`}
+            value={value}
+            onValueChange={(v) =>
+              handleLeverageProfileChange(symbol, v === 'none' ? null : v)
             }
             disabled={updateSymbol.isPending}
           >
             <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Select profile" />
+              <span className="truncate">{displayLabel}</span>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="none">No Profile</SelectItem>
-              {leverageProfiles?.items.map((profile) => (
-                <SelectItem key={profile.id} value={profile.id}>
+              {profileId && !hasCurrentInList && (
+                <SelectItem value={profileId} key={profileId}>
+                  {symbol.leverageProfileName ?? 'Unknown profile'}
+                </SelectItem>
+              )}
+              {leverageProfiles?.items?.map((profile) => (
+                <SelectItem key={profile.id} value={String(profile.id)}>
                   {profile.name}
                 </SelectItem>
               ))}
@@ -431,6 +453,7 @@ export function SymbolsTable({
     handleToggleEnabled,
     handleLeverageProfileChange,
     leverageProfiles,
+    leverageProfilesLoading,
     updateSymbol.isPending,
     toggleEnabled.isPending,
   ]) as ColumnDef<AdminSymbol>[]

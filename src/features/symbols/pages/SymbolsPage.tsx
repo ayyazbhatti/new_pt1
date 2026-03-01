@@ -8,6 +8,7 @@ import { Plus, Upload, RefreshCw } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAdminSymbolsList } from '../hooks/useSymbols'
+import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { Skeleton } from '@/shared/ui/loading'
 import { EmptyState } from '@/shared/ui/empty'
 
@@ -35,6 +36,9 @@ export function SymbolsPage() {
   const page = parseInt(searchParams.get('page') || '1', 10)
   const pageSize = parseInt(searchParams.get('page_size') || '20', 10)
   const sort = searchParams.get('sort') || 'updated_desc'
+
+  // Prefetch leverage profiles so dropdown has data when table renders (same query key = cache shared with table)
+  useLeverageProfilesList({ page_size: 500 })
 
   // Fetch symbols
   const { data, isLoading, error, refetch } = useAdminSymbolsList({
