@@ -989,6 +989,7 @@ dependencies = [
  "dotenv",
  "futures-util",
  "jsonwebtoken",
+ "redis",
  "rust_decimal",
  "serde",
  "serde_json",

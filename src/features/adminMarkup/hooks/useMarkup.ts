@@ -101,10 +101,13 @@ export function useUpsertSymbolOverride() {
       profileId: string
       symbolId: string
       payload: UpsertSymbolOverridePayload
+      silent?: boolean
     }) => upsertSymbolOverride(profileId, symbolId, payload),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.overrides(variables.profileId) })
-      toast.success('Markup saved', { duration: 2000 })
+      if (!variables.silent) {
+        toast.success('Markup saved', { duration: 2000 })
+      }
     },
     onError: (error: any) => {
       const message = error?.response?.data?.error?.message || error?.message || 'Failed to save markup'

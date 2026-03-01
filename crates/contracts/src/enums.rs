@@ -44,5 +44,6 @@ pub enum PositionSide {
 pub enum PositionStatus {
     Open,
     Closed,
+    Liquidated,
 }
 

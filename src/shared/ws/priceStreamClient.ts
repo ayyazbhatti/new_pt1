@@ -1,17 +1,22 @@
 /**
- * WebSocket client for live prices.
- * Connects to gateway-ws (same as main app WS). Gateway forwards ticks from Redis price:ticks (published by data-provider).
- * - In dev we use same-origin /ws so Vite proxies to gateway (3003). Default direct URL: 3003.
- * - Override with VITE_DATA_PROVIDER_WS_URL for a separate price-only WS (action 'subscribe', no auth).
+ * Gateway WebSocket URL (per-group marked-up prices via JWT group_id).
+ * Use this when the user is authenticated so they receive their group's markup.
+ */
+function getGatewayPriceWsUrl(): string {
+  if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV && typeof location !== 'undefined') {
+    return `ws://${location.host}/ws?group=default`
+  }
+  return 'ws://localhost:3003/ws?group=default'
+}
+
+/**
+ * Default URL: gateway when no env override; data-provider WS if VITE_DATA_PROVIDER_WS_URL is set (raw prices, no auth).
  */
 function getDefaultPriceWsUrl(): string {
   if (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_DATA_PROVIDER_WS_URL) {
     return (import.meta as any).env.VITE_DATA_PROVIDER_WS_URL
   }
-  if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV && typeof location !== 'undefined') {
-    return `ws://${location.host}/ws?group=default`
-  }
-  return 'ws://localhost:3003/ws?group=default'
+  return getGatewayPriceWsUrl()
 }
 export interface PriceTick {
   symbol: string
@@ -62,23 +67,36 @@ class PriceStreamClient {
   }
 
   setAuthToken(token: string | null): void {
+    const hadToken = !!this.authToken
     this.authToken = token
     if (!token) {
       this.authenticated = false
       return
     }
-    if (isGatewayUrl(this.url) && this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'auth', token }))
+    const effectiveUrl = this.getEffectiveUrl()
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      if (isGatewayUrl(effectiveUrl)) {
+        this.ws.send(JSON.stringify({ type: 'auth', token: this.authToken }))
+      } else if (!hadToken) {
+        // Just got a token; reconnect to gateway so user gets marked-up prices
+        this.disconnect()
+      }
     }
+  }
+
+  /** When user has a token, use gateway URL so they get per-group (marked-up) prices. */
+  private getEffectiveUrl(): string {
+    return this.authToken ? getGatewayPriceWsUrl() : this.url
   }
 
   connect(): void {
     if (this.ws?.readyState === WebSocket.OPEN) return
     if (this.ws?.readyState === WebSocket.CONNECTING) return
 
-    const gatewayMode = isGatewayUrl(this.url)
+    const urlToUse = this.getEffectiveUrl()
+    const gatewayMode = isGatewayUrl(urlToUse)
     try {
-      this.ws = new WebSocket(this.url)
+      this.ws = new WebSocket(urlToUse)
       this.ws.onopen = () => {
         this.reconnectAttempts = 0
         this.authenticated = !gatewayMode
@@ -139,7 +157,7 @@ class PriceStreamClient {
   }
 
   private sendSubscribe(symbols: string[]): void {
-    const gatewayMode = isGatewayUrl(this.url)
+    const gatewayMode = isGatewayUrl(this.getEffectiveUrl())
     const payload = gatewayMode
       ? JSON.stringify({ type: 'subscribe', symbols, channels: [] })
       : JSON.stringify({ action: 'subscribe', symbols })

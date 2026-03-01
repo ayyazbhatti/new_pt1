@@ -17,7 +17,7 @@ export interface Position {
   margin: string
   unrealized_pnl: string
   realized_pnl: string
-  status: 'OPEN' | 'CLOSED'
+  status: 'OPEN' | 'CLOSED' | 'LIQUIDATED'
   opened_at: number
   updated_at: number
   closed_at?: number // Timestamp when position was closed

@@ -17,8 +17,12 @@ interface DataTableProps<TData> {
   data: TData[]
   columns: ColumnDef<TData>[]
   className?: string
+  /** Optional class name for the <table> element (e.g. w-max for content-width) */
+  tableClassName?: string
   /** When true, reduces row height and cell padding for a denser table */
   dense?: boolean
+  /** When true, use fixed layout and column sizes so columns don't stretch */
+  compact?: boolean
   /** When false, table has no outer border/radius so it blends into parent (e.g. modal) */
   bordered?: boolean
   onRowClick?: (row: TData) => void
@@ -33,14 +37,16 @@ interface DataTableProps<TData> {
 
 // Memoized table cell component to prevent re-renders
 // For price cells (livePrice column), we allow re-renders since they update internally
-const TableCell = memo(({ cell, onRowClick, dense }: { cell: any; onRowClick?: (row: any) => void; dense?: boolean }) => {
+const TableCell = memo(({ cell, onRowClick, dense, compact }: { cell: any; onRowClick?: (row: any) => void; dense?: boolean; compact?: boolean }) => {
+  const size = compact ? cell.column.getSize() : undefined
   return (
     <td
       key={cell.id}
       className={cn(
         'align-middle text-sm text-text whitespace-nowrap',
-        dense ? 'py-2 px-3' : 'p-4'
+        compact ? 'py-1.5 px-2' : dense ? 'py-2 px-3' : 'p-4'
       )}
+      style={size !== undefined ? { width: size, minWidth: size } : undefined}
     >
       {flexRender(cell.column.columnDef.cell, cell.getContext())}
     </td>
@@ -56,6 +62,20 @@ const TableCell = memo(({ cell, onRowClick, dense }: { cell: any; onRowClick?: (
     next.cell.column.id === 'bid' ||
     prev.cell.column.id === 'ask' ||
     next.cell.column.id === 'ask' ||
+    prev.cell.column.id === 'bidPct' ||
+    next.cell.column.id === 'bidPct' ||
+    prev.cell.column.id === 'askPct' ||
+    next.cell.column.id === 'askPct' ||
+    prev.cell.column.id === 'liveBid' ||
+    next.cell.column.id === 'liveBid' ||
+    prev.cell.column.id === 'liveAsk' ||
+    next.cell.column.id === 'liveAsk' ||
+    prev.cell.column.id === 'bidAfter' ||
+    next.cell.column.id === 'bidAfter' ||
+    prev.cell.column.id === 'askAfter' ||
+    next.cell.column.id === 'askAfter' ||
+    prev.cell.column.id === 'spread' ||
+    next.cell.column.id === 'spread' ||
     prev.cell.column.id === 'tags' ||
     next.cell.column.id === 'tags'
   if (isLiveOrInteractiveCell) {
@@ -66,7 +86,8 @@ const TableCell = memo(({ cell, onRowClick, dense }: { cell: any; onRowClick?: (
   return prev.cell.id === next.cell.id &&
          prev.cell.getValue() === next.cell.getValue() &&
          prev.onRowClick === next.onRowClick &&
-         prev.dense === next.dense
+         prev.dense === next.dense &&
+         prev.compact === next.compact
 })
 
 TableCell.displayName = 'TableCell'
@@ -77,10 +98,12 @@ const TableRow = memo(({
   row,
   onRowClick,
   dense,
+  compact,
 }: {
   row: Row<any>
   onRowClick?: (row: any) => void
   dense?: boolean
+  compact?: boolean
 }) => {
   return (
     <tr
@@ -89,7 +112,7 @@ const TableRow = memo(({
       onClick={() => onRowClick?.(row.original)}
     >
       {row.getVisibleCells().map((cell) => (
-        <TableCell key={cell.id} cell={cell} onRowClick={onRowClick} dense={dense} />
+        <TableCell key={cell.id} cell={cell} onRowClick={onRowClick} dense={dense} compact={compact} />
       ))}
     </tr>
   )
@@ -98,7 +121,8 @@ const TableRow = memo(({
   const rowIdChanged = prev.row.id !== next.row.id
   const onRowClickChanged = prev.onRowClick !== next.onRowClick
   const denseChanged = prev.dense !== next.dense
-  if (!rowDataChanged && !rowIdChanged && !onRowClickChanged && !denseChanged) {
+  const compactChanged = prev.compact !== next.compact
+  if (!rowDataChanged && !rowIdChanged && !onRowClickChanged && !denseChanged && !compactChanged) {
     return true
   }
   return false
@@ -106,7 +130,7 @@ const TableRow = memo(({
 
 TableRow.displayName = 'TableRow'
 
-export function DataTable<TData>({ data, columns, className, dense, bordered = true, onRowClick, pagination }: DataTableProps<TData>) {
+export function DataTable<TData>({ data, columns, className, tableClassName, dense, compact, bordered = true, onRowClick, pagination }: DataTableProps<TData>) {
   const table = useReactTable({
     data,
     columns,
@@ -130,30 +154,36 @@ export function DataTable<TData>({ data, columns, className, dense, bordered = t
     <div className={cn('space-y-4', className)}>
       <div className={cn(bordered && 'rounded-lg border border-border', 'overflow-hidden')}>
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-surface-2 border-b border-border">
+          <table
+            className={cn('w-full', tableClassName)}
+            style={compact ? { tableLayout: 'fixed' } : undefined}
+          >
+            <thead className="sticky top-0 z-10 bg-surface-2 border-b border-border">
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
+                  {headerGroup.headers.map((header) => {
+                    const size = compact ? header.column.getSize() : undefined
+                    return (
                     <th
                       key={header.id}
                       className={cn(
                         'text-left align-middle font-medium text-text-muted text-sm whitespace-nowrap',
-                        dense ? 'h-9 py-2 px-3' : 'h-12 px-4'
+                        compact ? 'py-1.5 px-2 h-8' : dense ? 'h-9 py-2 px-3' : 'h-12 px-4'
                       )}
+                      style={size !== undefined ? { width: size, minWidth: size } : undefined}
                     >
                       {header.isPlaceholder
                         ? null
                         : flexRender(header.column.columnDef.header, header.getContext())}
                     </th>
-                  ))}
+                  )})}
                 </tr>
               ))}
             </thead>
             <tbody className="divide-y divide-border">
               {table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id} row={row} onRowClick={onRowClick} dense={dense} />
+                  <TableRow key={row.id} row={row} onRowClick={onRowClick} dense={dense} compact={compact} />
                 ))
               ) : (
                 <tr>

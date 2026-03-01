@@ -153,7 +153,7 @@ impl PositionHandler {
         };
         
         // Execute atomic close
-        match self.lua.atomic_close_position(&mut conn, &position_id, exit_price, close_size).await {
+        match self.lua.atomic_close_position(&mut conn, &position_id, exit_price, close_size, None).await {
             Ok(result) => {
                 if result.get("error").is_some() {
                     let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -284,9 +284,16 @@ impl PositionHandler {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        info!("Received close_all_positions: user_id={}, correlation_id={}", user_id, correlation_id);
+        let reason = cmd_json
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stop_out");
+        let is_liquidation = reason == "liquidated";
+        info!("Received close_all_positions: user_id={}, correlation_id={}, reason={}", user_id, correlation_id, reason);
 
         use redis_model::keys::Keys;
+        use contracts::enums::PositionStatus;
+        use crate::engine::position_events;
         let mut conn = self.redis.get_connection().await;
         let positions_key = Keys::positions_set(user_id);
         let position_ids: Vec<String> = redis::cmd("SMEMBERS")
@@ -343,7 +350,8 @@ impl PositionHandler {
             } else {
                 tick.ask
             };
-            match self.lua.atomic_close_position(&mut conn, &position_id, exit_price, None).await {
+            let close_reason_arg = if is_liquidation { Some("liquidated") } else { None };
+            match self.lua.atomic_close_position(&mut conn, &position_id, exit_price, None, close_reason_arg).await {
                 Ok(result) => {
                     if result.get("error").is_some() {
                         let err_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -365,6 +373,21 @@ impl PositionHandler {
                     } else {
                         contracts::enums::PositionSide::Short
                     };
+                    let status_override = if is_liquidation {
+                        Some(PositionStatus::Liquidated)
+                    } else {
+                        Some(PositionStatus::Closed)
+                    };
+                    if let Err(e) = position_events::publish_position_updated(
+                        self.nats.as_ref(),
+                        &mut conn,
+                        position_id,
+                        status_override,
+                    )
+                    .await
+                    {
+                        warn!("Close all: failed to publish evt.position.updated for {}: {}", position_id, e);
+                    }
                     let event = PositionClosedEvent {
                         position_id,
                         user_id,
@@ -375,7 +398,7 @@ impl PositionHandler {
                         realized_pnl,
                         correlation_id: correlation_id.clone(),
                         ts: now(),
-                        trigger_reason: Some("stop_out".to_string()),
+                        trigger_reason: Some(reason.to_string()),
                     };
                     if self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &event).await.is_err() {
                         warn!("Close all: failed to publish position closed for {}", position_id);
@@ -389,7 +412,7 @@ impl PositionHandler {
                             "side": side,
                             "quantity": closed_size.to_string(),
                             "unrealized_pnl": realized_pnl.to_string(),
-                            "trigger_reason": "stop_out",
+                            "trigger_reason": reason,
                             "ts": now().timestamp_millis(),
                         }))?)
                         .query_async::<_, i64>(&mut conn)
@@ -399,7 +422,7 @@ impl PositionHandler {
                     }
                     self.metrics.inc_positions_closed();
                     closed += 1;
-                    info!("Close all: closed position {} for user {}", position_id, user_id);
+                    info!("Close all: closed position {} for user {} (reason={})", position_id, user_id, reason);
                 }
                 Err(e) => {
                     warn!("Close all: error closing position {}: {}", position_id, e);

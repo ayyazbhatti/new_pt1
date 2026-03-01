@@ -10,7 +10,7 @@ interface ModalShellProps {
   description?: string
   children: ReactNode
   className?: string
-  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full' | 'content'
   onClose?: () => void // Alias for onOpenChange for convenience
 }
 
@@ -20,6 +20,8 @@ const sizeClasses = {
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
   full: 'max-w-7xl',
+  /** Width fits content (w-max), capped at viewport */
+  content: 'w-max max-w-[min(95vw,80rem)]',
 }
 
 export function ModalShell({

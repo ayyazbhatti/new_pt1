@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use contracts::events::PositionUpdatedEvent;
 use crate::routes::deposits::compute_and_cache_account_summary;
+use crate::services::email_config_service::{send_email_sync, EmailConfigService};
 use contracts::enums::{PositionSide, PositionStatus};
 use contracts::messages::VersionedMessage;
 use futures::StreamExt;
@@ -58,7 +59,10 @@ impl PositionEventHandler {
                 // Sync position to database
                 self.sync_position_to_database(&event).await?;
                 compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
-                
+                if event.status == PositionStatus::Liquidated {
+                    self.send_liquidation_email_if_configured(event.user_id, event.symbol.clone(), event.position_id)
+                        .await;
+                }
                 return Ok(());
             }
         };
@@ -75,14 +79,33 @@ impl PositionEventHandler {
         // Sync position to database
         self.sync_position_to_database(&event).await?;
         compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+        if event.status == PositionStatus::Liquidated {
+            self.send_liquidation_email_if_configured(event.user_id, event.symbol.clone(), event.position_id)
+                .await;
+        }
 
         Ok(())
     }
 
+    /// Send liquidation notification email to the user using platform email config. Fire-and-forget; logs on failure.
+    async fn send_liquidation_email_if_configured(
+        &self,
+        user_id: Uuid,
+        symbol: String,
+        position_id: Uuid,
+    ) {
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            if let Err(e) = send_liquidation_email_impl(&pool, user_id, symbol, position_id).await {
+                warn!("Liquidation email not sent for user {}: {}", user_id, e);
+            }
+        });
+    }
+
     async fn sync_position_to_database(&self, event: &PositionUpdatedEvent) -> Result<()> {
-        // Get symbol_id from database
+        // Get symbol_id from database (column is 'code', not 'symbol_code')
         let symbol_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM symbols WHERE symbol_code = $1"
+            "SELECT id FROM symbols WHERE code = $1"
         )
         .bind(&event.symbol)
         .fetch_optional(&*self.pool)
@@ -103,6 +126,7 @@ impl PositionEventHandler {
         let status_str = match event.status {
             PositionStatus::Open => "open",
             PositionStatus::Closed => "closed",
+            PositionStatus::Liquidated => "liquidated",
         };
 
         // For now, use avg_price as both entry_price and mark_price
@@ -136,7 +160,7 @@ impl PositionEventHandler {
 
         let opened_at = event.ts;
         let updated_at = event.ts;
-        let closed_at = if matches!(event.status, PositionStatus::Closed) {
+        let closed_at = if matches!(event.status, PositionStatus::Closed | PositionStatus::Liquidated) {
             Some(event.ts)
         } else {
             None
@@ -244,5 +268,76 @@ impl PositionEventHandler {
 
         Ok(())
     }
+}
+
+/// Load user email, get SMTP config, and send liquidation notification. Uses platform email config (Admin → Settings → Email).
+async fn send_liquidation_email_impl(
+    pool: &PgPool,
+    user_id: Uuid,
+    symbol: String,
+    position_id: Uuid,
+) -> Result<()> {
+    let (email, first_name): (String, Option<String>) = sqlx::query_as(
+        "SELECT email, first_name FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to query user for liquidation email")?
+    .ok_or_else(|| anyhow::anyhow!("User {} not found", user_id))?;
+
+    let email = email.trim();
+    if email.is_empty() {
+        anyhow::bail!("User {} has no email", user_id);
+    }
+
+    let config = match EmailConfigService::new(pool.clone())
+        .get_with_password()
+        .await?
+    {
+        Some(c) => c,
+        None => {
+            info!(
+                "Liquidation email not sent: no SMTP config. Configure Admin → Settings → Email."
+            );
+            return Ok(());
+        }
+    };
+    if config.smtp_host.trim() == "smtp.example.com" && config.smtp_username.trim().is_empty() {
+        info!(
+            "Liquidation email not sent: SMTP still default. Configure Admin → Settings → Email."
+        );
+        return Ok(());
+    }
+
+    let name = first_name.as_deref().unwrap_or("User").to_string();
+    let subject = "Your account has been liquidated";
+    let body = format!(
+        r#"Hello {},
+
+Your trading account has been liquidated.
+
+Position details:
+- Position ID: {}
+- Symbol: {}
+
+Margin fell below the required level and your position was closed automatically. You can log in to view your account and position history.
+
+If you have questions, please contact support."#,
+        name,
+        position_id,
+        symbol,
+    );
+
+    let config = config.clone();
+    let to = email.to_string();
+    let to_log = to.clone();
+    let subj = subject.to_string();
+    let body = body.clone();
+    tokio::task::spawn_blocking(move || send_email_sync(&config, &to, &subj, &body))
+        .await
+        .map_err(|e| anyhow::anyhow!("join: {}", e))??;
+    info!("Liquidation email sent to {} (user {})", to_log, user_id);
+    Ok(())
 }
 

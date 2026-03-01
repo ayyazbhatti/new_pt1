@@ -118,6 +118,9 @@ export function RightTradingPanel() {
   const [useSlTp, setUseSlTp] = useState(() => loadTradingPanelState().useSlTp || false)
   const [stopLoss, setStopLoss] = useState(() => loadTradingPanelState().stopLoss || '')
   const [takeProfit, setTakeProfit] = useState(() => loadTradingPanelState().takeProfit || '')
+  const [stopLossAmount, setStopLossAmount] = useState('')
+  const [takeProfitAmount, setTakeProfitAmount] = useState('')
+  const [slTpSide, setSlTpSide] = useState<'LONG' | 'SHORT'>('LONG') // side used for SL/TP price↔amount calculation
   const [limitPrice, setLimitPrice] = useState(() => loadTradingPanelState().limitPrice || '')
   const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(() => loadTradingPanelState().symbolDetailsOpen || false)
   const [userDetailsOpen, setUserDetailsOpen] = useState(() => loadTradingPanelState().userDetailsOpen || false)
@@ -1080,7 +1083,7 @@ export function RightTradingPanel() {
             </div>
           </div>
 
-          {/* Stop Loss / Take Profit */}
+          {/* Stop Loss / Take Profit - Price and Amount (same as Edit Position popup) */}
           <div className="mb-3">
             <div className="flex items-center mb-2">
               <Checkbox
@@ -1090,28 +1093,152 @@ export function RightTradingPanel() {
               <span className="text-xs text-muted ml-2">Use Stop Loss / Take Profit</span>
             </div>
             {useSlTp && (
-              <div className="grid grid-cols-2 gap-2 mt-2">
-                <div>
-                  <label className="text-xs text-muted mb-1 block">Stop Loss</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={stopLoss}
-                    onChange={(e) => setStopLoss(e.target.value)}
-                    placeholder="SL Price"
-                    className="w-full"
-                  />
+              <div className="space-y-3 mt-2">
+                {/* Side for SL/TP calculation (entry price = ask for LONG, bid for SHORT) */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted">For:</span>
+                  <div className="flex rounded-lg overflow-hidden border border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => setSlTpSide('LONG')}
+                      className={cn(
+                        'px-2 py-1 text-[10px] font-medium transition-colors',
+                        slTpSide === 'LONG' ? 'bg-accent text-white' : 'bg-surface-2 text-muted hover:text-text'
+                      )}
+                    >
+                      Buy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlTpSide('SHORT')}
+                      className={cn(
+                        'px-2 py-1 text-[10px] font-medium transition-colors',
+                        slTpSide === 'SHORT' ? 'bg-accent text-white' : 'bg-surface-2 text-muted hover:text-text'
+                      )}
+                    >
+                      Sell
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs text-muted mb-1 block">Take Profit</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={takeProfit}
-                    onChange={(e) => setTakeProfit(e.target.value)}
-                    placeholder="TP Price"
-                    className="w-full"
-                  />
+                {/* Stop Loss: Price ($) and Amount ($) */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-muted font-semibold block">Stop Loss</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-muted/80 mb-0.5 block">Price ($)</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="SL Price"
+                        className="w-full"
+                        value={stopLoss}
+                        onChange={(e) => {
+                          const price = e.target.value
+                          setStopLoss(price)
+                          if (selectedSymbol && price) {
+                            const entryPrice = slTpSide === 'LONG'
+                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
+                              : selectedSymbol.numericPrice
+                            const sizeNum = sizeCalculations.currentUnits
+                            const slPriceNum = parseFloat(price)
+                            if (!isNaN(slPriceNum) && sizeNum > 0) {
+                              const slAmount = slTpSide === 'LONG'
+                                ? (entryPrice - slPriceNum) * sizeNum
+                                : (slPriceNum - entryPrice) * sizeNum
+                              setStopLossAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
+                            } else setStopLossAmount('')
+                          } else setStopLossAmount('')
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-muted/80 mb-0.5 block">Amount ($)</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="Loss Amount"
+                        className="w-full"
+                        value={stopLossAmount}
+                        onChange={(e) => {
+                          const amount = e.target.value
+                          setStopLossAmount(amount)
+                          if (selectedSymbol && amount) {
+                            const entryPrice = slTpSide === 'LONG'
+                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
+                              : selectedSymbol.numericPrice
+                            const sizeNum = sizeCalculations.currentUnits
+                            const lossAmount = parseFloat(amount)
+                            if (!isNaN(lossAmount) && sizeNum > 0) {
+                              const slPrice = slTpSide === 'LONG'
+                                ? entryPrice - (lossAmount / sizeNum)
+                                : entryPrice + (lossAmount / sizeNum)
+                              setStopLoss(slPrice > 0 ? slPrice.toFixed(2) : '')
+                            } else setStopLoss('')
+                          } else setStopLoss('')
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                {/* Take Profit: Price ($) and Amount ($) */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-muted font-semibold block">Take Profit</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-muted/80 mb-0.5 block">Price ($)</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="TP Price"
+                        className="w-full"
+                        value={takeProfit}
+                        onChange={(e) => {
+                          const price = e.target.value
+                          setTakeProfit(price)
+                          if (selectedSymbol && price) {
+                            const entryPrice = slTpSide === 'LONG'
+                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
+                              : selectedSymbol.numericPrice
+                            const sizeNum = sizeCalculations.currentUnits
+                            const tpPriceNum = parseFloat(price)
+                            if (!isNaN(tpPriceNum) && sizeNum > 0) {
+                              const tpAmount = slTpSide === 'LONG'
+                                ? (tpPriceNum - entryPrice) * sizeNum
+                                : (entryPrice - tpPriceNum) * sizeNum
+                              setTakeProfitAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
+                            } else setTakeProfitAmount('')
+                          } else setTakeProfitAmount('')
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-muted/80 mb-0.5 block">Amount ($)</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="Profit Amount"
+                        className="w-full"
+                        value={takeProfitAmount}
+                        onChange={(e) => {
+                          const amount = e.target.value
+                          setTakeProfitAmount(amount)
+                          if (selectedSymbol && amount) {
+                            const entryPrice = slTpSide === 'LONG'
+                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
+                              : selectedSymbol.numericPrice
+                            const sizeNum = sizeCalculations.currentUnits
+                            const profitAmount = parseFloat(amount)
+                            if (!isNaN(profitAmount) && sizeNum > 0) {
+                              const tpPrice = slTpSide === 'LONG'
+                                ? entryPrice + (profitAmount / sizeNum)
+                                : entryPrice - (profitAmount / sizeNum)
+                              setTakeProfit(tpPrice > 0 ? tpPrice.toFixed(2) : '')
+                            } else setTakeProfit('')
+                          } else setTakeProfit('')
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

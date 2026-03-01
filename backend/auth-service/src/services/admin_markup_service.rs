@@ -250,7 +250,16 @@ impl AdminMarkupService {
         Ok(())
     }
 
+    /// Returns all symbol codes from the symbols table (for bootstrap).
+    pub async fn get_all_symbol_codes(&self) -> Result<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT code FROM symbols")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
     /// Bootstrap Redis for per-group price stream: populate price:groups and symbol:markup:* from DB.
+    /// Writes profile default bid/ask for every symbol; symbol_markup_overrides override per-symbol.
     /// Call once at auth-service startup.
     pub async fn bootstrap_price_groups_redis(&self, redis_url: &str) -> Result<()> {
         #[derive(sqlx::FromRow)]
@@ -268,6 +277,7 @@ impl AdminMarkupService {
         .fetch_all(&self.pool)
         .await?;
 
+        let all_symbols = self.get_all_symbol_codes().await.unwrap_or_default();
         let client = redis::Client::open(redis_url)?;
         let mut conn = client.get_connection()?;
 
@@ -277,15 +287,43 @@ impl AdminMarkupService {
                 .arg(row.group_id.to_string())
                 .query(&mut conn);
 
+            let profile = self.get_profile_by_id(row.profile_id).await.ok();
+            let (default_bid, default_ask) = profile
+                .as_ref()
+                .map(|p| {
+                    (
+                        p.bid_markup.parse::<f64>().unwrap_or(0.0),
+                        p.ask_markup.parse::<f64>().unwrap_or(0.0),
+                    )
+                })
+                .unwrap_or((0.0, 0.0));
+
             let overrides = self.get_symbol_overrides(row.profile_id).await?;
-            for o in &overrides {
+            let override_map: std::collections::HashMap<String, (f64, f64)> = overrides
+                .iter()
+                .map(|o| {
+                    (
+                        o.symbol_code.clone(),
+                        (
+                            o.bid_markup.parse::<f64>().unwrap_or(0.0),
+                            o.ask_markup.parse::<f64>().unwrap_or(0.0),
+                        ),
+                    )
+                })
+                .collect();
+
+            for symbol_code in &all_symbols {
+                let (bid_markup, ask_markup) = override_map
+                    .get(symbol_code)
+                    .copied()
+                    .unwrap_or((default_bid, default_ask));
                 let markup_value = serde_json::json!({
-                    "bid_markup": o.bid_markup.parse::<f64>().unwrap_or(0.0),
-                    "ask_markup": o.ask_markup.parse::<f64>().unwrap_or(0.0),
+                    "bid_markup": bid_markup,
+                    "ask_markup": ask_markup,
                     "type": "percent",
                 })
                 .to_string();
-                let key = format!("symbol:markup:{}:{}", o.symbol_code, row.group_id);
+                let key = format!("symbol:markup:{}:{}", symbol_code, row.group_id);
                 let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(&markup_value).query(&mut conn);
             }
         }
@@ -299,18 +337,44 @@ impl AdminMarkupService {
     }
 
     /// After a group's default_price_profile_id is changed: clear old markup keys for this group,
-    /// SADD price:groups, and if new profile_id is set, write that profile's overrides for this group.
+    /// SADD price:groups, and if new profile_id is set, write profile default for all symbols (overrides per-symbol).
     pub async fn sync_redis_after_group_profile_change(
         &self,
         group_id: Uuid,
         profile_id: Option<Uuid>,
         redis_url: &str,
     ) -> Result<()> {
+        let (default_bid, default_ask) = if let Some(pid) = profile_id {
+            self.get_profile_by_id(pid)
+                .await
+                .map(|p| {
+                    (
+                        p.bid_markup.parse::<f64>().unwrap_or(0.0),
+                        p.ask_markup.parse::<f64>().unwrap_or(0.0),
+                    )
+                })
+                .unwrap_or((0.0, 0.0))
+        } else {
+            (0.0, 0.0)
+        };
         let overrides: Vec<SymbolMarkupOverride> = if let Some(pid) = profile_id {
             self.get_symbol_overrides(pid).await?
         } else {
             Vec::new()
         };
+        let all_symbols = self.get_all_symbol_codes().await.unwrap_or_default();
+        let override_map: std::collections::HashMap<String, (f64, f64)> = overrides
+            .iter()
+            .map(|o| {
+                (
+                    o.symbol_code.clone(),
+                    (
+                        o.bid_markup.parse::<f64>().unwrap_or(0.0),
+                        o.ask_markup.parse::<f64>().unwrap_or(0.0),
+                    ),
+                )
+            })
+            .collect();
         let redis_url = redis_url.to_string();
         let group_id = group_id;
         tokio::task::spawn_blocking(move || {
@@ -325,14 +389,18 @@ impl AdminMarkupService {
                 .arg("price:groups")
                 .arg(group_id.to_string())
                 .query(&mut conn);
-            for o in &overrides {
+            for symbol_code in &all_symbols {
+                let (bid_markup, ask_markup) = override_map
+                    .get(symbol_code)
+                    .copied()
+                    .unwrap_or((default_bid, default_ask));
                 let markup_value = serde_json::json!({
-                    "bid_markup": o.bid_markup.parse::<f64>().unwrap_or(0.0),
-                    "ask_markup": o.ask_markup.parse::<f64>().unwrap_or(0.0),
+                    "bid_markup": bid_markup,
+                    "ask_markup": ask_markup,
                     "type": "percent",
                 })
                 .to_string();
-                let key = format!("symbol:markup:{}:{}", o.symbol_code, group_id);
+                let key = format!("symbol:markup:{}:{}", symbol_code, group_id);
                 let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(&markup_value).query(&mut conn);
             }
             // Notify data-provider to refresh price:groups so it includes this group in ticks

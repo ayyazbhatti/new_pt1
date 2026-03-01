@@ -320,8 +320,8 @@ export function BottomDock() {
           if (data.type === 'position_update') {
             const positionId = data.position_id
             if (!positionId) return
-            const positionStatus = data.status || 'OPEN'
-            const isOpen = positionStatus === 'OPEN' || positionStatus === 'open'
+            const positionStatus = (data.status || 'OPEN').toUpperCase() as 'OPEN' | 'CLOSED' | 'LIQUIDATED'
+            const isOpen = positionStatus === 'OPEN'
 
             setPositions(prev => {
               const existing = prev.findIndex(p => p.id === positionId)
@@ -334,7 +334,7 @@ export function BottomDock() {
                   side: (data.side || updated[existing].side) as 'LONG' | 'SHORT',
                   size: data.quantity || updated[existing].size,
                   unrealized_pnl: data.unrealized_pnl || updated[existing].unrealized_pnl,
-                  status: positionStatus as 'OPEN' | 'CLOSED',
+                  status: positionStatus,
                   updated_at: Date.now(),
                 }
                 return updated
@@ -356,7 +356,7 @@ export function BottomDock() {
                   margin: '0',
                   unrealized_pnl: data.unrealized_pnl || '0',
                   realized_pnl: '0',
-                  status: positionStatus as 'OPEN' | 'CLOSED',
+                  status: positionStatus,
                   opened_at: Date.now(),
                   updated_at: Date.now(),
                   closed_at: undefined,
@@ -364,7 +364,7 @@ export function BottomDock() {
                 setTimeout(() => fetchPositions(true), 500)
                 return [...prev, newPosition]
               }
-              if (positionStatus === 'CLOSED' || positionStatus === 'closed') {
+              if (positionStatus === 'CLOSED' || positionStatus === 'LIQUIDATED') {
                 return prev.filter(p => p.id !== positionId)
               }
               return prev
@@ -958,7 +958,7 @@ export function BottomDock() {
           <>
             {(() => {
               const closedPositions = positions
-                .filter(p => p.status === 'CLOSED')
+                .filter(p => p.status === 'CLOSED' || p.status === 'LIQUIDATED')
                 .sort((a, b) => {
                   // Sort by closed_at timestamp (newest first)
                   // Use updated_at as fallback if closed_at is not available
@@ -985,14 +985,15 @@ export function BottomDock() {
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Entry</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Exit</th>
                     <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">P&L</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Status</th>
                       <th className="px-4 py-3 text-left text-[10px] text-muted/80 uppercase font-bold tracking-widest">Closed</th>
                   </tr>
                 </thead>
                 <tbody>
                     {closedPositions.map((pos, index) => {
-                      // Use original_size for closed positions if available, otherwise use size
-                      const sizeValue = pos.status === 'CLOSED' && pos.original_size 
-                        ? pos.original_size 
+                      // Use original_size for closed/liquidated positions if available, otherwise use size
+                      const sizeValue = (pos.status === 'CLOSED' || pos.status === 'LIQUIDATED') && pos.original_size
+                        ? pos.original_size
                         : pos.size
                       const sizeNum = parseFloat(sizeValue || '0')
                       const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
@@ -1034,6 +1035,14 @@ export function BottomDock() {
                             realizedPnl >= 0 ? "text-success" : "text-danger"
                           )}>
                             {realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={cn(
+                              "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider",
+                              pos.status === 'LIQUIDATED' ? 'bg-danger/20 text-danger' : 'bg-white/10 text-text/80'
+                            )}>
+                              {pos.status === 'LIQUIDATED' ? 'Liquidated' : 'Closed'}
+                            </span>
                           </td>
                           <td className="px-4 py-3 text-text/70 text-[10px]">{closedAt}</td>
                     </tr>

@@ -62,9 +62,9 @@ async fn main() -> anyhow::Result<()> {
     let database_url = env::var("DATABASE_URL")
         .expect("DATABASE_URL must be set");
 
-    // Get Redis URL
+    // Get Redis URL (use 127.0.0.1 to match gateway-ws default so pub/sub is on same instance)
     let redis_url = env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
     // Get NATS URL
     let nats_url = env::var("NATS_URL")

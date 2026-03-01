@@ -147,6 +147,14 @@ impl Broadcaster {
                                 .or_else(|| p.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string())),
                         ),
                         None => {
+                            if let Some(ref gid) = conn.group_id {
+                                warn!(
+                                    "No price entry for group_id {} in tick for {} (conn {}); using first group's prices (user may see wrong/markup)",
+                                    gid, symbol, conn_id
+                                );
+                            } else {
+                                debug!("Connection {} has no group_id; using first group's prices for {}", conn_id, symbol);
+                            }
                             let first = prices.first();
                             (
                                 first.and_then(|p| p.get("bid").and_then(|v| v.as_str()).map(|s| s.to_string()))

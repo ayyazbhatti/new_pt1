@@ -37,10 +37,14 @@ pub async fn publish_position_updated(
     let avg_price = Decimal::from_str_exact(raw.get("avg_price").or(raw.get("entry_price")).map(|s| s.as_str()).unwrap_or("0")).unwrap_or(Decimal::ZERO);
     let unrealized_pnl = Decimal::from_str_exact(raw.get("unrealized_pnl").map(|s| s.as_str()).unwrap_or("0")).unwrap_or(Decimal::ZERO);
     let realized_pnl = Decimal::from_str_exact(raw.get("realized_pnl").map(|s| s.as_str()).unwrap_or("0")).unwrap_or(Decimal::ZERO);
-    let status_str = status_override.map(|s| match s { PositionStatus::Open => "OPEN", PositionStatus::Closed => "CLOSED" })
-        .or_else(|| raw.get("status").map(|s| s.as_str()));
+    let status_str = status_override.map(|s| match s {
+        PositionStatus::Open => "OPEN",
+        PositionStatus::Closed => "CLOSED",
+        PositionStatus::Liquidated => "LIQUIDATED",
+    }).or_else(|| raw.get("status").map(|s| s.as_str()));
     let status = match status_str {
         Some("CLOSED") => PositionStatus::Closed,
+        Some("LIQUIDATED") => PositionStatus::Liquidated,
         _ => PositionStatus::Open,
     };
     let sl = raw.get("sl").and_then(|s| Decimal::from_str_exact(s).ok()).filter(|d| *d != Decimal::ZERO);

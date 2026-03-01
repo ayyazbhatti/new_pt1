@@ -25,6 +25,7 @@ mod session;
 #[derive(Clone)]
 struct AppState {
     nats: async_nats::Client,
+    redis: Option<Arc<redis::Client>>,
     sessions: Arc<RwLock<HashMap<Uuid, session::Session>>>,
     senders: Arc<RwLock<HashMap<Uuid, mpsc::UnboundedSender<axum::extract::ws::Message>>>>,
     jwt_secret: String,
@@ -65,8 +66,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nats = async_nats::connect(&config.nats_url).await?;
     info!("Connected to NATS");
 
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis = match redis::Client::open(redis_url.clone()) {
+        Ok(c) => {
+            if let Ok(mut conn) = c.get_async_connection().await {
+                let _: Result<(), _> = redis::cmd("PING").query_async(&mut conn).await;
+                info!("Connected to Redis at {} (per-group marked-up prices enabled)", redis_url);
+                Some(Arc::new(c))
+            } else {
+                warn!("Redis URL set but connection failed; tick forwarder will use NATS (raw prices)");
+                None
+            }
+        }
+        Err(_) => None,
+    };
+
     let state = AppState {
         nats: nats.clone(),
+        redis: redis.clone(),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         senders: Arc::new(RwLock::new(HashMap::new())),
         jwt_secret,
@@ -75,10 +92,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start NATS event forwarder
     let forwarder_state = state.clone();
     tokio::spawn(forward_events(forwarder_state));
-    
-    // Start tick forwarder
-    let tick_forwarder_state = state.clone();
-    tokio::spawn(forward_ticks(tick_forwarder_state));
+
+    // Start tick forwarder: Redis (per-group markup) if available, else NATS (raw)
+    if let Some(rd) = redis {
+        let tick_state = state.clone();
+        tokio::spawn(forward_ticks_from_redis(tick_state, rd.clone()));
+        info!("Tick forwarder: Redis price:ticks (per-group marked-up prices)");
+        let account_summary_state = state.clone();
+        tokio::spawn(forward_account_summary_from_redis(account_summary_state, rd));
+        info!("Account summary forwarder: Redis account:summary:updated (live equity/margin)");
+    } else {
+        let tick_forwarder_state = state.clone();
+        tokio::spawn(forward_ticks(tick_forwarder_state));
+        info!("Tick forwarder: NATS ticks.> (raw prices)");
+    }
 
     let app = Router::new()
         .route("/ws", get(handle_websocket))
@@ -175,18 +202,19 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, state: AppState) {
                         }
                         WsClientMessage::TypeAuth { token, .. } | WsClientMessage::OpAuth { token, .. } => {
                             match auth::verify_access_token(token.trim(), &state.jwt_secret) {
-                                Ok(user_id) => {
-                                    session.user_id = Some(user_id);
+                                Ok(auth_result) => {
+                                    session.user_id = Some(auth_result.user_id);
+                                    session.group_id = auth_result.group_id.map(|g| g.to_string());
                                     {
                                         let mut sessions = state.sessions.write().await;
                                         if let Some(s) = sessions.get_mut(&session_id) {
                                             *s = session.clone();
                                         }
                                     }
-                                    info!("Session {} authenticated as user {}", session_id, user_id);
+                                    info!("Session {} authenticated as user {} group_id={:?}", session_id, auth_result.user_id, session.group_id);
                                     let response = WsServerMessage::AuthSuccess {
-                                        user_id: user_id.to_string(),
-                                        group_id: Some("default".to_string()),
+                                        user_id: auth_result.user_id.to_string(),
+                                        group_id: session.group_id.clone(),
                                     };
                                     if let Ok(json) = serde_json::to_string(&response) {
                                         let _ = tx_clone.send(axum::extract::ws::Message::Text(json));
@@ -569,6 +597,197 @@ async fn process_event_message(msg: async_nats::Message, state: &AppState) {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Normalize group ID for comparison (lowercase, no dashes) so UUID format always matches.
+fn normalize_group_id(s: &str) -> String {
+    s.trim().to_lowercase().replace('-', "")
+}
+
+/// Subscribe to Redis price:ticks and forward per-group marked-up prices to WebSocket sessions.
+async fn forward_ticks_from_redis(state: AppState, redis: Arc<redis::Client>) {
+    use futures_util::StreamExt;
+    let mut pubsub = redis.get_async_connection().await.expect("Redis connection").into_pubsub();
+    pubsub.subscribe("price:ticks").await.expect("Subscribe to price:ticks");
+    info!("Redis tick forwarder subscribed to price:ticks");
+    let mut stream = pubsub.on_message();
+    while let Some(msg) = stream.next().await {
+        let payload: String = msg.get_payload().unwrap_or_default();
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
+            let symbol = match parsed.get("symbol").and_then(|v| v.as_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let ts = parsed
+                .get("ts")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let tick_topic_binance = format!("ticks:{}", symbol);
+            let tick_topic_internal = if symbol.ends_with("USDT") {
+                format!("ticks:{}", symbol.replace("USDT", "USD"))
+            } else {
+                tick_topic_binance.clone()
+            };
+            let frontend_symbol = if symbol.ends_with("USDT") {
+                symbol.replace("USDT", "USD")
+            } else {
+                symbol.clone()
+            };
+
+            let sessions = state.sessions.read().await;
+            let senders = state.senders.read().await;
+
+            if let Some(prices) = parsed.get("prices").and_then(|v| v.as_array()) {
+                for (session_id, session) in sessions.iter() {
+                    if !session.subscriptions.contains(&tick_topic_binance) && !session.subscriptions.contains(&tick_topic_internal) {
+                        continue;
+                    }
+                    let group_id_norm = session.group_id.as_deref().map(normalize_group_id);
+                    let found = group_id_norm.as_ref().and_then(|gid_norm| {
+                        prices.iter().find(|p| {
+                            p.get("g")
+                                .and_then(|v| v.as_str())
+                                .map(normalize_group_id)
+                                .as_ref()
+                                == Some(gid_norm)
+                        })
+                    });
+                    let (bid, ask) = match found {
+                        Some(p) => (
+                            p.get("bid").and_then(|v| v.as_str()).map(|s| s.to_string())
+                                .or_else(|| p.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string())),
+                            p.get("ask").and_then(|v| v.as_str()).map(|s| s.to_string())
+                                .or_else(|| p.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string())),
+                        ),
+                        None => {
+                            let first = prices.first();
+                            (
+                                first.and_then(|p| p.get("bid").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                                    .or_else(|| first.and_then(|p| p.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string()))),
+                                first.and_then(|p| p.get("ask").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                                    .or_else(|| first.and_then(|p| p.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string()))),
+                            )
+                        }
+                    };
+                    if let (Some(bid), Some(ask)) = (bid, ask) {
+                        let tick_msg = serde_json::json!({
+                            "type": "tick",
+                            "symbol": frontend_symbol,
+                            "bid": bid,
+                            "ask": ask,
+                            "ts": ts,
+                        });
+                        if let Ok(json) = serde_json::to_string(&tick_msg) {
+                            if let Some(tx) = senders.get(session_id) {
+                                let _ = tx.send(axum::extract::ws::Message::Text(json));
+                            }
+                        }
+                    }
+                }
+            } else {
+                let bid = parsed.get("bid").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| parsed.get("bid").and_then(|v| v.as_f64()).map(|f| f.to_string()));
+                let ask = parsed.get("ask").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    .or_else(|| parsed.get("ask").and_then(|v| v.as_f64()).map(|f| f.to_string()));
+                if let (Some(bid), Some(ask)) = (bid, ask) {
+                    let tick_msg = serde_json::json!({
+                        "type": "tick",
+                        "symbol": frontend_symbol,
+                        "bid": bid,
+                        "ask": ask,
+                        "ts": ts,
+                    });
+                    if let Ok(json) = serde_json::to_string(&tick_msg) {
+                        for (session_id, session) in sessions.iter() {
+                            if session.subscriptions.contains(&tick_topic_binance) || session.subscriptions.contains(&tick_topic_internal) {
+                                if let Some(tx) = senders.get(session_id) {
+                                    let _ = tx.send(axum::extract::ws::Message::Text(json.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Subscribe to Redis account:summary:updated and forward to WebSocket sessions by user_id.
+async fn forward_account_summary_from_redis(state: AppState, redis: Arc<redis::Client>) {
+    use futures_util::StreamExt;
+    let mut pubsub = match redis.get_async_connection().await {
+        Ok(conn) => conn.into_pubsub(),
+        Err(e) => {
+            error!("Account summary forwarder: Redis connection failed: {}", e);
+            return;
+        }
+    };
+    if pubsub.subscribe("account:summary:updated").await.is_err() {
+        error!("Account summary forwarder: failed to subscribe to account:summary:updated");
+        return;
+    }
+    info!("Redis account summary forwarder subscribed to account:summary:updated");
+    let mut stream = pubsub.on_message();
+    while let Some(msg) = stream.next().await {
+        let payload: String = msg.get_payload().unwrap_or_default();
+        let mut payload_json: serde_json::Value = match serde_json::from_str(&payload) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("Account summary forwarder: failed to parse message: {}", e);
+                continue;
+            }
+        };
+        let event_user_id_str = payload_json
+            .get("userId")
+            .or_else(|| payload_json.get("user_id"))
+            .and_then(|v| v.as_str());
+        let event_user_id = match event_user_id_str.and_then(|s| Uuid::parse_str(s).ok()) {
+            Some(u) => u,
+            None => {
+                error!("Account summary forwarder: message missing or invalid userId/user_id");
+                continue;
+            }
+        };
+        info!("Account summary forwarder: received from Redis for user {}", event_user_id);
+        if let Some(obj) = payload_json.as_object_mut() {
+            if !obj.contains_key("userId") {
+                obj.insert("userId".to_string(), serde_json::Value::String(event_user_id.to_string()));
+            }
+        }
+        let event_json = serde_json::json!({
+            "type": "account.summary.updated",
+            "payload": payload_json
+        });
+        let json = match serde_json::to_string(&event_json) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Account summary forwarder: failed to serialize: {}", e);
+                continue;
+            }
+        };
+        let sessions = state.sessions.read().await;
+        let senders = state.senders.read().await;
+        let mut sent_count = 0u32;
+        for (session_id, session) in sessions.iter() {
+            if session.user_id != Some(event_user_id) {
+                continue;
+            }
+            if let Some(tx) = senders.get(session_id) {
+                if tx.send(axum::extract::ws::Message::Text(json.clone())).is_ok() {
+                    sent_count += 1;
+                    info!("Forwarded account.summary.updated to session {} (user {})", session_id, event_user_id);
+                }
+            }
+        }
+        if sent_count == 0 {
+            warn!(
+                "Account summary forwarder: no WS session for user {} (total sessions: {}, authenticated: {:?})",
+                event_user_id,
+                sessions.len(),
+                sessions.iter().filter_map(|(_, s)| s.user_id).collect::<Vec<_>>()
+            );
         }
     }
 }

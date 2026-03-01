@@ -1,5 +1,5 @@
 -- Atomic position close script
--- Args: position_id, exit_price, close_size (0 = full), timestamp_ms
+-- Args: position_id, exit_price, close_size (0 = full), timestamp_ms, [close_reason] (optional: "liquidated" => status LIQUIDATED)
 -- Returns: JSON with close result
 -- Supports both old format (JSON) and new format (Hash)
 
@@ -8,6 +8,8 @@ local position_id = ARGV[1]
 local exit_price = ARGV[2]
 local close_size = ARGV[3]
 local timestamp_ms = ARGV[4]
+local close_reason = (ARGV[5] and ARGV[5] ~= "") and ARGV[5] or nil
+local full_close_status = (close_reason == "liquidated") and "LIQUIDATED" or "CLOSED"
 
 -- Try new format first (Hash)
 local pos_key_new = 'pos:by_id:' .. position_id
@@ -86,7 +88,7 @@ end
 if actual_close_size >= current_size then
     -- Full close
     if is_new_format then
-        redis.call('HSET', pos_key_new, 'status', 'CLOSED')
+        redis.call('HSET', pos_key_new, 'status', full_close_status)
         redis.call('HSET', pos_key_new, 'size', '0')
         -- Preserve original size for position history display
         redis.call('HSET', pos_key_new, 'original_size', tostring(current_size))
@@ -105,7 +107,7 @@ if actual_close_size >= current_size then
         local tp_key = 'pos:tp:' .. symbol
         redis.call('ZREM', tp_key, position_id)
     else
-    position.status = "CLOSED"
+    position.status = full_close_status
     position.size = "0"
     -- Preserve original size for position history display
     position.original_size = tostring(current_size)

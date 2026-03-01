@@ -7,20 +7,28 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 /// Claims we need from the JWT (must match auth-service token shape).
-/// exp/iat are validated by jsonwebtoken; we only use sub for session.user_id.
+/// exp/iat are validated by jsonwebtoken; sub = user_id, group_id used for per-group price.
 #[derive(Debug, Deserialize)]
 pub struct Claims {
     pub sub: Uuid,
+    #[serde(default)]
+    pub group_id: Option<Uuid>,
     #[allow(dead_code)]
     pub exp: i64,
     #[allow(dead_code)]
     pub iat: i64,
 }
 
-/// Verify the access token and return the user id (sub) if valid.
+/// Result of successful auth: user_id and optional group_id (for per-group marked-up prices).
+pub struct AuthResult {
+    pub user_id: Uuid,
+    pub group_id: Option<Uuid>,
+}
+
+/// Verify the access token and return user_id and group_id if valid.
 /// Returns an error string suitable for sending as auth_error to the client.
 /// Strips "Bearer " prefix if present so clients can send either raw token or "Bearer <token>".
-pub fn verify_access_token(token: &str, secret: &str) -> Result<Uuid, String> {
+pub fn verify_access_token(token: &str, secret: &str) -> Result<AuthResult, String> {
     let token = token.trim().strip_prefix("Bearer ").unwrap_or(token.trim());
     if token.is_empty() {
         return Err("No token provided".to_string());
@@ -38,5 +46,8 @@ pub fn verify_access_token(token: &str, secret: &str) -> Result<Uuid, String> {
         };
         msg.to_string()
     })?;
-    Ok(token_data.claims.sub)
+    Ok(AuthResult {
+        user_id: token_data.claims.sub,
+        group_id: token_data.claims.group_id,
+    })
 }

@@ -9,8 +9,8 @@ pub struct Claims {
     pub sub: String, // user_id (can be UUID string)
     pub email: String,
     pub role: String,
-    /// Group ID from token; accept both "group_id" and "groupId" (camelCase).
-    #[serde(alias = "groupId", skip_serializing_if = "Option::is_none")]
+    /// Group ID from token; accept both "group_id" and "groupId" (camelCase). Required for per-group (marked-up) prices.
+    #[serde(alias = "groupId", deserialize_with = "deserialize_optional_group_id", skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
     pub exp: i64,
     pub iat: i64,
@@ -33,6 +33,25 @@ where
         Sub::Uuid(uuid) => Ok(uuid.to_string()),
         Sub::String(s) => Ok(s),
     }
+}
+
+/// Deserialize group_id from JWT (string or UUID); ensures we always get a normalized string for matching price ticks.
+fn deserialize_optional_group_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum GroupId {
+        Uuid(uuid::Uuid),
+        Str(String),
+    }
+    let opt = Option::<GroupId>::deserialize(deserializer)?;
+    Ok(opt.map(|g| match g {
+        GroupId::Uuid(u) => u.to_string(),
+        GroupId::Str(s) => s,
+    }))
 }
 
 #[derive(Clone)]

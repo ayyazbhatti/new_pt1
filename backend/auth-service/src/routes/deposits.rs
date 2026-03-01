@@ -95,6 +95,55 @@ async fn try_publish_stop_out_close_all(
     }
 }
 
+/// If margin_level < 0 (negative equity with margin in use), set cooldown and publish cmd.position.close_all with reason=liquidated.
+/// Positions will be closed with status LIQUIDATED. Uses same Redis/NATS as stop_out for sub-5ms flow.
+async fn try_publish_liquidation_close_all(
+    redis: &redis::Client,
+    user_id: Uuid,
+    margin_level: &str,
+) {
+    let margin_value = match margin_level.parse::<f64>() {
+        Ok(v) if v.is_finite() => v,
+        _ => return, // "inf" or invalid => no liquidation
+    };
+    if margin_value >= 0.0 {
+        return;
+    }
+    let cooldown_key = format!("pos:liquidation:triggered:{}", user_id);
+    let mut conn = match redis.get_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Liquidation: Redis connection failed for cooldown: {}", e);
+            return;
+        }
+    };
+    let set_ok: Result<bool, _> = redis::cmd("SET")
+        .arg(&cooldown_key)
+        .arg("1")
+        .arg("EX")
+        .arg(60_u64)
+        .arg("NX")
+        .query_async(&mut conn)
+        .await;
+    if set_ok.ok() != Some(true) {
+        return;
+    }
+    let Some(nats) = STOP_OUT_NATS.get() else {
+        return;
+    };
+    let payload = serde_json::json!({
+        "user_id": user_id.to_string(),
+        "correlation_id": Uuid::new_v4().to_string(),
+        "ts": Utc::now().to_rfc3339(),
+        "reason": "liquidated",
+    });
+    if let Err(e) = nats.publish("cmd.position.close_all".to_string(), payload.to_string().into()).await {
+        error!("Liquidation: failed to publish cmd.position.close_all for user {}: {}", user_id, e);
+    } else {
+        info!("Liquidation: published cmd.position.close_all for user {} (margin_level={} < 0)", user_id, margin_value);
+    }
+}
+
 // ============================================================================
 // ACCOUNT SUMMARY COORDINATOR (per-user serialization + publish throttle)
 // ============================================================================
@@ -541,24 +590,40 @@ pub(crate) async fn get_stop_out_level_for_group(
 }
 
 /// Read current (bid, ask) from Redis key prices:SYMBOL:GROUP_ID (written by order-engine on each tick).
+/// Positions use internal symbol (e.g. BTCUSD); order-engine receives ticks as BTCUSDT and writes prices:BTCUSDT:GROUP.
+/// So we try prices:SYMBOL:GROUP first, then if symbol ends with "USD" try prices:SYMBOL_USDT:GROUP so account summary gets live prices.
 /// Returns None if key missing or parse error.
 pub(crate) async fn get_price_from_redis(
     redis: &redis::Client,
     symbol: &str,
     group_id: &str,
 ) -> Option<(Decimal, Decimal)> {
-    let key = format!("prices:{}:{}", symbol, group_id);
     let mut conn = redis.get_async_connection().await.ok()?;
-    let json_str: String = conn.get(&key).await.ok()?;
-    let val: serde_json::Value = serde_json::from_str(&json_str).ok()?;
-    let bid_s = val.get("bid").and_then(|v| v.as_str())?;
-    let ask_s = val.get("ask").and_then(|v| v.as_str())?;
-    let bid = Decimal::from_str(bid_s).ok()?;
-    let ask = Decimal::from_str(ask_s).ok()?;
-    if bid <= Decimal::ZERO || ask <= Decimal::ZERO {
-        return None;
+    let keys_to_try: Vec<String> = if symbol.ends_with("USD") && !symbol.ends_with("USDT") {
+        let symbol_usdt = format!("{}T", symbol);
+        vec![
+            format!("prices:{}:{}", symbol, group_id),
+            format!("prices:{}:{}", symbol_usdt, group_id),
+        ]
+    } else {
+        vec![format!("prices:{}:{}", symbol, group_id)]
+    };
+    for key in keys_to_try {
+        let json_str: String = match conn.get(&key).await {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let val: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+        let bid_s = val.get("bid").and_then(|v| v.as_str())?;
+        let ask_s = val.get("ask").and_then(|v| v.as_str())?;
+        let bid = Decimal::from_str(bid_s).ok()?;
+        let ask = Decimal::from_str(ask_s).ok()?;
+        if bid <= Decimal::ZERO || ask <= Decimal::ZERO {
+            continue;
+        }
+        return Some((bid, ask));
     }
-    Some((bid, ask))
+    None
 }
 
 /// Fetches position-derived aggregates from Redis (same source as Positions tab).
@@ -905,6 +970,7 @@ pub async fn compute_and_cache_account_summary_with_prices(
                         ("margin_level", summary_with_threshold.margin_level.clone()),
                         ("margin_call_level_threshold", thresh_str),
                         ("stop_out_level_threshold", stop_out_str),
+                        ("liquidation_level", "0".to_string()),
                         ("realized_pnl", summary_with_threshold.realized_pnl.to_string()),
                         ("unrealized_pnl", summary_with_threshold.unrealized_pnl.to_string()),
                         ("updated_at", summary_with_threshold.updated_at.clone()),
@@ -931,6 +997,8 @@ pub async fn compute_and_cache_account_summary_with_prices(
                     &summary_with_threshold.margin_level,
                     summary_with_threshold.stop_out_level_threshold,
                 ).await;
+                // Liquidation: if margin level < 0, close all with status liquidated (same Redis path, <5ms)
+                try_publish_liquidation_close_all(redis, user_id, &summary_with_threshold.margin_level).await;
             }
             Err(e) => {
                 error!("Failed to compute account summary for user {}: {}", user_id, e);

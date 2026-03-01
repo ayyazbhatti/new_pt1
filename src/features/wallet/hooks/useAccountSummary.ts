@@ -23,6 +23,8 @@ export function useAccountSummary() {
     enabled: !!user?.id,
     staleTime: 0,
     refetchOnWindowFocus: false,
+    // Fallback: refetch every 5s so UI updates even if WS account.summary.updated is missed
+    refetchInterval: 5000,
   })
 
   // Update cache from WebSocket so UI stays real-time without refetch
@@ -31,11 +33,35 @@ export function useAccountSummary() {
     const currentUserId = String(user.id).trim()
     const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
       if (event.type === 'account.summary.updated') {
-        const payload = (event as { type: 'account.summary.updated'; payload: AccountSummaryResponse }).payload
-        if (!payload || String(payload.userId ?? '').trim() !== currentUserId) return
-        const isZeros = payload.balance === 0 && payload.equity === 0 && payload.marginUsed === 0
+        const raw = (event as { type: 'account.summary.updated'; payload: Record<string, unknown> }).payload
+        if (!raw || typeof raw !== 'object') return
+        // Accept both camelCase and snake_case from backend
+        const userId = String((raw.userId ?? raw.user_id) ?? '').trim()
+        if (userId !== currentUserId) return
+        const balance = Number((raw.balance ?? 0))
+        const equity = Number((raw.equity ?? 0))
+        const marginUsed = Number((raw.marginUsed ?? raw.margin_used ?? 0))
+        const freeMargin = Number((raw.freeMargin ?? raw.free_margin ?? 0))
+        const marginLevel = String(raw.marginLevel ?? raw.margin_level ?? '')
+        const realizedPnl = Number((raw.realizedPnl ?? raw.realized_pnl ?? 0))
+        const unrealizedPnl = Number((raw.unrealizedPnl ?? raw.unrealized_pnl ?? 0))
+        const updatedAt = String(raw.updatedAt ?? raw.updated_at ?? '')
+        const isZeros = balance === 0 && equity === 0 && marginUsed === 0
         if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
-        lastEquityRef.current = payload.equity
+        lastEquityRef.current = equity
+        const payload: AccountSummaryResponse = {
+          userId,
+          balance,
+          equity,
+          marginUsed,
+          freeMargin,
+          marginLevel,
+          marginCallLevelThreshold: raw.marginCallLevelThreshold ?? raw.margin_call_level_threshold ?? null,
+          stopOutLevelThreshold: raw.stopOutLevelThreshold ?? raw.stop_out_level_threshold ?? null,
+          realizedPnl,
+          unrealizedPnl,
+          updatedAt,
+        }
         queryClient.setQueryData<AccountSummaryResponse>(QUERY_KEY, payload)
       }
     })

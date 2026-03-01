@@ -90,6 +90,14 @@ impl PriceTickSummaryHandler {
             .ok_or_else(|| anyhow::anyhow!("Missing symbol"))?
             .to_string();
 
+        // Data-provider publishes ticks with Binance symbol (e.g. BTCUSDT); order-engine stores
+        // positions under internal symbol (BTCUSD). Normalize so we look up the correct key.
+        let symbol_for_positions = if symbol.ends_with("USDT") {
+            symbol.replace("USDT", "USD")
+        } else {
+            symbol.clone()
+        };
+
         let prices_array = payload
             .get("prices")
             .and_then(|v| v.as_array())
@@ -100,12 +108,18 @@ impl PriceTickSummaryHandler {
         }
 
         let mut conn = self.redis.get_async_connection().await?;
-        let open_key = Keys::positions_open_by_symbol(&symbol);
+        let open_key = Keys::positions_open_by_symbol(&symbol_for_positions);
         let position_ids: Vec<String> = conn.zrange(&open_key, 0, -1).await.unwrap_or_default();
 
         if position_ids.is_empty() {
             return Ok(());
         }
+        debug!(
+            "price:ticks account summary: {} positions for {} (key {})",
+            position_ids.len(),
+            symbol_for_positions,
+            open_key
+        );
 
         let mut user_overrides: HashMap<Uuid, PriceOverrides> = HashMap::new();
 
@@ -153,7 +167,7 @@ impl PriceTickSummaryHandler {
             user_overrides
                 .entry(user_id)
                 .or_default()
-                .insert((symbol.clone(), group_id), (bid, ask));
+                .insert((symbol_for_positions.clone(), group_id), (bid, ask));
         }
 
         for (user_id, overrides) in user_overrides {

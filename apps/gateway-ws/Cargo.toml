@@ -25,6 +25,7 @@ uuid = { workspace = true }
 jsonwebtoken = { workspace = true }
 rust_decimal = { workspace = true }
 dotenv = "0.15"
+redis = { version = "0.24", features = ["tokio-comp"] }
 common = { path = "../../crates/common" }
 contracts = { path = "../../crates/contracts" }
 

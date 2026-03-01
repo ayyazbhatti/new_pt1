@@ -200,7 +200,7 @@ impl SltpHandler {
         // But we need to adapt it to work with our trigger system
         
         // Use the existing atomic_close_position Lua script directly
-        let close_result = self.lua.atomic_close_position(&mut conn, position_id, exit_price, None).await?;
+        let close_result = self.lua.atomic_close_position(&mut conn, position_id, exit_price, None, None).await?;
         
         if close_result.get("error").is_some() {
             let error_msg = close_result.get("error")

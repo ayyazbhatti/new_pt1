@@ -80,18 +80,19 @@ impl LuaScripts {
         position_id: &Uuid,
         exit_price: Decimal,
         close_size: Option<Decimal>,
+        close_reason: Option<&str>,
     ) -> Result<serde_json::Value> {
         let size_arg = close_size
             .map(|s| s.to_string())
             .unwrap_or_else(|| "0".to_string());
-        
-        // Try new format first, fallback to old format
+        let reason_arg = close_reason.unwrap_or("");
         let result: String = self.close_position_script
             .key(format!("pos:by_id:{}", position_id))  // New format
             .arg(position_id.to_string())
             .arg(exit_price.to_string())
             .arg(size_arg)
             .arg(Utc::now().timestamp_millis().to_string())
+            .arg(reason_arg)
             .invoke_async(conn)
             .await
             .context("Failed to execute atomic_close_position Lua script")?;

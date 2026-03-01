@@ -15,15 +15,79 @@ use redis::AsyncCommands;
 
 mod health;
 
+/// Redis markup config (matches auth-service bootstrap format).
+#[derive(Debug, Deserialize)]
+struct MarkupConfig {
+    bid_markup: f64,
+    ask_markup: f64,
+    #[serde(rename = "type")]
+    _markup_type: Option<String>,
+}
+
+/// Fetch price:groups from Redis and apply per-group markup; return prices array for ws-gateway per-group format.
+async fn apply_markup_and_build_prices(
+    rd: &redis::Client,
+    symbol: &str,
+    bid: Decimal,
+    ask: Decimal,
+) -> Option<Vec<serde_json::Value>> {
+    let mut conn = rd.get_async_connection().await.ok()?;
+    let group_ids: Vec<String> = redis::cmd("SMEMBERS")
+        .arg("price:groups")
+        .query_async(&mut conn)
+        .await
+        .ok()?;
+    if group_ids.is_empty() {
+        return None;
+    }
+    let mut prices = Vec::with_capacity(group_ids.len());
+    for g in &group_ids {
+        let key = format!("symbol:markup:{}:{}", symbol, g);
+        let json: Option<String> = redis::cmd("GET")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .ok()
+            .flatten();
+        let (final_bid, final_ask) = if let Some(ref s) = json {
+            let config: MarkupConfig = match serde_json::from_str(s) {
+                Ok(c) => c,
+                Err(_) => {
+                    prices.push(serde_json::json!({ "g": g, "bid": bid.to_string(), "ask": ask.to_string() }));
+                    continue;
+                }
+            };
+            let one = Decimal::from(1);
+            let bid_pct = Decimal::try_from(config.bid_markup).ok().unwrap_or(Decimal::ZERO) / Decimal::from(100);
+            let ask_pct = Decimal::try_from(config.ask_markup).ok().unwrap_or(Decimal::ZERO) / Decimal::from(100);
+            let marked_bid = bid * (one + bid_pct);
+            let marked_ask = ask * (one + ask_pct);
+            (marked_bid, marked_ask)
+        } else {
+            (bid, ask)
+        };
+        prices.push(serde_json::json!({
+            "g": g,
+            "bid": final_bid.to_string(),
+            "ask": final_ask.to_string(),
+        }));
+    }
+    if prices.is_empty() {
+        return None;
+    }
+    Some(prices)
+}
+
 #[derive(Clone)]
 struct AppState {
     nats_client: async_nats::Client,
     last_ticks: Arc<RwLock<HashMap<String, TickEvent>>>,
 }
 
-/// Optional Redis client for publishing to price:ticks (so ws-gateway can forward to frontend).
+/// Redis client for publishing to price:ticks (per-group marked-up prices for ws-gateway).
+/// Uses REDIS_URL if set, else default localhost so run-all.sh works without extra env.
 fn redis_client() -> Option<Arc<redis::Client>> {
-    let url = std::env::var("REDIS_URL").ok()?;
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     redis::Client::open(url).ok().map(Arc::new)
 }
 
@@ -180,15 +244,26 @@ async fn fetch_real_ticks(
                                             }
                                         }
 
-                                        // Publish to Redis price:ticks so ws-gateway can forward to frontend (left sidebar live prices)
+                                        // Publish to Redis price:ticks so ws-gateway can forward to frontend (per-group marked-up or legacy single price)
                                         if let Some(rd) = &redis {
                                             let ts_ms = tick.ts.timestamp_millis();
-                                            let payload = serde_json::json!({
-                                                "symbol": binance_symbol,
-                                                "bid": tick.bid.to_string(),
-                                                "ask": tick.ask.to_string(),
-                                                "ts": ts_ms,
-                                            });
+                                            let payload = match apply_markup_and_build_prices(rd, binance_symbol, tick.bid, tick.ask).await {
+                                                Some(prices) if !prices.is_empty() => {
+                                                    serde_json::json!({
+                                                        "symbol": binance_symbol,
+                                                        "ts": ts_ms,
+                                                        "prices": prices,
+                                                    })
+                                                }
+                                                _ => {
+                                                    serde_json::json!({
+                                                        "symbol": binance_symbol,
+                                                        "bid": tick.bid.to_string(),
+                                                        "ask": tick.ask.to_string(),
+                                                        "ts": ts_ms,
+                                                    })
+                                                }
+                                            };
                                             if let Ok(json) = serde_json::to_string(&payload) {
                                                 if let Ok(mut conn) = rd.get_async_connection().await {
                                                     let _: Result<(), _> = conn.publish("price:ticks", &json).await;
