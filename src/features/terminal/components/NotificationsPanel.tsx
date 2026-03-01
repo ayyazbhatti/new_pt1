@@ -36,6 +36,7 @@ function getKindType(kind: NotificationPushPayload['kind']): 'order' | 'sl' | 'd
   if (kind === 'POSITION_SL' || kind === 'POSITION_LIQUIDATED') return 'sl'
   if (kind === 'POSITION_TP') return 'order'
   if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED' || kind === 'WITHDRAWAL_APPROVED') return 'deposit'
+  if (kind === 'ADMIN_MESSAGE') return 'system'
   return 'system'
 }
 
@@ -56,6 +57,7 @@ function getTypeLabel(kind: NotificationPushPayload['kind']): string {
   if (kind === 'POSITION_SL') return 'SL'
   if (kind === 'POSITION_TP') return 'TP'
   if (kind === 'POSITION_LIQUIDATED') return 'LIQ'
+  if (kind === 'ADMIN_MESSAGE') return 'Msg'
   if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED') return 'D'
   if (kind === 'WITHDRAWAL_APPROVED') return 'W'
   return '!'

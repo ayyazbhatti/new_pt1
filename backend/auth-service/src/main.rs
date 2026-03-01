@@ -192,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/symbols", create_admin_symbols_router(pool.clone()))
         .nest("/api/admin/markup", create_admin_markup_router(pool.clone()))
         .nest("/api/admin/swap", create_admin_swap_router(pool.clone()))
-        .nest("/api/admin/users", create_admin_users_router(pool.clone()))
+        .nest("/api/admin/users", create_admin_users_router(pool.clone(), deposits_state.clone()))
         .nest("/api/admin/managers", create_admin_managers_router(pool.clone()))
         .nest("/api/admin/permission-profiles", create_admin_permission_profiles_router(pool.clone()))
         .nest("/api/admin/affiliate", create_admin_affiliate_router(pool.clone()))

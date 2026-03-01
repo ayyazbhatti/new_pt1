@@ -9,7 +9,8 @@ import { useModalStore } from '@/app/store'
 import { UserDetailsModal } from '../modals/UserDetailsModal'
 import { CreateEditUserModal } from '../modals/CreateEditUserModal'
 import { RestrictUserModal } from '../modals/RestrictUserModal'
-import { Eye, Edit, Shield, X, LogIn } from 'lucide-react'
+import { SendNotificationModal } from '../modals/SendNotificationModal'
+import { Eye, Edit, Shield, X, LogIn, Bell } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
@@ -186,6 +187,13 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     openModal(`restrict-user-${user.id}`, <RestrictUserModal user={user} />, {
       title: 'Restrict User',
       size: 'sm',
+    })
+  }
+
+  const handleSendNotification = (user: User) => {
+    openModal(`send-notify-${user.id}`, <SendNotificationModal user={user} />, {
+      title: 'Send notification',
+      size: 'md',
     })
   }
 
@@ -524,6 +532,14 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const user = row.original
         return (
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleSendNotification(user)}
+              title="Send notification"
+            >
+              <Bell className="h-4 w-4" />
+            </Button>
             <Button
               variant="ghost"
               size="sm"

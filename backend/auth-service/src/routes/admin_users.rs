@@ -4,12 +4,16 @@ use axum::{
     response::Json,
     routing::{post, put},
     Router,
+    Extension,
 };
+use chrono::Utc;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
+use crate::routes::deposits::DepositsState;
 use crate::services::auth_service::AuthService;
 use crate::utils::jwt::Claims;
 
@@ -60,7 +64,19 @@ pub struct ImpersonateResponse {
     pub refresh_token: String,
 }
 
-pub fn create_admin_users_router(pool: PgPool) -> Router<PgPool> {
+#[derive(Debug, Deserialize)]
+pub struct SendNotifyRequest {
+    pub title: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SendNotifyResponse {
+    pub success: bool,
+    pub notification_id: String,
+}
+
+pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) -> Router<PgPool> {
     Router::new()
         .route("/:id/group", put(update_user_group))
         .route("/:id/account-type", put(update_user_account_type))
@@ -68,8 +84,145 @@ pub fn create_admin_users_router(pool: PgPool) -> Router<PgPool> {
         .route("/:id/trading-access", put(update_user_trading_access))
         .route("/:id/permission-profile", put(update_user_permission_profile))
         .route("/:id/impersonate", post(impersonate_user))
+        .route("/:id/notify", post(admin_send_notify))
+        .layer(Extension(deposits_state))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+async fn admin_send_notify(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Path(user_id): Path<Uuid>,
+    Json(body): Json<SendNotifyRequest>,
+) -> Result<Json<SendNotifyResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can send notifications to users".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let title = body.title.trim();
+    let message = body.message.trim();
+    if title.is_empty() || message.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "Title and message are required".to_string(),
+                },
+            }),
+        ));
+    }
+    const MAX_TITLE: usize = 200;
+    const MAX_MESSAGE: usize = 2000;
+    if title.len() > MAX_TITLE || message.len() > MAX_MESSAGE {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_INPUT".to_string(),
+                    message: format!("Title max {} chars, message max {} chars", MAX_TITLE, MAX_MESSAGE),
+                },
+            }),
+        ));
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let now = Utc::now();
+    let notification_id = Uuid::new_v4();
+    let kind = "ADMIN_MESSAGE";
+    let meta = serde_json::json!({ "sentByAdminId": claims.sub.to_string() });
+
+    sqlx::query(
+        r#"
+        INSERT INTO notifications (id, user_id, kind, title, message, read, created_at, meta)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(notification_id)
+    .bind(user_id)
+    .bind(kind)
+    .bind(title)
+    .bind(message)
+    .bind(false)
+    .bind(now)
+    .bind(&meta)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INSERT_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let notification_event = serde_json::json!({
+        "id": notification_id.to_string(),
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "createdAt": now.to_rfc3339(),
+        "read": false,
+        "userId": user_id.to_string(),
+        "meta": meta,
+    });
+
+    if let Ok(mut conn) = deposits_state.redis.get_async_connection().await {
+        let _: Result<(), _> = conn
+            .publish(
+                "notifications:push",
+                serde_json::to_string(&notification_event).unwrap_or_default(),
+            )
+            .await;
+    }
+
+    Ok(Json(SendNotifyResponse {
+        success: true,
+        notification_id: notification_id.to_string(),
+    }))
 }
 
 async fn impersonate_user(

@@ -83,3 +83,24 @@ export async function impersonateUser(userId: string): Promise<ImpersonateRespon
   )
   return response
 }
+
+export interface SendNotifyPayload {
+  title: string
+  message: string
+}
+
+export interface SendNotifyResponse {
+  success: boolean
+  notification_id: string
+}
+
+/** Send a notification to a user (admin only). User sees it in their notification panel. */
+export async function sendNotificationToUser(
+  userId: string,
+  payload: SendNotifyPayload
+): Promise<SendNotifyResponse> {
+  return http<SendNotifyResponse>(`/api/admin/users/${userId}/notify`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
