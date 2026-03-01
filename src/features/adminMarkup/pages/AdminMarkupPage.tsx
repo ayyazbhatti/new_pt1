@@ -11,7 +11,6 @@ import {
   Plus,
   Search,
   X,
-  Upload,
   Settings,
   Copy,
   Pencil,
@@ -62,7 +61,7 @@ export function AdminMarkupPage() {
     openModal(
       `transfer-settings-${profile.id}`,
       <TransferSettingsModal sourceStream={profile} />,
-      { title: '', size: 'lg' }
+      { title: 'Transfer Price Stream Settings', size: 'lg' }
     )
   }
 
@@ -77,10 +76,6 @@ export function AdminMarkupPage() {
           '!p-0 !gap-0 !bg-slate-800 !border-slate-700 !rounded-xl max-h-[95vh] overflow-hidden flex flex-col [&>button]:hidden [&>div:first-child]:hidden [&>div:last-child]:flex-1 [&>div:last-child]:min-h-0',
       }
     )
-  }
-
-  const handlePublish = (_profile: MarkupProfile) => {
-    // Placeholder: Publish to DataProvider
   }
 
   if (isLoading) {
@@ -159,16 +154,16 @@ export function AdminMarkupPage() {
           <table className="w-full min-w-[600px]">
             <thead>
               <tr className="border-b border-slate-600 bg-slate-800">
-                <th className="text-left py-3 px-4 text-slate-300 font-medium text-sm">
+                <th className="text-left py-3 px-4 text-slate-300 font-medium text-base">
                   Name
                 </th>
-                <th className="text-left py-3 px-4 text-slate-300 font-medium text-sm">
+                <th className="text-left py-3 px-4 text-slate-300 font-medium text-base">
                   Groups
                 </th>
-                <th className="text-left py-3 px-4 text-slate-300 font-medium text-sm">
+                <th className="text-left py-3 px-4 text-slate-300 font-medium text-base">
                   Created At
                 </th>
-                <th className="text-right py-3 px-4 text-slate-300 font-medium text-sm">
+                <th className="text-right py-3 px-4 text-slate-300 font-medium text-base">
                   Actions
                 </th>
               </tr>
@@ -178,7 +173,7 @@ export function AdminMarkupPage() {
                 <tr>
                   <td
                     colSpan={4}
-                    className="py-12 text-center text-slate-400 text-sm"
+                    className="py-12 text-center text-slate-400 text-base"
                   >
                     No price streams found.
                   </td>
@@ -189,23 +184,23 @@ export function AdminMarkupPage() {
                     key={profile.id}
                     className="border-b border-slate-700 hover:bg-slate-700/30"
                   >
-                    <td className="py-3 px-4">
+                    <td className="py-3 px-4 text-base">
                       <span className="font-medium text-white">
                         {profile.name}
                       </span>
                     </td>
-                    <td className="py-3 px-4">
+                    <td className="py-3 px-4 text-base">
                       {profile.groupName ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-200">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium bg-slate-700 text-slate-200">
                           {profile.groupName}
                         </span>
                       ) : (
-                        <span className="text-slate-500 text-sm">
+                        <span className="text-slate-500">
                           Unassigned
                         </span>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-slate-400 text-sm">
+                    <td className="py-3 px-4 text-slate-400 text-base">
                       {profile.createdAt
                         ? formatDistanceToNow(new Date(profile.createdAt), {
                             addSuffix: true,
@@ -214,14 +209,6 @@ export function AdminMarkupPage() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handlePublish(profile)}
-                          className="p-2 rounded-lg hover:bg-slate-700 text-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Publish to DataProvider"
-                        >
-                          <Upload className="w-4 h-4" />
-                        </button>
                         <button
                           type="button"
                           onClick={() => handleConfigureMarkups(profile)}

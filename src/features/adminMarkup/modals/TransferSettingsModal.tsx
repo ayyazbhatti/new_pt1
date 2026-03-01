@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react'
 import { useModalStore } from '@/app/store'
+import { Button } from '@/shared/ui/button'
+import { Input } from '@/shared/ui/input'
 import { useMarkupProfiles } from '../hooks/useMarkup'
 import { MarkupProfile } from '../types/markup'
-import { Copy, Search, X, AlertTriangle } from 'lucide-react'
+import { Copy, Search, AlertTriangle } from 'lucide-react'
 import { CheckSquare, Square } from 'lucide-react'
 
 interface TransferSettingsModalProps {
@@ -82,91 +84,67 @@ export function TransferSettingsModal({ sourceStream }: TransferSettingsModalPro
   }
 
   return (
-    <div className="bg-slate-800 rounded-lg border border-slate-700 shadow-xl w-full max-w-[calc(100vw-1rem)] sm:max-w-2xl md:max-w-3xl max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between p-3 sm:p-4 md:p-6 border-b border-slate-700 flex-shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 pr-2">
-          <div className="p-1.5 sm:p-2 bg-blue-600/20 rounded-lg flex-shrink-0">
-            <Copy className="w-4 h-4 sm:w-5 sm:h-5 text-blue-400" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-base sm:text-lg font-semibold text-white truncate">
-              Transfer Price Stream Settings
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-400 truncate">
-              Copy settings from <span className="text-white font-medium">{sourceStream.name}</span> to other streams
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => closeModal(modalKey)}
-          className="p-1 text-slate-400 hover:text-white disabled:opacity-50 flex-shrink-0"
-        >
-          <X className="w-4 h-4 sm:w-5 sm:h-5" />
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 space-y-3 sm:space-y-4 min-h-0">
-        <div className="bg-slate-700/30 rounded-lg p-3 sm:p-4 border border-slate-700">
-          <p className="text-xs sm:text-sm font-medium text-slate-300 mb-2">
-            Settings to Transfer
-          </p>
-          <label className="inline-flex items-center space-x-2 text-xs sm:text-sm text-slate-300 cursor-pointer">
+    <div className="flex flex-col overflow-hidden min-h-0">
+      <p className="text-sm text-text-muted mb-4">
+        Copy settings from <span className="font-medium text-text">{sourceStream.name}</span> to other streams.
+      </p>
+      <div className="flex-1 overflow-y-auto space-y-4 min-h-0">
+        <div className="rounded-lg p-4 border border-border bg-surface-2">
+          <p className="text-sm font-medium text-text mb-2">Settings to Transfer</p>
+          <label className="inline-flex items-center space-x-2 text-sm text-text-muted cursor-pointer">
             <input
               type="checkbox"
               checked={includeMarkups}
               onChange={(e) => setIncludeMarkups(e.target.checked)}
-              className="rounded text-blue-500 focus:ring-blue-500 bg-slate-800 border-slate-600 w-3 h-3 sm:w-4 sm:h-4"
+              className="rounded border-border text-accent focus:ring-accent bg-surface-1 w-4 h-4"
             />
             <span>Markups (copy all symbol markups)</span>
           </label>
         </div>
 
-        <div className="bg-slate-700/30 rounded-lg p-3 sm:p-4 border border-slate-700">
+        <div className="rounded-lg p-4 border border-border bg-surface-2">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs sm:text-sm font-medium text-slate-300">
+            <p className="text-sm font-medium text-text">
               Target Streams ({selectedCount} selected)
             </p>
             <button
               type="button"
               onClick={toggleAll}
-              className="text-xs text-blue-400 hover:text-blue-300"
+              className="text-sm text-accent hover:text-accent/90"
             >
               {allSelected ? 'Deselect All' : 'Select All'}
             </button>
           </div>
           <div className="relative mb-3">
-            <Search className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 text-slate-400" />
-            <input
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <Input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search streams..."
-              className="w-full pl-8 sm:pl-10 pr-3 sm:pr-4 py-1.5 sm:py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-xs sm:text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="pl-9"
             />
           </div>
           <div className="max-h-48 sm:max-h-64 overflow-y-auto space-y-2">
             {filteredTargets.length === 0 ? (
-              <p className="text-center text-slate-400 py-4 sm:py-6 text-xs sm:text-sm">
+              <p className="text-center text-text-muted py-6 text-sm">
                 No target streams available
               </p>
             ) : (
               filteredTargets.map((p) => (
                 <label
                   key={p.id}
-                  className={`flex items-center justify-between p-2 sm:p-3 rounded border cursor-pointer ${
+                  className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer ${
                     targetIds.has(p.id)
-                      ? 'bg-blue-600/10 border-blue-500/30'
-                      : 'bg-slate-800/50 border-slate-600 hover:border-slate-500'
+                      ? 'bg-accent/10 border-accent/50'
+                      : 'bg-surface-1 border-border hover:border-border/80'
                   }`}
                 >
                   <div className="min-w-0 flex-1">
-                    <span className="font-medium text-white text-xs sm:text-sm truncate block">
+                    <span className="font-medium text-text text-sm truncate block">
                       {p.name}
                     </span>
-                    <span className="text-xs text-slate-400 truncate block">
+                    <span className="text-sm text-text-muted truncate block">
                       {p.id}
                     </span>
                   </div>
@@ -179,9 +157,9 @@ export function TransferSettingsModal({ sourceStream }: TransferSettingsModalPro
                     className="flex-shrink-0 ml-2"
                   >
                     {targetIds.has(p.id) ? (
-                      <CheckSquare className="w-4 h-4 sm:w-5 sm:h-5 text-blue-400" />
+                      <CheckSquare className="w-4 h-4 text-accent" />
                     ) : (
-                      <Square className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400" />
+                      <Square className="w-4 h-4 text-text-muted" />
                     )}
                   </button>
                 </label>
@@ -191,36 +169,31 @@ export function TransferSettingsModal({ sourceStream }: TransferSettingsModalPro
         </div>
 
         {error && (
-          <div className="flex items-center space-x-2 p-2 sm:p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-            <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 flex-shrink-0" />
-            <p className="text-xs sm:text-sm text-red-400">{error}</p>
+          <div className="flex items-center space-x-2 p-3 bg-danger/10 border border-danger/30 rounded-lg">
+            <AlertTriangle className="w-4 h-4 text-danger flex-shrink-0" />
+            <p className="text-sm text-danger">{error}</p>
           </div>
         )}
       </div>
 
-      {/* Footer */}
-      <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 sm:gap-3 p-3 sm:p-4 md:p-6 border-t border-slate-700 flex-shrink-0">
-        <button
+      <div className="flex justify-end gap-2 pt-4 border-t border-border flex-shrink-0">
+        <Button
           type="button"
+          variant="outline"
           onClick={() => closeModal(modalKey)}
           disabled={loading}
-          className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs sm:text-sm"
         >
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           onClick={handleTransfer}
           disabled={loading || selectedCount === 0}
-          className="flex items-center justify-center space-x-1.5 sm:space-x-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:text-slate-400 text-white rounded-lg text-xs sm:text-sm disabled:cursor-not-allowed"
+          className="flex items-center gap-2"
         >
-          <Copy className="w-3 h-3 sm:w-4 sm:h-4" />
-          <span>
-            {loading
-              ? 'Transferring...'
-              : `Transfer to ${selectedCount} stream(s)`}
-          </span>
-        </button>
+          <Copy className="w-4 h-4" />
+          {loading ? 'Transferring...' : `Transfer to ${selectedCount} stream(s)`}
+        </Button>
       </div>
     </div>
   )

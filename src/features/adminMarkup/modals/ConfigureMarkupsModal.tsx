@@ -118,8 +118,14 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
   }, [symbolsWithMarkup, search])
 
   const tableData = useMemo(
-    () => filteredRows.map((r) => ({ ...r, id: r.symbolId })),
-    [filteredRows]
+    () =>
+      filteredRows.map((r) => ({
+        ...r,
+        id: r.symbolId,
+        localBid: localMarkups[r.symbolId]?.bid ?? r.bidMarkup,
+        localAsk: localMarkups[r.symbolId]?.ask ?? r.askMarkup,
+      })),
+    [filteredRows, localMarkups]
   )
 
   const handleBidChange = useCallback(
@@ -215,7 +221,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
           return (
             <div>
               <span className="font-medium text-text block">{s.symbolCode}</span>
-              <span className="text-xs text-text-muted">
+              <span className="text-sm text-text-muted">
                 {s.baseCurrency}/{s.quoteCurrency}
               </span>
             </div>
@@ -229,7 +235,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         cell: ({ row }) => {
           const live = prices.get(normalizeSymbolKey(row.original.symbolCode))
           const n = live ? parseFloat(live.bid) : NaN
-          if (!live) return <span className="text-text-muted text-xs">N/A</span>
+          if (!live) return <span className="text-text-muted text-sm">N/A</span>
           return (
             <span className="text-green-600 dark:text-green-400 font-mono text-sm">
               {formatPrice(n)}
@@ -244,7 +250,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         cell: ({ row }) => {
           const live = prices.get(normalizeSymbolKey(row.original.symbolCode))
           const n = live ? parseFloat(live.ask) : NaN
-          if (!live) return <span className="text-text-muted text-xs">N/A</span>
+          if (!live) return <span className="text-text-muted text-sm">N/A</span>
           return (
             <span className="text-red-600 dark:text-red-400 font-mono text-sm">
               {formatPrice(n)}
@@ -266,7 +272,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
               ? liveBid * (1 + (parseFloat(bidPct) || 0) / 100)
               : NaN
           if (Number.isNaN(after))
-            return <span className="text-text-muted text-xs">—</span>
+            return <span className="text-text-muted text-sm">—</span>
           return (
             <span className="text-green-600 dark:text-green-300 font-mono text-sm">
               {formatPrice(after)}
@@ -288,7 +294,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
               ? liveAsk * (1 + (parseFloat(askPct) || 0) / 100)
               : NaN
           if (Number.isNaN(after))
-            return <span className="text-text-muted text-xs">—</span>
+            return <span className="text-text-muted text-sm">—</span>
           return (
             <span className="text-red-600 dark:text-red-300 font-mono text-sm">
               {formatPrice(after)}
@@ -322,7 +328,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
                   }))
                 }
                 onKeyDown={(e) => e.stopPropagation()}
-                className="w-20 sm:w-24 pl-6 pr-6 py-1 bg-surface-2 border border-border rounded text-text text-xs sm:text-sm focus:ring-1 focus:ring-accent"
+                className="w-20 sm:w-24 pl-6 pr-6 py-1.5 bg-surface-2 border border-border rounded text-text text-sm focus:ring-1 focus:ring-accent"
                 placeholder="0.0"
               />
               <button
@@ -362,7 +368,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
                   }))
                 }
                 onKeyDown={(e) => e.stopPropagation()}
-                className="w-20 sm:w-24 pl-6 pr-6 py-1 bg-surface-2 border border-border rounded text-text text-xs sm:text-sm focus:ring-1 focus:ring-accent"
+                className="w-20 sm:w-24 pl-6 pr-6 py-1.5 bg-surface-2 border border-border rounded text-text text-sm focus:ring-1 focus:ring-accent"
                 placeholder="0.0"
               />
               <button
@@ -409,12 +415,12 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         cell: ({ row }) => {
           const s = row.original
           return (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
               <button
                 type="button"
                 onClick={() => handleReset(s.symbolId)}
                 className="p-1 rounded hover:bg-surface-2"
-                title="Reset"
+                title="Reset bid/ask to 0"
               >
                 <RotateCcw className="w-4 h-4 text-text-muted" />
               </button>
@@ -445,7 +451,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
   if (overridesLoading) {
     return (
       <div className="flex flex-col flex-1 min-h-0">
-        <div className="flex items-center justify-center min-h-[200px] text-xs sm:text-sm text-slate-400">
+        <div className="flex items-center justify-center min-h-[200px] text-sm text-slate-400">
           Loading markup configuration...
         </div>
       </div>
@@ -459,7 +465,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
           <h2 className="text-base sm:text-lg md:text-xl font-bold text-white truncate">
             Configure Markups - {stream.name}
           </h2>
-          <p className="text-xs sm:text-sm text-slate-400 truncate mt-0.5">
+          <p className="text-sm text-slate-400 truncate mt-0.5">
             Set bid/ask markups for each symbol in this stream
           </p>
         </div>
@@ -479,7 +485,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search symbols..."
-          className="w-full pl-8 sm:pl-10 pr-3 sm:pr-4 py-1.5 sm:py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-xs sm:text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full pl-8 sm:pl-10 pr-3 sm:pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
 
@@ -501,7 +507,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         <button
           type="button"
           onClick={() => closeModal(modalKey)}
-          className="px-3 sm:px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs sm:text-sm"
+          className="px-3 sm:px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm"
         >
           Cancel
         </button>
@@ -509,7 +515,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
           type="button"
           disabled={isSaving}
           onClick={handleSave}
-          className="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs sm:text-sm flex items-center justify-center gap-2"
+          className="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm flex items-center justify-center gap-2"
         >
           <Save className="w-4 h-4" />
           {isSaving ? 'Saving...' : 'Save Changes'}

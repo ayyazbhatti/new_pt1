@@ -2,6 +2,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useModalStore } from '@/app/store'
+import { Input } from '@/shared/ui/input'
+import { Button } from '@/shared/ui/button'
 import { useCreateMarkupProfile, useUpdateMarkupProfile } from '../hooks/useMarkup'
 import { MarkupProfile } from '../types/markup'
 
@@ -59,49 +61,36 @@ export function CreateEditPriceStreamModal({ stream }: CreateEditPriceStreamModa
   }
 
   return (
-    <div className="bg-slate-800 rounded-lg p-4 sm:p-6 w-full max-w-md">
-      <h2 className="text-lg sm:text-xl font-bold text-white mb-4">
-        {isEdit ? 'Edit Price Stream' : 'Create Price Stream'}
-      </h2>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">
-            Name
-          </label>
-          <input
-            {...register('name')}
-            placeholder="Price stream name"
-            disabled={isSubmitting}
-            className={`w-full px-3 py-2 bg-slate-700 border rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm sm:text-base ${
-              errors.name ? 'border-red-500' : 'border-slate-600'
-            }`}
-          />
-          {errors.name && (
-            <p className="mt-1 text-sm text-red-400">{errors.name.message}</p>
-          )}
-        </div>
-        <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 sm:space-x-2">
-          <button
-            type="button"
-            onClick={() =>
-              closeModal(
-                isEdit ? `edit-price-stream-${stream!.id}` : 'create-price-stream'
-              )
-            }
-            disabled={isSubmitting}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-lg text-sm sm:text-base"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm sm:text-base"
-          >
-            {isSubmitting ? 'Saving...' : isEdit ? 'Update' : 'Create'}
-          </button>
-        </div>
-      </form>
-    </div>
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <div>
+        <label className="text-sm font-medium text-text mb-2 block">Name</label>
+        <Input
+          {...register('name')}
+          placeholder="Price stream name"
+          disabled={isSubmitting}
+          className={errors.name ? 'border-danger' : ''}
+        />
+        {errors.name && (
+          <p className="mt-1 text-sm text-danger">{errors.name.message}</p>
+        )}
+      </div>
+      <div className="flex justify-end gap-2 pt-4 border-t border-border">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() =>
+            closeModal(
+              isEdit ? `edit-price-stream-${stream!.id}` : 'create-price-stream'
+            )
+          }
+          disabled={isSubmitting}
+        >
+          Cancel
+        </Button>
+        <Button type="submit" disabled={isSubmitting}>
+          {isSubmitting ? 'Saving...' : isEdit ? 'Save Changes' : 'Create'}
+        </Button>
+      </div>
+    </form>
   )
 }
