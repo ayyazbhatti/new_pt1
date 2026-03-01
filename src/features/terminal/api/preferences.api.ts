@@ -4,6 +4,8 @@ export interface TerminalPreferences {
   chartShowAskPrice: boolean
   chartShowPositionMarker: boolean
   chartShowClosedPositionMarker: boolean
+  enableLiquidationEmail: boolean
+  enableSlTpEmail: boolean
 }
 
 export interface TerminalPreferencesResponse {

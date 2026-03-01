@@ -11,6 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::types::Json as SqlxJson;
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
@@ -21,6 +22,8 @@ fn default_preferences() -> TerminalPreferences {
         chart_show_ask_price: true,
         chart_show_position_marker: true,
         chart_show_closed_position_marker: true,
+        enable_liquidation_email: false,
+        enable_sltp_email: false,
     }
 }
 
@@ -41,6 +44,14 @@ fn normalize_preferences(value: &serde_json::Value) -> TerminalPreferences {
             .and_then(|o| o.get("chartShowClosedPositionMarker"))
             .and_then(|v| v.as_bool())
             .unwrap_or(def.chart_show_closed_position_marker),
+        enable_liquidation_email: obj
+            .and_then(|o| o.get("enableLiquidationEmail"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(def.enable_liquidation_email),
+        enable_sltp_email: obj
+            .and_then(|o| o.get("enableSlTpEmail"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(def.enable_sltp_email),
     }
 }
 
@@ -60,6 +71,14 @@ fn merge_preferences(existing: &TerminalPreferences, incoming: &serde_json::Valu
             .and_then(|o| o.get("chartShowClosedPositionMarker"))
             .and_then(|v| v.as_bool())
             .unwrap_or(existing.chart_show_closed_position_marker),
+        enable_liquidation_email: obj
+            .and_then(|o| o.get("enableLiquidationEmail"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(existing.enable_liquidation_email),
+        enable_sltp_email: obj
+            .and_then(|o| o.get("enableSlTpEmail"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(existing.enable_sltp_email),
     }
 }
 
@@ -69,6 +88,8 @@ struct TerminalPreferences {
     chart_show_ask_price: bool,
     chart_show_position_marker: bool,
     chart_show_closed_position_marker: bool,
+    enable_liquidation_email: bool,
+    enable_sltp_email: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +175,36 @@ async fn put_terminal_preferences(
     Ok(Json(TerminalPreferencesResponse {
         preferences: merged,
     }))
+}
+
+/// Returns whether the user has liquidation email enabled. Used when sending liquidation
+/// notification email. Defaults to false if no row exists or on error (opt-in).
+pub async fn get_enable_liquidation_email(pool: &PgPool, user_id: Uuid) -> bool {
+    let row = match sqlx::query("SELECT preferences FROM user_terminal_preferences WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) | Err(_) => return false,
+    };
+    let value: SqlxJson<serde_json::Value> = row.get("preferences");
+    normalize_preferences(&value.0).enable_liquidation_email
+}
+
+/// Returns whether the user has SL/TP email enabled. Used when sending SL/TP
+/// notification email. Defaults to false if no row exists or on error (opt-in).
+pub async fn get_enable_sltp_email(pool: &PgPool, user_id: Uuid) -> bool {
+    let row = match sqlx::query("SELECT preferences FROM user_terminal_preferences WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) | Err(_) => return false,
+    };
+    let value: SqlxJson<serde_json::Value> = row.get("preferences");
+    normalize_preferences(&value.0).enable_sltp_email
 }
 
 pub fn create_user_preferences_router(pool: PgPool) -> Router<PgPool> {

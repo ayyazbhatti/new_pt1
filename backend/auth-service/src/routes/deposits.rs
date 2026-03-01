@@ -27,6 +27,7 @@ use tokio::sync::Mutex;
 /// (symbol, group_id) -> (bid, ask). Used for tick-driven account summary so unrealized PnL uses live price.
 pub type PriceOverrides = HashMap<(String, String), (Decimal, Decimal)>;
 
+use crate::routes::user_preferences;
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::services::ledger_service;
@@ -1207,40 +1208,42 @@ pub async fn create_sltp_notifications_and_push(
         error!("SL/TP notification: Redis connection failed for user {}", user_id);
     }
 
-    // Send email to user using admin-configured SMTP (fire-and-forget)
-    let user_email: Option<String> = sqlx::query_scalar::<_, String>(
-        "SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten();
-    if let Some(ref to_email) = user_email {
-        let to_email = to_email.trim().to_string();
-        if !to_email.is_empty() {
-            if let Ok(Some(config)) = EmailConfigService::new(pool.clone()).get_with_password().await {
-                let subject = title.to_string();
-                let html_body = build_sltp_email_html(
-                    trigger_label,
-                    trigger_reason == "SL",
-                    &symbol,
-                    &side,
-                    &realized_pnl_display,
-                    &exit_price_display,
-                );
-                let email_user_id = user_id;
-                tokio::spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        send_email_html_sync(&config, &to_email, &subject, &html_body)
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok(())) => info!("SL/TP email sent to user {}", email_user_id),
-                        Ok(Err(e)) => error!("SL/TP email failed for user {}: {}", email_user_id, e),
-                        Err(e) => error!("SL/TP email task join error: {}", e),
-                    }
-                });
+    // Send email to user using admin-configured SMTP (fire-and-forget) only if user has enabled SL/TP email
+    if user_preferences::get_enable_sltp_email(&pool, user_id).await {
+        let user_email: Option<String> = sqlx::query_scalar::<_, String>(
+            "SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some(ref to_email) = user_email {
+            let to_email = to_email.trim().to_string();
+            if !to_email.is_empty() {
+                if let Ok(Some(config)) = EmailConfigService::new(pool.clone()).get_with_password().await {
+                    let subject = title.to_string();
+                    let html_body = build_sltp_email_html(
+                        trigger_label,
+                        trigger_reason == "SL",
+                        &symbol,
+                        &side,
+                        &realized_pnl_display,
+                        &exit_price_display,
+                    );
+                    let email_user_id = user_id;
+                    tokio::spawn(async move {
+                        let result = tokio::task::spawn_blocking(move || {
+                            send_email_html_sync(&config, &to_email, &subject, &html_body)
+                        })
+                        .await;
+                        match result {
+                            Ok(Ok(())) => info!("SL/TP email sent to user {}", email_user_id),
+                            Ok(Err(e)) => error!("SL/TP email failed for user {}: {}", email_user_id, e),
+                            Err(e) => error!("SL/TP email task join error: {}", e),
+                        }
+                    });
+                }
             }
         }
     }
@@ -1460,38 +1463,40 @@ pub async fn create_liquidation_notifications_and_push(
         error!("Liquidation notification: Redis connection failed for user {}", user_id);
     }
 
-    // Send HTML email to user (fire-and-forget)
-    let user_email: Option<String> = sqlx::query_scalar::<_, String>(
-        "SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten();
-    if let Some(ref to_email) = user_email {
-        let to_email = to_email.trim().to_string();
-        if !to_email.is_empty() {
-            if let Ok(Some(config)) = EmailConfigService::new(pool.clone()).get_with_password().await {
-                let subject = title.to_string();
-                let html_body = build_liquidation_email_html(
-                    &symbol,
-                    &side,
-                    &realized_pnl_display,
-                    &exit_price_display,
-                );
-                let email_user_id = user_id;
-                tokio::spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        send_email_html_sync(&config, &to_email, &subject, &html_body)
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok(())) => info!("Liquidation email sent to user {}", email_user_id),
-                        Ok(Err(e)) => error!("Liquidation email failed for user {}: {}", email_user_id, e),
-                        Err(e) => error!("Liquidation email task join error: {}", e),
-                    }
-                });
+    // Send HTML email to user (fire-and-forget) only if user has enabled liquidation email
+    if user_preferences::get_enable_liquidation_email(&pool, user_id).await {
+        let user_email: Option<String> = sqlx::query_scalar::<_, String>(
+            "SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some(ref to_email) = user_email {
+            let to_email = to_email.trim().to_string();
+            if !to_email.is_empty() {
+                if let Ok(Some(config)) = EmailConfigService::new(pool.clone()).get_with_password().await {
+                    let subject = title.to_string();
+                    let html_body = build_liquidation_email_html(
+                        &symbol,
+                        &side,
+                        &realized_pnl_display,
+                        &exit_price_display,
+                    );
+                    let email_user_id = user_id;
+                    tokio::spawn(async move {
+                        let result = tokio::task::spawn_blocking(move || {
+                            send_email_html_sync(&config, &to_email, &subject, &html_body)
+                        })
+                        .await;
+                        match result {
+                            Ok(Ok(())) => info!("Liquidation email sent to user {}", email_user_id),
+                            Ok(Err(e)) => error!("Liquidation email failed for user {}: {}", email_user_id, e),
+                            Err(e) => error!("Liquidation email task join error: {}", e),
+                        }
+                    });
+                }
             }
         }
     }

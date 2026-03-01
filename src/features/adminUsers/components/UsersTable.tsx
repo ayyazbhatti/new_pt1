@@ -537,6 +537,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
               size="sm"
               onClick={() => handleSendNotification(user)}
               title="Send notification"
+              className="text-accent hover:text-accent hover:bg-accent/10"
             >
               <Bell className="h-4 w-4" />
             </Button>
@@ -546,14 +547,27 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
               onClick={() => handleLoginAsUser(user)}
               disabled={loginLoading.has(user.id)}
               title="Login as user (open trading terminal)"
+              className="text-accent hover:text-accent hover:bg-accent/10 disabled:opacity-50"
             >
               <LogIn className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => handleView(user)} title="View">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleView(user)}
+              title="View"
+              className="text-text-muted hover:text-text hover:bg-white/10"
+            >
               <Eye className="h-4 w-4" />
             </Button>
             {canEditUser && (
-              <Button variant="ghost" size="sm" onClick={() => handleEdit(user)} title="Edit">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleEdit(user)}
+                title="Edit"
+                className="text-accent hover:text-accent hover:bg-accent/10"
+              >
                 <Edit className="h-4 w-4" />
               </Button>
             )}
@@ -562,6 +576,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
               size="sm"
               onClick={() => handleRestrict(user)}
               title="Restrict"
+              className="text-warning hover:text-warning hover:bg-warning/10"
             >
               <Shield className="h-4 w-4" />
             </Button>
@@ -570,6 +585,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
               size="sm"
               onClick={() => handleDisable(user)}
               title={user.status === 'active' ? 'Disable' : 'Enable'}
+              className="text-danger hover:text-danger hover:bg-danger/10"
             >
               <X className="h-4 w-4" />
             </Button>

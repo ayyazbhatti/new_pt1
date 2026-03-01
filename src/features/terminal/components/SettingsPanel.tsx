@@ -19,6 +19,10 @@ export function SettingsPanel() {
     setChartShowPositionMarker,
     chartShowClosedPositionMarker,
     setChartShowClosedPositionMarker,
+    enableLiquidationEmail,
+    setEnableLiquidationEmail,
+    enableSlTpEmail,
+    setEnableSlTpEmail,
   } = useTerminalStore()
 
   const handleChartShowAskPrice = useCallback(
@@ -30,6 +34,8 @@ export function SettingsPanel() {
         chartShowAskPrice: state.chartShowAskPrice,
         chartShowPositionMarker: state.chartShowPositionMarker,
         chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+        enableLiquidationEmail: state.enableLiquidationEmail,
+        enableSlTpEmail: state.enableSlTpEmail,
       }).catch(() => {
         setChartShowAskPrice(prev)
         toast.error('Failed to save settings. Please try again.')
@@ -47,6 +53,8 @@ export function SettingsPanel() {
         chartShowAskPrice: state.chartShowAskPrice,
         chartShowPositionMarker: state.chartShowPositionMarker,
         chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+        enableLiquidationEmail: state.enableLiquidationEmail,
+        enableSlTpEmail: state.enableSlTpEmail,
       }).catch(() => {
         setChartShowPositionMarker(prev)
         toast.error('Failed to save settings. Please try again.')
@@ -64,12 +72,52 @@ export function SettingsPanel() {
         chartShowAskPrice: state.chartShowAskPrice,
         chartShowPositionMarker: state.chartShowPositionMarker,
         chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+        enableLiquidationEmail: state.enableLiquidationEmail,
+        enableSlTpEmail: state.enableSlTpEmail,
       }).catch(() => {
         setChartShowClosedPositionMarker(prev)
         toast.error('Failed to save settings. Please try again.')
       })
     },
     [chartShowClosedPositionMarker, setChartShowClosedPositionMarker]
+  )
+
+  const handleEnableLiquidationEmail = useCallback(
+    (checked: boolean) => {
+      const prev = enableLiquidationEmail
+      setEnableLiquidationEmail(checked)
+      const state = useTerminalStore.getState()
+      updateTerminalPreferences({
+        chartShowAskPrice: state.chartShowAskPrice,
+        chartShowPositionMarker: state.chartShowPositionMarker,
+        chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+        enableLiquidationEmail: state.enableLiquidationEmail,
+        enableSlTpEmail: state.enableSlTpEmail,
+      }).catch(() => {
+        setEnableLiquidationEmail(prev)
+        toast.error('Failed to save settings. Please try again.')
+      })
+    },
+    [enableLiquidationEmail, setEnableLiquidationEmail]
+  )
+
+  const handleEnableSlTpEmail = useCallback(
+    (checked: boolean) => {
+      const prev = enableSlTpEmail
+      setEnableSlTpEmail(checked)
+      const state = useTerminalStore.getState()
+      updateTerminalPreferences({
+        chartShowAskPrice: state.chartShowAskPrice,
+        chartShowPositionMarker: state.chartShowPositionMarker,
+        chartShowClosedPositionMarker: state.chartShowClosedPositionMarker,
+        enableLiquidationEmail: state.enableLiquidationEmail,
+        enableSlTpEmail: state.enableSlTpEmail,
+      }).catch(() => {
+        setEnableSlTpEmail(prev)
+        toast.error('Failed to save settings. Please try again.')
+      })
+    },
+    [enableSlTpEmail, setEnableSlTpEmail]
   )
 
   if (!settingsPanelOpen) return null
@@ -181,14 +229,38 @@ export function SettingsPanel() {
                 Notifications
               </h3>
             </div>
-            <div className="space-y-1 pl-5">
-              <div className="py-1.5">
-                <p className="text-sm font-medium text-text">Order fills</p>
-                <p className="text-xs text-text-muted mt-0.5">Sound & browser alerts</p>
+            <div className="pl-5">
+              <div className="flex items-center justify-between gap-3 py-2">
+                <Label htmlFor="enable-liquidation-email" className="text-sm font-medium text-text cursor-pointer">
+                  Enable liquidation email
+                </Label>
+                <Switch
+                  id="enable-liquidation-email"
+                  checked={enableLiquidationEmail}
+                  onCheckedChange={handleEnableLiquidationEmail}
+                />
               </div>
-              <div className="py-1.5">
-                <p className="text-sm font-medium text-text">Price alerts</p>
-                <p className="text-xs text-text-muted mt-0.5">When price reaches level</p>
+              <p className="text-xs text-text-muted mt-0.5">Receive an email when your position is liquidated</p>
+              <div className="flex items-center justify-between gap-3 py-2 mt-1">
+                <Label htmlFor="enable-sltp-email" className="text-sm font-medium text-text cursor-pointer">
+                  Enable SL/TP email
+                </Label>
+                <Switch
+                  id="enable-sltp-email"
+                  checked={enableSlTpEmail}
+                  onCheckedChange={handleEnableSlTpEmail}
+                />
+              </div>
+              <p className="text-xs text-text-muted mt-0.5">Receive an email when your position is closed by Stop Loss or Take Profit</p>
+              <div className="space-y-1 mt-2">
+                <div className="py-1.5">
+                  <p className="text-sm font-medium text-text">Order fills</p>
+                  <p className="text-xs text-text-muted mt-0.5">Sound & browser alerts</p>
+                </div>
+                <div className="py-1.5">
+                  <p className="text-sm font-medium text-text">Price alerts</p>
+                  <p className="text-xs text-text-muted mt-0.5">When price reaches level</p>
+                </div>
               </div>
             </div>
           </div>

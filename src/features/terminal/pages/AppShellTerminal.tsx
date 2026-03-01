@@ -97,6 +97,8 @@ export function AppShellTerminal() {
     setChartShowAskPrice,
     setChartShowPositionMarker,
     setChartShowClosedPositionMarker,
+    setEnableLiquidationEmail,
+    setEnableSlTpEmail,
   } = useTerminalStore()
   const { user } = useAuthStore()
   const [depositModalOpen, setDepositModalOpen] = useState(false)
@@ -111,11 +113,13 @@ export function AppShellTerminal() {
         setChartShowAskPrice(res.preferences.chartShowAskPrice)
         setChartShowPositionMarker(res.preferences.chartShowPositionMarker)
         setChartShowClosedPositionMarker(res.preferences.chartShowClosedPositionMarker)
+        setEnableLiquidationEmail(res.preferences.enableLiquidationEmail ?? false)
+        setEnableSlTpEmail(res.preferences.enableSlTpEmail ?? false)
       })
       .catch(() => {
         // Keep current store values (localStorage or defaults); optional: toast could go here
       })
-  }, [user?.id, setChartShowAskPrice, setChartShowPositionMarker, setChartShowClosedPositionMarker])
+  }, [user?.id, setChartShowAskPrice, setChartShowPositionMarker, setChartShowClosedPositionMarker, setEnableLiquidationEmail, setEnableSlTpEmail])
 
   // Fetch enabled symbols
   const { data: symbolsData, isLoading } = useSymbolsList({

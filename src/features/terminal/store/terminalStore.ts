@@ -18,6 +18,10 @@ interface TerminalStore {
   chartShowPositionMarker: boolean
   /** Show closed position marker (dot) on chart – position history (persisted in localStorage only). */
   chartShowClosedPositionMarker: boolean
+  /** Receive an email when position is liquidated (persisted in user terminal preferences). */
+  enableLiquidationEmail: boolean
+  /** Receive an email when position is closed by SL or TP (persisted in user terminal preferences). */
+  enableSlTpEmail: boolean
   setSymbols: (symbols: MockSymbol[]) => void
   setLoading: (loading: boolean) => void
   setSelectedSymbol: (symbol: MockSymbol) => void
@@ -31,6 +35,8 @@ interface TerminalStore {
   setChartShowAskPrice: (show: boolean) => void
   setChartShowPositionMarker: (show: boolean) => void
   setChartShowClosedPositionMarker: (show: boolean) => void
+  setEnableLiquidationEmail: (value: boolean) => void
+  setEnableSlTpEmail: (value: boolean) => void
   getFilteredSymbols: () => MockSymbol[]
 }
 
@@ -38,6 +44,26 @@ const STORAGE_KEY_SELECTED_SYMBOL = 'terminal.selectedSymbolId'
 const STORAGE_KEY_CHART_SHOW_ASK = 'terminal.chartShowAskPrice'
 const STORAGE_KEY_CHART_SHOW_POSITION_MARKER = 'terminal.chartShowPositionMarker'
 const STORAGE_KEY_CHART_SHOW_CLOSED_POSITION_MARKER = 'terminal.chartShowClosedPositionMarker'
+const STORAGE_KEY_ENABLE_LIQUIDATION_EMAIL = 'terminal.enableLiquidationEmail'
+const STORAGE_KEY_ENABLE_SLTP_EMAIL = 'terminal.enableSlTpEmail'
+
+function getEnableLiquidationEmailFromStorage(): boolean {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_ENABLE_LIQUIDATION_EMAIL)
+    if (v === 'true') return true
+    if (v === 'false') return false
+  } catch {}
+  return false
+}
+
+function getEnableSlTpEmailFromStorage(): boolean {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_ENABLE_SLTP_EMAIL)
+    if (v === 'true') return true
+    if (v === 'false') return false
+  } catch {}
+  return false
+}
 
 function getChartShowAskPriceFromStorage(): boolean {
   try {
@@ -155,6 +181,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       localStorage.setItem(STORAGE_KEY_CHART_SHOW_CLOSED_POSITION_MARKER, String(show))
     } catch {}
     set({ chartShowClosedPositionMarker: show })
+  },
+  enableLiquidationEmail: getEnableLiquidationEmailFromStorage(),
+  setEnableLiquidationEmail: (value) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_ENABLE_LIQUIDATION_EMAIL, String(value))
+    } catch {}
+    set({ enableLiquidationEmail: value })
+  },
+  enableSlTpEmail: getEnableSlTpEmailFromStorage(),
+  setEnableSlTpEmail: (value) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_ENABLE_SLTP_EMAIL, String(value))
+    } catch {}
+    set({ enableSlTpEmail: value })
   },
   getFilteredSymbols: () => {
     const { searchQuery, activeTab, watchlist, symbols } = get()
