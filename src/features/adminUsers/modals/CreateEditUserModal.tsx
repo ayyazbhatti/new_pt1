@@ -10,8 +10,8 @@ import { useModalStore } from '@/app/store'
 import { toast } from '@/shared/components/common'
 import { User, UserStatus } from '../types/users'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { updateUserGroup, updateUserPermissionProfile } from '../api/users.api'
-import type { UserResponse } from '@/shared/api/users.api'
+import { updateUserProfile, updateUserGroup, updateUserPermissionProfile } from '../api/users.api'
+import { listUsers, type UserResponse } from '@/shared/api/users.api'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
 
 const userSchema = z.object({
@@ -53,7 +53,10 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
   })
 
   // Subscribe to users list so we get latest cache (e.g. after optimistic group update)
-  const { data: usersList } = useQuery({ queryKey: ['users'] })
+  const { data: usersList } = useQuery({
+    queryKey: ['users'],
+    queryFn: () => listUsers({ limit: 100 }),
+  })
   // When editing, prefer user from cache so re-opened modal shows latest group
   const displayUser = useMemo(() => {
     if (!user) return null
@@ -128,6 +131,14 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
     if (user) {
       setIsSubmitting(true)
       try {
+        await updateUserProfile(user.id, {
+          first_name: data.firstName,
+          last_name: data.lastName,
+          email: data.email,
+          phone: data.phone || null,
+          country: data.country,
+          status: data.status as 'active' | 'disabled' | 'suspended',
+        })
         await updateUserGroup(user.id, {
           group_id: data.group,
           min_leverage: data.minLeverage,
@@ -137,7 +148,13 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
         await updateUserPermissionProfile(user.id, permId)
         const groupName = groups.find((g) => g.id === data.group)?.name ?? ''
         const permissionProfileName = permId ? permissionProfiles.find((p) => p.id === permId)?.name ?? undefined : undefined
+        const newName = `${data.firstName} ${data.lastName}`.trim() || user.name
         onUserUpdate?.(user.id, {
+          name: newName,
+          email: data.email,
+          phone: data.phone,
+          country: data.country,
+          status: data.status as 'active' | 'disabled' | 'suspended',
           group: data.group,
           groupName,
           leverageLimitMin: data.minLeverage,
@@ -151,6 +168,12 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
             u.id === user.id
               ? {
                   ...u,
+                  first_name: data.firstName,
+                  last_name: data.lastName,
+                  email: data.email,
+                  phone: data.phone ?? null,
+                  country: data.country ?? null,
+                  status: data.status,
                   group_id: data.group,
                   group_name: groupName,
                   min_leverage: data.minLeverage,

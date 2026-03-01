@@ -53,11 +53,28 @@ export function AffiliateDetailsModal({ user, onClose }: AffiliateDetailsModalPr
                 <span className="text-white">{displayName(user)}</span>
               </div>
               <div>
+                <span className="text-slate-400 block mb-1">Scheme</span>
+                <span className="text-white">—</span>
+              </div>
+              <div>
                 <span className="text-slate-400 block mb-1">Status</span>
                 <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border border-green-500/50 bg-green-500/20 text-green-400">
                   <CheckCircle className="w-3 h-3 mr-1" />
                   Active
                 </span>
+              </div>
+            </div>
+          </section>
+          <section className="bg-slate-700 p-3 sm:p-4 md:p-6 rounded-lg">
+            <h3 className="text-sm sm:text-base font-semibold text-white mb-3 sm:mb-4">Timeline</h3>
+            <div className="space-y-2 text-sm">
+              <div>
+                <span className="text-slate-400 block mb-1">Created</span>
+                <span className="text-white">—</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block mb-1">Last updated</span>
+                <span className="text-white">—</span>
               </div>
             </div>
           </section>

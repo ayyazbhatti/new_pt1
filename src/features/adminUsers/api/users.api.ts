@@ -1,5 +1,32 @@
 import { http } from '@/shared/api/http'
 
+export interface UpdateUserProfilePayload {
+  first_name: string
+  last_name: string
+  email?: string
+  phone?: string | null
+  country?: string
+  status?: 'active' | 'disabled' | 'suspended'
+}
+
+export async function updateUserProfile(
+  userId: string,
+  payload: UpdateUserProfilePayload
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    first_name: payload.first_name.trim(),
+    last_name: payload.last_name.trim(),
+  }
+  if (payload.email !== undefined) body.email = payload.email.trim() || null
+  if (payload.phone !== undefined) body.phone = payload.phone?.trim() ?? null
+  if (payload.country !== undefined) body.country = payload.country?.trim() ?? null
+  if (payload.status !== undefined) body.status = payload.status
+  await http(`/api/admin/users/${userId}/profile`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
 export interface UpdateUserGroupPayload {
   group_id: string
   min_leverage?: number

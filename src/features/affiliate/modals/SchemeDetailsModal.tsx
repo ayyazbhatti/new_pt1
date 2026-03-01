@@ -40,17 +40,34 @@ export function SchemeDetailsModal({ layer, onClose }: SchemeDetailsModalProps) 
                 </span>
               </div>
               <div>
+                <span className="text-slate-400 block mb-1">Cookie duration</span>
+                <span className="text-white">0 days</span>
+              </div>
+              <div>
                 <span className="text-slate-400 block mb-1">Commission levels</span>
                 <span className="text-white">1</span>
               </div>
             </div>
           </section>
           <section className="bg-slate-700 p-3 sm:p-4 md:p-6 rounded-lg mb-4">
-            <h3 className="text-sm sm:text-base font-semibold text-white mb-3 sm:mb-4">Commission Structure</h3>
-            <div className="flex items-center gap-2 p-3 bg-slate-800/50 rounded-lg">
+            <h3 className="text-sm sm:text-base md:text-lg font-semibold text-white mb-3 sm:mb-4">Commission Structure</h3>
+            <div className="flex items-center gap-2 p-3 sm:p-4 bg-slate-800/50 rounded-lg">
               <span className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 text-sm font-bold">1</span>
               <span className="text-white">Level 1</span>
               <span className="text-green-400 font-medium">{layer.commissionPercent}%</span>
+            </div>
+          </section>
+          <section className="bg-slate-700 p-3 sm:p-4 md:p-6 rounded-lg mb-4">
+            <h3 className="text-sm sm:text-base md:text-lg font-semibold text-white mb-3 sm:mb-4">Qualification Requirements</h3>
+            <div className="space-y-2 text-sm">
+              <div>
+                <span className="text-slate-400 block mb-1">Min active users</span>
+                <span className="text-white">0</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block mb-1">Min volume</span>
+                <span className="text-white">$0</span>
+              </div>
             </div>
           </section>
           <section className="bg-slate-700 p-3 sm:p-4 md:p-6 rounded-lg">

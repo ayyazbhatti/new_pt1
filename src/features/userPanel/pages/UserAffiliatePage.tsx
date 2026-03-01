@@ -1,55 +1,153 @@
 import { useState, useMemo } from 'react'
-import { ContentShell, PageHeader } from '@/shared/layout'
-import { Card } from '@/shared/ui/card'
-import { Button } from '@/shared/ui/button'
-import { Input } from '@/shared/ui/input'
+import { ContentShell } from '@/shared/layout'
+import {
+  DollarSign,
+  Users,
+  TrendingUp,
+  CheckCircle,
+  Plus,
+  Share2,
+  XCircle,
+} from 'lucide-react'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useMyReferrals } from '../hooks/useMyReferrals'
-import {
-  UsersRound,
-  DollarSign,
-  Copy,
-  Check,
-  Gift,
-  BarChart3,
-  ChevronRight,
-} from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
 
-function StatCard({
-  title,
-  value,
-  subtext,
-  icon: Icon,
-}: {
-  title: string
-  value: string
-  subtext?: string
-  icon: React.ElementType
-}) {
+type UserTab = 'overview' | 'referrals' | 'commissions'
+
+// Placeholder commission structure (UI only; could come from scheme in future)
+const DEFAULT_LEVELS = [
+  { level: 1, percent: 10, label: 'Direct referrals' },
+  { level: 2, percent: 5, label: 'Sub-referrals' },
+  { level: 3, percent: 2, label: 'Nested referrals' },
+]
+
+// Placeholder commissions (UI only)
+const PLACEHOLDER_COMMISSIONS: { id: string; amount: string; basis: string; status: 'Paid' | 'Approved' | 'Accrued'; date: string }[] = []
+
+function StatusBadge({ status }: { status: 'Paid' | 'Approved' | 'Accrued' | string }) {
+  const styles =
+    status === 'Paid'
+      ? 'bg-green-500/20 text-green-400 border-green-500/50'
+      : status === 'Approved'
+        ? 'bg-blue-500/20 text-blue-400 border-blue-500/50'
+        : status === 'Accrued'
+          ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50'
+          : 'bg-slate-500/20 text-slate-400 border-slate-500/50'
   return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-text-muted">{title}</p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-text">{value}</p>
-          {subtext && <p className="mt-0.5 text-xs text-text-muted">{subtext}</p>}
+    <span
+      className={cn(
+        'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border',
+        styles
+      )}
+    >
+      {status}
+    </span>
+  )
+}
+
+interface JoinAffiliateModalProps {
+  onClose: () => void
+  onJoin?: (schemeId?: string) => void
+  assignedSchemeName?: string | null
+  assignedGroupName?: string | null
+}
+
+function JoinAffiliateModal({
+  onClose,
+  onJoin,
+  assignedSchemeName,
+  assignedGroupName,
+}: JoinAffiliateModalProps) {
+  const [loading] = useState(false)
+  const schemes: { id: string; name: string; levels: string }[] = [] // Would come from API
+
+  const hasAssigned = assignedSchemeName && assignedSchemeName.length > 0
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-2 sm:p-4">
+      <div className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 w-full max-w-[calc(100vw-1rem)] sm:max-w-md border border-slate-700 max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base sm:text-lg md:text-xl font-bold text-white">
+            Join Affiliate Program
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 sm:p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white"
+          >
+            <XCircle className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
         </div>
-        <div className="rounded-lg bg-surface-2 p-2.5 shrink-0">
-          <Icon className="h-5 w-5 text-accent" />
-        </div>
+
+        {hasAssigned ? (
+          <>
+            <div className="bg-slate-700/50 rounded-lg p-3 sm:p-4 border border-slate-600 mb-4 text-left">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-sm sm:text-base text-white">
+                  {assignedSchemeName}
+                </span>
+                <span className="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-medium rounded-full border border-blue-500/50">
+                  Assigned
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-300 mt-1">1: 10%, 2: 5%</p>
+              {assignedGroupName && (
+                <p className="text-xs text-slate-400 mt-1">
+                  Assigned to your group: {assignedGroupName}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => onJoin?.()}
+              className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm sm:text-base font-medium"
+            >
+              Join This Scheme
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-xs sm:text-sm text-slate-400 mb-4">
+              Select a commission scheme to join the affiliate program:
+            </p>
+            {loading ? (
+              <p className="text-sm text-slate-400">Loading schemes...</p>
+            ) : schemes.length === 0 ? (
+              <p className="text-red-400 text-sm">No schemes available</p>
+            ) : (
+              <div className="space-y-2">
+                {schemes.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => onJoin?.(s.id)}
+                    className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-left"
+                  >
+                    <span className="font-semibold text-sm sm:text-base block">{s.name}</span>
+                    <span className="text-xs sm:text-sm text-blue-200 break-words">{s.levels}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
-    </Card>
+    </div>
   )
 }
 
 export function UserAffiliatePage() {
   const user = useAuthStore((state) => state.user)
   const [copied, setCopied] = useState(false)
-  const { data: referrals = [], isLoading: referralsLoading, error: referralsError } = useMyReferrals()
+  const [joinModalOpen, setJoinModalOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<UserTab>('overview')
 
+  const { data: referrals = [], isLoading: referralsLoading } = useMyReferrals()
+
+  const isEnrolled = Boolean(user?.referralCode)
   const refCode = user?.referralCode || (user?.id ? user.id.slice(0, 8) : '')
   const referralUrl =
     refCode && typeof window !== 'undefined'
@@ -58,12 +156,12 @@ export function UserAffiliatePage() {
         ? `https://example.com/register?ref=${encodeURIComponent(refCode)}`
         : ''
 
-  const levelCounts = useMemo(() => {
-    const l1 = referrals.filter((r) => (typeof r.level === 'number' ? r.level : 1) === 1).length
-    const l2 = referrals.filter((r) => (typeof r.level === 'number' ? r.level : 1) === 2).length
-    const l3 = referrals.filter((r) => (typeof r.level === 'number' ? r.level : 1) === 3).length
-    return { level1: l1, level2: l2, level3: l3 }
-  }, [referrals])
+  const activeCount = useMemo(
+    () => referrals.filter((r) => (r as { active?: boolean }).active !== false).length,
+    [referrals]
+  )
+  const totalCommission = '$0.00'
+  const paidCommission = '$0.00'
 
   const handleCopy = () => {
     navigator.clipboard
@@ -76,223 +174,377 @@ export function UserAffiliatePage() {
       .catch(() => toast.error('Failed to copy'))
   }
 
-  return (
-    <ContentShell>
-      <PageHeader
-        title="Affiliate Dashboard"
-        description="Manage your referral program"
-      />
+  const handleJoin = () => {
+    setJoinModalOpen(false)
+    toast.success('Joined affiliate program')
+  }
 
-      {/* Top stats — 4 cards */}
-      <section className="mb-8">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            title="Affiliate Balance"
-            value="$0.00"
-            subtext="Available for withdrawal"
-            icon={DollarSign}
-          />
-          <StatCard
-            title="Level 1"
-            value={referralsLoading ? '…' : String(levelCounts.level1)}
-            subtext="Referrals"
-            icon={UsersRound}
-          />
-          <StatCard
-            title="Level 2"
-            value={referralsLoading ? '…' : String(levelCounts.level2)}
-            subtext="Referrals"
-            icon={UsersRound}
-          />
-          <StatCard
-            title="Level 3"
-            value={referralsLoading ? '…' : String(levelCounts.level3)}
-            subtext="Referrals"
-            icon={UsersRound}
-          />
+  // —— Not enrolled state ——
+  if (!isEnrolled) {
+    const assignedSchemeName: string | null = null
+    const assignedGroupName: string | null = null
+
+    return (
+      <ContentShell className="space-y-4 sm:space-y-6">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-white">Affiliate Program</h1>
+          <p className="text-xs sm:text-sm text-slate-400 mt-1">
+            Join our affiliate program and start earning commissions
+          </p>
         </div>
-      </section>
 
-      {/* Your referral link */}
-      <section className="mb-8">
-        <h2 className="mb-1 text-lg font-semibold text-text">Your Referral Link</h2>
-        <p className="mb-4 text-sm text-text-muted">Share this link to earn commissions</p>
-        <Card className="p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <Input
-              readOnly
-              value={referralUrl}
-              className="flex-1 font-mono text-sm bg-surface-2/50 border-border"
-            />
-            <Button
-              variant="outline"
-              size="default"
-              onClick={handleCopy}
-              className="shrink-0 sm:w-auto"
-            >
-              {copied ? (
-                <>
-                  <Check className="mr-2 h-4 w-4 text-success" />
-                  Copied
-                </>
-              ) : (
-                <>
-                  <Copy className="mr-2 h-4 w-4" />
-                  Copy
-                </>
-              )}
-            </Button>
+        <div className="bg-slate-800 rounded-lg p-4 sm:p-6 md:p-8 border border-slate-700 text-center">
+          <div className="p-3 sm:p-4 bg-blue-500/10 rounded-full w-12 h-12 sm:w-16 sm:h-16 mx-auto mb-3 sm:mb-4 flex items-center justify-center">
+            <DollarSign className="w-6 h-6 sm:w-8 sm:h-8 text-blue-400" />
           </div>
-          {refCode && (
-            <p className="mt-4 text-sm text-text-muted">
-              Your referral code: <span className="font-mono font-medium text-text">{refCode}</span>
-            </p>
-          )}
-        </Card>
-      </section>
-
-      {/* Quick Actions + Recent Activity */}
-      <section className="mb-8 grid gap-6 lg:grid-cols-2">
-        <Card className="p-5">
-          <h3 className="mb-4 text-base font-semibold text-text">Quick Actions</h3>
-          <ul className="space-y-1">
-            <li>
-              <a
-                href="#referred-users"
-                className={cn(
-                  'flex items-center justify-between rounded-lg px-3 py-2.5 text-sm text-text',
-                  'hover:bg-surface-2/50 transition-colors'
-                )}
-              >
-                <span className="flex items-center gap-3">
-                  <UsersRound className="h-4 w-4 text-accent" />
-                  View Referrals
-                </span>
-                <ChevronRight className="h-4 w-4 text-text-muted" />
-              </a>
-            </li>
-            <li>
-              <span
-                className={cn(
-                  'flex items-center justify-between rounded-lg px-3 py-2.5 text-sm text-text-muted cursor-not-allowed'
-                )}
-                title="Coming soon"
-              >
-                <span className="flex items-center gap-3">
-                  <BarChart3 className="h-4 w-4" />
-                  Commission History
-                </span>
-                <ChevronRight className="h-4 w-4" />
-              </span>
-            </li>
-            <li>
-              <span
-                className={cn(
-                  'flex items-center justify-between rounded-lg px-3 py-2.5 text-sm text-text-muted cursor-not-allowed'
-                )}
-                title="Coming soon"
-              >
-                <span className="flex items-center gap-3">
-                  <DollarSign className="h-4 w-4" />
-                  Request Withdrawal
-                </span>
-                <ChevronRight className="h-4 w-4" />
-              </span>
-            </li>
-          </ul>
-        </Card>
-        <Card className="p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-text">Recent Activity</h3>
-            <span className="text-xs text-text-muted">View all transactions →</span>
-          </div>
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <p className="text-sm text-text-muted">No recent activity</p>
-            <p className="mt-1 text-xs text-text-muted">
-              Commissions and payouts will appear here
-            </p>
-          </div>
-        </Card>
-      </section>
-
-      {/* Referred users table */}
-      <section id="referred-users" className="mb-8 scroll-mt-6">
-        <h2 className="mb-4 text-lg font-semibold text-text">Referred users</h2>
-        <Card className="overflow-hidden">
-          {referralsError && (
-            <div className="border-b border-border bg-danger/10 px-4 py-2 text-sm text-danger">
-              {(referralsError as Error).message}
-            </div>
-          )}
-          {referralsLoading ? (
-            <div className="flex items-center justify-center py-12 text-text-muted">
-              Loading…
-            </div>
-          ) : referrals.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <UsersRound className="mb-3 h-10 w-10 text-text-muted/50" />
-              <p className="text-sm font-medium text-text-muted">No referrals yet</p>
-              <p className="mt-1 text-xs text-text-muted">
-                People who sign up using your link will appear here.
+          <h2 className="text-base sm:text-xl font-semibold text-white mb-2">
+            Join Affiliate Program
+          </h2>
+          {assignedSchemeName ? (
+            <>
+              <p className="text-xs sm:text-sm text-slate-400 mb-4 sm:mb-6">
+                You can join the affiliate scheme assigned to your group:
               </p>
-            </div>
+              <div className="bg-slate-700/50 rounded-lg p-3 sm:p-4 border border-slate-600 mb-4 sm:mb-6 text-left max-w-md mx-auto">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-sm sm:text-base text-white">
+                    {assignedSchemeName}
+                  </span>
+                  <span className="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-medium rounded-full border border-blue-500/50">
+                    Assigned
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm text-slate-300 mt-1">1: X%, 2: Y%, …</p>
+                {assignedGroupName && (
+                  <p className="text-xs text-slate-400 mt-1">
+                    Assigned to your group: {assignedGroupName}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setJoinModalOpen(true)}
+                className="px-4 sm:px-6 py-2 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center space-x-2 mx-auto text-sm sm:text-base"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Join This Scheme</span>
+              </button>
+            </>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="border-b border-border bg-surface-2">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-medium text-text-muted">User</th>
-                    <th className="px-4 py-3 text-left font-medium text-text-muted">Email</th>
-                    <th className="px-4 py-3 text-left font-medium text-text-muted">Level</th>
-                    <th className="px-4 py-3 text-left font-medium text-text-muted">Signed up</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {referrals.map((r) => (
-                    <tr key={r.id} className="hover:bg-surface-2/30">
-                      <td className="px-4 py-3 font-medium text-text">
-                        {[r.firstName, r.lastName].filter(Boolean).join(' ') || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-text-muted">{r.email}</td>
-                      <td className="px-4 py-3">
-                        <span className="inline-flex items-center rounded-md bg-surface-2 px-2 py-0.5 text-xs font-medium text-text">
-                          Level {typeof r.level === 'number' ? r.level : 1}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-text-muted">
-                        {r.createdAt ? format(new Date(r.createdAt), 'MMM d, yyyy HH:mm') : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <p className="text-xs sm:text-sm text-slate-400 mb-4 sm:mb-6">
+                Start earning commissions by referring new users to our platform
+              </p>
+              <button
+                type="button"
+                onClick={() => setJoinModalOpen(true)}
+                className="px-4 sm:px-6 py-2 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center space-x-2 mx-auto text-sm sm:text-base"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Join Now</span>
+              </button>
+            </>
           )}
-        </Card>
-      </section>
+        </div>
 
-      {/* How it works — at the end */}
-      <section>
-        <h2 className="mb-4 text-lg font-semibold text-text">How it works</h2>
-        <Card className="p-6">
-          <div className="flex items-start gap-4">
-            <div className="rounded-lg bg-accent/10 p-3">
-              <Gift className="h-6 w-6 text-accent" />
-            </div>
-            <div className="min-w-0 flex-1 space-y-2 text-sm text-text-muted">
-              <p className="font-medium text-text">Earn with every referral</p>
-              <ul className="list-inside list-disc space-y-1">
-                <li>Share your unique link with friends and contacts.</li>
-                <li>When they register and start trading, you receive a commission.</li>
-                <li>Payouts are processed according to the program terms.</li>
-              </ul>
-              <p className="pt-2 text-xs">
-                Commission rates and payout schedule will be configured by the backend.
+        {joinModalOpen && (
+          <JoinAffiliateModal
+            onClose={() => setJoinModalOpen(false)}
+            onJoin={handleJoin}
+            assignedSchemeName={assignedSchemeName}
+            assignedGroupName={assignedGroupName}
+          />
+        )}
+      </ContentShell>
+    )
+  }
+
+  // —— Enrolled state: dashboard ——
+  const tabStyles = (active: boolean) =>
+    active
+      ? 'bg-blue-600 text-white'
+      : 'text-slate-400 hover:text-white hover:bg-slate-700'
+
+  return (
+    <ContentShell className="space-y-4 sm:space-y-6">
+      <div>
+        <h1 className="text-xl sm:text-2xl font-bold text-white">Affiliate Program</h1>
+        <p className="text-xs sm:text-sm text-slate-400 mt-1">
+          Manage your affiliate and referral program
+        </p>
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
+        <div className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 border border-slate-700">
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
+              <p className="text-xs sm:text-sm font-medium text-slate-400 truncate">
+                Total Referrals
+              </p>
+              <p className="text-lg sm:text-xl md:text-2xl font-bold text-white mt-1 truncate">
+                {referralsLoading ? '…' : referrals.length}
               </p>
             </div>
+            <div className="p-2 sm:p-2.5 md:p-3 rounded-lg text-blue-400 bg-blue-400/10">
+              <Users className="w-5 h-5 md:w-6 md:h-6" />
+            </div>
           </div>
-        </Card>
-      </section>
+        </div>
+        <div className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 border border-slate-700">
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
+              <p className="text-xs sm:text-sm font-medium text-slate-400 truncate">
+                Active Referrals
+              </p>
+              <p className="text-lg sm:text-xl md:text-2xl font-bold text-green-400 mt-1 truncate">
+                {referralsLoading ? '…' : activeCount}
+              </p>
+            </div>
+            <div className="p-2 sm:p-2.5 md:p-3 rounded-lg text-green-400 bg-green-400/10">
+              <TrendingUp className="w-5 h-5 md:w-6 md:h-6" />
+            </div>
+          </div>
+        </div>
+        <div className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 border border-slate-700">
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
+              <p className="text-xs sm:text-sm font-medium text-slate-400 truncate">
+                Total Commission
+              </p>
+              <p className="text-lg sm:text-xl md:text-2xl font-bold text-white mt-1 truncate">
+                {totalCommission}
+              </p>
+            </div>
+            <div className="p-2 sm:p-2.5 md:p-3 rounded-lg text-purple-400 bg-purple-400/10">
+              <DollarSign className="w-5 h-5 md:w-6 md:h-6" />
+            </div>
+          </div>
+        </div>
+        <div className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 border border-slate-700">
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
+              <p className="text-xs sm:text-sm font-medium text-slate-400 truncate">
+                Paid Commission
+              </p>
+              <p className="text-lg sm:text-xl md:text-2xl font-bold text-green-400 mt-1 truncate">
+                {paidCommission}
+              </p>
+            </div>
+            <div className="p-2 sm:p-2.5 md:p-3 rounded-lg text-green-400 bg-green-400/10">
+              <CheckCircle className="w-5 h-5 md:w-6 md:h-6" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Affiliate link section */}
+      <div className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 border border-slate-700">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="p-1.5 sm:p-2 bg-blue-500/10 rounded-lg">
+            <Share2 className="w-4 h-4 sm:w-5 sm:h-5 text-blue-400" />
+          </div>
+          <div>
+            <h2 className="text-base sm:text-lg font-semibold text-white">Your Affiliate Link</h2>
+            <p className="text-xs sm:text-sm text-slate-400">Share this link to earn commissions</p>
+          </div>
+        </div>
+        <div className="bg-slate-700/50 rounded-lg p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <p className="text-xs text-slate-400 mb-1">Affiliate Code</p>
+            <p className="text-base sm:text-lg font-mono font-medium text-white break-all">
+              {refCode}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center justify-center space-x-2 text-sm sm:text-base shrink-0"
+          >
+            {copied ? (
+              <>
+                <CheckCircle className="w-4 h-4" />
+                <span>Copied!</span>
+              </>
+            ) : (
+              <>
+                <Share2 className="w-4 h-4" />
+                <span>Copy Link</span>
+              </>
+            )}
+          </button>
+        </div>
+        <div className="mt-3 sm:mt-4 bg-slate-700/50 rounded-lg p-3 sm:p-4">
+          <p className="text-xs text-slate-400 mb-1">Referral Link</p>
+          <p className="text-xs sm:text-sm text-slate-300 break-all">{referralUrl}</p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex space-x-1 bg-slate-800 p-1 rounded-lg overflow-x-auto scrollbar-hide">
+        {[
+          { id: 'overview' as const, label: 'Overview', icon: DollarSign },
+          { id: 'referrals' as const, label: 'Referrals', icon: Users },
+          { id: 'commissions' as const, label: 'Commissions', icon: TrendingUp },
+        ].map((tab) => {
+          const Icon = tab.icon
+          const isActive = activeTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'flex items-center space-x-1 sm:space-x-2 px-2 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium flex-shrink-0',
+                tabStyles(isActive)
+              )}
+            >
+              <Icon className="w-3 h-3 sm:w-4 sm:h-4" />
+              <span>{tab.label}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Tab content */}
+      {activeTab === 'overview' && (
+        <div className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 border border-slate-700">
+          <h3 className="text-base sm:text-lg font-semibold text-white mb-3 sm:mb-4">
+            Commission Structure
+          </h3>
+          {DEFAULT_LEVELS.length === 0 ? (
+            <p className="text-slate-400 text-sm">No commission structure available</p>
+          ) : (
+            <div className="space-y-2">
+              {DEFAULT_LEVELS.map((lev) => (
+                <div
+                  key={lev.level}
+                  className="p-3 sm:p-4 bg-slate-700/50 rounded-lg flex items-center justify-between"
+                >
+                  <div>
+                    <p className="text-xs sm:text-sm font-medium text-white">
+                      Level {lev.level} Commission
+                    </p>
+                    <p className="text-xs text-slate-400">{lev.label}</p>
+                  </div>
+                  <span
+                    className={cn(
+                      'text-base sm:text-lg font-bold',
+                      lev.level === 1 && 'text-green-400',
+                      lev.level === 2 && 'text-blue-400',
+                      lev.level >= 3 && 'text-purple-400'
+                    )}
+                  >
+                    {lev.percent}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'referrals' && (
+        <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
+          <div className="p-3 sm:p-4 md:p-6 border-b border-slate-700">
+            <h3 className="text-base sm:text-lg font-semibold text-white">My Referrals</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[600px]">
+              <thead className="bg-slate-700/50">
+                <tr>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    User Email
+                  </th>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    Level
+                  </th>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    Referred Date
+                  </th>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    Total Commission
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700">
+                {referrals.map((r) => (
+                  <tr key={r.id} className="hover:bg-slate-700/50">
+                    <td className="px-3 sm:px-4 md:px-6 py-3 text-white">{r.email}</td>
+                    <td className="px-3 sm:px-4 md:px-6 py-3">
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border border-slate-600 text-slate-300">
+                        Level {typeof r.level === 'number' ? r.level : 1}
+                      </span>
+                    </td>
+                    <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-400">
+                      {r.createdAt ? format(new Date(r.createdAt), 'PP') : '—'}
+                    </td>
+                    <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-300">$0.00</td>
+                  </tr>
+                ))}
+                {referrals.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-8 text-center text-slate-400 text-sm">
+                      No referrals yet
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'commissions' && (
+        <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
+          <div className="p-3 sm:p-4 md:p-6 border-b border-slate-700">
+            <h3 className="text-base sm:text-lg font-semibold text-white">Commission History</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[600px]">
+              <thead className="bg-slate-700/50">
+                <tr>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    Amount
+                  </th>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    Basis
+                  </th>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                    Date
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700">
+                {PLACEHOLDER_COMMISSIONS.map((c) => (
+                  <tr key={c.id} className="hover:bg-slate-700/50">
+                    <td className="px-3 sm:px-4 md:px-6 py-3 font-mono text-white">{c.amount}</td>
+                    <td className="px-3 sm:px-4 md:px-6 py-3">
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border border-slate-600 text-slate-300">
+                        {c.basis}
+                      </span>
+                    </td>
+                    <td className="px-3 sm:px-4 md:px-6 py-3">
+                      <StatusBadge status={c.status} />
+                    </td>
+                    <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-400">{c.date}</td>
+                  </tr>
+                ))}
+                {PLACEHOLDER_COMMISSIONS.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-8 text-center text-slate-400 text-sm">
+                      No commissions yet
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </ContentShell>
   )
 }

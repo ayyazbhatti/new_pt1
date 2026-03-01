@@ -291,10 +291,18 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  openModal(`edit-user-${user.id}`, <CreateEditUserModal user={userState} />, {
-                    title: 'Edit Profile',
-                    size: 'md',
-                  })
+                  openModal(
+                    `edit-user-${user.id}`,
+                    <CreateEditUserModal
+                      user={userState}
+                      onUserUpdate={(userId, updates) => {
+                        if (userId === user.id) {
+                          setUserState((prev) => ({ ...prev, ...updates }))
+                        }
+                      }}
+                    />,
+                    { title: 'Edit Profile', size: 'md' }
+                  )
                 }}
               >
                 <Edit className="h-4 w-4 mr-2" />

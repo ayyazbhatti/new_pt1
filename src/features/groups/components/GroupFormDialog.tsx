@@ -135,52 +135,53 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           <p className="text-xs text-text-muted">Used in signup URL: /register?ref=<strong>{watch('signup_slug')?.trim() || '&lt;slug&gt;'}</strong>. 3-20 letters/numbers. Create: leave empty to auto-generate.</p>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="status">Status *</Label>
-          <Select
-            value={watch('status')}
-            onValueChange={(value) => setValue('status', value as 'active' | 'disabled')}
-            disabled={isLoading || isReadOnly}
-          >
-            <SelectTrigger id="status">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="disabled">Disabled</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="status">Status *</Label>
+            <Select
+              value={watch('status')}
+              onValueChange={(value) => setValue('status', value as 'active' | 'disabled')}
+              disabled={isLoading || isReadOnly}
+            >
+              <SelectTrigger id="status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="disabled">Disabled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="margin_call_level">Margin call level (%)</Label>
+            <Input
+              id="margin_call_level"
+              type="number"
+              min={0}
+              max={1000}
+              step={0.5}
+              placeholder="e.g. 50 (empty = default)"
+              disabled={isLoading || isReadOnly}
+              {...register('margin_call_level', { setValueAs: (v) => (v === '' || Number.isNaN(Number(v)) ? undefined : Number(v)) })}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="stop_out_level">Stop out level (%)</Label>
+            <Input
+              id="stop_out_level"
+              type="number"
+              min={0}
+              max={1000}
+              step={0.5}
+              placeholder="e.g. 20 (empty = off)"
+              disabled={isLoading || isReadOnly}
+              {...register('stop_out_level', { setValueAs: (v) => (v === '' || Number.isNaN(Number(v)) ? undefined : Number(v)) })}
+            />
+          </div>
         </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="margin_call_level">Margin call level (%)</Label>
-          <Input
-            id="margin_call_level"
-            type="number"
-            min={0}
-            max={1000}
-            step={0.5}
-            placeholder="e.g. 50 (empty = platform default)"
-            disabled={isLoading || isReadOnly}
-            {...register('margin_call_level', { setValueAs: (v) => (v === '' || Number.isNaN(Number(v)) ? undefined : Number(v)) })}
-          />
-          <p className="text-xs text-text-muted">When user margin level falls below this %, they see a margin call warning. Leave empty for default (50%).</p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="stop_out_level">Stop out level (%)</Label>
-          <Input
-            id="stop_out_level"
-            type="number"
-            min={0}
-            max={1000}
-            step={0.5}
-            placeholder="e.g. 20 (empty = no automatic stop out)"
-            disabled={isLoading || isReadOnly}
-            {...register('stop_out_level', { setValueAs: (v) => (v === '' || Number.isNaN(Number(v)) ? undefined : Number(v)) })}
-          />
-          <p className="text-xs text-text-muted">When user margin level falls below this %, all their positions are closed automatically. Leave empty to disable. Should be lower than margin call level.</p>
-        </div>
+        <p className="text-xs text-text-muted">
+          Margin call: when user margin level falls below this %, they see a margin call warning. Leave empty for default (50%). Stop out: when margin falls below this %, positions are closed automatically. Leave empty to disable. Stop out should be lower than margin call.
+        </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button

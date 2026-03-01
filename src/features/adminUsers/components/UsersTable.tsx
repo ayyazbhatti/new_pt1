@@ -310,7 +310,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
           null
 
         return (
-          <div className="whitespace-nowrap min-w-[150px]">
+          <div className="whitespace-nowrap min-w-[150px]" onClick={(e) => e.stopPropagation()}>
             <Select
               value={currentGroupId || undefined}
               onValueChange={(value) => handleGroupChange(user.id, user.name, value)}
@@ -350,7 +350,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
         const disabled = isUpdating || hasOpenPositions
         return (
-          <div className="whitespace-nowrap min-w-[130px]">
+          <div className="whitespace-nowrap min-w-[130px]" onClick={(e) => e.stopPropagation()}>
             <Select
               value={currentType}
               onValueChange={(value) =>
@@ -396,7 +396,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
         const disabled = isUpdating || hasOpenPositions
         return (
-          <div className="whitespace-nowrap min-w-[100px]">
+          <div className="whitespace-nowrap min-w-[100px]" onClick={(e) => e.stopPropagation()}>
             <Select
               value={currentType}
               onValueChange={(value) =>
@@ -440,7 +440,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const currentAccess = user.tradingAccess ?? 'full'
         const isUpdating = updatingTradingAccess.has(user.id)
         return (
-          <div className="whitespace-nowrap min-w-[140px]">
+          <div className="whitespace-nowrap min-w-[140px]" onClick={(e) => e.stopPropagation()}>
             <Select
               value={currentAccess}
               onValueChange={(value) =>
@@ -531,7 +531,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       cell: ({ row }) => {
         const user = row.original
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
             <Button
               variant="ghost"
               size="sm"
@@ -595,6 +595,12 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     },
   ]
 
-  return <DataTable data={users} columns={columns} />
+  return (
+    <DataTable
+      data={users}
+      columns={columns}
+      onRowClick={handleView}
+    />
+  )
 }
 

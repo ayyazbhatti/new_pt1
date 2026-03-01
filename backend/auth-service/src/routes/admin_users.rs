@@ -47,6 +47,17 @@ pub struct UpdateUserPermissionProfileRequest {
     pub permission_profile_id: Option<Uuid>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserProfileRequest {
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub country: Option<String>,
+    /// One of: active, disabled, suspended
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
@@ -78,6 +89,7 @@ pub struct SendNotifyResponse {
 
 pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) -> Router<PgPool> {
     Router::new()
+        .route("/:id/profile", put(update_user_profile))
         .route("/:id/group", put(update_user_group))
         .route("/:id/account-type", put(update_user_account_type))
         .route("/:id/margin-calculation-type", put(update_user_margin_calculation_type))
@@ -257,6 +269,128 @@ async fn impersonate_user(
         access_token,
         refresh_token,
     }))
+}
+
+async fn update_user_profile(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserProfileRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can update user profile".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    if let Some(ref s) = payload.status {
+        let s = s.trim().to_lowercase();
+        if s != "active" && s != "disabled" && s != "suspended" {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "INVALID_STATUS".to_string(),
+                        message: "status must be one of: active, disabled, suspended".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    let first_name = payload.first_name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let last_name = payload.last_name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let email = payload.email.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let phone = payload.phone.as_deref().map(|s| s.trim());
+    let country = payload.country.as_deref().map(|s| s.trim());
+    let status = payload.status.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+
+    let rows = sqlx::query(
+        r#"
+        UPDATE users SET
+            first_name = COALESCE($1, first_name),
+            last_name = COALESCE($2, last_name),
+            email = COALESCE($3, email),
+            phone = COALESCE($4, phone),
+            country = COALESCE($5, country),
+            status = COALESCE($6::user_status, status),
+            updated_at = NOW()
+        WHERE id = $7 AND deleted_at IS NULL
+        "#,
+    )
+    .bind(first_name)
+    .bind(last_name)
+    .bind(email)
+    .bind(phone)
+    .bind(country)
+    .bind(status)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if rows.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "User profile updated successfully"
+    })))
 }
 
 async fn update_user_group(
