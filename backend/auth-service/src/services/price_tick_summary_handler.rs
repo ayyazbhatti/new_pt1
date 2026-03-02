@@ -90,25 +90,32 @@ impl PriceTickSummaryHandler {
             .ok_or_else(|| anyhow::anyhow!("Missing symbol"))?
             .to_string();
 
-        // Data-provider publishes ticks with Binance symbol (e.g. BTCUSDT); order-engine stores
-        // positions under internal symbol (BTCUSD). Normalize so we look up the correct key.
-        let symbol_for_positions = if symbol.ends_with("USDT") {
-            symbol.replace("USDT", "USD")
+        // Use payload symbol as-is: order-engine stores positions under pos:open:{symbol} (e.g. BTCUSDT).
+        // Build prices array: either from "prices" or from top-level "bid"/"ask" (legacy payload when price:groups is empty).
+        let prices_array: Vec<serde_json::Value> = if let Some(arr) = payload.get("prices").and_then(|v| v.as_array()) {
+            if arr.is_empty() {
+                return Ok(());
+            }
+            arr.clone()
         } else {
-            symbol.clone()
+            // Legacy format: { "symbol", "bid", "ask", "ts" } — single global price (e.g. when price:groups is empty)
+            let bid_val = payload.get("bid").ok_or_else(|| anyhow::anyhow!("Missing prices array and bid"))?;
+            let ask_val = payload.get("ask").ok_or_else(|| anyhow::anyhow!("Missing prices array and ask"))?;
+            let bid_s = bid_val
+                .as_str()
+                .map(String::from)
+                .or_else(|| bid_val.as_f64().map(|n| n.to_string()))
+                .unwrap_or_else(|| "0".to_string());
+            let ask_s = ask_val
+                .as_str()
+                .map(String::from)
+                .or_else(|| ask_val.as_f64().map(|n| n.to_string()))
+                .unwrap_or_else(|| "0".to_string());
+            vec![serde_json::json!({ "g": "", "bid": bid_s, "ask": ask_s })]
         };
 
-        let prices_array = payload
-            .get("prices")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Missing prices array"))?;
-
-        if prices_array.is_empty() {
-            return Ok(());
-        }
-
         let mut conn = self.redis.get_async_connection().await?;
-        let open_key = Keys::positions_open_by_symbol(&symbol_for_positions);
+        let open_key = Keys::positions_open_by_symbol(&symbol);
         let position_ids: Vec<String> = conn.zrange(&open_key, 0, -1).await.unwrap_or_default();
 
         if position_ids.is_empty() {
@@ -117,7 +124,7 @@ impl PriceTickSummaryHandler {
         debug!(
             "price:ticks account summary: {} positions for {} (key {})",
             position_ids.len(),
-            symbol_for_positions,
+            symbol,
             open_key
         );
 
@@ -167,7 +174,7 @@ impl PriceTickSummaryHandler {
             user_overrides
                 .entry(user_id)
                 .or_default()
-                .insert((symbol_for_positions.clone(), group_id), (bid, ask));
+                .insert((symbol.clone(), group_id), (bid, ask));
         }
 
         for (user_id, overrides) in user_overrides {

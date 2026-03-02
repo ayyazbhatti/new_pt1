@@ -288,7 +288,7 @@ impl PositionHandler {
             .get("reason")
             .and_then(|v| v.as_str())
             .unwrap_or("stop_out");
-        let is_liquidation = reason == "liquidated";
+        let is_liquidation = reason.eq_ignore_ascii_case("liquidated");
         info!("Received close_all_positions: user_id={}, correlation_id={}, reason={}", user_id, correlation_id, reason);
 
         use redis_model::keys::Keys;
@@ -338,7 +338,11 @@ impl PositionHandler {
                 (Some(s), Some(side)) => (s, side),
                 _ => continue,
             };
-            let tick = match self.cache.get_last_tick(&symbol, group_id.as_deref()) {
+            // Ticks from data-provider are cached under symbol only (no group). Fall back to symbol-level tick
+            // so positions with a group_id still get closed (same as single-position close path).
+            let tick = match self.cache.get_last_tick(&symbol, group_id.as_deref())
+                .or_else(|| self.cache.get_last_tick(&symbol, None))
+            {
                 Some(t) => t,
                 None => {
                     warn!("Close all: no tick for symbol {}, skipping position {}", symbol, position_id);

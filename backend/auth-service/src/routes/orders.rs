@@ -753,7 +753,264 @@ async fn cancel_order(
     }
 
     info!("Order cancelled: order_id={}, user_id={}", order_id, user_id);
-    Ok(StatusCode::OK)
+    // Return 204 No Content so the frontend does not try to parse a JSON body (cancel has no response body).
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ============================================================================
+// SYNC PENDING ORDERS (ADMIN) — recover orders that are pending in DB but missing in Redis
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPendingOrdersResponse {
+    pub synced: u32,
+    pub skipped: u32,
+    pub errors: u32,
+    pub order_ids_synced: Vec<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct PendingOrderRow {
+    id: Uuid,
+    user_id: Uuid,
+    symbol_code: String,
+    side: String,
+    order_type: String,
+    size: rust_decimal::Decimal,
+    price: Option<rust_decimal::Decimal>,
+    stop_price: Option<rust_decimal::Decimal>,
+    reference: Option<String>,
+    created_at: chrono::DateTime<Utc>,
+}
+
+async fn sync_pending_orders(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Extension(orders_state): Extension<OrdersState>,
+) -> Result<Json<SyncPendingOrdersResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": { "message": "Only admins can sync pending orders" }
+            })),
+        ));
+    }
+
+    let pending: Vec<PendingOrderRow> = sqlx::query_as(
+        r#"
+        SELECT o.id, o.user_id, s.code AS symbol_code,
+               o.side::text AS side, o.type::text AS order_type,
+               o.size, o.price, o.stop_price, o.reference, o.created_at
+        FROM orders o
+        JOIN symbols s ON s.id = o.symbol_id
+        WHERE o.status = 'pending'::order_status
+        ORDER BY o.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        error!("Sync pending orders: failed to fetch: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "message": "Failed to fetch pending orders" } })),
+        )
+    })?;
+
+    let mut conn = orders_state
+        .redis
+        .get_async_connection()
+        .await
+        .map_err(|e| {
+            error!("Sync pending orders: Redis connection failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": { "message": "Redis unavailable" } })),
+            )
+        })?;
+
+    let mut synced = 0u32;
+    let mut skipped = 0u32;
+    let mut errors = 0u32;
+    let mut order_ids_synced = Vec::new();
+
+    for row in pending {
+        let order_key = format!("order:{}", row.id);
+        let value: Option<String> = conn.get(&order_key).await.ok().flatten();
+        let exists = value.is_some();
+        if exists {
+            skipped += 1;
+            continue;
+        }
+
+        let side = match row.side.to_uppercase().as_str() {
+            "BUY" => Side::Buy,
+            "SELL" => Side::Sell,
+            _ => {
+                warn!("Sync: order {} has invalid side {}", row.id, row.side);
+                errors += 1;
+                continue;
+            }
+        };
+        let order_type = match row.order_type.to_uppercase().as_str() {
+            "MARKET" => OrderType::Market,
+            "LIMIT" => OrderType::Limit,
+            _ => {
+                warn!("Sync: order {} has invalid type {}", row.id, row.order_type);
+                errors += 1;
+                continue;
+            }
+        };
+
+        #[derive(sqlx::FromRow)]
+        struct UserLevRow {
+            min_leverage: Option<i32>,
+            max_leverage: Option<i32>,
+            account_type: Option<String>,
+            group_id: Option<Uuid>,
+        }
+        let user_lev: Option<UserLevRow> = sqlx::query_as(
+            r#"SELECT min_leverage, max_leverage, account_type, group_id FROM users WHERE id = $1"#,
+        )
+        .bind(row.user_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+        let (user_min_lev, user_max_lev, account_type, group_id) = user_lev
+            .as_ref()
+            .map(|r| (r.min_leverage, r.max_leverage, r.account_type.clone(), r.group_id))
+            .unwrap_or((None, None, None, None));
+        let account_type = account_type
+            .filter(|s| s == "hedging" || s == "netting")
+            .or_else(|| Some("hedging".to_string()));
+
+        #[derive(sqlx::FromRow)]
+        struct ProfileIdRow {
+            leverage_profile_id: Option<Uuid>,
+        }
+        let profile_row: Option<ProfileIdRow> = sqlx::query_as(
+            r#"
+            SELECT COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id
+            FROM users u
+            INNER JOIN user_groups ug ON ug.id = u.group_id
+            INNER JOIN symbols s ON LOWER(TRIM(s.code)) = LOWER(TRIM($2))
+            LEFT JOIN group_symbols gs ON gs.symbol_id = s.id AND gs.group_id = ug.id
+            WHERE u.id = $1
+            "#,
+        )
+        .bind(row.user_id)
+        .bind(&row.symbol_code)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+
+        let leverage_tiers: Option<Vec<CmdLeverageTier>> = match profile_row.and_then(|r| r.leverage_profile_id) {
+            Some(pid) => {
+                let tiers: Vec<LeverageProfileTier> = sqlx::query_as(
+                    r#"
+                    SELECT id, profile_id, tier_index,
+                        notional_from::text AS notional_from, notional_to::text AS notional_to,
+                        max_leverage, initial_margin_percent::text AS initial_margin_percent,
+                        maintenance_margin_percent::text AS maintenance_margin_percent,
+                        created_at, updated_at
+                    FROM leverage_profile_tiers WHERE profile_id = $1 ORDER BY tier_index ASC
+                    "#,
+                )
+                .bind(pid)
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_default();
+                if tiers.is_empty() {
+                    None
+                } else {
+                    Some(
+                        tiers
+                            .into_iter()
+                            .map(|t| CmdLeverageTier {
+                                notional_from: t.notional_from,
+                                notional_to: t.notional_to,
+                                max_leverage: t.max_leverage,
+                            })
+                            .collect(),
+                    )
+                }
+            }
+            None => None,
+        };
+
+        let idempotency_key = format!("sync-{}", row.id);
+        let place_order_cmd = PlaceOrderCommand {
+            order_id: row.id,
+            user_id: row.user_id,
+            symbol: row.symbol_code.clone(),
+            side,
+            order_type,
+            size: row.size,
+            limit_price: row.price,
+            sl: row.stop_price,
+            tp: None,
+            tif: TimeInForce::Gtc,
+            client_order_id: row.reference.clone(),
+            idempotency_key: idempotency_key.clone(),
+            ts: row.created_at,
+            group_id: group_id.map(|u| u.to_string()),
+            min_leverage: user_min_lev,
+            max_leverage: user_max_lev,
+            leverage_tiers,
+            account_type: account_type.clone(),
+        };
+
+        let msg = match VersionedMessage::new("cmd.order.place", &place_order_cmd) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Sync: failed to build message for order {}: {}", row.id, e);
+                errors += 1;
+                continue;
+            }
+        };
+        let payload = match serde_json::to_vec(&msg) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Sync: failed to serialize order {}: {}", row.id, e);
+                errors += 1;
+                continue;
+            }
+        };
+
+        if let Err(e) = orders_state
+            .nats
+            .publish("cmd.order.place".to_string(), payload.into())
+            .await
+        {
+            error!("Sync: failed to publish order {}: {}", row.id, e);
+            errors += 1;
+            continue;
+        }
+
+        synced += 1;
+        order_ids_synced.push(row.id.to_string());
+        info!(
+            "Sync: republished pending order {} to order-engine (user={}, symbol={})",
+            row.id, row.user_id, row.symbol_code
+        );
+    }
+
+    info!(
+        "Sync pending orders: synced={}, skipped={}, errors={}",
+        synced, skipped, errors
+    );
+
+    Ok(Json(SyncPendingOrdersResponse {
+        synced,
+        skipped,
+        errors,
+        order_ids_synced,
+    }))
 }
 
 // ============================================================================
@@ -766,6 +1023,7 @@ pub fn create_orders_router(
 ) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_orders).post(place_order))
+        .route("/sync-pending", post(sync_pending_orders))
         .route("/:order_id/cancel", post(cancel_order))
         .layer(axum::middleware::from_fn_with_state(
             pool.clone(),

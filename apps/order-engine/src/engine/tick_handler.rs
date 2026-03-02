@@ -102,7 +102,7 @@ impl TickHandler {
         });
         {
             use redis::AsyncCommands;
-            conn.set(&price_key, price_json.to_string()).await?;
+            conn.set::<_, _, ()>(&price_key, price_json.to_string()).await?;
         }
 
         self.cache.update_tick(tick.clone(), group_id);
@@ -199,10 +199,11 @@ impl TickHandler {
             }
         }
 
-        if let Some(gid) = group_id {
-            if let Err(e) = self.sltp_handler.check_and_trigger(&tick.symbol, gid, tick.bid, tick.ask).await {
-                error!("SL/TP check failed for {}: {}", tick.symbol, e);
-            }
+        // Run SL/TP check on every tick. Pass empty string when no group_id so Lua checks all
+        // positions for this symbol (data-provider publishes ticks.SYMBOL with no group).
+        let gid = group_id.unwrap_or("");
+        if let Err(e) = self.sltp_handler.check_and_trigger(&tick.symbol, gid, tick.bid, tick.ask).await {
+            error!("SL/TP check failed for {}: {}", tick.symbol, e);
         }
 
         Ok(())

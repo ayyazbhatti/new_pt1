@@ -42,7 +42,7 @@ pub async fn publish_position_updated(
         PositionStatus::Closed => "CLOSED",
         PositionStatus::Liquidated => "LIQUIDATED",
     }).or_else(|| raw.get("status").map(|s| s.as_str()));
-    let status = match status_str {
+    let status = match status_str.map(|s| s.to_uppercase()).as_deref() {
         Some("CLOSED") => PositionStatus::Closed,
         Some("LIQUIDATED") => PositionStatus::Liquidated,
         _ => PositionStatus::Open,

@@ -8,8 +8,9 @@ local position_id = ARGV[1]
 local exit_price = ARGV[2]
 local close_size = ARGV[3]
 local timestamp_ms = ARGV[4]
-local close_reason = (ARGV[5] and ARGV[5] ~= "") and ARGV[5] or nil
-local full_close_status = (close_reason == "liquidated") and "LIQUIDATED" or "CLOSED"
+local close_reason_raw = (ARGV[5] and ARGV[5] ~= "") and ARGV[5] or nil
+local close_reason_lower = (close_reason_raw and type(close_reason_raw) == "string") and string.lower(close_reason_raw) or ""
+local full_close_status = (close_reason_lower == "liquidated") and "LIQUIDATED" or "CLOSED"
 
 -- Try new format first (Hash)
 local pos_key_new = 'pos:by_id:' .. position_id
