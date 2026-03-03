@@ -215,11 +215,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       )
     }
 
-    // Sort by price (high to low)
+    // Sort: highest price first, then lowest; symbols without price at the end (by code)
     filtered = [...filtered].sort((a, b) => {
-      const priceA = a.numericPrice || 0
-      const priceB = b.numericPrice || 0
-      return priceB - priceA // High to low
+      const priceA = a.numericPrice ?? 0
+      const priceB = b.numericPrice ?? 0
+      if (priceA > 0 && priceB > 0) return priceB - priceA // high to low
+      if (priceA > 0) return -1 // a has price, b doesn't -> a first
+      if (priceB > 0) return 1  // b has price, a doesn't -> b first
+      return (a.code || '').localeCompare(b.code || '', undefined, { sensitivity: 'base' }) // no price: sort by code
     })
 
     return filtered

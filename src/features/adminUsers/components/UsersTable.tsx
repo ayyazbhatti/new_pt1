@@ -20,9 +20,16 @@ import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType
 interface UsersTableProps {
   users: User[]
   onUserUpdate?: (userId: string, updates: Partial<User>) => void
+  pagination?: {
+    page: number
+    pageSize: number
+    total: number
+    onPageChange: (page: number) => void
+    onPageSizeChange: (size: number) => void
+  }
 }
 
-export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
+export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const canEditUser = useCanAccess('users:edit')
   const [updatingGroups, setUpdatingGroups] = useState<Set<string>>(new Set())
@@ -255,20 +262,6 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
     return <Badge variant={variants[kycStatus] || 'neutral'}>{labels[kycStatus] || kycStatus}</Badge>
   }
 
-  const getRiskBadge = (riskFlag: string) => {
-    const variants: Record<string, 'success' | 'warning' | 'danger'> = {
-      normal: 'success',
-      review: 'warning',
-      high: 'danger',
-    }
-    const labels: Record<string, string> = {
-      normal: 'Normal',
-      review: 'Under Review',
-      high: 'High Risk',
-    }
-    return <Badge variant={variants[riskFlag] || 'neutral'}>{labels[riskFlag] || riskFlag}</Badge>
-  }
-
   const columns: ColumnDef<User>[] = [
     {
       accessorKey: 'id',
@@ -310,7 +303,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
           null
 
         return (
-          <div className="whitespace-nowrap min-w-[150px]" onClick={(e) => e.stopPropagation()}>
+          <div className="whitespace-nowrap min-w-[150px]" onClick={(e) => e.stopPropagation()} data-no-row-click>
             <Select
               value={currentGroupId || undefined}
               onValueChange={(value) => handleGroupChange(user.id, user.name, value)}
@@ -350,7 +343,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
         const disabled = isUpdating || hasOpenPositions
         return (
-          <div className="whitespace-nowrap min-w-[130px]" onClick={(e) => e.stopPropagation()}>
+          <div className="whitespace-nowrap min-w-[130px]" onClick={(e) => e.stopPropagation()} data-no-row-click>
             <Select
               value={currentType}
               onValueChange={(value) =>
@@ -396,7 +389,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
         const disabled = isUpdating || hasOpenPositions
         return (
-          <div className="whitespace-nowrap min-w-[100px]" onClick={(e) => e.stopPropagation()}>
+          <div className="whitespace-nowrap min-w-[100px]" onClick={(e) => e.stopPropagation()} data-no-row-click>
             <Select
               value={currentType}
               onValueChange={(value) =>
@@ -440,7 +433,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
         const currentAccess = user.tradingAccess ?? 'full'
         const isUpdating = updatingTradingAccess.has(user.id)
         return (
-          <div className="whitespace-nowrap min-w-[140px]" onClick={(e) => e.stopPropagation()}>
+          <div className="whitespace-nowrap min-w-[140px]" onClick={(e) => e.stopPropagation()} data-no-row-click>
             <Select
               value={currentAccess}
               onValueChange={(value) =>
@@ -514,11 +507,6 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       cell: ({ row }) => <div className="whitespace-nowrap">{getKYCBadge(row.getValue('kycStatus'))}</div>,
     },
     {
-      accessorKey: 'riskFlag',
-      header: 'Risk Flag',
-      cell: ({ row }) => <div className="whitespace-nowrap">{getRiskBadge(row.getValue('riskFlag'))}</div>,
-    },
-    {
       accessorKey: 'createdAt',
       header: 'Created',
       cell: ({ row }) => {
@@ -531,7 +519,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       cell: ({ row }) => {
         const user = row.original
         return (
-          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()} data-no-row-click>
             <Button
               variant="ghost"
               size="sm"
@@ -600,6 +588,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
       data={users}
       columns={columns}
       onRowClick={handleView}
+      rowClickTitle="View user details"
+      pagination={pagination}
     />
   )
 }

@@ -1,4 +1,4 @@
-import { Search, LayoutDashboard, Bell, CreditCard, MessageCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
+import { Search, X, LayoutDashboard, Bell, CreditCard, MessageCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
@@ -406,10 +406,23 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted/60 pointer-events-none" />
           <Input
             placeholder="Search symbols..."
-            className="pl-9 h-9 text-sm bg-white/5 border-white/10 focus:bg-white/10 focus:border-accent/50 transition-all"
+            className={cn(
+              'pl-9 h-9 text-sm bg-white/5 border-white/10 focus:bg-white/10 focus:border-accent/50 transition-all',
+              searchQuery && 'pr-9'
+            )}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-text-muted hover:text-text hover:bg-white/10 transition-colors"
+              aria-label="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
       </div>
 

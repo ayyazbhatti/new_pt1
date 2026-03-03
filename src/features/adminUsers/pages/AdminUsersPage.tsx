@@ -90,6 +90,9 @@ export function AdminUsersPage() {
     balanceMax: '',
   })
 
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+
   // Use state if available, otherwise use computed users
   const displayUsers = usersState.length > 0 ? usersState : users
 
@@ -120,6 +123,28 @@ export function AdminUsersPage() {
       return true
     })
   }, [displayUsers, filters])
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [filters])
+
+  const totalFiltered = filteredUsers.length
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize))
+  const currentPage = Math.min(page, totalPages)
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return filteredUsers.slice(start, start + pageSize)
+  }, [filteredUsers, currentPage, pageSize])
+
+  const handlePageChange = (newPage: number) => {
+    setPage(Math.max(1, Math.min(newPage, totalPages)))
+  }
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize)
+    setPage(1)
+  }
 
   const handleCreateUser = () => {
     openModal('create-user', <CreateEditUserModal />, {
@@ -196,7 +221,17 @@ export function AdminUsersPage() {
       />
       <UserKPICards users={displayUsers} />
       <UserFiltersBar filters={filters} onFilterChange={setFilters} />
-      <UsersTable users={filteredUsers} onUserUpdate={handleUserUpdate} />
+      <UsersTable
+        users={paginatedUsers}
+        onUserUpdate={handleUserUpdate}
+        pagination={{
+          page: currentPage,
+          pageSize,
+          total: totalFiltered,
+          onPageChange: handlePageChange,
+          onPageSizeChange: handlePageSizeChange,
+        }}
+      />
       <MultiUserMetricsModal
         open={multiUserMetricsOpen}
         onOpenChange={setMultiUserMetricsOpen}

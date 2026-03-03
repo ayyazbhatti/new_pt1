@@ -37,7 +37,7 @@ impl RedisClient {
         symbol: &str,
         group: &str,
     ) -> Result<Option<MarkupConfig>> {
-        let key = format!("symbol:markup:{}:{}", symbol, group);
+        let key = format!("symbol:markup:{}:{}", symbol.to_uppercase(), group);
         let mut conn = self.connection.write().await;
 
         let value: Option<String> = conn.get(&key).await?;

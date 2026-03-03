@@ -11,7 +11,7 @@ export function UserKPICards({ users }: UserKPICardsProps) {
   const activeTraders = users.filter((u) => u.openPositions > 0).length
   const kycPending = users.filter((u) => u.kycStatus === 'pending').length
   const restrictedAccounts = users.filter(
-    (u) => u.status === 'suspended' || u.status === 'disabled' || u.riskFlag === 'high'
+    (u) => u.status === 'suspended' || u.status === 'disabled'
   ).length
 
   return (

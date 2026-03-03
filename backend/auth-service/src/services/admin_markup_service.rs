@@ -323,7 +323,7 @@ impl AdminMarkupService {
                     "type": "percent",
                 })
                 .to_string();
-                let key = format!("symbol:markup:{}:{}", symbol_code, row.group_id);
+                let key = format!("symbol:markup:{}:{}", symbol_code.to_uppercase(), row.group_id);
                 let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(&markup_value).query(&mut conn);
             }
         }
@@ -400,7 +400,7 @@ impl AdminMarkupService {
                     "type": "percent",
                 })
                 .to_string();
-                let key = format!("symbol:markup:{}:{}", symbol_code, group_id);
+                let key = format!("symbol:markup:{}:{}", symbol_code.to_uppercase(), group_id);
                 let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(&markup_value).query(&mut conn);
             }
             // Notify data-provider to refresh price:groups so it includes this group in ticks

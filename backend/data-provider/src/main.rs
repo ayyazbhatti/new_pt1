@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     let feed = Arc::new(BinanceFeed::new(config.binance_ws_url.clone()));
     let markup_engine = MarkupEngine::new(redis.clone());
     let broadcaster = Arc::new(Broadcaster::new(markup_engine));
-    let validator = Arc::new(SymbolValidator::new(50));
+    let validator = Arc::new(SymbolValidator::new(100));
     let rate_limiter = Arc::new(RateLimiter::new(60, 100));
 
     // Track subscribed symbols dynamically
@@ -102,12 +102,46 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Subscribe to initial symbols (example)
-    let initial_symbols = vec!["BTCUSDT", "ETHUSDT", "EURUSD", "BNBUSDT", "DOGEUSDT"];
-    for symbol in initial_symbols {
+    // Subscribe to initial symbols: from INITIAL_SYMBOLS env (comma-separated) or default list of 100
+    let initial_symbols: Vec<String> = match std::env::var("INITIAL_SYMBOLS") {
+        Ok(s) if !s.trim().is_empty() => s
+            .split(',')
+            .map(|x| x.trim().to_uppercase())
+            .filter(|x| !x.is_empty())
+            .collect(),
+        _ => vec![
+            "BTCUSDT".into(), "ETHUSDT".into(), "BNBUSDT".into(), "SOLUSDT".into(), "XRPUSDT".into(),
+            "DOGEUSDT".into(), "ADAUSDT".into(), "SHIBUSDT".into(), "TONUSDT".into(), "TRXUSDT".into(),
+            "AVAXUSDT".into(), "DOTUSDT".into(), "LINKUSDT".into(), "MATICUSDT".into(), "LTCUSDT".into(),
+            "BCHUSDT".into(), "XMRUSDT".into(), "EOSUSDT".into(), "KASUSDT".into(), "EGLDUSDT".into(),
+            "UNIUSDT".into(), "ATOMUSDT".into(), "ETCUSDT".into(), "XLMUSDT".into(), "NEARUSDT".into(),
+            "APTUSDT".into(),
+            "FILUSDT".into(), "INJUSDT".into(), "OPUSDT".into(), "ARBUSDT".into(), "IMXUSDT".into(),
+            "SUIUSDT".into(), "SEIUSDT".into(), "RENDERUSDT".into(), "PEPEUSDT".into(), "WIFUSDT".into(),
+            "FLOKIUSDT".into(), "BONKUSDT".into(), "FETUSDT".into(), "RUNEUSDT".into(), "GRTUSDT".into(),
+            "AAVEUSDT".into(), "ALGOUSDT".into(), "AXSUSDT".into(), "CRVUSDT".into(), "ENSUSDT".into(),
+            "GMTUSDT".into(), "MANAUSDT".into(), "SANDUSDT".into(), "APEUSDT".into(), "LDOUSDT".into(),
+            "MKRUSDT".into(), "SNXUSDT".into(), "STXUSDT".into(), "THETAUSDT".into(), "VETUSDT".into(),
+            "BLURUSDT".into(), "COMPUSDT".into(), "DYDXUSDT".into(), "GALAUSDT".into(), "HBARUSDT".into(),
+            "ICPUSDT".into(), "JASMYUSDT".into(), "KAVAUSDT".into(), "KSMUSDT".into(), "MANTAUSDT".into(),
+            "ORDIUSDT".into(), "PENDLEUSDT".into(), "PYTHUSDT".into(), "QNTUSDT".into(), "RDNTUSDT".into(),
+            "RPLUSDT".into(), "STRKUSDT".into(), "WLDUSDT".into(), "ZECUSDT".into(), "1INCHUSDT".into(),
+            "1000PEPEUSDT".into(), "1000SATSUSDT".into(), "AGIXUSDT".into(), "ARKMUSDT".into(), "ASTRUSDT".into(),
+            "BATUSDT".into(), "CELOUSDT".into(), "CFXUSDT".into(), "CHZUSDT".into(), "COTIUSDT".into(),
+            "DASHUSDT".into(), "DEFIUSDT".into(), "ENJUSDT".into(), "FLOWUSDT".into(), "FTMUSDT".into(),
+            "GASUSDT".into(), "HOTUSDT".into(), "ICXUSDT".into(), "KEYUSDT".into(), "KNCUSDT".into(),
+            "LQTYUSDT".into(), "MAGICUSDT".into(), "MINAUSDT".into(), "NMRUSDT".into(), "OCEANUSDT".into(),
+            "OMGUSDT".into(), "ONEUSDT".into(), "PHBUSDT".into(), "POLUSDT".into(), "PORTALUSDT".into(),
+            "POWRUSDT".into(), "QTUMUSDT".into(), "RSRUSDT".into(), "SKLUSDT".into(), "SSVUSDT".into(),
+            "STORJUSDT".into(), "TIAUSDT".into(), "TLMUSDT".into(), "TOKENUSDT".into(), "WOOUSDT".into(),
+            "XAIUSDT".into(), "YFIUSDT".into(), "ZILUSDT".into(), "ZROUSDT".into(),
+        ],
+    };
+    info!("📊 Initial symbols ({}): {:?}", initial_symbols.len(), initial_symbols);
+    for symbol in &initial_symbols {
         feed.subscribe_symbol(symbol).await?;
-        validator.enable_symbol(symbol.to_string());
-        subscribed_symbols.write().await.insert(symbol.to_string());
+        validator.enable_symbol(symbol.clone());
+        subscribed_symbols.write().await.insert(symbol.clone());
     }
 
     // Price update loop — per-group: one Redis message with prices[], per-group NATS, per-group WS
@@ -158,6 +192,14 @@ async fn main() -> anyhow::Result<()> {
                         broadcaster_clone
                             .broadcast_price(symbol, Some(group_id.as_str()), bid, ask)
                             .await;
+                    }
+                    // When no groups in Redis, still send one entry so gateway can deliver ticks (uses "first" for all conns)
+                    if prices_by_group.is_empty() {
+                        prices_by_group.push(serde_json::json!({
+                            "g": "",
+                            "bid": price_state.bid.to_string(),
+                            "ask": price_state.ask.to_string(),
+                        }));
                     }
                     // Always broadcast to symbol-only room so WS clients without a group get live ticks
                     broadcaster_clone

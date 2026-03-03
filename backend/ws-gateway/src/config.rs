@@ -85,7 +85,7 @@ impl Config {
             },
             limits: LimitsConfig {
                 max_symbols_per_client: env::var("MAX_SYMBOLS_PER_CLIENT")
-                    .unwrap_or_else(|_| "100".to_string())
+                    .unwrap_or_else(|_| "500".to_string())
                     .parse()?,
                 max_message_size_bytes: env::var("MAX_MESSAGE_SIZE_BYTES")
                     .unwrap_or_else(|_| "65536".to_string())

@@ -26,6 +26,8 @@ interface DataTableProps<TData> {
   /** When false, table has no outer border/radius so it blends into parent (e.g. modal) */
   bordered?: boolean
   onRowClick?: (row: TData) => void
+  /** Optional title when hovering over a clickable row (e.g. "View details") */
+  rowClickTitle?: string
   pagination?: {
     page: number
     pageSize: number
@@ -99,17 +101,35 @@ const TableRow = memo(({
   onRowClick,
   dense,
   compact,
+  rowClickTitle,
 }: {
   row: Row<any>
   onRowClick?: (row: any) => void
   dense?: boolean
   compact?: boolean
+  rowClickTitle?: string
 }) => {
+  const handleRowClick = (e: React.MouseEvent<HTMLTableRowElement>) => {
+    const target = e.target as HTMLElement
+    if (target.closest('button, [role="button"], a, input, select, [data-no-row-click]')) return
+    onRowClick?.(row.original)
+  }
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    const target = e.target as HTMLElement
+    if (target.closest('button, [role="button"], a, input, select')) return
+    e.preventDefault()
+    onRowClick?.(row.original)
+  }
   return (
     <tr
       key={row.id}
+      role={onRowClick ? 'button' : undefined}
+      tabIndex={onRowClick ? 0 : undefined}
+      title={onRowClick && rowClickTitle ? rowClickTitle : undefined}
       className={`hover:bg-surface-2/50 transition-colors ${onRowClick ? 'cursor-pointer' : ''}`}
-      onClick={() => onRowClick?.(row.original)}
+      onClick={onRowClick ? handleRowClick : undefined}
+      onKeyDown={onRowClick ? handleKeyDown : undefined}
     >
       {row.getVisibleCells().map((cell) => (
         <TableCell key={cell.id} cell={cell} onRowClick={onRowClick} dense={dense} compact={compact} />
@@ -120,9 +140,10 @@ const TableRow = memo(({
   const rowDataChanged = prev.row.original !== next.row.original
   const rowIdChanged = prev.row.id !== next.row.id
   const onRowClickChanged = prev.onRowClick !== next.onRowClick
+  const rowClickTitleChanged = prev.rowClickTitle !== next.rowClickTitle
   const denseChanged = prev.dense !== next.dense
   const compactChanged = prev.compact !== next.compact
-  if (!rowDataChanged && !rowIdChanged && !onRowClickChanged && !denseChanged && !compactChanged) {
+  if (!rowDataChanged && !rowIdChanged && !onRowClickChanged && !rowClickTitleChanged && !denseChanged && !compactChanged) {
     return true
   }
   return false
@@ -130,7 +151,7 @@ const TableRow = memo(({
 
 TableRow.displayName = 'TableRow'
 
-export function DataTable<TData>({ data, columns, className, tableClassName, dense, compact, bordered = true, onRowClick, pagination }: DataTableProps<TData>) {
+export function DataTable<TData>({ data, columns, className, tableClassName, dense, compact, bordered = true, onRowClick, rowClickTitle, pagination }: DataTableProps<TData>) {
   const table = useReactTable({
     data,
     columns,
@@ -183,7 +204,7 @@ export function DataTable<TData>({ data, columns, className, tableClassName, den
             <tbody className="divide-y divide-border">
               {table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id} row={row} onRowClick={onRowClick} dense={dense} compact={compact} />
+                  <TableRow key={row.id} row={row} onRowClick={onRowClick} rowClickTitle={rowClickTitle} dense={dense} compact={compact} />
                 ))
               ) : (
                 <tr>

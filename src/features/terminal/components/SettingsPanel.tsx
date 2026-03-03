@@ -201,26 +201,6 @@ export function SettingsPanel() {
             </div>
           </div>
 
-          {/* Appearance */}
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Palette className="h-3.5 w-3.5 text-text-muted" />
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
-                Appearance
-              </h3>
-            </div>
-            <div className="space-y-1 pl-5">
-              <div className="py-1.5">
-                <p className="text-sm font-medium text-text">Theme</p>
-                <p className="text-xs text-text-muted mt-0.5">Light / Dark mode</p>
-              </div>
-              <div className="py-1.5">
-                <p className="text-sm font-medium text-text">Density</p>
-                <p className="text-xs text-text-muted mt-0.5">Compact / Comfortable</p>
-              </div>
-            </div>
-          </div>
-
           {/* Notifications */}
           <div>
             <div className="flex items-center gap-2 mb-2">
@@ -261,6 +241,26 @@ export function SettingsPanel() {
                   <p className="text-sm font-medium text-text">Price alerts</p>
                   <p className="text-xs text-text-muted mt-0.5">When price reaches level</p>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Appearance */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Palette className="h-3.5 w-3.5 text-text-muted" />
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+                Appearance
+              </h3>
+            </div>
+            <div className="space-y-1 pl-5">
+              <div className="py-1.5">
+                <p className="text-sm font-medium text-text">Theme</p>
+                <p className="text-xs text-text-muted mt-0.5">Light / Dark mode</p>
+              </div>
+              <div className="py-1.5">
+                <p className="text-sm font-medium text-text">Density</p>
+                <p className="text-xs text-text-muted mt-0.5">Compact / Comfortable</p>
               </div>
             </div>
           </div>
