@@ -4,7 +4,7 @@ import { SymbolsFilters } from '../components/SymbolsFilters'
 import { Button } from '@/shared/ui/button'
 import { AddSymbolModal } from '../modals/AddSymbolModal'
 import { useModalStore } from '@/app/store'
-import { Plus, Upload, RefreshCw } from 'lucide-react'
+import { Plus, Upload } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAdminSymbolsList } from '../hooks/useSymbols'
@@ -103,10 +103,6 @@ export function SymbolsPage() {
         description="Manage tradable instruments, leverage profiles, and group markups"
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
             <Button variant="outline" disabled>
               <Upload className="h-4 w-4 mr-2" />
               Import
