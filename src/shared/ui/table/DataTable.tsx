@@ -28,6 +28,8 @@ interface DataTableProps<TData> {
   onRowClick?: (row: TData) => void
   /** Optional title when hovering over a clickable row (e.g. "View details") */
   rowClickTitle?: string
+  /** When true, all rows are shown and the pagination UI is hidden */
+  disablePagination?: boolean
   pagination?: {
     page: number
     pageSize: number
@@ -151,12 +153,12 @@ const TableRow = memo(({
 
 TableRow.displayName = 'TableRow'
 
-export function DataTable<TData>({ data, columns, className, tableClassName, dense, compact, bordered = true, onRowClick, rowClickTitle, pagination }: DataTableProps<TData>) {
+export function DataTable<TData>({ data, columns, className, tableClassName, dense, compact, bordered = true, onRowClick, rowClickTitle, disablePagination, pagination }: DataTableProps<TData>) {
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: pagination ? undefined : getPaginationRowModel(),
+    getPaginationRowModel: pagination || disablePagination ? undefined : getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     manualPagination: !!pagination,
@@ -260,7 +262,7 @@ export function DataTable<TData>({ data, columns, className, tableClassName, den
             </Select>
           </div>
         </div>
-      ) : (
+      ) : disablePagination ? null : (
         <div className="flex items-center justify-between">
           <div className="text-sm text-text-muted">
             Showing {table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1} to{' '}

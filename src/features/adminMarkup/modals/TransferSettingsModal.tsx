@@ -1,11 +1,14 @@
 import { useState, useMemo } from 'react'
 import { useModalStore } from '@/app/store'
+import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
 import { useMarkupProfiles } from '../hooks/useMarkup'
 import { MarkupProfile } from '../types/markup'
+import { transferMarkupsToProfiles } from '../api/markup.api'
 import { Copy, Search, AlertTriangle } from 'lucide-react'
 import { CheckSquare, Square } from 'lucide-react'
+import { toast } from '@/shared/components/common'
 
 interface TransferSettingsModalProps {
   sourceStream: MarkupProfile
@@ -13,6 +16,7 @@ interface TransferSettingsModalProps {
 
 export function TransferSettingsModal({ sourceStream }: TransferSettingsModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
+  const queryClient = useQueryClient()
   const { data: profiles } = useMarkupProfiles()
   const [includeMarkups, setIncludeMarkups] = useState(true)
   const [targetIds, setTargetIds] = useState<Set<string>>(new Set())
@@ -73,8 +77,17 @@ export function TransferSettingsModal({ sourceStream }: TransferSettingsModalPro
     setLoading(true)
     setError(null)
     try {
-      // Placeholder: call transfer API when available
-      await new Promise((r) => setTimeout(r, 800))
+      const ids = Array.from(targetIds)
+      const { copied_overrides } = await transferMarkupsToProfiles(sourceStream.id, {
+        target_profile_ids: ids,
+        include_markups: includeMarkups,
+      })
+      toast.success(
+        includeMarkups
+          ? `Transferred ${copied_overrides} markup override(s) to ${selectedCount} stream(s)`
+          : `Transfer completed for ${selectedCount} stream(s)`
+      )
+      queryClient.invalidateQueries({ queryKey: ['markup'] })
       closeModal(modalKey)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Transfer failed')

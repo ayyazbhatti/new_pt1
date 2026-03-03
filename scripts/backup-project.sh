@@ -126,6 +126,7 @@ DIRS_TO_BACKUP=(
     "database"
     "infra"
     "scripts"
+    "docs"
 )
 
 for dir in "${DIRS_TO_BACKUP[@]}"; do
@@ -137,7 +138,7 @@ for dir in "${DIRS_TO_BACKUP[@]}"; do
     fi
 done
 
-# Backup root files
+# Backup root files (workspace, frontend, config)
 print_info "Backing up root configuration files..."
 ROOT_FILES=(
     "Cargo.toml"
@@ -146,6 +147,12 @@ ROOT_FILES=(
     ".env.example"
     "docker-compose.yml"
     "README.md"
+    "package.json"
+    "package-lock.json"
+    "index.html"
+    "tsconfig.json"
+    "tsconfig.node.json"
+    "vite.config.ts"
     "*.md"
 )
 
@@ -167,13 +174,28 @@ print_info "Step 3: Backing up migration files..."
 MIGRATION_BACKUP_DIR="${BACKUP_PATH}/migrations"
 mkdir -p "${MIGRATION_BACKUP_DIR}"
 
-# Find and backup all migration files
-find "${PROJECT_ROOT}" -type f -name "*.sql" -path "*/migrations/*" -exec cp --parents {} "${MIGRATION_BACKUP_DIR}/" \; 2>/dev/null || true
-
+# Backup infra/migrations (main schema - used by start-all-servers)
+if [ -d "${PROJECT_ROOT}/infra/migrations" ]; then
+    mkdir -p "${MIGRATION_BACKUP_DIR}/infra_migrations"
+    cp -r "${PROJECT_ROOT}/infra/migrations/"*.sql "${MIGRATION_BACKUP_DIR}/infra_migrations/" 2>/dev/null || true
+fi
+# Backup database/migrations (auth-service and other DB migrations)
+if [ -d "${PROJECT_ROOT}/database/migrations" ]; then
+    mkdir -p "${MIGRATION_BACKUP_DIR}/database_migrations"
+    cp -r "${PROJECT_ROOT}/database/"*.sql "${MIGRATION_BACKUP_DIR}/database_migrations/" 2>/dev/null || true
+    cp -r "${PROJECT_ROOT}/database/migrations/"*.sql "${MIGRATION_BACKUP_DIR}/database_migrations/" 2>/dev/null || true
+fi
+# Backup backend auth-service migrations if present
+if [ -d "${PROJECT_ROOT}/backend/auth-service/migrations" ]; then
+    mkdir -p "${MIGRATION_BACKUP_DIR}/auth_service_migrations"
+    cp -r "${PROJECT_ROOT}/backend/auth-service/migrations/"*.sql "${MIGRATION_BACKUP_DIR}/auth_service_migrations/" 2>/dev/null || true
+fi
 # Also backup database schema
 if [ -f "${PROJECT_ROOT}/database/schema.sql" ]; then
     cp "${PROJECT_ROOT}/database/schema.sql" "${MIGRATION_BACKUP_DIR}/" 2>/dev/null || true
 fi
+# Any other .sql under any migrations path
+find "${PROJECT_ROOT}" -type f -name "*.sql" -path "*/migrations/*" ! -path "${PROJECT_ROOT}/infra/migrations/*" ! -path "${PROJECT_ROOT}/database/migrations/*" ! -path "${PROJECT_ROOT}/backend/auth-service/migrations/*" -exec cp {} "${MIGRATION_BACKUP_DIR}/" \; 2>/dev/null || true
 
 print_success "Migration files backup completed"
 
@@ -199,6 +221,31 @@ if [ -f "${PROJECT_ROOT}/Cargo.toml" ]; then
 fi
 
 print_success "Configuration files backup completed"
+
+# ============================================================
+# 4b. Redis Backup (optional - cache/positions/summaries)
+# ============================================================
+print_info "Step 4b: Backing up Redis (optional)..."
+
+REDIS_BACKUP_DIR="${BACKUP_PATH}/redis"
+mkdir -p "${REDIS_BACKUP_DIR}"
+
+if docker ps --format "{{.Names}}" | grep -q "trading-redis"; then
+    print_info "Triggering Redis SAVE in Docker container..."
+    if docker exec trading-redis redis-cli SAVE 2>/dev/null; then
+        # Redis 7+ uses appendonly; dump.rdb may still exist for RDB snapshot
+        if docker exec trading-redis test -f /data/dump.rdb 2>/dev/null; then
+            docker cp trading-redis:/data/dump.rdb "${REDIS_BACKUP_DIR}/dump.rdb" 2>/dev/null && print_success "Redis dump.rdb copied"
+        fi
+        if docker exec trading-redis test -f /data/appendonly.aof 2>/dev/null; then
+            docker cp trading-redis:/data/appendonly.aof "${REDIS_BACKUP_DIR}/appendonly.aof" 2>/dev/null && print_success "Redis appendonly.aof copied"
+        fi
+    else
+        print_warning "Redis SAVE or copy failed (non-fatal)"
+    fi
+else
+    print_warning "Docker Redis container not running; skipping Redis backup"
+fi
 
 # ============================================================
 # 5. Create Backup Manifest
@@ -253,10 +300,103 @@ Docker PostgreSQL:
 
 Restore Instructions:
 ---------------------
-See restore-project.sh script for automated restoration.
-Or follow manual restore steps in BACKUP_README.md
+See RESTORE_README.md in this backup folder for full restore steps.
 
 EOF
+
+# Create RESTORE_README.md for easy recovery
+RESTORE_README="${BACKUP_PATH}/RESTORE_README.md"
+cat > "${RESTORE_README}" <<'RESTOREEOF'
+# Restore Full Project from Backup
+
+## What this backup contains
+
+- **database/** – PostgreSQL dump (newpt) from Docker or local
+- **code/** – apps, backend, crates, src, database, infra, scripts, docs + root config (package.json, Cargo.toml, etc.)
+- **migrations/** – infra_migrations/, database_migrations/, auth_service_migrations/ + any other .sql
+- **config/** – docker-compose, .env*, Cargo.toml
+- **redis/** – dump.rdb and/or appendonly.aof (if Redis was running)
+
+## Restore steps
+
+### 1. Restore project files
+
+Copy or extract the backup to a new project directory:
+
+- Copy `code/` contents over your project root (or extract from archive).
+- Copy root files from `code/` (Cargo.toml, package.json, index.html, etc.) to project root.
+- Ensure `infra/migrations` and `database/migrations` match `migrations/infra_migrations` and `migrations/database_migrations`.
+
+### 2. Start infrastructure
+
+```bash
+cd infra && docker-compose up -d
+```
+
+### 3. Apply migrations
+
+Using the migrations from this backup:
+
+```bash
+# Infra migrations (main schema)
+for f in migrations/infra_migrations/*.sql; do PGPASSWORD=postgres psql -h localhost -U postgres -d newpt -f "$f"; done
+
+# Database migrations if you use database/migrations
+for f in migrations/database_migrations/*.sql; do PGPASSWORD=postgres psql -h localhost -U postgres -d newpt -f "$f"; done
+```
+
+Or copy `migrations/infra_migrations/*.sql` to `infra/migrations/` and run your existing migration script.
+
+### 4. Restore PostgreSQL
+
+**If you have a custom-format dump (.dump):**
+
+```bash
+docker exec -i trading-postgres pg_restore -U postgres -d newpt --clean --if-exists < database/newpt_docker.dump
+```
+
+**If you have a plain SQL dump (.sql):**
+
+```bash
+docker exec -i trading-postgres psql -U postgres -d newpt < database/newpt_docker.sql
+```
+
+Use `newpt_local.*` if the backup was from local PostgreSQL.
+
+### 5. (Optional) Restore Redis
+
+If you need to restore Redis cache (positions, account summaries):
+
+```bash
+docker cp redis/dump.rdb trading-redis:/data/dump.rdb
+docker restart trading-redis
+```
+
+Or with appendonly.aof, copy to `/data/appendonly.aof` and restart.
+
+### 6. Start services
+
+Run your normal start script, e.g.:
+
+```bash
+./scripts/start-all-servers.sh
+```
+
+### 7. Frontend
+
+```bash
+npm install && npm run dev
+```
+
+## Connection reference
+
+- Postgres: localhost:5432, user=postgres, db=newpt
+- Redis: localhost:6379
+- NATS: localhost:4222
+
+RESTOREEOF
+print_success "RESTORE_README.md created"
+
 
 print_success "Backup manifest created"
 
@@ -275,12 +415,14 @@ if [ -f "${BACKUP_NAME}.tar.gz" ]; then
     ARCHIVE_SIZE=$(du -h "${BACKUP_NAME}.tar.gz" | cut -f1)
     print_success "Compressed archive created: ${BACKUP_NAME}.tar.gz (${ARCHIVE_SIZE})"
     
-    # Optionally remove uncompressed directory to save space
-    read -p "Remove uncompressed backup directory to save space? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        rm -rf "${BACKUP_NAME}"
-        print_info "Removed uncompressed directory"
+    # Optionally remove uncompressed directory to save space (only when running interactively)
+    if [ -t 0 ]; then
+        read -p "Remove uncompressed backup directory to save space? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -rf "${BACKUP_NAME}"
+            print_info "Removed uncompressed directory"
+        fi
     fi
 fi
 

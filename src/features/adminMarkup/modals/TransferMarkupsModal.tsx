@@ -1,7 +1,9 @@
 import { useState, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { MarkupProfile, SymbolWithMarkup } from '../types/markup'
 import { X, Search } from 'lucide-react'
 import { useUpsertSymbolOverride } from '../hooks/useMarkup'
+import { toast } from '@/shared/components/common'
 
 interface TransferMarkupsModalProps {
   stream: MarkupProfile
@@ -24,6 +26,7 @@ export function TransferMarkupsModal({
   const [transferring, setTransferring] = useState(false)
 
   const upsertOverride = useUpsertSymbolOverride()
+  const queryClient = useQueryClient()
 
   const targetsExceptSource = useMemo(
     () => allSymbols.filter((s) => s.symbolId !== sourceSymbol.symbolId),
@@ -47,22 +50,33 @@ export function TransferMarkupsModal({
     selectedTargets.length > 0 && !transferring
   const onlyOneSymbol = allSymbols.length <= 1
 
+  const BATCH_SIZE = 20
+
   const handleTransfer = async () => {
     if (!canTransfer) return
     setTransferring(true)
     try {
       const bid = sourceSymbol.bidMarkup ?? '0'
       const ask = sourceSymbol.askMarkup ?? '0'
-      await Promise.all(
-        selectedTargets.map((s) =>
-          upsertOverride.mutateAsync({
-            profileId: stream.id,
-            symbolId: s.symbolId,
-            payload: { bid_markup: bid, ask_markup: ask },
-          })
+      // Batch requests so "Apply to all" doesn't fire 100+ parallel requests
+      for (let i = 0; i < selectedTargets.length; i += BATCH_SIZE) {
+        const chunk = selectedTargets.slice(i, i + BATCH_SIZE)
+        await Promise.all(
+          chunk.map((s) =>
+            upsertOverride.mutateAsync({
+              profileId: stream.id,
+              symbolId: s.symbolId,
+              payload: { bid_markup: bid, ask_markup: ask },
+              silent: true,
+            })
+          )
         )
-      )
+      }
+      queryClient.invalidateQueries({ queryKey: ['markup'] })
+      toast.success(`Transferred markups to ${selectedTargets.length} symbol(s)`)
       onClose()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Transfer failed')
     } finally {
       setTransferring(false)
     }

@@ -51,12 +51,24 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TransferMarkupsRequest {
+    pub target_profile_ids: Vec<String>,
+    #[serde(alias = "includeMarkups", default = "default_true")]
+    pub include_markups: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 pub fn create_admin_markup_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/profiles", get(list_profiles).post(create_profile))
         .route("/profiles/:id", get(get_profile).put(update_profile))
         .route("/profiles/:id/symbols", get(get_symbol_overrides))
         .route("/profiles/:id/symbols/:symbol_id", put(upsert_symbol_override))
+        .route("/profiles/:id/transfer", post(transfer_markups))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -360,6 +372,71 @@ async fn upsert_symbol_override(
         "ask_markup": override_data.ask_markup,
         "created_at": override_data.created_at,
         "updated_at": override_data.updated_at,
+    })))
+}
+
+async fn transfer_markups(
+    State(pool): State<PgPool>,
+    Path(source_id): Path<Uuid>,
+    claims: axum::extract::Extension<Claims>,
+    Json(payload): Json<TransferMarkupsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    check_admin(&claims)?;
+
+    let target_ids: Vec<Uuid> = payload
+        .target_profile_ids
+        .iter()
+        .filter_map(|s| Uuid::parse_str(s).ok())
+        .collect();
+    if target_ids.len() != payload.target_profile_ids.len() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_TARGET_IDS".to_string(),
+                    message: "All target_profile_ids must be valid UUIDs.".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let service = AdminMarkupService::new(pool.clone());
+    let copied = service
+        .copy_profile_markups_to_profiles(source_id, &target_ids, payload.include_markups)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "TRANSFER_FAILED".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    // Sync Redis for each target profile so groups get updated markups
+    for &target_id in &target_ids {
+        let group_ids = service
+            .get_group_ids_by_profile_id(target_id)
+            .await
+            .unwrap_or_default();
+        let overrides = service.get_symbol_overrides(target_id).await.unwrap_or_default();
+        for o in &overrides {
+            sync_redis_markup_for_override(
+                &o.symbol_code,
+                &o.bid_markup,
+                &o.ask_markup,
+                &group_ids,
+            )
+            .await;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "message": "Transfer completed",
+        "copied_overrides": copied,
     })))
 }
 

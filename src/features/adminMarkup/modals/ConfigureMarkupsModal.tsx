@@ -18,6 +18,34 @@ function formatPrice(value: number): string {
   return value >= 1 ? value.toFixed(2) : value.toFixed(6)
 }
 
+/** Allow only digits, optional leading + or -, and at most one decimal point */
+function sanitizeNumericInput(value: string): string {
+  let result = ''
+  let hasDecimal = false
+  let hasSign = false
+  for (const c of value) {
+    if (c === '+' || c === '-') {
+      if (result.length === 0) {
+        result += c
+        hasSign = true
+      }
+      continue
+    }
+    if (c === '.') {
+      if (!hasDecimal) {
+        result += c
+        hasDecimal = true
+      }
+      continue
+    }
+    if (c >= '0' && c <= '9') {
+      result += c
+      continue
+    }
+  }
+  return result
+}
+
 /** Input that keeps local state while typing and only commits to parent on blur to avoid re-renders blocking typing */
 function MarkupInput({
   value,
@@ -25,24 +53,31 @@ function MarkupInput({
   className,
   placeholder,
   onKeyDown,
+  sanitize,
 }: {
   value: string
   onCommit: (v: string) => void
   className?: string
   placeholder?: string
   onKeyDown?: (e: React.KeyboardEvent) => void
+  /** When set, only allowed characters (digits, +, -, .) are accepted */
+  sanitize?: (v: string) => string
 }) {
   const [local, setLocal] = useState(value)
   useEffect(() => {
     setLocal(value)
   }, [value])
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = sanitize ? sanitize(e.target.value) : e.target.value
+    setLocal(next)
+  }
   return (
     <input
       type="text"
       inputMode="decimal"
       value={local}
-      onChange={(e) => setLocal(e.target.value)}
-      onBlur={() => onCommit(local)}
+      onChange={handleChange}
+      onBlur={() => onCommit(sanitize ? sanitize(local) : local)}
       onKeyDown={onKeyDown}
       className={className}
       placeholder={placeholder}
@@ -194,11 +229,17 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
 
   const openTransferMarkups = useCallback(
     (source: SymbolWithMarkup) => {
+      // Use current local bid/ask (including unsaved edits) so transfer applies what user sees
+      const sourceWithLocal: SymbolWithMarkup = {
+        ...source,
+        bidMarkup: localMarkups[source.symbolId]?.bid ?? source.bidMarkup,
+        askMarkup: localMarkups[source.symbolId]?.ask ?? source.askMarkup,
+      }
       openModal(
         `transfer-markups-${stream.id}-${source.symbolId}`,
         <TransferMarkupsModal
           stream={stream}
-          sourceSymbol={source}
+          sourceSymbol={sourceWithLocal}
           allSymbols={symbolsWithMarkup}
           onClose={() =>
             closeModal(`transfer-markups-${stream.id}-${source.symbolId}`)
@@ -207,7 +248,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         { title: '', size: 'md' }
       )
     },
-    [stream, symbolsWithMarkup, openModal, closeModal]
+    [stream, symbolsWithMarkup, localMarkups, openModal, closeModal]
   )
 
   const columns: ColumnDef<SymbolWithMarkup>[] = useMemo(
@@ -330,6 +371,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
                 onKeyDown={(e) => e.stopPropagation()}
                 className="w-20 sm:w-24 pl-6 pr-6 py-1.5 bg-surface-2 border border-border rounded text-text text-sm focus:ring-1 focus:ring-accent"
                 placeholder="0.0"
+                sanitize={sanitizeNumericInput}
               />
               <button
                 type="button"
@@ -370,6 +412,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
                 onKeyDown={(e) => e.stopPropagation()}
                 className="w-20 sm:w-24 pl-6 pr-6 py-1.5 bg-surface-2 border border-border rounded text-text text-sm focus:ring-1 focus:ring-accent"
                 placeholder="0.0"
+                sanitize={sanitizeNumericInput}
               />
               <button
                 type="button"
@@ -499,6 +542,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
             bordered={false}
             tableClassName="w-max"
             className="space-y-0"
+            disablePagination
           />
         </div>
       </div>

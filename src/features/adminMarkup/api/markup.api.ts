@@ -100,3 +100,25 @@ export async function upsertSymbolOverride(
   return toCamelCaseOverride(response)
 }
 
+export interface TransferMarkupsPayload {
+  target_profile_ids: string[]
+  include_markups?: boolean
+}
+
+export async function transferMarkupsToProfiles(
+  sourceProfileId: string,
+  payload: TransferMarkupsPayload
+): Promise<{ message: string; copied_overrides: number }> {
+  const response = await http<{ message: string; copied_overrides: number }>(
+    `/api/admin/markup/profiles/${sourceProfileId}/transfer`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        target_profile_ids: payload.target_profile_ids,
+        include_markups: payload.include_markups !== false,
+      }),
+    }
+  )
+  return response
+}
+

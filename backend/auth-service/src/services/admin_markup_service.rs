@@ -250,6 +250,37 @@ impl AdminMarkupService {
         Ok(())
     }
 
+    /// Copy all symbol markup overrides from source profile to target profiles.
+    /// When include_markups is true, copies each override to each target; otherwise no-op for markups.
+    pub async fn copy_profile_markups_to_profiles(
+        &self,
+        source_profile_id: Uuid,
+        target_profile_ids: &[Uuid],
+        include_markups: bool,
+    ) -> Result<usize> {
+        if !include_markups || target_profile_ids.is_empty() {
+            return Ok(0);
+        }
+        let overrides = self.get_symbol_overrides(source_profile_id).await?;
+        let mut copied = 0;
+        for &target_id in target_profile_ids {
+            if target_id == source_profile_id {
+                continue;
+            }
+            for o in &overrides {
+                self.upsert_symbol_override(
+                    target_id,
+                    o.symbol_id,
+                    &o.bid_markup,
+                    &o.ask_markup,
+                )
+                .await?;
+                copied += 1;
+            }
+        }
+        Ok(copied)
+    }
+
     /// Returns all symbol codes from the symbols table (for bootstrap).
     pub async fn get_all_symbol_codes(&self) -> Result<Vec<String>> {
         let rows: Vec<(String,)> = sqlx::query_as("SELECT code FROM symbols")
