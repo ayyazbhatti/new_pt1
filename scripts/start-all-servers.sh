@@ -5,6 +5,18 @@
 
 set -e
 
+# Always run from repo root so paths work regardless of cwd
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# Load .env from repo root so DATABASE_URL, JWT_SECRET, etc. are available
+if [ -f "$REPO_ROOT/.env" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$REPO_ROOT/.env"
+    set +a
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -177,8 +189,8 @@ echo ""
 
 # Step 0: Ensure Docker PostgreSQL is ready
 print_status "Step 0: Ensuring Docker PostgreSQL is ready..."
-if [ -f "scripts/ensure-docker-postgres.sh" ]; then
-    bash scripts/ensure-docker-postgres.sh || {
+if [ -f "$REPO_ROOT/scripts/ensure-docker-postgres.sh" ]; then
+    bash "$REPO_ROOT/scripts/ensure-docker-postgres.sh" || {
         print_warning "Docker PostgreSQL check failed, continuing anyway..."
     }
 else
@@ -187,7 +199,7 @@ fi
 
 # Step 1: Start Infrastructure
 print_info "Step 1: Starting Infrastructure Services..."
-cd "$(dirname "$0")/../infra" || exit 1
+cd "$REPO_ROOT/infra" || exit 1
 
 if docker-compose ps | grep -q "Up"; then
     print_warning "Infrastructure services are already running"
@@ -197,7 +209,20 @@ else
     sleep 3  # Wait for services to initialize
 fi
 
-cd - > /dev/null
+cd "$REPO_ROOT" || exit 1
+
+# Step 1b: Apply migrations so DB schema is up to date
+print_info "Step 1b: Applying migrations..."
+if [ -d "$REPO_ROOT/infra/migrations" ]; then
+    shopt -s nullglob 2>/dev/null || true
+    for f in "$REPO_ROOT"/infra/migrations/*.sql; do
+        print_info "  Applying $(basename "$f")..."
+        PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -U postgres -d newpt -f "$f" || true
+    done
+    shopt -u nullglob 2>/dev/null || true
+else
+    print_warning "infra/migrations not found, skipping"
+fi
 
 # Verify infrastructure
 print_info "Verifying infrastructure..."
@@ -239,7 +264,7 @@ export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export NATS_URL="${NATS_URL:-nats://localhost:4222}"
 
 # Start Auth Service (port 3000)
-cd "$(dirname "$0")/../backend/auth-service" || exit 1
+cd "$REPO_ROOT/backend/auth-service" || exit 1
 if [ -f .env ]; then
     export $(cat .env | grep -v '^#' | xargs)
 fi
@@ -247,15 +272,16 @@ export PORT=$AUTH_SERVICE_PORT
 export JWT_SECRET="${JWT_SECRET:-dev-jwt-secret-key-change-in-production-minimum-32-characters-long}"
 export JWT_ISSUER="${JWT_ISSUER:-newpt}"
 start_service "Auth Service" "cargo run --bin auth-service" $AUTH_SERVICE_PORT "http://localhost:$AUTH_SERVICE_PORT/health" || true
-cd - > /dev/null
+cd "$REPO_ROOT" || exit 1
 
 # Start Data Provider (port 3001) - use backend/data-provider (Redis price:ticks + markup)
-DATA_PROVIDER_DIR="$(cd "$(dirname "$0")/../backend/data-provider" && pwd)"
+DATA_PROVIDER_DIR="$REPO_ROOT/backend/data-provider"
 export HTTP_PORT=$DATA_PROVIDER_PORT
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 start_service "Data Provider" "cd $DATA_PROVIDER_DIR && cargo run --release" $DATA_PROVIDER_PORT "http://localhost:$DATA_PROVIDER_PORT/health" || true
 
-# Start Order Engine (port 3002)
+# Start Order Engine (port 3002) - must run from repo root (workspace member)
+cd "$REPO_ROOT" || exit 1
 export PORT=$ORDER_ENGINE_PORT
 start_service "Order Engine" "cargo run -p order-engine" $ORDER_ENGINE_PORT "http://localhost:$ORDER_ENGINE_PORT/health" || true
 
@@ -265,7 +291,7 @@ export WS_PORT=$GATEWAY_WS_PORT
 GATEWAY_HTTP_PORT="${GATEWAY_HTTP_PORT:-9002}"
 export HTTP_PORT=$GATEWAY_HTTP_PORT
 export JWT_SECRET="${JWT_SECRET:-dev-jwt-secret-key-change-in-production-minimum-32-characters-long}"
-GATEWAY_DIR="$(cd "$(dirname "$0")/../backend/ws-gateway" && pwd)"
+GATEWAY_DIR="$REPO_ROOT/backend/ws-gateway"
 if [ -f "$GATEWAY_DIR/.env" ]; then
     set -a; . "$GATEWAY_DIR/.env"; set +a
 fi
@@ -280,7 +306,7 @@ echo ""
 
 # Step 3: Start Frontend
 print_info "Step 3: Starting Frontend..."
-cd "$(dirname "$0")/.." || exit 1
+cd "$REPO_ROOT" || exit 1
 
 if check_port $FRONTEND_PORT; then
     print_warning "Port $FRONTEND_PORT is already in use. Frontend may already be running"

@@ -59,6 +59,19 @@ struct UserGroupRowMinimal {
     updated_at: DateTime<Utc>,
 }
 
+/// Row with profile IDs but without signup_slug/margin columns (fallback when full query fails).
+#[derive(sqlx::FromRow)]
+struct UserGroupRowMinimalWithProfiles {
+    id: Uuid,
+    name: String,
+    description: Option<String>,
+    status: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    default_price_profile_id: Option<Uuid>,
+    default_leverage_profile_id: Option<Uuid>,
+}
+
 impl From<UserGroupRowMinimal> for UserGroup {
     fn from(r: UserGroupRowMinimal) -> Self {
         UserGroup {
@@ -69,6 +82,24 @@ impl From<UserGroupRowMinimal> for UserGroup {
             signup_slug: None,
             default_price_profile_id: None,
             default_leverage_profile_id: None,
+            margin_call_level: None,
+            stop_out_level: None,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+impl From<UserGroupRowMinimalWithProfiles> for UserGroup {
+    fn from(r: UserGroupRowMinimalWithProfiles) -> Self {
+        UserGroup {
+            id: r.id,
+            name: r.name,
+            description: r.description,
+            status: r.status,
+            signup_slug: None,
+            default_price_profile_id: r.default_price_profile_id,
+            default_leverage_profile_id: r.default_leverage_profile_id,
             margin_call_level: None,
             stop_out_level: None,
             created_at: r.created_at,
@@ -126,7 +157,7 @@ impl AdminGroupsService {
             _ => "created_at DESC",
         };
 
-        // Try full query with profile columns first; fallback to minimal if columns missing
+        // Try full query first; then minimal-with-profiles (so price profile dropdown shows saved value); then minimal
         let groups = match self
             .list_groups_full(search, status, page_size, offset, order_by)
             .await
@@ -136,10 +167,21 @@ impl AdminGroupsService {
                 let msg = e.to_string();
                 if msg.contains("default_price_profile_id")
                     || msg.contains("default_leverage_profile_id")
+                    || msg.contains("signup_slug")
+                    || msg.contains("margin_call_level")
+                    || msg.contains("stop_out_level")
                     || msg.contains("does not exist")
                 {
-                    self.list_groups_minimal(search, status, page_size, offset, order_by)
-                        .await?
+                    match self
+                        .list_groups_minimal_with_profiles(search, status, page_size, offset, order_by)
+                        .await
+                    {
+                        Ok(g) => g,
+                        Err(_) => {
+                            self.list_groups_minimal(search, status, page_size, offset, order_by)
+                                .await?
+                        }
+                    }
                 } else {
                     return Err(e);
                 }
@@ -220,6 +262,46 @@ impl AdminGroupsService {
 
         let rows = query
             .build_query_as::<UserGroupRowMinimal>()
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(UserGroup::from).collect())
+    }
+
+    /// Same as minimal but includes default_price_profile_id and default_leverage_profile_id
+    /// so the groups list shows assigned price/leverage profile after update.
+    async fn list_groups_minimal_with_profiles(
+        &self,
+        search: Option<&str>,
+        status: Option<&str>,
+        page_size: i64,
+        offset: i64,
+        order_by: &str,
+    ) -> anyhow::Result<Vec<UserGroup>> {
+        let mut query = sqlx::QueryBuilder::new(
+            "SELECT id, name, description, status, created_at, updated_at, \
+             default_price_profile_id, default_leverage_profile_id FROM user_groups WHERE 1=1"
+        );
+        if let Some(search) = search {
+            if !search.is_empty() {
+                query.push(" AND name ILIKE ");
+                query.push_bind(format!("%{}%", search));
+            }
+        }
+        if let Some(status) = status {
+            if status != "all" {
+                query.push(" AND status = ");
+                query.push_bind(status);
+            }
+        }
+        query.push(" ORDER BY ");
+        query.push(order_by);
+        query.push(" LIMIT ");
+        query.push_bind(page_size);
+        query.push(" OFFSET ");
+        query.push_bind(offset);
+
+        let rows = query
+            .build_query_as::<UserGroupRowMinimalWithProfiles>()
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(UserGroup::from).collect())

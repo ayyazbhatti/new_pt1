@@ -51,8 +51,9 @@ export function GroupsPage() {
 
   // Price profile dropdown: use list from groups API, or fallback to markup profiles (same source as Markup page)
   const { data: markupProfiles } = useMarkupProfiles()
+  const normalizeId = (id: string) => (id == null || id === '' ? '' : String(id).toLowerCase())
   const availablePriceProfiles =
-    (data?.availablePriceProfiles?.length ? data.availablePriceProfiles : (markupProfiles ?? []).map((p) => ({ id: p.id, name: p.name }))) ?? []
+    (data?.availablePriceProfiles?.length ? data.availablePriceProfiles : (markupProfiles ?? []).map((p) => ({ id: normalizeId(p.id), name: p.name }))) ?? []
 
   // Local state for groups list (same pattern as Admin Users page) so price profile dropdown updates immediately
   const [groupsState, setGroupsState] = useState<UserGroup[]>([])

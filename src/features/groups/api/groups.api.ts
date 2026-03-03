@@ -9,13 +9,18 @@ import {
   GroupSymbol,
 } from '../types/group'
 
+function normalizeId(id: string | undefined | null): string | undefined {
+  if (id == null || id === '') return undefined
+  return String(id).toLowerCase()
+}
+
 // Helper to convert snake_case to camelCase (list item may include price_profile, leverage_profile)
 function toCamelCase(obj: any): UserGroup {
   const priceProfile = obj.price_profile
-    ? { id: obj.price_profile.id, name: obj.price_profile.name }
+    ? { id: (normalizeId(obj.price_profile.id) ?? String(obj.price_profile.id)).toLowerCase(), name: obj.price_profile.name }
     : null
   const leverageProfile = obj.leverage_profile
-    ? { id: obj.leverage_profile.id, name: obj.leverage_profile.name }
+    ? { id: (normalizeId(obj.leverage_profile.id) ?? String(obj.leverage_profile.id)).toLowerCase(), name: obj.leverage_profile.name }
     : null
   return {
     id: obj.id,
@@ -24,8 +29,8 @@ function toCamelCase(obj: any): UserGroup {
     status: obj.status,
     signupSlug: obj.signup_slug ?? undefined,
     tagIds: Array.isArray(obj.tag_ids) ? obj.tag_ids : [],
-    priceProfileId: obj.default_price_profile_id,
-    leverageProfileId: obj.default_leverage_profile_id,
+    priceProfileId: normalizeId(obj.default_price_profile_id) ?? obj.default_price_profile_id ?? undefined,
+    leverageProfileId: normalizeId(obj.default_leverage_profile_id) ?? obj.default_leverage_profile_id ?? undefined,
     priceProfile: priceProfile ?? undefined,
     leverageProfile: leverageProfile ?? undefined,
     marginCallLevel: obj.margin_call_level != null ? Number(obj.margin_call_level) : null,
@@ -65,7 +70,7 @@ export async function listGroups(params?: ListGroupsParams): Promise<ListGroupsR
 
   const rawProfiles = response.available_price_profiles ?? []
   const availablePriceProfiles = Array.isArray(rawProfiles)
-    ? rawProfiles.map((p: any) => ({ id: p.id, name: p.name ?? '' }))
+    ? rawProfiles.map((p: any) => ({ id: normalizeId(p.id) ?? p.id, name: p.name ?? '' }))
     : []
 
   return {

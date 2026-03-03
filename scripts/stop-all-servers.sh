@@ -65,9 +65,9 @@ fi
 print_info "Stopping remaining cargo processes..."
 pkill -f "cargo run" 2>/dev/null && print_status "Stopped cargo processes" || print_warning "No cargo processes found"
 
-# Kill server binaries that may outlive cargo (auth-service, data-provider, etc.)
+# Kill server binaries that may outlive cargo (auth-service, data-provider, ws-gateway, etc.)
 print_info "Stopping remaining server processes..."
-for name in auth-service data-provider order-engine gateway-ws core-api; do
+for name in auth-service data-provider order-engine gateway-ws ws-gateway core-api; do
   pkill -f "$name" 2>/dev/null && print_status "Stopped $name" || true
 done
 

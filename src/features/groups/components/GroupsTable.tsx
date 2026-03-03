@@ -172,13 +172,14 @@ export function GroupsTable({
       header: 'Price profile',
       cell: ({ row }) => {
         const group = row.original
-        const value = group.priceProfileId ?? group.priceProfile?.id ?? NONE_PROFILE_VALUE
+        const rawId = group.priceProfileId ?? group.priceProfile?.id
+        const value = rawId != null && rawId !== '' ? String(rawId).toLowerCase() : NONE_PROFILE_VALUE
         const isUpdating = updatePriceProfile.isPending && updatePriceProfile.variables?.groupId === group.id
 
         const handleChange = (newValue: string) => {
           const priceProfileId = newValue === NONE_PROFILE_VALUE ? null : newValue
           const profile =
-            priceProfileId != null ? availablePriceProfiles.find((p) => p.id === priceProfileId) : null
+            priceProfileId != null ? availablePriceProfiles.find((p) => String(p.id).toLowerCase() === priceProfileId.toLowerCase()) : null
 
           updatePriceProfile.mutate(
             { groupId: group.id, priceProfileId },
@@ -207,7 +208,7 @@ export function GroupsTable({
               <SelectContent>
                 <SelectItem value={NONE_PROFILE_VALUE}>None</SelectItem>
                 {availablePriceProfiles.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
+                  <SelectItem key={p.id} value={String(p.id).toLowerCase()}>
                     {p.name}
                   </SelectItem>
                 ))}

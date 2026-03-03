@@ -32,7 +32,7 @@ function isGatewayUrl(url: string): boolean {
   return /[:/]8090[/?]/.test(url) || /[:/]3003[/?]/.test(url) || url.includes('localhost:8090') || url.includes('localhost:3003') || (url.includes('/ws') && typeof location !== 'undefined' && url.startsWith('ws://' + location.host))
 }
 
-/** HTTP base URL for data-provider (e.g. http://localhost:9004) for GET /prices snapshot. Empty if using gateway. */
+/** HTTP base URL for data-provider (e.g. http://localhost:3001) for GET /prices snapshot. Empty if using gateway. */
 export function getDataProviderPricesBaseUrl(): string {
   const env = typeof import.meta !== 'undefined' && (import.meta as any).env
   const httpUrl = env?.VITE_DATA_PROVIDER_HTTP_URL
@@ -41,11 +41,11 @@ export function getDataProviderPricesBaseUrl(): string {
   if (wsUrl && typeof wsUrl === 'string') {
     try {
       const u = new URL(wsUrl)
-      // Data-provider HTTP is on 9004 when WS is on 9003 (see backend config default)
-      const port = u.port === '9003' ? '9004' : u.port || '9004'
+      // Data-provider serves HTTP and WS on the same port (e.g. 3001 in this project)
+      const port = u.port || '3001'
       return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.hostname}:${port}`
     } catch {
-      return 'http://localhost:9004'
+      return 'http://localhost:3001'
     }
   }
   return ''

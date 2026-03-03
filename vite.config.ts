@@ -76,9 +76,9 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       // /ws-health must come before /ws so GET /ws-health is not matched by /ws
-      // Gateway WS runs on 3003; health is GET /health on same server
+      // ws-gateway: WebSocket on WS_PORT (3003), health on HTTP_PORT (9002)
       '/ws-health': {
-        target: 'http://localhost:3003',
+        target: 'http://localhost:9002',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ws-health/, '/health'),
       },
