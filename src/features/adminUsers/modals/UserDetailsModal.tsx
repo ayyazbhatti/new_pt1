@@ -42,6 +42,26 @@ import {
 } from '@/features/support/api/supportChat.api'
 import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
+import type { Appointment } from '@/features/appointments/types'
+import type { UserSearchResult } from '@/features/appointments/types'
+import {
+  getAppointments,
+  createAppointment,
+  updateAppointment,
+  rescheduleAppointment,
+  cancelAppointment,
+  completeAppointment,
+  sendAppointmentReminder,
+  searchUsersForAppointment,
+} from '@/features/appointments/api/appointments.api'
+import { AdminAppointmentsTable } from '@/features/appointments/components/AdminAppointmentsTable'
+import { ViewAppointmentModal } from '@/features/appointments/modals/ViewAppointmentModal'
+import { CreateAppointmentModal } from '@/features/appointments/modals/CreateAppointmentModal'
+import { EditAppointmentModal } from '@/features/appointments/modals/EditAppointmentModal'
+import { RescheduleModal } from '@/features/appointments/modals/RescheduleModal'
+import { CancelAppointmentModal } from '@/features/appointments/modals/CancelAppointmentModal'
+import { CompleteAppointmentModal } from '@/features/appointments/modals/CompleteAppointmentModal'
+import { SendReminderModal } from '@/features/appointments/modals/SendReminderModal'
 
 const USER_DETAILS_TAB_STORAGE_KEY = 'admin-user-details-modal-tab'
 const TAB_VALUES = ['overview', 'funding', 'appointments', 'orders-positions', 'notes', 'chat'] as const
@@ -148,6 +168,167 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       toast.error(err.message || 'Failed to add note')
     },
   })
+
+  const QUERY_KEY_APPOINTMENTS = ['admin', 'appointments'] as const
+  const appointmentsParams = useMemo(
+    () => ({ user_id: user.id, limit: 100 }),
+    [user.id]
+  )
+  const { data: appointmentsData, isLoading: appointmentsLoading } = useQuery({
+    queryKey: [...QUERY_KEY_APPOINTMENTS, appointmentsParams],
+    queryFn: () => getAppointments(appointmentsParams),
+    enabled: activeTab === 'appointments' && !!user.id,
+    staleTime: 30_000,
+  })
+  const appointments = appointmentsData?.appointments ?? []
+
+  const createAptMutation = useMutation({
+    mutationFn: createAppointment,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY_APPOINTMENTS })
+      toast.success('Appointment created.')
+      useModalStore.getState().closeModal('create-apt')
+    },
+    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
+      toast.error(err?.response?.data?.error ?? err.message)
+    },
+  })
+  const updateAptMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof updateAppointment>[1] }) => updateAppointment(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY_APPOINTMENTS })
+      toast.success('Appointment updated.')
+      useModalStore.getState().closeModal('edit-apt')
+    },
+    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
+      toast.error(err?.response?.data?.error ?? err.message)
+    },
+  })
+  const rescheduleAptMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof rescheduleAppointment>[1] }) => rescheduleAppointment(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY_APPOINTMENTS })
+      toast.success('Appointment rescheduled.')
+      useModalStore.getState().closeModal('reschedule-apt')
+    },
+    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
+      toast.error(err?.response?.data?.error ?? err.message)
+    },
+  })
+  const cancelAptMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof cancelAppointment>[1] }) => cancelAppointment(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY_APPOINTMENTS })
+      toast.success('Appointment cancelled.')
+      useModalStore.getState().closeModal('cancel-apt')
+    },
+    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
+      toast.error(err?.response?.data?.error ?? err.message)
+    },
+  })
+  const completeAptMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof completeAppointment>[1] }) => completeAppointment(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY_APPOINTMENTS })
+      toast.success('Appointment marked complete.')
+      useModalStore.getState().closeModal('complete-apt')
+    },
+    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
+      toast.error(err?.response?.data?.error ?? err.message)
+    },
+  })
+  const reminderAptMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof sendAppointmentReminder>[1] }) => sendAppointmentReminder(id, payload),
+    onSuccess: () => {
+      toast.success('Reminder sent.')
+      useModalStore.getState().closeModal('reminder-apt')
+    },
+    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
+      toast.error(err?.response?.data?.error ?? err.message)
+    },
+  })
+
+  const userAsSearchResult: UserSearchResult = useMemo(
+    () => ({
+      id: userState.id,
+      email: userState.email ?? '',
+      first_name: userState.name?.split(' ')[0],
+      last_name: userState.name?.split(' ').slice(1).join(' ') || undefined,
+      full_name: userState.name || undefined,
+    }),
+    [userState.id, userState.email, userState.name]
+  )
+
+  const handleViewApt = (apt: Appointment) => {
+    openModal('view-apt', <ViewAppointmentModal appointment={apt} />, { title: 'Appointment details', size: 'md' })
+  }
+  const handleCreateApt = () => {
+    openModal(
+      'create-apt',
+      <CreateAppointmentModal
+        onSearchUsers={(q, limit) => searchUsersForAppointment(q, limit)}
+        onSubmit={(payload) => createAptMutation.mutate(payload)}
+        submitting={createAptMutation.isPending}
+        initialUser={userAsSearchResult}
+      />,
+      { title: 'Create appointment', size: 'lg' }
+    )
+  }
+  const handleEditApt = (apt: Appointment) => {
+    openModal(
+      'edit-apt',
+      <EditAppointmentModal
+        appointment={apt}
+        onSubmit={(id, payload) => updateAptMutation.mutate({ id, payload })}
+        submitting={updateAptMutation.isPending}
+      />,
+      { title: 'Edit appointment', size: 'lg' }
+    )
+  }
+  const handleRescheduleApt = (apt: Appointment) => {
+    openModal(
+      'reschedule-apt',
+      <RescheduleModal
+        appointment={apt}
+        onSubmit={(id, payload) => rescheduleAptMutation.mutate({ id, payload })}
+        submitting={rescheduleAptMutation.isPending}
+      />,
+      { title: 'Reschedule', size: 'md' }
+    )
+  }
+  const handleCancelApt = (apt: Appointment) => {
+    openModal(
+      'cancel-apt',
+      <CancelAppointmentModal
+        appointment={apt}
+        onSubmit={(id, payload) => cancelAptMutation.mutate({ id, payload })}
+        submitting={cancelAptMutation.isPending}
+      />,
+      { title: 'Cancel appointment', size: 'md' }
+    )
+  }
+  const handleCompleteApt = (apt: Appointment) => {
+    openModal(
+      'complete-apt',
+      <CompleteAppointmentModal
+        appointment={apt}
+        onSubmit={(id, payload) => completeAptMutation.mutate({ id, payload })}
+        submitting={completeAptMutation.isPending}
+      />,
+      { title: 'Mark complete', size: 'md' }
+    )
+  }
+  const handleSendReminderApt = (apt: Appointment) => {
+    openModal(
+      'reminder-apt',
+      <SendReminderModal
+        appointment={apt}
+        onSubmit={(id, payload) => reminderAptMutation.mutate({ id, payload })}
+        submitting={reminderAptMutation.isPending}
+      />,
+      { title: 'Send reminder', size: 'lg' }
+    )
+  }
 
   // Ensure WS connected when modal is open (Chat tab may use it)
   useEffect(() => {
@@ -884,15 +1065,29 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
               <h2 className="text-base font-semibold text-white sm:text-lg">Appointments</h2>
               <button
                 type="button"
-                onClick={() => toast.success('New appointment flow coming soon')}
+                onClick={handleCreateApt}
                 className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 sm:px-4"
               >
                 New Appointment
               </button>
             </div>
-            <div className="rounded-lg border border-slate-600 bg-slate-700/50 p-4 text-center text-sm text-slate-400">
-              No appointments
-            </div>
+            <p className="mb-3 text-xs text-slate-400">Showing appointments for this user.</p>
+            {appointmentsLoading ? (
+              <div className="flex h-32 items-center justify-center rounded-lg border border-slate-600 bg-slate-700/50">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-600 border-t-blue-500" />
+                <span className="ml-2 text-sm text-slate-400">Loading appointments...</span>
+              </div>
+            ) : (
+              <AdminAppointmentsTable
+                appointments={appointments}
+                onView={handleViewApt}
+                onEdit={handleEditApt}
+                onReschedule={handleRescheduleApt}
+                onCancel={handleCancelApt}
+                onComplete={handleCompleteApt}
+                onSendReminder={handleSendReminderApt}
+              />
+            )}
           </div>
         </TabsContent>
 

@@ -20,18 +20,26 @@ interface CreateAppointmentModalProps {
   onSearchUsers: (q: string, limit?: number) => UserSearchResult[] | Promise<UserSearchResult[]>
   onSubmit: (payload: CreateAppointmentRequest) => void
   submitting?: boolean
+  /** When set, user is pre-selected and read-only (e.g. when opening from User Details drawer). */
+  initialUser?: UserSearchResult | null
 }
 
 export function CreateAppointmentModal({
   onSearchUsers,
   onSubmit,
   submitting = false,
+  initialUser = null,
 }: CreateAppointmentModalProps) {
   const closeModal = useModalStore((s) => s.closeModal)
   const [userQuery, setUserQuery] = useState('')
   const [userResults, setUserResults] = useState<UserSearchResult[]>([])
   const [showUserDropdown, setShowUserDropdown] = useState(false)
-  const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(null)
+  const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(initialUser ?? null)
+  const isUserLocked = initialUser != null
+
+  useEffect(() => {
+    if (initialUser) setSelectedUser(initialUser)
+  }, [initialUser])
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [scheduledDate, setScheduledDate] = useState('')
@@ -43,7 +51,7 @@ export function CreateAppointmentModal({
   const [notes, setNotes] = useState('')
 
   useEffect(() => {
-    if (userQuery.trim().length < 2) {
+    if (isUserLocked || userQuery.trim().length < 2) {
       setUserResults([])
       return
     }
@@ -57,7 +65,7 @@ export function CreateAppointmentModal({
     return () => {
       cancelled = true
     }
-  }, [userQuery, onSearchUsers])
+  }, [isUserLocked, userQuery, onSearchUsers])
 
   const handleSelectUser = (u: UserSearchResult) => {
     setSelectedUser(u)
@@ -91,19 +99,21 @@ export function CreateAppointmentModal({
       <div className="relative">
         <label className="mb-1 block text-sm font-medium text-slate-300">User *</label>
         {selectedUser ? (
-          <div className="flex items-center justify-between rounded-lg border border-slate-600 bg-slate-700 p-2">
+          <div className={cn('flex items-center justify-between rounded-lg border border-slate-600 bg-slate-700 p-2', isUserLocked && 'opacity-90')}>
             <span className="text-slate-200">
               {(selectedUser.full_name ?? `${(selectedUser.first_name ?? '')} ${(selectedUser.last_name ?? '')}`.trim()) || selectedUser.email}
             </span>
-            <button
-              type="button"
-              onClick={() => setSelectedUser(null)}
-              className="text-slate-400 hover:text-white"
-            >
-              Clear
-            </button>
+            {!isUserLocked && (
+              <button
+                type="button"
+                onClick={() => setSelectedUser(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                Clear
+              </button>
+            )}
           </div>
-        ) : (
+        ) : !isUserLocked ? (
           <>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -131,7 +141,7 @@ export function CreateAppointmentModal({
               </ul>
             )}
           </>
-        )}
+        ) : null}
       </div>
 
       <div>
