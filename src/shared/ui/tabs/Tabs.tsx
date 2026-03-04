@@ -43,7 +43,7 @@ export function TabsList({ children, className }: TabsListProps) {
   return (
     <TabsPrimitive.List
       className={cn(
-        'inline-flex h-10 items-center justify-center rounded-lg bg-surface-2 p-1 text-text-muted',
+        'inline-flex h-10 items-center justify-start rounded-lg bg-surface-2 p-1 text-text-muted',
         className
       )}
     >

@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{post, put},
+    routing::{get, post, put},
     Router,
     Extension,
 };
@@ -85,6 +85,32 @@ pub struct SendNotifyRequest {
 pub struct SendNotifyResponse {
     pub success: bool,
     pub notification_id: String,
+}
+
+// --- User notes (Notes & Timeline tab) ---
+
+#[derive(Debug, Serialize)]
+pub struct UserNoteResponse {
+    pub id: String,
+    pub user_id: String,
+    pub author_id: Option<String>,
+    pub author_email: Option<String>,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateUserNoteRequest {
+    pub content: String,
+}
+
+/// Dedicated router for user notes at /api/admin/user-notes/:user_id (GET list, POST create).
+/// Nested separately to avoid 404s from route ordering under /api/admin/users.
+pub fn create_admin_user_notes_router(pool: PgPool) -> Router<PgPool> {
+    Router::new()
+        .route("/:user_id", get(list_user_notes).post(create_user_note))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .with_state(pool)
 }
 
 pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) -> Router<PgPool> {
@@ -234,6 +260,219 @@ async fn admin_send_notify(
     Ok(Json(SendNotifyResponse {
         success: true,
         notification_id: notification_id.to_string(),
+    }))
+}
+
+async fn list_user_notes(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<Vec<UserNoteResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can list user notes".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<String>, String, chrono::DateTime<chrono::Utc>)>(
+        r#"
+        SELECT n.id, n.user_id, n.author_id, u.email, n.content, n.created_at
+        FROM user_notes n
+        LEFT JOIN users u ON u.id = n.author_id AND u.deleted_at IS NULL
+        WHERE n.user_id = $1
+        ORDER BY n.created_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let notes: Vec<UserNoteResponse> = rows
+        .into_iter()
+        .map(|(id, uid, author_id, author_email, content, created_at)| UserNoteResponse {
+            id: id.to_string(),
+            user_id: uid.to_string(),
+            author_id: author_id.map(|a| a.to_string()),
+            author_email,
+            content,
+            created_at: created_at.to_rfc3339(),
+        })
+        .collect();
+
+    Ok(Json(notes))
+}
+
+async fn create_user_note(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+    Json(body): Json<CreateUserNoteRequest>,
+) -> Result<Json<UserNoteResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can create user notes".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let content = body.content.trim();
+    if content.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "Content is required".to_string(),
+                },
+            }),
+        ));
+    }
+    const MAX_CONTENT: usize = 10_000;
+    if content.len() > MAX_CONTENT {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_INPUT".to_string(),
+                    message: format!("Content must be at most {} characters", MAX_CONTENT),
+                },
+            }),
+        ));
+    }
+
+    let user_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if !user_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "USER_NOT_FOUND".to_string(),
+                    message: "User not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let note_id = Uuid::new_v4();
+    let now = Utc::now();
+
+    sqlx::query(
+        r#"
+        INSERT INTO user_notes (id, user_id, author_id, content, created_at)
+        VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind(note_id)
+    .bind(user_id)
+    .bind(claims.sub)
+    .bind(content)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INSERT_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let author_email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL")
+        .bind(claims.sub)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    Ok(Json(UserNoteResponse {
+        id: note_id.to_string(),
+        user_id: user_id.to_string(),
+        author_id: Some(claims.sub.to_string()),
+        author_email,
+        content: content.to_string(),
+        created_at: now.to_rfc3339(),
     }))
 }
 

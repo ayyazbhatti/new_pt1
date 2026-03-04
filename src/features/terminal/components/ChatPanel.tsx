@@ -198,10 +198,10 @@ export function ChatPanel() {
                       : 'bg-white/5 text-text/90 border border-white/10'
                   )}
                 >
-                  <div className="font-medium text-[10px] uppercase tracking-wider text-text-muted mb-0.5">
+                  <p className="text-sm leading-snug">{msg.text}</p>
+                  <div className="font-medium text-[10px] uppercase tracking-wider text-text-muted mt-1.5 text-right">
                     {msg.name} · {msg.time}
                   </div>
-                  <p className="text-sm leading-snug">{msg.text}</p>
                 </div>
               </div>
             ))

@@ -36,6 +36,12 @@ export async function getPositions(): Promise<Position[]> {
   return response.positions || []
 }
 
+/** Fetch positions for a specific user (admin only when viewing another user). Uses same endpoint; backend allows admin. */
+export async function getPositionsByUserId(userId: string): Promise<Position[]> {
+  const response = await http<PositionsResponse>(`/v1/users/${userId}/positions`)
+  return response.positions || []
+}
+
 export interface UpdatePositionSltpRequest {
   stop_loss?: string | null
   take_profit?: string | null

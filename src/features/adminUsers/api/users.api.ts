@@ -131,3 +131,58 @@ export async function sendNotificationToUser(
     body: JSON.stringify(payload),
   })
 }
+
+// --- User notes (Notes & Timeline tab) ---
+
+export interface UserNote {
+  id: string
+  userId: string
+  authorId: string | null
+  authorEmail: string | null
+  content: string
+  createdAt: string
+}
+
+/** List admin notes for a user (admin only). */
+export async function fetchUserNotes(userId: string): Promise<UserNote[]> {
+  const raw = await http<RawUserNote[] | { notes: RawUserNote[] }>(`/api/admin/user-notes/${userId}`)
+  const list = Array.isArray(raw) ? raw : (raw as { notes: RawUserNote[] }).notes
+  return (list || []).map(normalizeUserNote)
+}
+
+interface RawUserNote {
+  id: string
+  user_id?: string
+  author_id?: string | null
+  author_email?: string | null
+  content: string
+  created_at: string
+}
+
+function normalizeUserNote(n: RawUserNote): UserNote {
+  return {
+    id: n.id,
+    userId: n.user_id ?? '',
+    authorId: n.author_id ?? null,
+    authorEmail: n.author_email ?? null,
+    content: n.content,
+    createdAt: n.created_at,
+  }
+}
+
+export interface CreateUserNotePayload {
+  content: string
+}
+
+/** Create an admin note for a user (admin only). */
+export async function createUserNote(
+  userId: string,
+  payload: CreateUserNotePayload
+): Promise<UserNote> {
+  const body = { content: payload.content.trim() }
+  const raw = await http<RawUserNote>(`/api/admin/user-notes/${userId}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return normalizeUserNote(raw as RawUserNote)
+}

@@ -177,8 +177,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
 
   const handleView = (user: User) => {
     openModal(`user-details-${user.id}`, <UserDetailsModal user={user} />, {
-      title: `User Details - ${user.name}`,
-      size: 'xl',
+      variant: 'drawer',
     })
   }
 
@@ -267,21 +266,60 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
       accessorKey: 'id',
       header: 'User ID',
       cell: ({ row }) => {
-        return <span className="font-mono text-sm whitespace-nowrap">{row.getValue('id')}</span>
+        const user = row.original
+        return (
+          <button
+            type="button"
+            className="font-mono text-sm whitespace-nowrap text-left text-accent hover:underline cursor-pointer bg-transparent border-0 p-0"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleView(user)
+            }}
+            title="View user details"
+          >
+            {row.getValue('id') as string}
+          </button>
+        )
       },
     },
     {
       accessorKey: 'name',
       header: 'Name',
       cell: ({ row }) => {
-        return <span className="font-semibold text-text whitespace-nowrap">{row.getValue('name')}</span>
+        const user = row.original
+        return (
+          <button
+            type="button"
+            className="font-semibold text-text whitespace-nowrap text-left hover:underline cursor-pointer bg-transparent border-0 p-0"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleView(user)
+            }}
+            title="View user details"
+          >
+            {row.getValue('name') as string}
+          </button>
+        )
       },
     },
     {
       accessorKey: 'email',
       header: 'Email',
       cell: ({ row }) => {
-        return <span className="text-sm text-text-muted whitespace-nowrap">{row.getValue('email')}</span>
+        const user = row.original
+        return (
+          <button
+            type="button"
+            className="text-sm text-text-muted whitespace-nowrap text-left hover:underline cursor-pointer bg-transparent border-0 p-0"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleView(user)
+            }}
+            title="View user details"
+          >
+            {row.getValue('email') as string}
+          </button>
+        )
       },
     },
     {

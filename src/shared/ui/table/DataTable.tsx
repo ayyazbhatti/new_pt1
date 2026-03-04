@@ -113,13 +113,13 @@ const TableRow = memo(({
 }) => {
   const handleRowClick = (e: React.MouseEvent<HTMLTableRowElement>) => {
     const target = e.target as HTMLElement
-    if (target.closest('button, [role="button"], a, input, select, [data-no-row-click]')) return
+    if (target.closest('button, [role="button"], [role="combobox"], a, input, select, [data-no-row-click]')) return
     onRowClick?.(row.original)
   }
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTableRowElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
     const target = e.target as HTMLElement
-    if (target.closest('button, [role="button"], a, input, select')) return
+    if (target.closest('button, [role="button"], [role="combobox"], a, input, select, [data-no-row-click]')) return
     e.preventDefault()
     onRowClick?.(row.original)
   }
