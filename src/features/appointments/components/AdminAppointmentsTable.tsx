@@ -36,17 +36,17 @@ export function AdminAppointmentsTable({
 
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-700">
-      <table className="w-full">
+      <table className="w-full min-w-[800px]">
         <thead className="border-b border-slate-700 bg-slate-800">
           <tr>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400">User</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400">Title</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400">Scheduled</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400">Duration</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400">Status</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400">Type</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400">Created by</th>
-            <th className="px-4 py-3 text-right text-xs font-medium text-slate-400">Actions</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">User</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Title</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Scheduled</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Duration</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Status</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Type</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Created by</th>
+            <th className="px-4 py-3 text-right text-xs font-medium text-slate-400 whitespace-nowrap">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-700 bg-slate-800">
@@ -63,42 +63,48 @@ export function AdminAppointmentsTable({
                 onClick={() => onView(apt)}
                 className="cursor-pointer hover:bg-slate-700/50"
               >
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
+                <td className="px-4 py-3 align-middle">
+                  <div className="flex min-w-0 max-w-[180px] items-center gap-2">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-600 text-sm font-medium text-slate-300">
                       {(apt.user_name ?? apt.user_email ?? '?')[0].toUpperCase()}
                     </div>
-                    <div>
-                      <p className="font-medium text-white">{apt.user_name ?? '—'}</p>
-                      <p className="text-xs text-slate-400">{apt.user_email ?? '—'}</p>
-                    </div>
+                    <span className="min-w-0 truncate text-sm font-medium text-white" title={`${apt.user_name ?? '—'} ${apt.user_email ?? ''}`}>
+                      {apt.user_name ?? apt.user_email ?? '—'}
+                    </span>
                   </div>
                 </td>
-                <td className="px-4 py-3">
-                  <div>
-                    <p className="font-medium text-slate-200">{apt.title}</p>
+                <td className="px-4 py-3 align-middle max-w-[200px]">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="min-w-0 truncate font-medium text-slate-200" title={apt.title}>
+                      {apt.title}
+                    </span>
                     {apt.meeting_link && (
                       <a
                         href={apt.meeting_link}
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center gap-1 text-xs text-blue-400 hover:underline"
+                        className="shrink-0 text-blue-400 hover:underline"
+                        title="Meeting link"
                       >
-                        <Video className="h-3 w-3" /> Meeting link
+                        <Video className="h-3 w-3" />
                       </a>
                     )}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-sm text-slate-300">
+                <td className="px-4 py-3 align-middle whitespace-nowrap text-sm text-slate-300">
                   {formatDate(apt.scheduled_at)} {formatTime(apt.scheduled_at)}
                 </td>
-                <td className="px-4 py-3 text-sm text-slate-300">{apt.duration_minutes} min</td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 align-middle whitespace-nowrap text-sm text-slate-300">{apt.duration_minutes} min</td>
+                <td className="px-4 py-3 align-middle whitespace-nowrap">
                   <StatusBadge status={apt.status} />
                 </td>
-                <td className="px-4 py-3 capitalize text-slate-300">{apt.type}</td>
-                <td className="px-4 py-3 text-sm text-slate-400">{apt.admin_email ?? '—'}</td>
+                <td className="px-4 py-3 align-middle whitespace-nowrap capitalize text-slate-300">{apt.type}</td>
+                <td className="px-4 py-3 align-middle max-w-[160px]">
+                  <span className="block min-w-0 truncate text-sm text-slate-400" title={apt.admin_email ?? undefined}>
+                    {apt.admin_email ?? '—'}
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-1">
                     <Button

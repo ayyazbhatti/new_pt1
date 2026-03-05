@@ -25,7 +25,6 @@ import {
   Lock,
   TrendingUp,
   TrendingDown,
-  CreditCard,
   ArrowDownCircle,
   ArrowUpCircle,
   Plus,
@@ -42,6 +41,7 @@ import {
 } from '@/features/support/api/supportChat.api'
 import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
+import { requestPasswordResetOTP } from '@/shared/api/auth.api'
 import type { Appointment } from '@/features/appointments/types'
 import type { UserSearchResult } from '@/features/appointments/types'
 import {
@@ -95,6 +95,59 @@ function getStoredUserDetailsTab(): (typeof TAB_VALUES)[number] {
   if (typeof sessionStorage === 'undefined') return 'overview'
   const stored = sessionStorage.getItem(USER_DETAILS_TAB_STORAGE_KEY)
   return TAB_VALUES.includes(stored as (typeof TAB_VALUES)[number]) ? (stored as (typeof TAB_VALUES)[number]) : 'overview'
+}
+
+interface ResetPasswordConfirmModalProps {
+  email: string
+  modalKey: string
+}
+
+function ResetPasswordConfirmModal({ email, modalKey }: ResetPasswordConfirmModalProps) {
+  const closeModal = useModalStore((s) => s.closeModal)
+  const [sending, setSending] = useState(false)
+
+  const handleSend = async () => {
+    if (!email?.trim()) return
+    setSending(true)
+    try {
+      const res = await requestPasswordResetOTP(email.trim())
+      if (res.success) {
+        toast.success(res.message ?? 'Password reset OTP sent to user email.')
+        closeModal(modalKey)
+      } else {
+        toast.error(res.error ?? 'Failed to send reset')
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to send password reset')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-300">
+        Send a password reset OTP to <strong className="text-white">{email}</strong>? The user will receive an email with a 6-digit verification code valid for 10 minutes.
+      </p>
+      <div className="flex justify-end gap-2 border-t border-slate-700 pt-4">
+        <button
+          type="button"
+          onClick={() => closeModal(modalKey)}
+          className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white hover:bg-slate-600"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={sending}
+          onClick={handleSend}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-70"
+        >
+          {sending ? 'Sending…' : 'Send OTP'}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 interface UserDetailsModalProps {
@@ -748,81 +801,6 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                 />
                 <p className="mt-1 text-xs text-slate-400">Per-symbol limits may apply.</p>
               </div>
-              <div className="md:col-span-2">
-                <label className="mb-2 block text-sm font-medium text-slate-300">User ID</label>
-                <div className="flex gap-2">
-                  <input
-                    readOnly
-                    value={userState.id}
-                    className="flex-1 rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 font-mono text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(userState.id, 'User ID')}
-                    className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm text-white hover:bg-blue-700"
-                  >
-                    <Key className="h-4 w-4" />
-                    Copy
-                  </button>
-                </div>
-              </div>
-              <div className="md:col-span-3">
-                <label className="mb-2 block text-sm font-medium text-slate-300">Trading Accounts</label>
-                <div className="rounded-lg border border-slate-600 bg-slate-700/50 p-4">
-                  <div className="flex items-center gap-2 text-sm text-slate-400">
-                    <CreditCard className="h-5 w-5" />
-                    <span className="font-mono">—</span>
-                    <span>No accounts found</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-slate-700 pt-4">
-              {isEditMode ? (
-                <>
-                  <p className="text-xs text-blue-400">✏️ Edit mode - Make changes and click Save</p>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditMode(false)}
-                    className="rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 sm:px-4"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isSaving}
-                    onClick={async () => {
-                      setIsSaving(true)
-                      await new Promise((r) => setTimeout(r, 500))
-                      setIsSaving(false)
-                      setIsEditMode(false)
-                      toast.success('Changes saved')
-                    }}
-                    className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-70 sm:px-4"
-                  >
-                    {isSaving ? 'Saving...' : 'Save Changes'}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditMode(true)}
-                    className="flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 sm:px-4 sm:text-base"
-                  >
-                    <Edit className="h-4 w-4" />
-                    Edit Profile
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => toast.success('Reset password link sent')}
-                    className="flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 sm:px-4 sm:text-base"
-                  >
-                    <Key className="h-4 w-4" />
-                    Reset Password
-                  </button>
-                </>
-              )}
             </div>
           </div>
         </TabsContent>
@@ -1220,6 +1198,65 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Overview tab footer: Edit Profile & Reset Password */}
+      {activeTab === 'overview' && (
+        <div className="flex-shrink-0 border-t border-slate-700 px-3 py-3 sm:px-4 sm:py-4 bg-slate-800/80 flex flex-wrap items-center gap-3">
+          {isEditMode ? (
+            <>
+              <p className="text-xs text-blue-400">✏️ Edit mode — Make changes and click Save</p>
+              <button
+                type="button"
+                onClick={() => setIsEditMode(false)}
+                className="rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 sm:px-4"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={async () => {
+                  setIsSaving(true)
+                  await new Promise((r) => setTimeout(r, 500))
+                  setIsSaving(false)
+                  setIsEditMode(false)
+                  toast.success('Changes saved')
+                }}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-70 sm:px-4"
+              >
+                {isSaving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setIsEditMode(true)}
+                className="flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 sm:px-4 sm:text-base"
+              >
+                <Edit className="h-4 w-4" />
+                Edit Profile
+              </button>
+              <button
+                type="button"
+                disabled={!userState.email}
+                onClick={() => {
+                  if (!userState.email?.trim()) return
+                  openModal(
+                    'reset-pwd',
+                    <ResetPasswordConfirmModal email={userState.email} modalKey="reset-pwd" />,
+                    { title: 'Reset password', size: 'sm' }
+                  )
+                }}
+                className="flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 disabled:opacity-70 sm:px-4 sm:text-base"
+              >
+                <Key className="h-4 w-4" />
+                Reset Password
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </>
   )
 }
