@@ -1,13 +1,14 @@
 import { ReactNode, useEffect } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { UserCallProvider } from '@/features/call/UserCallProvider'
 
 interface AuthGuardProps {
   children: ReactNode
 }
 
 export function AuthGuard({ children }: AuthGuardProps) {
-  const { isAuthenticated, isHydrated, hydrateFromStorage } = useAuthStore()
+  const { isAuthenticated, isHydrated, hydrateFromStorage, user } = useAuthStore()
   const location = useLocation()
 
   useEffect(() => {
@@ -30,6 +31,14 @@ export function AuthGuard({ children }: AuthGuardProps) {
     return <Navigate to="/login" state={{ from: location }} replace />
   }
 
-  return <>{children}</>
+  // Incoming-call UI for non-admin users (so they see the ring modal from any page: terminal, trading, user panel)
+  const showCallProvider = user?.role === 'user'
+
+  return (
+    <>
+      {children}
+      {showCallProvider && <UserCallProvider />}
+    </>
+  )
 }
 

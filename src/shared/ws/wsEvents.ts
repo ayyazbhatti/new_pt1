@@ -154,6 +154,13 @@ export type WsOutboundEvent =
       type: 'deposit.request.approve'
       payload: DepositRequestApprovePayload
     }
+  | { type: 'call.initiate'; target_user_id: string; caller_display_name?: string }
+  | { type: 'call.answer'; call_id: string }
+  | { type: 'call.reject'; call_id: string }
+  | { type: 'call.end'; call_id: string }
+  | { type: 'call.webrtc.offer'; call_id: string; sdp: string }
+  | { type: 'call.webrtc.answer'; call_id: string; sdp: string }
+  | { type: 'call.webrtc.ice'; call_id: string; candidate: string }
 
 // Server → Client Events
 export type WsInboundEvent =
@@ -281,4 +288,39 @@ export type WsInboundEvent =
       type: 'error'
       message: string
     }
+  | {
+      type: 'call.incoming'
+      call_id: string
+      admin_user_id: string
+      admin_display_name?: string
+    }
+  | {
+      type: 'call.ringing'
+      call_id: string
+      target_user_id: string
+    }
+  | {
+      type: 'call.accepted'
+      call_id: string
+      target_user_id: string
+    }
+  | {
+      type: 'call.rejected'
+      call_id: string
+      target_user_id: string
+    }
+  | {
+      type: 'call.ended'
+      call_id: string
+      ended_by: string
+    }
+  | {
+      type: 'call.error'
+      call_id?: string
+      code: string
+      message: string
+    }
+  | { type: 'call.webrtc.offer'; call_id: string; sdp: string }
+  | { type: 'call.webrtc.answer'; call_id: string; sdp: string }
+  | { type: 'call.webrtc.ice'; call_id: string; candidate: string }
 

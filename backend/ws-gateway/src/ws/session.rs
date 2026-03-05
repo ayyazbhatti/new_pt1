@@ -1,4 +1,5 @@
 use crate::auth::jwt::{Claims, JwtAuth};
+use crate::state::call_registry::{CallRegistry, CallState, CallStatus};
 use crate::state::connection_registry::{Connection, ConnectionRegistry};
 use crate::validation::message_validation::MessageValidator;
 use crate::ws::protocol::{ClientMessage, ServerMessage};
@@ -19,6 +20,7 @@ pub struct Session {
     validator: Arc<MessageValidator>,
     jwt_auth: Arc<JwtAuth>,
     broadcaster: Arc<Broadcaster>,
+    call_registry: Arc<CallRegistry>,
     redis_url: String,
 }
 
@@ -28,6 +30,7 @@ impl Session {
         validator: Arc<MessageValidator>,
         jwt_auth: Arc<JwtAuth>,
         broadcaster: Arc<Broadcaster>,
+        call_registry: Arc<CallRegistry>,
         redis_url: String,
     ) -> Self {
         let conn_id = Uuid::new_v4();
@@ -38,6 +41,7 @@ impl Session {
             validator,
             jwt_auth,
             broadcaster,
+            call_registry,
             redis_url,
         }
     }
@@ -95,6 +99,7 @@ impl Session {
         let validator = self.validator.clone();
         let jwt_auth = self.jwt_auth.clone();
         let broadcaster = self.broadcaster.clone();
+        let call_registry = self.call_registry.clone();
         let response_tx_clone = response_tx.clone();
         let redis_url_for_balance = redis_url.clone();
 
@@ -173,6 +178,7 @@ impl Session {
                                             conn_id,
                                             user_id: claims.sub.clone(),
                                             group_id: claims.group_id.clone(),
+                                            role: claims.role.clone(),
                                             subscriptions: Arc::new(dashmap::DashMap::new()),
                                             last_heartbeat: std::time::Instant::now(),
                                         };
@@ -267,6 +273,333 @@ impl Session {
                                 if let Ok(json) = pong.to_json() {
                                     let _ = response_tx_clone.send(Message::Text(json));
                                 }
+                            }
+                            ClientMessage::CallInitiate {
+                                target_user_id,
+                                caller_display_name,
+                            } => {
+                                let conn = match registry.get(&conn_id) {
+                                    Some(c) => c,
+                                    None => {
+                                        let err = ServerMessage::CallError {
+                                            call_id: None,
+                                            code: "NOT_AUTHENTICATED".to_string(),
+                                            message: "Must authenticate first".to_string(),
+                                        };
+                                        if let Ok(json) = err.to_json() {
+                                            let _ = response_tx_clone.send(Message::Text(json));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                if conn.role != "admin" {
+                                    let err = ServerMessage::CallError {
+                                        call_id: None,
+                                        code: "FORBIDDEN".to_string(),
+                                        message: "Only admins can initiate calls".to_string(),
+                                    };
+                                    if let Ok(json) = err.to_json() {
+                                        let _ = response_tx_clone.send(Message::Text(json));
+                                    }
+                                    continue;
+                                }
+                                if target_user_id == conn.user_id {
+                                    let err = ServerMessage::CallError {
+                                        call_id: None,
+                                        code: "INVALID_TARGET".to_string(),
+                                        message: "Cannot call yourself".to_string(),
+                                    };
+                                    if let Ok(json) = err.to_json() {
+                                        let _ = response_tx_clone.send(Message::Text(json));
+                                    }
+                                    continue;
+                                }
+                                let call_id = Uuid::new_v4().to_string();
+                                let admin_user_id = conn.user_id.clone();
+                                let state = CallState {
+                                    call_id: call_id.clone(),
+                                    admin_user_id: admin_user_id.clone(),
+                                    target_user_id: target_user_id.clone(),
+                                    status: CallStatus::Ringing,
+                                    created_at: std::time::Instant::now(),
+                                };
+                                call_registry.insert(state);
+                                let target_conn_ids = registry.get_user_connections(&target_user_id);
+                                if target_conn_ids.is_empty() {
+                                    let _ = call_registry.remove(&call_id);
+                                    let err = ServerMessage::CallError {
+                                        call_id: Some(call_id),
+                                        code: "USER_OFFLINE".to_string(),
+                                        message: "User is offline".to_string(),
+                                    };
+                                    if let Ok(json) = err.to_json() {
+                                        let _ = response_tx_clone.send(Message::Text(json));
+                                    }
+                                    continue;
+                                }
+                                let incoming = ServerMessage::CallIncoming {
+                                    call_id: call_id.clone(),
+                                    admin_user_id: admin_user_id.clone(),
+                                    admin_display_name: caller_display_name.clone(),
+                                };
+                                broadcaster.send_to_connections(&target_conn_ids, incoming);
+                                let ringing = ServerMessage::CallRinging {
+                                    call_id: call_id.clone(),
+                                    target_user_id: target_user_id.clone(),
+                                };
+                                if let Ok(json) = ringing.to_json() {
+                                    let _ = response_tx_clone.send(Message::Text(json));
+                                }
+                                // Ring timeout: after 60s send call.ended to admin if still ringing
+                                let cr = call_registry.clone();
+                                let bc = broadcaster.clone();
+                                let reg = registry.clone();
+                                let cid = call_id.clone();
+                                let aid = admin_user_id.clone();
+                                let tid = target_user_id.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                                    if let Some(_state) = cr.remove_if_ringing(&cid) {
+                                        let ended = ServerMessage::CallEnded {
+                                            call_id: cid.clone(),
+                                            ended_by: "timeout".to_string(),
+                                        };
+                                        let admin_conns = reg.get_user_connections(&aid);
+                                        bc.send_to_connections(&admin_conns, ended.clone());
+                                        let user_conns = reg.get_user_connections(&tid);
+                                        bc.send_to_connections(&user_conns, ended);
+                                    }
+                                });
+                            }
+                            ClientMessage::CallAnswer { call_id } => {
+                                let conn = match registry.get(&conn_id) {
+                                    Some(c) => c,
+                                    None => {
+                                        let err = ServerMessage::CallError {
+                                            call_id: Some(call_id.clone()),
+                                            code: "NOT_AUTHENTICATED".to_string(),
+                                            message: "Must authenticate first".to_string(),
+                                        };
+                                        if let Ok(json) = err.to_json() {
+                                            let _ = response_tx_clone.send(Message::Text(json));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let state = match call_registry.get(&call_id) {
+                                    Some(s) => s,
+                                    None => {
+                                        let err = ServerMessage::CallError {
+                                            call_id: Some(call_id),
+                                            code: "CALL_NOT_FOUND".to_string(),
+                                            message: "Call not found or already ended".to_string(),
+                                        };
+                                        if let Ok(json) = err.to_json() {
+                                            let _ = response_tx_clone.send(Message::Text(json));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                if state.target_user_id != conn.user_id {
+                                    let err = ServerMessage::CallError {
+                                        call_id: Some(call_id),
+                                        code: "FORBIDDEN".to_string(),
+                                        message: "Not authorized to answer this call".to_string(),
+                                    };
+                                    if let Ok(json) = err.to_json() {
+                                        let _ = response_tx_clone.send(Message::Text(json));
+                                    }
+                                    continue;
+                                }
+                                if state.status != CallStatus::Ringing {
+                                    let err = ServerMessage::CallError {
+                                        call_id: Some(call_id),
+                                        code: "ALREADY_ANSWERED".to_string(),
+                                        message: "Call already answered or ended".to_string(),
+                                    };
+                                    if let Ok(json) = err.to_json() {
+                                        let _ = response_tx_clone.send(Message::Text(json));
+                                    }
+                                    continue;
+                                }
+                                if let Some(mut entry) = call_registry.get_mut(&call_id) {
+                                    entry.status = CallStatus::Accepted;
+                                }
+                                let accepted = ServerMessage::CallAccepted {
+                                    call_id: call_id.clone(),
+                                    target_user_id: state.target_user_id.clone(),
+                                };
+                                let admin_conns = registry.get_user_connections(&state.admin_user_id);
+                                broadcaster.send_to_connections(&admin_conns, accepted);
+                            }
+                            ClientMessage::CallReject { call_id } => {
+                                let conn = match registry.get(&conn_id) {
+                                    Some(c) => c,
+                                    None => {
+                                        let err = ServerMessage::CallError {
+                                            call_id: Some(call_id.clone()),
+                                            code: "NOT_AUTHENTICATED".to_string(),
+                                            message: "Must authenticate first".to_string(),
+                                        };
+                                        if let Ok(json) = err.to_json() {
+                                            let _ = response_tx_clone.send(Message::Text(json));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let state = match call_registry.remove(&call_id) {
+                                    Some(s) => s,
+                                    None => {
+                                        let err = ServerMessage::CallError {
+                                            call_id: Some(call_id.clone()),
+                                            code: "CALL_NOT_FOUND".to_string(),
+                                            message: "Call not found or already ended".to_string(),
+                                        };
+                                        if let Ok(json) = err.to_json() {
+                                            let _ = response_tx_clone.send(Message::Text(json));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                if state.target_user_id != conn.user_id {
+                                    call_registry.insert(state);
+                                    let err = ServerMessage::CallError {
+                                        call_id: Some(call_id),
+                                        code: "FORBIDDEN".to_string(),
+                                        message: "Not authorized".to_string(),
+                                    };
+                                    if let Ok(json) = err.to_json() {
+                                        let _ = response_tx_clone.send(Message::Text(json));
+                                    }
+                                    continue;
+                                }
+                                let rejected = ServerMessage::CallRejected {
+                                    call_id: call_id.clone(),
+                                    target_user_id: state.target_user_id.clone(),
+                                };
+                                let admin_conns = registry.get_user_connections(&state.admin_user_id);
+                                broadcaster.send_to_connections(&admin_conns, rejected);
+                            }
+                            ClientMessage::CallEnd { call_id } => {
+                                let conn = match registry.get(&conn_id) {
+                                    Some(c) => c,
+                                    None => {
+                                        let err = ServerMessage::CallError {
+                                            call_id: Some(call_id.clone()),
+                                            code: "NOT_AUTHENTICATED".to_string(),
+                                            message: "Must authenticate first".to_string(),
+                                        };
+                                        if let Ok(json) = err.to_json() {
+                                            let _ = response_tx_clone.send(Message::Text(json));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let state = match call_registry.remove(&call_id) {
+                                    Some(s) => s,
+                                    None => {
+                                        let err = ServerMessage::CallError {
+                                            call_id: Some(call_id.clone()),
+                                            code: "CALL_NOT_FOUND".to_string(),
+                                            message: "Call not found or already ended".to_string(),
+                                        };
+                                        if let Ok(json) = err.to_json() {
+                                            let _ = response_tx_clone.send(Message::Text(json));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let is_admin = conn.user_id == state.admin_user_id;
+                                if conn.user_id != state.admin_user_id && conn.user_id != state.target_user_id {
+                                    call_registry.insert(state);
+                                    let err = ServerMessage::CallError {
+                                        call_id: Some(call_id),
+                                        code: "FORBIDDEN".to_string(),
+                                        message: "Not a participant in this call".to_string(),
+                                    };
+                                    if let Ok(json) = err.to_json() {
+                                        let _ = response_tx_clone.send(Message::Text(json));
+                                    }
+                                    continue;
+                                }
+                                let ended_by = if is_admin { "admin" } else { "user" }.to_string();
+                                let ended = ServerMessage::CallEnded {
+                                    call_id: call_id.clone(),
+                                    ended_by: ended_by.clone(),
+                                };
+                                let admin_conns = registry.get_user_connections(&state.admin_user_id);
+                                broadcaster.send_to_connections(&admin_conns, ended.clone());
+                                let user_conns = registry.get_user_connections(&state.target_user_id);
+                                broadcaster.send_to_connections(&user_conns, ended);
+                            }
+                            ClientMessage::CallWebrtcOffer { call_id, sdp } => {
+                                let conn = match registry.get(&conn_id) {
+                                    Some(c) => c,
+                                    None => continue,
+                                };
+                                let state = match call_registry.get(&call_id) {
+                                    Some(s) => s,
+                                    None => continue,
+                                };
+                                if conn.user_id != state.admin_user_id && conn.user_id != state.target_user_id {
+                                    continue;
+                                }
+                                let other_id = if conn.user_id == state.admin_user_id {
+                                    state.target_user_id.clone()
+                                } else {
+                                    state.admin_user_id.clone()
+                                };
+                                let msg = ServerMessage::CallWebrtcOffer {
+                                    call_id: call_id.clone(),
+                                    sdp: sdp.clone(),
+                                };
+                                broadcaster.send_to_connections(&registry.get_user_connections(&other_id), msg);
+                            }
+                            ClientMessage::CallWebrtcAnswer { call_id, sdp } => {
+                                let conn = match registry.get(&conn_id) {
+                                    Some(c) => c,
+                                    None => continue,
+                                };
+                                let state = match call_registry.get(&call_id) {
+                                    Some(s) => s,
+                                    None => continue,
+                                };
+                                if conn.user_id != state.admin_user_id && conn.user_id != state.target_user_id {
+                                    continue;
+                                }
+                                let other_id = if conn.user_id == state.admin_user_id {
+                                    state.target_user_id.clone()
+                                } else {
+                                    state.admin_user_id.clone()
+                                };
+                                let msg = ServerMessage::CallWebrtcAnswer {
+                                    call_id: call_id.clone(),
+                                    sdp: sdp.clone(),
+                                };
+                                broadcaster.send_to_connections(&registry.get_user_connections(&other_id), msg);
+                            }
+                            ClientMessage::CallWebrtcIce { call_id, candidate } => {
+                                let conn = match registry.get(&conn_id) {
+                                    Some(c) => c,
+                                    None => continue,
+                                };
+                                let state = match call_registry.get(&call_id) {
+                                    Some(s) => s,
+                                    None => continue,
+                                };
+                                if conn.user_id != state.admin_user_id && conn.user_id != state.target_user_id {
+                                    continue;
+                                }
+                                let other_id = if conn.user_id == state.admin_user_id {
+                                    state.target_user_id.clone()
+                                } else {
+                                    state.admin_user_id.clone()
+                                };
+                                let msg = ServerMessage::CallWebrtcIce {
+                                    call_id: call_id.clone(),
+                                    candidate: candidate.clone(),
+                                };
+                                broadcaster.send_to_connections(&registry.get_user_connections(&other_id), msg);
                             }
                         }
                     }

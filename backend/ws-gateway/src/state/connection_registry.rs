@@ -12,6 +12,8 @@ pub struct Connection {
     pub conn_id: Uuid,
     pub user_id: String,
     pub group_id: Option<String>,
+    /// User role from JWT (e.g. "admin", "user") for call and other role-based checks.
+    pub role: String,
     pub subscriptions: Arc<DashMap<String, Vec<String>>>, // symbol -> channels
     pub last_heartbeat: std::time::Instant,
 }

@@ -6,6 +6,7 @@ use axum::Router;
 use std::sync::Arc;
 use crate::auth::jwt::JwtAuth;
 use crate::config::Config;
+use crate::state::call_registry::CallRegistry;
 use crate::state::connection_registry::ConnectionRegistry;
 use crate::validation::message_validation::MessageValidator;
 use crate::ws::session::Session;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub validator: Arc<MessageValidator>,
     pub jwt_auth: Arc<JwtAuth>,
     pub broadcaster: Arc<Broadcaster>,
+    pub call_registry: Arc<CallRegistry>,
     pub redis_url: String,
 }
 
@@ -37,6 +39,7 @@ async fn ws_handler(
             state.validator.clone(),
             state.jwt_auth.clone(),
             state.broadcaster.clone(),
+            state.call_registry.clone(),
             state.redis_url.clone(),
         );
         session.handle(socket).await;

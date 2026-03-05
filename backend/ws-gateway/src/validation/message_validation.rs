@@ -63,6 +63,48 @@ impl MessageValidator {
             ClientMessage::Ping => {
                 // No validation needed
             }
+            ClientMessage::CallInitiate { target_user_id, .. } => {
+                if target_user_id.is_empty() {
+                    return Err(anyhow::anyhow!("target_user_id cannot be empty"));
+                }
+                if target_user_id.len() > 128 {
+                    return Err(anyhow::anyhow!("target_user_id too long"));
+                }
+            }
+            ClientMessage::CallAnswer { call_id }
+            | ClientMessage::CallReject { call_id }
+            | ClientMessage::CallEnd { call_id } => {
+                if call_id.is_empty() {
+                    return Err(anyhow::anyhow!("call_id cannot be empty"));
+                }
+                if uuid::Uuid::parse_str(call_id).is_err() {
+                    return Err(anyhow::anyhow!("call_id must be a valid UUID"));
+                }
+            }
+            ClientMessage::CallWebrtcOffer { call_id, sdp } => {
+                if call_id.is_empty() || uuid::Uuid::parse_str(call_id).is_err() {
+                    return Err(anyhow::anyhow!("call_id must be a valid UUID"));
+                }
+                if sdp.is_empty() || sdp.len() > 16384 {
+                    return Err(anyhow::anyhow!("sdp must be 1-16384 bytes"));
+                }
+            }
+            ClientMessage::CallWebrtcAnswer { call_id, sdp } => {
+                if call_id.is_empty() || uuid::Uuid::parse_str(call_id).is_err() {
+                    return Err(anyhow::anyhow!("call_id must be a valid UUID"));
+                }
+                if sdp.is_empty() || sdp.len() > 16384 {
+                    return Err(anyhow::anyhow!("sdp must be 1-16384 bytes"));
+                }
+            }
+            ClientMessage::CallWebrtcIce { call_id, candidate } => {
+                if call_id.is_empty() || uuid::Uuid::parse_str(call_id).is_err() {
+                    return Err(anyhow::anyhow!("call_id must be a valid UUID"));
+                }
+                if candidate.len() > 2048 {
+                    return Err(anyhow::anyhow!("candidate too long"));
+                }
+            }
         }
 
         Ok(())

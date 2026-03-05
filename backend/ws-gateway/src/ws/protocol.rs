@@ -18,6 +18,24 @@ pub enum ClientMessage {
     },
     #[serde(rename = "ping")]
     Ping,
+    #[serde(rename = "call.initiate")]
+    CallInitiate {
+        target_user_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caller_display_name: Option<String>,
+    },
+    #[serde(rename = "call.answer")]
+    CallAnswer { call_id: String },
+    #[serde(rename = "call.reject")]
+    CallReject { call_id: String },
+    #[serde(rename = "call.end")]
+    CallEnd { call_id: String },
+    #[serde(rename = "call.webrtc.offer")]
+    CallWebrtcOffer { call_id: String, sdp: String },
+    #[serde(rename = "call.webrtc.answer")]
+    CallWebrtcAnswer { call_id: String, sdp: String },
+    #[serde(rename = "call.webrtc.ice")]
+    CallWebrtcIce { call_id: String, candidate: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +122,46 @@ pub enum ServerMessage {
     AccountSummaryUpdated {
         payload: serde_json::Value,
     },
+    // Admin call user – signaling only
+    #[serde(rename = "call.incoming")]
+    CallIncoming {
+        call_id: String,
+        admin_user_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        admin_display_name: Option<String>,
+    },
+    #[serde(rename = "call.ringing")]
+    CallRinging {
+        call_id: String,
+        target_user_id: String,
+    },
+    #[serde(rename = "call.accepted")]
+    CallAccepted {
+        call_id: String,
+        target_user_id: String,
+    },
+    #[serde(rename = "call.rejected")]
+    CallRejected {
+        call_id: String,
+        target_user_id: String,
+    },
+    #[serde(rename = "call.ended")]
+    CallEnded {
+        call_id: String,
+        ended_by: String,
+    },
+    #[serde(rename = "call.error")]
+    CallError {
+        call_id: Option<String>,
+        code: String,
+        message: String,
+    },
+    #[serde(rename = "call.webrtc.offer")]
+    CallWebrtcOffer { call_id: String, sdp: String },
+    #[serde(rename = "call.webrtc.answer")]
+    CallWebrtcAnswer { call_id: String, sdp: String },
+    #[serde(rename = "call.webrtc.ice")]
+    CallWebrtcIce { call_id: String, candidate: String },
 }
 
 impl ServerMessage {

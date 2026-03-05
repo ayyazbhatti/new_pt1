@@ -9,8 +9,8 @@ pub struct Claims {
     pub sub: String, // user_id (can be UUID string)
     pub email: String,
     pub role: String,
-    /// Group ID from token; accept both "group_id" and "groupId" (camelCase). Required for per-group (marked-up) prices.
-    #[serde(alias = "groupId", deserialize_with = "deserialize_optional_group_id", skip_serializing_if = "Option::is_none")]
+    /// Group ID from token; accept both "group_id" and "groupId" (camelCase). Missing field defaults to None (e.g. admin tokens).
+    #[serde(default, alias = "groupId", deserialize_with = "deserialize_optional_group_id", skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
     pub exp: i64,
     pub iat: i64,

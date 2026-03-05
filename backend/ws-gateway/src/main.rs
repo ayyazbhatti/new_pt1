@@ -17,6 +17,7 @@ use anyhow::Result;
 use config::Config;
 use ws::server::{AppState, create_router};
 use auth::jwt::JwtAuth;
+use state::call_registry::CallRegistry;
 use state::connection_registry::ConnectionRegistry;
 use validation::message_validation::MessageValidator;
 use stream::redis_subscriber::RedisSubscriber;
@@ -89,12 +90,16 @@ async fn main() -> Result<()> {
     // Create broadcaster (spawns internal task)
     let broadcaster = Arc::new(Broadcaster::new(registry.clone(), message_rx));
 
+    // Call registry for admin-call-user signaling
+    let call_registry = Arc::new(CallRegistry::new());
+
     // Create app state
     let app_state = AppState {
         registry: registry.clone(),
         validator: validator.clone(),
         jwt_auth: jwt_auth.clone(),
         broadcaster: broadcaster.clone(),
+        call_registry: call_registry.clone(),
         redis_url: config.redis.url.clone(),
     };
 

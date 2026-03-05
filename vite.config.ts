@@ -74,6 +74,7 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
+    // HTTP by default so Chrome works. On localhost the mic works over HTTP; for other devices use a tunnel (e.g. ngrok) or HTTPS proxy.
     proxy: {
       // /ws-health must come before /ws so GET /ws-health is not matched by /ws
       // ws-gateway: WebSocket on WS_PORT (3003), health on HTTP_PORT (9002)

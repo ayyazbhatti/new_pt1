@@ -47,6 +47,15 @@ impl Broadcaster {
         self.connection_txs.remove(&conn_id);
     }
 
+    /// Send a message to specific connections (e.g. for call signaling). Used only from session.
+    pub fn send_to_connections(&self, conn_ids: &[Uuid], msg: ServerMessage) {
+        for conn_id in conn_ids {
+            if let Some(tx) = self.connection_txs.get(conn_id) {
+                let _ = tx.send(msg.clone());
+            }
+        }
+    }
+
     async fn handle_message(
         registry: &ConnectionRegistry,
         connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
