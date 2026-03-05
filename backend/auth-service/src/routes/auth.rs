@@ -305,12 +305,16 @@ async fn send_password_reset_otp_email(
             .replace("{{site_name}}", site_name),
         None => "Reset your password".to_string(),
     };
-    let body_html = build_password_reset_email_html(site_name, &first_name, otp);
+    // Use plain text (same as test email) so delivery matches Admin → Settings → Test email; some providers filter HTML.
+    let body_plain = format!(
+        "Hi {},\n\nYou requested to reset your password. Your verification code is:\n\n{}\n\nThis code expires in 10 minutes. Enter it on the password reset page to set a new password.\n\nIf you did not request this, you can safely ignore this email.\n\n— {} Team",
+        first_name, otp, site_name
+    );
     let config = config.clone();
     let to_email = to_email.to_string();
     tokio::task::spawn_blocking(move || {
-        tracing::info!("Sending password reset OTP email to {}", to_email);
-        send_email_html_sync(&config, &to_email, &subject, &body_html)
+        tracing::info!("Sending password reset OTP email (plain text) to {}", to_email);
+        send_email_sync(&config, &to_email, &subject, &body_plain)
     })
     .await
     .map_err(|e| anyhow::anyhow!("join: {}", e))??;

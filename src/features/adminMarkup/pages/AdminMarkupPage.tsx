@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { ContentShell } from '@/shared/layout'
+import { ContentShell, PageHeader } from '@/shared/layout'
 import { useModalStore } from '@/app/store'
 import { useMarkupProfiles } from '../hooks/useMarkup'
 import { MarkupProfile } from '../types/markup'
@@ -7,6 +7,7 @@ import { CreateEditPriceStreamModal } from '../modals/CreateEditPriceStreamModal
 import { DeletePriceStreamModal } from '../modals/DeletePriceStreamModal'
 import { TransferSettingsModal } from '../modals/TransferSettingsModal'
 import { ConfigureMarkupsModal } from '../modals/ConfigureMarkupsModal'
+import { Button } from '@/shared/ui/button'
 import {
   Plus,
   Search,
@@ -80,11 +81,10 @@ export function AdminMarkupPage() {
 
   if (isLoading) {
     return (
-      <ContentShell className="bg-slate-900 min-h-[calc(100vh-8rem)] rounded-lg border border-slate-700/50">
+      <ContentShell>
+        <PageHeader title="Price Streams Management" description="Manage price stream configurations" />
         <div className="flex items-center justify-center h-64 p-4 sm:p-6">
-          <p className="text-sm sm:text-base text-slate-400">
-            Loading price streams...
-          </p>
+          <p className="text-sm text-text-muted">Loading price streams...</p>
         </div>
       </ContentShell>
     )
@@ -92,54 +92,41 @@ export function AdminMarkupPage() {
 
   if (error) {
     return (
-      <ContentShell className="bg-slate-900 min-h-[calc(100vh-8rem)] rounded-lg border border-slate-700/50">
-        <div className="flex items-center justify-center h-64 p-4 sm:p-6">
-          <p className="text-red-400 text-sm sm:text-base">
-            Failed to load price streams
-          </p>
-        </div>
+      <ContentShell>
+        <PageHeader title="Price Streams Management" description="Manage price stream configurations" />
+        <p className="text-sm text-danger">Failed to load price streams</p>
       </ContentShell>
     )
   }
 
   return (
-    <ContentShell className="space-y-4 sm:space-y-6 bg-slate-900 text-white min-h-[calc(100vh-8rem)] rounded-lg border border-slate-700/50">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-white">
-            Price Streams Management
-          </h1>
-          <p className="text-sm sm:text-base text-slate-400 mt-0.5">
-            Manage price stream configurations
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={handleNewStream}
-          className="flex items-center justify-center sm:justify-start space-x-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm sm:text-base w-full sm:w-auto"
-        >
-          <Plus className="w-4 h-4 flex-shrink-0" />
-          <span>New Stream</span>
-        </button>
-      </div>
-
+    <ContentShell>
+      <PageHeader
+        title="Price Streams Management"
+        description="Manage price stream configurations"
+        actions={
+          <Button onClick={handleNewStream}>
+            <Plus className="h-4 w-4 mr-2" />
+            New Stream
+          </Button>
+        }
+      />
       {/* Search */}
-      <div className="flex items-center space-x-4">
-        <div className="relative flex-1 w-full sm:max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+      <div className="mb-6 flex items-center">
+        <div className="relative w-full max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search price streams..."
-            className="w-full pl-10 pr-10 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm sm:text-base"
+            className="w-full rounded-lg border border-border bg-surface-2 pl-10 pr-10 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent"
           />
           {searchTerm && (
             <button
               type="button"
               onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
               aria-label="Clear search"
             >
               <X className="h-4 w-4" />
@@ -149,21 +136,21 @@ export function AdminMarkupPage() {
       </div>
 
       {/* Table */}
-      <div className="border border-slate-600 rounded-lg overflow-hidden bg-slate-800/50">
+      <div className="overflow-hidden rounded-lg border border-border bg-surface-2">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[600px]">
             <thead>
-              <tr className="border-b border-slate-600 bg-slate-800">
-                <th className="text-left py-3 px-4 text-slate-300 font-medium text-base">
+              <tr className="border-b border-border bg-surface-2">
+                <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
                   Name
                 </th>
-                <th className="text-left py-3 px-4 text-slate-300 font-medium text-base">
+                <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
                   Groups
                 </th>
-                <th className="text-left py-3 px-4 text-slate-300 font-medium text-base">
+                <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
                   Created At
                 </th>
-                <th className="text-right py-3 px-4 text-slate-300 font-medium text-base">
+                <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
                   Actions
                 </th>
               </tr>
@@ -171,10 +158,7 @@ export function AdminMarkupPage() {
             <tbody>
               {filteredProfiles.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={4}
-                    className="py-12 text-center text-slate-400 text-base"
-                  >
+                  <td colSpan={4} className="px-4 py-12 text-center text-sm text-text-muted">
                     No price streams found.
                   </td>
                 </tr>
@@ -182,64 +166,60 @@ export function AdminMarkupPage() {
                 filteredProfiles.map((profile) => (
                   <tr
                     key={profile.id}
-                    className="border-b border-slate-700 hover:bg-slate-700/30"
+                    className="border-b border-border hover:bg-white/5"
                   >
-                    <td className="py-3 px-4 text-base">
-                      <span className="font-medium text-white">
-                        {profile.name}
-                      </span>
+                    <td className="px-4 py-3 text-sm font-medium text-text">
+                      {profile.name}
                     </td>
-                    <td className="py-3 px-4 text-base">
+                    <td className="px-4 py-3 text-sm">
                       {profile.groupName ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium bg-slate-700 text-slate-200">
+                        <span className="inline-flex items-center rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
                           {profile.groupName}
                         </span>
                       ) : (
-                        <span className="text-slate-500">
-                          Unassigned
-                        </span>
+                        <span className="text-text-muted">Unassigned</span>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-slate-400 text-base">
+                    <td className="px-4 py-3 text-sm text-text-muted">
                       {profile.createdAt
                         ? formatDistanceToNow(new Date(profile.createdAt), {
                             addSuffix: true,
                           })
                         : '—'}
                     </td>
-                    <td className="py-3 px-4">
+                    <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
                           onClick={() => handleConfigureMarkups(profile)}
-                          className="p-2 rounded-lg hover:bg-slate-700 text-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="rounded-lg p-2 text-accent hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
                           title="Configure Markups"
                         >
-                          <Settings className="w-4 h-4" />
+                          <Settings className="h-4 w-4" />
                         </button>
                         <button
                           type="button"
                           onClick={() => handleTransferSettings(profile)}
-                          className="p-2 rounded-lg hover:bg-slate-700 text-teal-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="rounded-lg p-2 text-teal-400 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
                           title="Transfer Settings"
                         >
-                          <Copy className="w-4 h-4" />
+                          <Copy className="h-4 w-4" />
                         </button>
                         <button
                           type="button"
                           onClick={() => handleEdit(profile)}
-                          className="p-2 rounded-lg hover:bg-slate-700 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="rounded-lg p-2 text-text-muted hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
                           title="Edit Stream"
                         >
-                          <Pencil className="w-4 h-4" />
+                          <Pencil className="h-4 w-4" />
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDelete(profile)}
-                          className="p-2 rounded-lg hover:bg-slate-700 text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="rounded-lg p-2 text-danger hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
                           title="Delete Stream"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     </td>

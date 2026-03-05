@@ -1,5 +1,5 @@
 import { Search, User, Activity, LogOut } from 'lucide-react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, Link, useLocation } from 'react-router-dom'
 import { toast } from '@/shared/components/common'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
@@ -16,7 +16,10 @@ interface TopbarProps {
 
 export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
   const navigate = useNavigate()
+  const location = useLocation()
   const logout = useAuthStore((state) => state.logout)
+  const isAdmin = location.pathname.startsWith('/admin')
+  const profilePath = isAdmin ? '/admin/profile' : '/user/profile'
 
   const handleLogout = () => {
     logout()
@@ -51,7 +54,7 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
         )}
         <NotificationBell />
         <Link
-          to="/user/profile"
+          to={profilePath}
           title="Profile"
           className={cn(
             'inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs',
