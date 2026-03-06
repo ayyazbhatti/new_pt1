@@ -299,11 +299,8 @@ async fn approve_transaction(
     }
 
     // Publish to Redis for real-time WebSocket balance update (single source of truth)
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    if let Ok(client) = redis::Client::open(redis_url.as_str()) {
-        publish_wallet_balance_updated(&pool, &client, user_id).await;
-        compute_and_cache_account_summary(&pool, &client, user_id).await;
-    }
+    publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), user_id).await;
+    compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), user_id).await;
     // Publish to NATS so gateway-ws can push wallet.balance.updated to the user's terminal (balance updates in real time)
     publish_wallet_balance_updated_nats(&pool, deposits_state.nats.as_ref(), user_id).await;
 

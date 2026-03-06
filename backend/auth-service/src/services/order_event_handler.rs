@@ -13,11 +13,11 @@ use uuid::Uuid;
 
 pub struct OrderEventHandler {
     pool: Arc<PgPool>,
-    redis: redis::Client,
+    redis: Arc<crate::redis_pool::RedisPool>,
 }
 
 impl OrderEventHandler {
-    pub fn new(pool: Arc<PgPool>, redis: redis::Client) -> Self {
+    pub fn new(pool: Arc<PgPool>, redis: Arc<crate::redis_pool::RedisPool>) -> Self {
         Self { pool, redis }
     }
 
@@ -153,8 +153,8 @@ impl OrderEventHandler {
         filled_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<()> {
         // Get order data from Redis
-        let mut conn = self.redis.get_async_connection().await
-            .context("Failed to get Redis connection")?;
+        let mut conn = self.redis.get().await
+            .map_err(|_| anyhow::anyhow!("Redis unavailable (circuit open)"))?;
         
         let order_key = format!("order:{}", order_id);
         let order_json: Option<String> = conn.get(&order_key).await

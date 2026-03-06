@@ -248,7 +248,7 @@ async fn admin_send_notify(
         "meta": meta,
     });
 
-    if let Ok(mut conn) = deposits_state.redis.get_async_connection().await {
+    if let Ok(mut conn) = deposits_state.redis.get().await {
         let _: Result<(), _> = conn
             .publish(
                 "notifications:push",

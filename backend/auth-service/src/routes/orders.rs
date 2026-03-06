@@ -24,7 +24,7 @@ use crate::middleware::auth_middleware;
 
 #[derive(Clone)]
 pub struct OrdersState {
-    pub redis: Arc<redis::Client>,
+    pub redis: Arc<crate::redis_pool::RedisPool>,
     pub nats: Arc<async_nats::Client>,
 }
 
@@ -122,40 +122,48 @@ async fn place_order(
     Extension(orders_state): Extension<OrdersState>,
     Json(req): Json<PlaceOrderRequest>,
 ) -> Result<Json<PlaceOrderResponse>, PlaceOrderError> {
-    info!("📥 place_order started: user_id={}, symbol={}, side={}, type={}", claims.sub, req.symbol, req.side, req.order_type);
     let user_id = claims.sub;
     let order_id = Uuid::new_v4();
     let now = Utc::now();
+    info!(
+        order_id = %order_id,
+        user_id = %user_id,
+        symbol = %req.symbol,
+        side = %req.side,
+        order_type = %req.order_type,
+        idempotency_key = %req.idempotency_key,
+        "📥 place_order started"
+    );
 
     // Validate order type
     let order_type_upper = req.order_type.to_uppercase();
     if order_type_upper != "MARKET" && order_type_upper != "LIMIT" {
-        error!("Invalid order type: {}", req.order_type);
+        error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=validate_order_type reason=invalid order_type");
         return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
     // Validate side
     let side_upper = req.side.to_uppercase();
     if side_upper != "BUY" && side_upper != "SELL" {
-        error!("Invalid side: {}", req.side);
+        error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=validate_side reason=invalid side");
         return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
     // Parse size
     let size = Decimal::from_str(&req.size).map_err(|_| {
-        error!("Invalid size: {}", req.size);
+        error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=parse_size reason=invalid size");
         PlaceOrderError::Status(StatusCode::BAD_REQUEST)
     })?;
 
     if size <= Decimal::ZERO {
-        error!("Size must be greater than zero");
+        error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=validate_size reason=size <= 0");
         return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
     // Parse limit price if provided
     let limit_price = if let Some(price_str) = &req.limit_price {
         Some(Decimal::from_str(price_str).map_err(|_| {
-            error!("Invalid limit price: {}", price_str);
+            error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=parse_limit_price reason=invalid limit_price");
             PlaceOrderError::Status(StatusCode::BAD_REQUEST)
         })?)
     } else {
@@ -164,7 +172,7 @@ async fn place_order(
 
     // Validate limit order has price
     if order_type_upper == "LIMIT" && limit_price.is_none() {
-        error!("Limit order requires limit_price");
+        error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=limit_order_no_price reason=limit order requires limit_price");
         return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
@@ -176,11 +184,11 @@ async fn place_order(
     .fetch_optional(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to fetch symbol: {}", e);
+        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, error = %e, "place_order FAILED stage=fetch_symbol status=500");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?
     .ok_or_else(|| {
-        error!("Symbol not found: {}", req.symbol);
+        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "place_order FAILED stage=symbol_not_found status=404");
         PlaceOrderError::Status(StatusCode::NOT_FOUND)
     })?;
 
@@ -196,7 +204,7 @@ async fn place_order(
     .fetch_optional(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to fetch user leverage: {}", e);
+        error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=fetch_user_leverage status=500");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
     let (user_min_lev, user_max_lev, account_type, trading_access) = user_lev
@@ -205,7 +213,7 @@ async fn place_order(
         .unwrap_or((None, None, None, Some("full".to_string())));
     let trading_access = trading_access.as_deref().unwrap_or("full");
     if trading_access != "full" {
-        error!("Place order rejected: user {} has trading_access={}", user_id, trading_access);
+        error!(order_id = %order_id, user_id = %user_id, trading_access = %trading_access, "place_order FAILED stage=trading_restricted status=403");
         return Err(PlaceOrderError::TradingRestricted {
             message: "Trading is disabled. You cannot open new positions.".to_string(),
         });
@@ -231,7 +239,7 @@ async fn place_order(
     .fetch_optional(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to fetch symbol leverage profile: {}", e);
+        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, error = %e, "place_order FAILED stage=fetch_symbol_leverage_profile status=500");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
@@ -251,7 +259,7 @@ async fn place_order(
             .fetch_all(&pool)
             .await
             .map_err(|e| {
-                error!("Failed to fetch leverage tiers: {}", e);
+                error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=fetch_leverage_tiers status=500");
                 PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
             })?;
             if tiers.is_empty() {
@@ -268,16 +276,16 @@ async fn place_order(
     };
 
     // Check idempotency
-    let mut conn = orders_state.redis.get_async_connection().await
-        .map_err(|e| {
-            error!("Failed to get Redis connection: {}", e);
-            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    let mut conn = orders_state.redis.get().await
+        .map_err(|_| {
+            error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=redis_connection status=503");
+            PlaceOrderError::Status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
 
     let idempotency_key = format!("order:idempotency:{}", req.idempotency_key);
     let existing_order_id: Option<String> = conn.get(&idempotency_key).await
         .map_err(|e| {
-            error!("Failed to check idempotency: {}", e);
+            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=idempotency_check status=500");
             PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
@@ -292,7 +300,7 @@ async fn place_order(
     // Store idempotency key (expires in 24 hours)
     let _: () = conn.set_ex(&idempotency_key, order_id.to_string(), 86400).await
         .map_err(|e| {
-            error!("Failed to store idempotency key: {}", e);
+            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=idempotency_store status=500");
             PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
@@ -300,7 +308,7 @@ async fn place_order(
     let summary_key = Keys::account_summary(user_id);
     let free_margin_str: Option<String> = conn.hget(&summary_key, "free_margin").await
         .map_err(|e| {
-            error!("Failed to read free_margin from Redis: {}", e);
+            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=free_margin_read status=500");
             PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
     let free_margin = free_margin_str
@@ -329,14 +337,14 @@ async fn place_order(
 
     let execution_price = if order_type_upper == "LIMIT" {
         limit_price.ok_or_else(|| {
-            error!("Limit order missing limit_price");
+            error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=limit_price_missing reason=limit order missing limit_price");
             PlaceOrderError::Status(StatusCode::BAD_REQUEST)
         })?
     } else {
         let group_id_str = claims.group_id.map(|u| u.to_string()).unwrap_or_default();
         let (bid, ask) = get_price_from_redis(orders_state.redis.as_ref(), &req.symbol, &group_id_str).await
             .ok_or_else(|| {
-                error!("Market order: no price in Redis for symbol={} group_id={}", req.symbol, group_id_str);
+                error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, group_id = %group_id_str, "place_order FAILED stage=market_no_price reason=no price in Redis");
                 PlaceOrderError::Status(StatusCode::BAD_REQUEST)
             })?;
         if side_upper == "BUY" { ask } else { bid }
@@ -355,6 +363,7 @@ async fn place_order(
         notional * Decimal::from(2) / Decimal::from(100) // 2% fallback
     };
     if required_margin > free_margin {
+        error!(order_id = %order_id, user_id = %user_id, required = %required_margin, free = %free_margin, "place_order FAILED stage=insufficient_margin status=403");
         return Err(PlaceOrderError::InsufficientMargin {
             required_margin: required_margin.to_string(),
             free_margin: free_margin.to_string(),
@@ -390,7 +399,7 @@ async fn place_order(
     .execute(&pool)
     .await
     .map_err(|e| {
-        error!("Failed to insert order: {}", e);
+        error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=db_insert_order status=500");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
@@ -440,12 +449,12 @@ async fn place_order(
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)
         .map_err(|e| {
-            error!("Failed to create versioned message: {}", e);
+            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=versioned_message status=500");
             PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
     let payload = serde_json::to_vec(&msg)
         .map_err(|e| {
-            error!("Failed to serialize order command: {}", e);
+            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=serialize_command status=500");
             PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
@@ -470,10 +479,10 @@ async fn place_order(
     // This is a safety net in case JetStream consumer isn't working
     orders_state.nats.publish("cmd.order.place".to_string(), payload.into()).await
         .map_err(|e| {
-            error!("❌ Failed to publish order to NATS basic pub/sub: {}", e);
+            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=nats_publish status=500");
             PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
-    info!("✅ Published to NATS (basic pub/sub): cmd.order.place");
+    info!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "✅ Published to NATS (basic pub/sub): cmd.order.place");
 
     // Also publish to Redis for ws-gateway
     let redis_payload = serde_json::json!({
@@ -488,15 +497,22 @@ async fn place_order(
             "ts": now.timestamp_millis(),
         }
     });
-    if let Ok(mut conn_sync) = orders_state.redis.get_connection() {
+    if let Ok(mut conn) = orders_state.redis.get().await {
         let _: Result<(), _> = redis::cmd("PUBLISH")
             .arg("orders:updates")
             .arg(redis_payload.to_string())
-            .query(&mut conn_sync);
+            .query_async(&mut conn)
+            .await;
     }
 
-    info!("Order created: order_id={}, user_id={}, symbol={}, side={}, type={}", 
-          order_id, user_id, req.symbol, side_upper, order_type_upper);
+    info!(
+        order_id = %order_id,
+        user_id = %user_id,
+        symbol = %req.symbol,
+        side = %side_upper,
+        order_type = %order_type_upper,
+        "place_order SUCCESS status=200"
+    );
 
     Ok(Json(PlaceOrderResponse {
         order_id: order_id.to_string(),
@@ -745,11 +761,12 @@ async fn cancel_order(
             "ts": now.timestamp_millis(),
         }
     });
-    if let Ok(mut conn_sync) = orders_state.redis.get_connection() {
+    if let Ok(mut conn) = orders_state.redis.get().await {
         let _: Result<(), _> = redis::cmd("PUBLISH")
             .arg("orders:updates")
             .arg(redis_payload.to_string())
-            .query(&mut conn_sync);
+            .query_async(&mut conn)
+            .await;
     }
 
     info!("Order cancelled: order_id={}, user_id={}", order_id, user_id);
@@ -822,12 +839,11 @@ async fn sync_pending_orders(
 
     let mut conn = orders_state
         .redis
-        .get_async_connection()
+        .get()
         .await
-        .map_err(|e| {
-            error!("Sync pending orders: Redis connection failed: {}", e);
+        .map_err(|_| {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({ "error": { "message": "Redis unavailable" } })),
             )
         })?;

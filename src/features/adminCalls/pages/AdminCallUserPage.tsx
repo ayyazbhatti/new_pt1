@@ -7,7 +7,9 @@ import type { UserSearchResult } from '@/features/appointments/types'
 import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { useAuthStore } from '@/shared/store/auth.store'
-import { Phone, PhoneOff, Loader2 } from 'lucide-react'
+import { getCallRecords, type CallRecordRow } from '../api/callRecords.api'
+import { Phone, PhoneOff, Loader2, RefreshCw } from 'lucide-react'
+import { format } from 'date-fns'
 
 type CallStatus = 'idle' | 'ringing' | 'connected' | 'declined' | 'error'
 
@@ -25,6 +27,11 @@ export function AdminCallUserPage() {
   const [targetUserId, setTargetUserId] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
+  const [callRecords, setCallRecords] = useState<CallRecordRow[]>([])
+  const [recordsTotal, setRecordsTotal] = useState(0)
+  const [recordsLoading, setRecordsLoading] = useState(false)
+  const [recordsPage, setRecordsPage] = useState(0)
+  const recordsLimit = 20
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
@@ -204,6 +211,36 @@ export function AdminCallUserPage() {
   const displayName = (u: UserSearchResult) =>
     u.full_name ?? ([u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id)
 
+  const fetchCallRecords = useCallback(async () => {
+    setRecordsLoading(true)
+    try {
+      const res = await getCallRecords({
+        limit: recordsLimit,
+        offset: recordsPage * recordsLimit,
+      })
+      setCallRecords(res.records)
+      setRecordsTotal(res.total)
+    } catch {
+      setCallRecords([])
+      setRecordsTotal(0)
+    } finally {
+      setRecordsLoading(false)
+    }
+  }, [recordsPage])
+
+  useEffect(() => {
+    fetchCallRecords()
+  }, [fetchCallRecords])
+
+  const prevStatusRef = useRef<CallStatus>('idle')
+  useEffect(() => {
+    const wasInCall = prevStatusRef.current !== 'idle'
+    prevStatusRef.current = status
+    if (wasInCall && status === 'idle') {
+      fetchCallRecords()
+    }
+  }, [status, fetchCallRecords])
+
   useEffect(() => {
     if (remoteAudioRef.current && remoteStream) {
       remoteAudioRef.current.srcObject = remoteStream
@@ -311,6 +348,99 @@ export function AdminCallUserPage() {
             </Button>
           </div>
         )}
+
+        {/* Call history table */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Call history</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchCallRecords()}
+              disabled={recordsLoading}
+              className="gap-1"
+            >
+              <RefreshCw className={`h-4 w-4 ${recordsLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
+          <div className="rounded-lg border border-border overflow-hidden bg-surface">
+            {recordsLoading && callRecords.length === 0 ? (
+              <div className="p-8 text-center text-text-muted flex items-center justify-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Loading records...
+              </div>
+            ) : callRecords.length === 0 ? (
+              <div className="p-8 text-center text-text-muted">No call records yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-surface-2">
+                      <th className="text-left px-4 py-3 font-medium">Initiated at</th>
+                      <th className="text-left px-4 py-3 font-medium">Admin</th>
+                      <th className="text-left px-4 py-3 font-medium">User (callee)</th>
+                      <th className="text-left px-4 py-3 font-medium">Status</th>
+                      <th className="text-left px-4 py-3 font-medium">Duration</th>
+                      <th className="text-left px-4 py-3 font-medium">Ended by</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {callRecords.map((r) => (
+                      <tr key={r.id} className="border-b border-border last:border-0">
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {format(new Date(r.initiatedAt), 'MMM d, yyyy HH:mm:ss')}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span title={r.adminEmail ?? undefined}>
+                            {r.adminDisplayName || r.adminEmail || r.adminUserId}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span title={r.userEmail ?? undefined}>
+                            {r.userDisplayName || r.userEmail || r.userId}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 capitalize">{r.status}</td>
+                        <td className="px-4 py-3">
+                          {r.durationSeconds != null
+                            ? `${Math.floor(r.durationSeconds / 60)}m ${r.durationSeconds % 60}s`
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-3">{r.endedBy ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {recordsTotal > recordsLimit && (
+              <div className="px-4 py-2 border-t border-border flex items-center justify-between text-text-muted text-xs">
+                <span>
+                  Showing {recordsPage * recordsLimit + 1}–{Math.min((recordsPage + 1) * recordsLimit, recordsTotal)} of {recordsTotal}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={recordsPage === 0 || recordsLoading}
+                    onClick={() => setRecordsPage((p) => p - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={(recordsPage + 1) * recordsLimit >= recordsTotal || recordsLoading}
+                    onClick={() => setRecordsPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </ContentShell>
   )

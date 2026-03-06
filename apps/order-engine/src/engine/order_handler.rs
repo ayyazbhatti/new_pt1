@@ -69,7 +69,7 @@ impl OrderHandler {
                 } else {
                     format!("{:?}", bytes)
                 };
-                error!("❌ Deserialization failed: {}. Message preview: {}", e, preview);
+                error!(error = %e, payload_preview = %preview, "ORDER_ERROR stage=deserialize_versioned_message");
                 return Err(anyhow::anyhow!("Deserialization failed: {}", e).into());
             }
         };
@@ -80,7 +80,7 @@ impl OrderHandler {
                 c
             }
             Err(e) => {
-                error!("❌ Failed to deserialize PlaceOrderCommand: {}", e);
+                error!(error = %e, "ORDER_ERROR stage=deserialize_place_order_command");
                 return Err(anyhow::anyhow!("Command deserialization failed: {}", e).into());
             }
         };
@@ -209,7 +209,15 @@ impl OrderHandler {
                 };
                 self.nats.publish_event(nats_subjects::EVENT_ORDER_ACCEPTED, &accepted_event).await?;
                 
-                info!("Order {} accepted for symbol {}", order_id, cmd.symbol);
+                info!(
+                    order_id = %order_id,
+                    user_id = %cmd.user_id,
+                    symbol = %cmd.symbol,
+                    side = ?cmd.side,
+                    order_type = ?cmd.order_type,
+                    size = %cmd.size,
+                    "ORDER_ACCEPTED"
+                );
                 
                 // For market orders, try immediate execution if tick exists for this group
                 if cmd.order_type == contracts::enums::OrderType::Market {
@@ -237,7 +245,14 @@ impl OrderHandler {
                                     warn!("Failed to fill market order {} immediately: {}", order_id, error_msg);
                                     // Order will be processed on next tick
                                 } else {
-                                    info!("✅ Market order {} filled immediately at {}", order_id, fill_price);
+                                    info!(
+                                        order_id = %order_id,
+                                        user_id = %cmd.user_id,
+                                        symbol = %cmd.symbol,
+                                        fill_price = %fill_price,
+                                        size = %order.size,
+                                        "ORDER_FILLED"
+                                    );
                                     self.metrics.inc_orders_filled();
                                     
                                     let fill_action = result.get("fill_action").and_then(|v| v.as_str()).unwrap_or("created");
@@ -379,7 +394,13 @@ impl OrderHandler {
                 self.nats.publish_event(nats_subjects::EVENT_ORDER_REJECTED, &rejected_event).await?;
                 self.metrics.inc_orders_rejected();
                 
-                warn!("Order rejected: {}", rejection_reason);
+                error!(
+                    order_id = %order_id,
+                    user_id = %cmd.user_id,
+                    symbol = %cmd.symbol,
+                    reason = %rejection_reason,
+                    "ORDER_REJECTED"
+                );
             }
         }
         

@@ -35,7 +35,7 @@ use crate::services::email_config_service::{send_email_html_sync, EmailConfigSer
 
 #[derive(Clone)]
 pub struct DepositsState {
-    pub redis: Arc<redis::Client>,
+    pub redis: Arc<crate::redis_pool::RedisPool>,
     pub nats: Arc<async_nats::Client>,
 }
 
@@ -49,7 +49,7 @@ pub fn register_stop_out_nats(client: Arc<async_nats::Client>) {
 
 /// If margin_level < stop_out_threshold, set cooldown key and publish cmd.position.close_all. Called from compute_and_cache_account_summary_with_prices.
 async fn try_publish_stop_out_close_all(
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     user_id: Uuid,
     margin_level: &str,
     stop_out_threshold: Option<f64>,
@@ -63,11 +63,10 @@ async fn try_publish_stop_out_close_all(
         return;
     }
     let cooldown_key = format!("pos:stop_out:triggered:{}", user_id);
-    let mut conn = match redis.get_async_connection().await {
+    let mut conn = match redis.get().await {
         Ok(c) => c,
-        Err(e) => {
-            error!("Stop out: Redis connection failed for cooldown: {}", e);
-            return;
+        Err(_) => {
+            return; // circuit open or Redis unavailable
         }
     };
     // SET key 1 EX 60 NX — only proceed if we set the key (first trigger in 60s)
@@ -100,7 +99,7 @@ async fn try_publish_stop_out_close_all(
 /// If margin_level < 0 (negative equity with margin in use), set cooldown and publish cmd.position.close_all with reason=liquidated.
 /// Positions will be closed with status LIQUIDATED. Uses same Redis/NATS as stop_out for sub-5ms flow.
 async fn try_publish_liquidation_close_all(
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     user_id: Uuid,
     margin_level: &str,
 ) {
@@ -112,12 +111,9 @@ async fn try_publish_liquidation_close_all(
         return;
     }
     let cooldown_key = format!("pos:liquidation:triggered:{}", user_id);
-    let mut conn = match redis.get_async_connection().await {
+    let mut conn = match redis.get().await {
         Ok(c) => c,
-        Err(e) => {
-            error!("Liquidation: Redis connection failed for cooldown: {}", e);
-            return;
-        }
+        Err(_) => return,
     };
     let set_ok: Result<bool, _> = redis::cmd("SET")
         .arg(&cooldown_key)
@@ -294,7 +290,7 @@ async fn create_deposit_request(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = deposits_state.redis.get_async_connection().await
+    let mut redis_conn = deposits_state.redis.get().await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let _: Result<(), _> = redis_conn.publish("deposits:requests", serde_json::to_string(&event).unwrap_or_default()).await;
 
@@ -356,7 +352,7 @@ async fn create_deposit_request(
                 .ok();
 
             // Also publish to Redis for WebSocket gateway
-            let mut redis_conn = deposits_state.redis.get_async_connection().await.ok();
+            let mut redis_conn = deposits_state.redis.get().await.ok();
             if let Some(mut conn) = redis_conn {
                 let _: Result<(), _> = conn.publish("notifications:push", serde_json::to_string(&notification_event).unwrap_or_default()).await;
             }
@@ -537,12 +533,12 @@ async fn get_user_group_id(pool: &PgPool, user_id: Uuid) -> Option<Uuid> {
 
 /// Margin call level threshold for a group (%). Redis-first, then DB; on DB hit we cache in Redis.
 pub(crate) async fn get_margin_call_level_for_group(
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     pool: &PgPool,
     group_id: Uuid,
 ) -> Option<f64> {
     let key = redis_model::keys::Keys::group(group_id);
-    if let Ok(mut conn) = redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get().await {
         if let Ok(Some(s)) = conn.hget::<_, _, Option<String>>(&key, "margin_call_level").await {
             if let Ok(v) = s.parse::<f64>() {
                 return Some(v);
@@ -557,7 +553,7 @@ pub(crate) async fn get_margin_call_level_for_group(
     .await
     .ok()?;
     let value = row.and_then(|(v,)| v).and_then(|d| d.to_string().parse::<f64>().ok())?;
-    if let Ok(mut conn) = redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get().await {
         let _: Result<(), _> = conn.hset(&key, "margin_call_level", value.to_string()).await;
     }
     Some(value)
@@ -565,12 +561,12 @@ pub(crate) async fn get_margin_call_level_for_group(
 
 /// Stop out level threshold for a group (%). Redis-first, then DB; on DB hit we cache in Redis.
 pub(crate) async fn get_stop_out_level_for_group(
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     pool: &PgPool,
     group_id: Uuid,
 ) -> Option<f64> {
     let key = redis_model::keys::Keys::group(group_id);
-    if let Ok(mut conn) = redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get().await {
         if let Ok(Some(s)) = conn.hget::<_, _, Option<String>>(&key, "stop_out_level").await {
             if let Ok(v) = s.parse::<f64>() {
                 return Some(v);
@@ -585,23 +581,15 @@ pub(crate) async fn get_stop_out_level_for_group(
     .await
     .ok()?;
     let value = row.and_then(|(v,)| v).and_then(|d| d.to_string().parse::<f64>().ok())?;
-    if let Ok(mut conn) = redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get().await {
         let _: Result<(), _> = conn.hset(&key, "stop_out_level", value.to_string()).await;
     }
     Some(value)
 }
 
-/// Read current (bid, ask) from Redis key prices:SYMBOL:GROUP_ID (written by order-engine on each tick).
-/// Positions use internal symbol (e.g. BTCUSD); order-engine receives ticks as BTCUSDT and writes prices:BTCUSDT:GROUP.
-/// So we try prices:SYMBOL:GROUP first, then if symbol ends with "USD" try prices:SYMBOL_USDT:GROUP so account summary gets live prices.
-/// Returns None if key missing or parse error.
-pub(crate) async fn get_price_from_redis(
-    redis: &redis::Client,
-    symbol: &str,
-    group_id: &str,
-) -> Option<(Decimal, Decimal)> {
-    let mut conn = redis.get_async_connection().await.ok()?;
-    let keys_to_try: Vec<String> = if symbol.ends_with("USD") && !symbol.ends_with("USDT") {
+/// Build keys to try for price lookup (symbol and optional SYMBOL_USDT fallback).
+fn price_redis_keys(symbol: &str, group_id: &str) -> Vec<String> {
+    if symbol.ends_with("USD") && !symbol.ends_with("USDT") {
         let symbol_usdt = format!("{}T", symbol);
         vec![
             format!("prices:{}:{}", symbol, group_id),
@@ -609,7 +597,20 @@ pub(crate) async fn get_price_from_redis(
         ]
     } else {
         vec![format!("prices:{}:{}", symbol, group_id)]
-    };
+    }
+}
+
+/// Read current (bid, ask) from Redis using an existing connection. Use this when you already hold
+/// a connection to avoid opening one per lookup (critical for scale: 10M+ users).
+pub(crate) async fn get_price_from_redis_conn<C>(
+    conn: &mut C,
+    symbol: &str,
+    group_id: &str,
+) -> Option<(Decimal, Decimal)>
+where
+    C: redis::AsyncCommands + Send,
+{
+    let keys_to_try = price_redis_keys(symbol, group_id);
     for key in keys_to_try {
         let json_str: String = match conn.get(&key).await {
             Ok(s) => s,
@@ -628,21 +629,35 @@ pub(crate) async fn get_price_from_redis(
     None
 }
 
+/// Read current (bid, ask) from Redis key prices:SYMBOL:GROUP_ID (written by order-engine on each tick).
+/// Positions use internal symbol (e.g. BTCUSD); order-engine receives ticks as BTCUSDT and writes prices:BTCUSDT:GROUP.
+/// So we try prices:SYMBOL:GROUP first, then if symbol ends with "USD" try prices:SYMBOL_USDT:GROUP so account summary gets live prices.
+/// Returns None if key missing or parse error.
+/// Prefer get_price_from_redis_conn when you already hold a connection (e.g. in get_user_positions) to avoid connection churn.
+pub(crate) async fn get_price_from_redis(
+    redis: &crate::redis_pool::RedisPool,
+    symbol: &str,
+    group_id: &str,
+) -> Option<(Decimal, Decimal)> {
+    let mut conn = redis.get().await.ok()?;
+    get_price_from_redis_conn(&mut conn, symbol, group_id).await
+}
+
 /// Fetches position-derived aggregates from Redis (same source as Positions tab).
 /// Returns (margin_used, unrealized_pnl, realized_pnl). Uses "margin" and "status" from pos:by_id:* hashes.
 /// When `price_overrides` is set, unrealized PnL for open positions is computed from (bid, ask) for (symbol, group_id) instead of stored value.
 /// When `price_overrides` is None, tries to read current price from Redis (prices:SYMBOL:GROUP_ID, written by order-engine) so UnR PnL is not stuck at 0.
 /// `margin_calculation_type`: "hedged" = sum of all position margins; "net" = per (symbol, group_id) net size then margin = |net_size|*price/leverage, sum.
 async fn fetch_position_aggregates_from_redis(
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     user_id: Uuid,
     price_overrides: Option<&PriceOverrides>,
     margin_calculation_type: &str,
 ) -> Option<(Decimal, Decimal, Decimal)> {
-    let mut conn = match redis.get_async_connection().await {
+    let mut conn = match redis.get().await {
         Ok(c) => c,
-        Err(e) => {
-            warn!("Account summary: Redis connection failed for user {}: {}", user_id, e);
+        Err(_) => {
+            warn!("Account summary: Redis unavailable (circuit open?) for user {}", user_id);
             return None;
         }
     };
@@ -914,7 +929,7 @@ pub(crate) async fn get_free_margin_from_db_fast(pool: &PgPool, user_id: Uuid) -
 /// Position-derived metrics (margin, PnL) are read from Redis when available so they match the Positions tab.
 pub async fn compute_and_cache_account_summary(
     pool: &PgPool,
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     user_id: Uuid,
 ) {
     compute_and_cache_account_summary_with_prices(pool, redis, user_id, None).await
@@ -1052,7 +1067,7 @@ fn build_liquidation_email_html(
 /// Fire-and-forget: log errors, do not panic. Does not block the position-closed critical path.
 pub async fn create_sltp_notifications_and_push(
     pool: PgPool,
-    redis: redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     inner_payload: serde_json::Value,
 ) {
     let user_id_str = match inner_payload.get("user_id").and_then(|v| v.as_str()) {
@@ -1201,7 +1216,7 @@ pub async fn create_sltp_notifications_and_push(
     });
 
     // Publish to Redis for user (gateway routes by userId)
-    if let Ok(mut conn) = redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get().await {
         let payload_str = serde_json::to_string(&notification_event).unwrap_or_default();
         let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
     } else {
@@ -1305,7 +1320,7 @@ pub async fn create_sltp_notifications_and_push(
             "userId": admin_id.to_string(),
             "meta": meta_with_trader,
         });
-        if let Ok(mut conn) = redis.get_async_connection().await {
+        if let Ok(mut conn) = redis.get().await {
             let payload_str = serde_json::to_string(&admin_event).unwrap_or_default();
             let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
         }
@@ -1322,7 +1337,7 @@ pub async fn create_sltp_notifications_and_push(
 /// Fire-and-forget: log errors, do not panic. Does not block the position-closed critical path.
 pub async fn create_liquidation_notifications_and_push(
     pool: PgPool,
-    redis: redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     inner_payload: serde_json::Value,
 ) {
     let user_id_str = match inner_payload.get("user_id").and_then(|v| v.as_str()) {
@@ -1456,7 +1471,7 @@ pub async fn create_liquidation_notifications_and_push(
         }
     });
 
-    if let Ok(mut conn) = redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get().await {
         let payload_str = serde_json::to_string(&notification_event).unwrap_or_default();
         let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
     } else {
@@ -1558,7 +1573,7 @@ pub async fn create_liquidation_notifications_and_push(
             "userId": admin_id.to_string(),
             "meta": meta_with_trader,
         });
-        if let Ok(mut conn) = redis.get_async_connection().await {
+        if let Ok(mut conn) = redis.get().await {
             let payload_str = serde_json::to_string(&admin_event).unwrap_or_default();
             let _: Result<(), _> = conn.publish("notifications:push", payload_str).await;
         }
@@ -1574,7 +1589,7 @@ pub async fn create_liquidation_notifications_and_push(
 /// Uses AccountSummaryCoordinator when initialized: one computation per user at a time, and throttled publish to reduce UI flicker.
 pub async fn compute_and_cache_account_summary_with_prices(
     pool: &PgPool,
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     user_id: Uuid,
     price_overrides: Option<PriceOverrides>,
 ) {
@@ -1605,7 +1620,7 @@ pub async fn compute_and_cache_account_summary_with_prices(
                         return;
                     }
                 };
-                if let Ok(mut conn) = redis.get_async_connection().await {
+                if let Ok(mut conn) = redis.get().await {
                     let thresh_str = summary_with_threshold
                         .margin_call_level_threshold
                         .map(|v| v.to_string())
@@ -1667,7 +1682,7 @@ pub async fn compute_and_cache_account_summary_with_prices(
 
 pub(crate) async fn compute_account_summary_inner(
     pool: &PgPool,
-    redis: Option<&redis::Client>,
+    redis: Option<&crate::redis_pool::RedisPool>,
     user_id: Uuid,
     price_overrides: Option<&PriceOverrides>,
 ) -> anyhow::Result<AccountSummary> {
@@ -1772,7 +1787,7 @@ pub(crate) async fn compute_account_summary_inner(
 /// Call this after any operation that changes balance (deposit/withdrawal approval, etc.).
 pub async fn publish_wallet_balance_updated(
     pool: &PgPool,
-    redis: &redis::Client,
+    redis: &crate::redis_pool::RedisPool,
     user_id: Uuid,
 ) {
     match calculate_wallet_balance(pool, user_id).await {
@@ -1794,7 +1809,7 @@ pub async fn publish_wallet_balance_updated(
                 "updatedAt": balance.updated_at,
             });
             if let Ok(event_json) = serde_json::to_string(&balance_event) {
-                if let Ok(mut conn) = redis.get_async_connection().await {
+                if let Ok(mut conn) = redis.get().await {
                     if let Ok(count) = conn.publish::<_, _, i32>("wallet:balance:updated", event_json).await {
                         info!("✅ Published wallet.balance.updated to Redis ({} subscribers) for user_id={}", count, user_id);
                     } else {
@@ -1853,7 +1868,7 @@ async fn get_account_summary(
     let redis = deposits_state.redis.as_ref();
     // Try Redis cache first
     let key = redis_model::keys::Keys::account_summary(user_id);
-    if let Ok(mut conn) = redis.get_async_connection().await {
+    if let Ok(mut conn) = redis.get().await {
         let balance: Option<String> = conn.hget(&key, "balance").await.ok();
         let equity: Option<String> = conn.hget(&key, "equity").await.ok();
         let margin_used: Option<String> = conn.hget(&key, "margin_used").await.ok();
@@ -2316,7 +2331,7 @@ async fn approve_deposit(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = deposits_state.redis.get_async_connection().await
+    let mut redis_conn = deposits_state.redis.get().await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let _: Result<(), _> = redis_conn.publish("deposits:approved", serde_json::to_string(&approved_event).unwrap_or_default()).await;
 
@@ -2392,7 +2407,7 @@ async fn approve_deposit(
         .ok();
 
     // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = deposits_state.redis.get_async_connection().await.ok();
+    let mut redis_conn = deposits_state.redis.get().await.ok();
     if let Some(mut conn) = redis_conn {
         let _: Result<(), _> = conn.publish("notifications:push", serde_json::to_string(&notification_event).unwrap_or_default()).await;
     }
@@ -2510,7 +2525,7 @@ async fn reject_deposit(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = deposits_state.redis.get_async_connection().await
+    let mut redis_conn = deposits_state.redis.get().await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let _: Result<(), _> = redis_conn.publish("deposits:rejected", serde_json::to_string(&rejected_event).unwrap_or_default()).await;
 
@@ -2561,7 +2576,7 @@ async fn reject_deposit(
         .ok();
 
     // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = deposits_state.redis.get_async_connection().await.ok();
+    let mut redis_conn = deposits_state.redis.get().await.ok();
     if let Some(mut conn) = redis_conn {
         let _: Result<(), _> = conn.publish("notifications:push", serde_json::to_string(&notification_event).unwrap_or_default()).await;
     }
@@ -2674,11 +2689,8 @@ async fn get_user_positions(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let mut conn = deposits_state.redis.get_async_connection().await
-        .map_err(|e| {
-            error!("Failed to get Redis connection: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let mut conn = deposits_state.redis.get().await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     let positions_key = Keys::positions_set(user_id);
     let position_ids: Vec<String> = conn.smembers(&positions_key).await
@@ -2688,60 +2700,42 @@ async fn get_user_positions(
         })?;
 
     let mut positions = Vec::new();
-    
-    // Optimize: Fetch all positions in parallel using futures
-    // This reduces latency from O(n) sequential calls to O(1) parallel batch
+
     if position_ids.is_empty() {
         return Ok(Json(PositionsResponse { positions }));
     }
-    
-    // Parse all position IDs and create futures for parallel fetching
-    let mut fetch_futures = Vec::new();
-    let redis_client = deposits_state.redis.clone();
-    
+
+    // Single connection for entire request: SMEMBERS already done above; now sequential HGETALL
+    // per position. Avoids N parallel connections (socket exhaustion under 10M+ users).
     for pos_id_str in position_ids {
         if let Ok(pos_id) = Uuid::parse_str(&pos_id_str) {
             let pos_key = Keys::position_by_id(pos_id);
-            let pos_id_str_clone = pos_id_str.clone();
-            let redis_clone = redis_client.clone();
-            
-            // Create future for each position fetch using a new connection
-            let fetch_future = async move {
-                let mut conn = redis_clone.get_async_connection().await.ok()?;
-                let pos_data: std::collections::HashMap<String, String> = conn.hgetall(&pos_key).await.ok()?;
-                Some((pos_id_str_clone, pos_data))
-            };
-            
-            fetch_futures.push(fetch_future);
-        }
-    }
-    
-    // Execute all fetches in parallel
-    let results = futures::future::join_all(fetch_futures).await;
-    
-    // Process results
-    for result in results {
-        if let Some((pos_id_str, pos_data)) = result {
-            if !pos_data.is_empty() {
-                let mut pos_json = serde_json::Map::new();
-                pos_json.insert("id".to_string(), serde_json::Value::String(pos_id_str.clone()));
-                
-                for (k, v) in pos_data {
-                    if let Ok(num) = v.parse::<f64>() {
-                        pos_json.insert(k, serde_json::Value::Number(serde_json::Number::from_f64(num).unwrap_or(serde_json::Number::from(0))));
-                    } else if v == "null" || v.is_empty() {
-                        pos_json.insert(k, serde_json::Value::Null);
-                    } else {
-                        pos_json.insert(k, serde_json::Value::String(v));
-                    }
+            let pos_data: std::collections::HashMap<String, String> = match conn.hgetall(&pos_key).await {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to get position {}: {}", pos_id, e);
+                    continue;
                 }
-                
-                positions.push(serde_json::Value::Object(pos_json));
+            };
+            if pos_data.is_empty() {
+                continue;
             }
+            let mut pos_json = serde_json::Map::new();
+            pos_json.insert("id".to_string(), serde_json::Value::String(pos_id_str.clone()));
+            for (k, v) in pos_data {
+                if let Ok(num) = v.parse::<f64>() {
+                    pos_json.insert(k, serde_json::Value::Number(serde_json::Number::from_f64(num).unwrap_or(serde_json::Number::from(0))));
+                } else if v == "null" || v.is_empty() {
+                    pos_json.insert(k, serde_json::Value::Null);
+                } else {
+                    pos_json.insert(k, serde_json::Value::String(v));
+                }
+            }
+            positions.push(serde_json::Value::Object(pos_json));
         }
     }
 
-    // Enrich open positions with server-computed unrealized PnL from Redis prices (no polling; real-time via WebSocket still overwrites when client has ticks)
+    // Enrich open positions with server-computed unrealized PnL from Redis (reuse same conn)
     for pos_value in positions.iter_mut() {
         if let Some(obj) = pos_value.as_object_mut() {
             let status = obj
@@ -2775,7 +2769,7 @@ async fn get_user_positions(
                 continue;
             }
             if let Some((bid, ask)) =
-                get_price_from_redis(&deposits_state.redis, &symbol, &group_id).await
+                get_price_from_redis_conn(&mut conn, &symbol, &group_id).await
             {
                 let size_d = Decimal::from_str(&size.to_string()).unwrap_or(Decimal::ZERO);
                 let avg_d = Decimal::from_str(&avg_price.to_string()).unwrap_or(Decimal::ZERO);
@@ -2959,11 +2953,8 @@ async fn update_position_sltp(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let mut conn = deposits_state.redis.get_async_connection().await
-        .map_err(|e| {
-            error!("Failed to get Redis connection: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let mut conn = deposits_state.redis.get().await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     // Verify position exists and belongs to user
     let pos_key = Keys::position_by_id(position_id);
@@ -3136,11 +3127,8 @@ async fn close_position(
     }
 
     // Verify position exists and belongs to user
-    let mut conn = deposits_state.redis.get_async_connection().await
-        .map_err(|e| {
-            error!("Failed to get Redis connection: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        })?;
+    let mut conn = deposits_state.redis.get().await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
 
     let pos_key = Keys::position_by_id(position_id);
     let pos_data: std::collections::HashMap<String, String> = conn.hgetall(&pos_key).await

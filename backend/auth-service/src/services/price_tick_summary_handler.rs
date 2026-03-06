@@ -16,12 +16,12 @@ const THROTTLE_MS: u64 = 100;
 
 pub struct PriceTickSummaryHandler {
     pool: sqlx::PgPool,
-    redis: redis::Client,
+    redis: std::sync::Arc<crate::redis_pool::RedisPool>,
     last_update_per_user: std::sync::Mutex<HashMap<Uuid, Instant>>,
 }
 
 impl PriceTickSummaryHandler {
-    pub fn new(pool: sqlx::PgPool, redis: redis::Client) -> Self {
+    pub fn new(pool: sqlx::PgPool, redis: std::sync::Arc<crate::redis_pool::RedisPool>) -> Self {
         Self {
             pool,
             redis,
@@ -114,7 +114,7 @@ impl PriceTickSummaryHandler {
             vec![serde_json::json!({ "g": "", "bid": bid_s, "ask": ask_s })]
         };
 
-        let mut conn = self.redis.get_async_connection().await?;
+        let mut conn = self.redis.get().await.map_err(|_| anyhow::anyhow!("Redis unavailable"))?;
         let open_key = Keys::positions_open_by_symbol(&symbol);
         let position_ids: Vec<String> = conn.zrange(&open_key, 0, -1).await.unwrap_or_default();
 

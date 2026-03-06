@@ -93,6 +93,23 @@ async fn main() -> Result<()> {
     // Call registry for admin-call-user signaling
     let call_registry = Arc::new(CallRegistry::new());
 
+    // NATS (optional): for publishing call records to auth-service
+    let nats_url = std::env::var("NATS_URL").ok();
+    let nats_client = if let Some(ref url) = nats_url {
+        match async_nats::connect(url).await {
+            Ok(c) => {
+                info!("Connected to NATS for call records");
+                Some(Arc::new(c))
+            }
+            Err(e) => {
+                info!("NATS not available (call records will not be persisted): {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Create app state
     let app_state = AppState {
         registry: registry.clone(),
@@ -101,6 +118,7 @@ async fn main() -> Result<()> {
         broadcaster: broadcaster.clone(),
         call_registry: call_registry.clone(),
         redis_url: config.redis.url.clone(),
+        nats: nats_client,
     };
 
     // Create WebSocket router

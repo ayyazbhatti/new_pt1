@@ -19,7 +19,7 @@ use crate::middleware::auth_middleware;
 
 #[derive(Clone)]
 pub struct AdminTradingState {
-    pub redis: Arc<redis::Client>,
+    pub redis: Arc<crate::redis_pool::RedisPool>,
     pub nats: Arc<async_nats::Client>,
 }
 
@@ -654,11 +654,12 @@ async fn create_admin_order(
         "type": "admin.order.created",
         "payload": admin_event,
     });
-    if let Ok(mut conn) = admin_state.redis.get_connection() {
+    if let Ok(mut conn) = admin_state.redis.get().await {
         let _: Result<(), _> = redis::cmd("PUBLISH")
             .arg("admin:orders")
             .arg(redis_payload.to_string())
-            .query(&mut conn);
+            .query_async(&mut conn)
+            .await;
     }
 
     // Return created order
@@ -798,11 +799,12 @@ async fn cancel_admin_order(
         "type": "admin.order.canceled",
         "payload": cancel_event,
     });
-    if let Ok(mut conn) = admin_state.redis.get_connection() {
+    if let Ok(mut conn) = admin_state.redis.get().await {
         let _: Result<(), _> = redis::cmd("PUBLISH")
             .arg("admin:orders")
             .arg(redis_payload.to_string())
-            .query(&mut conn);
+            .query_async(&mut conn)
+            .await;
     }
 
     info!("Admin cancelled order: order_id={}, admin_id={}", order_id, claims.sub);
@@ -918,11 +920,12 @@ async fn force_cancel_admin_order(
         "type": "admin.order.canceled",
         "payload": cancel_event,
     });
-    if let Ok(mut conn) = admin_state.redis.get_connection() {
+    if let Ok(mut conn) = admin_state.redis.get().await {
         let _: Result<(), _> = redis::cmd("PUBLISH")
             .arg("admin:orders")
             .arg(redis_payload.to_string())
-            .query(&mut conn);
+            .query_async(&mut conn)
+            .await;
     }
 
     info!("Admin force cancelled order: order_id={}, admin_id={}", order_id, claims.sub);

@@ -22,6 +22,7 @@ pub struct Session {
     broadcaster: Arc<Broadcaster>,
     call_registry: Arc<CallRegistry>,
     redis_url: String,
+    nats: Option<Arc<async_nats::Client>>,
 }
 
 impl Session {
@@ -32,6 +33,7 @@ impl Session {
         broadcaster: Arc<Broadcaster>,
         call_registry: Arc<CallRegistry>,
         redis_url: String,
+        nats: Option<Arc<async_nats::Client>>,
     ) -> Self {
         let conn_id = Uuid::new_v4();
         info!("New WebSocket connection established: {}", conn_id);
@@ -43,6 +45,7 @@ impl Session {
             broadcaster,
             call_registry,
             redis_url,
+            nats,
         }
     }
 
@@ -102,6 +105,7 @@ impl Session {
         let call_registry = self.call_registry.clone();
         let response_tx_clone = response_tx.clone();
         let redis_url_for_balance = redis_url.clone();
+        let nats_clone = self.nats.clone();
 
         let mut recv_task = tokio::spawn(async move {
             while let Some(Ok(msg)) = receiver.next().await {
@@ -350,6 +354,16 @@ impl Session {
                                 if let Ok(json) = ringing.to_json() {
                                     let _ = response_tx_clone.send(Message::Text(json));
                                 }
+                                if let Some(ref nats) = nats_clone {
+                                    let payload = serde_json::json!({
+                                        "call_id": call_id,
+                                        "admin_user_id": admin_user_id,
+                                        "user_id": target_user_id,
+                                        "event": "initiated",
+                                        "admin_display_name": caller_display_name
+                                    });
+                                    let _ = nats.publish("admin_call.events".to_string(), payload.to_string().into()).await;
+                                }
                                 // Ring timeout: after 60s send call.ended to admin if still ringing
                                 let cr = call_registry.clone();
                                 let bc = broadcaster.clone();
@@ -357,6 +371,7 @@ impl Session {
                                 let cid = call_id.clone();
                                 let aid = admin_user_id.clone();
                                 let tid = target_user_id.clone();
+                                let nats_timeout = nats_clone.clone();
                                 tokio::spawn(async move {
                                     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
                                     if let Some(_state) = cr.remove_if_ringing(&cid) {
@@ -368,6 +383,16 @@ impl Session {
                                         bc.send_to_connections(&admin_conns, ended.clone());
                                         let user_conns = reg.get_user_connections(&tid);
                                         bc.send_to_connections(&user_conns, ended);
+                                        if let Some(ref nats) = nats_timeout {
+                                            let payload = serde_json::json!({
+                                                "call_id": cid,
+                                                "admin_user_id": aid,
+                                                "user_id": tid,
+                                                "event": "timeout",
+                                                "ended_by": "timeout"
+                                            });
+                                            let _ = nats.publish("admin_call.events".to_string(), payload.to_string().into()).await;
+                                        }
                                     }
                                 });
                             }
@@ -431,6 +456,15 @@ impl Session {
                                 };
                                 let admin_conns = registry.get_user_connections(&state.admin_user_id);
                                 broadcaster.send_to_connections(&admin_conns, accepted);
+                                if let Some(ref nats) = nats_clone {
+                                    let payload = serde_json::json!({
+                                        "call_id": call_id,
+                                        "admin_user_id": state.admin_user_id,
+                                        "user_id": state.target_user_id,
+                                        "event": "answered"
+                                    });
+                                    let _ = nats.publish("admin_call.events".to_string(), payload.to_string().into()).await;
+                                }
                             }
                             ClientMessage::CallReject { call_id } => {
                                 let conn = match registry.get(&conn_id) {
@@ -479,6 +513,15 @@ impl Session {
                                 };
                                 let admin_conns = registry.get_user_connections(&state.admin_user_id);
                                 broadcaster.send_to_connections(&admin_conns, rejected);
+                                if let Some(ref nats) = nats_clone {
+                                    let payload = serde_json::json!({
+                                        "call_id": call_id,
+                                        "admin_user_id": state.admin_user_id,
+                                        "user_id": state.target_user_id,
+                                        "event": "rejected"
+                                    });
+                                    let _ = nats.publish("admin_call.events".to_string(), payload.to_string().into()).await;
+                                }
                             }
                             ClientMessage::CallEnd { call_id } => {
                                 let conn = match registry.get(&conn_id) {
@@ -531,6 +574,16 @@ impl Session {
                                 broadcaster.send_to_connections(&admin_conns, ended.clone());
                                 let user_conns = registry.get_user_connections(&state.target_user_id);
                                 broadcaster.send_to_connections(&user_conns, ended);
+                                if let Some(ref nats) = nats_clone {
+                                    let payload = serde_json::json!({
+                                        "call_id": call_id,
+                                        "admin_user_id": state.admin_user_id,
+                                        "user_id": state.target_user_id,
+                                        "event": "ended",
+                                        "ended_by": ended_by
+                                    });
+                                    let _ = nats.publish("admin_call.events".to_string(), payload.to_string().into()).await;
+                                }
                             }
                             ClientMessage::CallWebrtcOffer { call_id, sdp } => {
                                 let conn = match registry.get(&conn_id) {

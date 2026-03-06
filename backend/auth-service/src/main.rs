@@ -15,6 +15,7 @@ use futures::stream::StreamExt;
 mod db;
 mod middleware;
 mod models;
+mod redis_pool;
 mod routes;
 mod services;
 mod utils;
@@ -38,6 +39,7 @@ use routes::orders::create_orders_router;
 use routes::admin_trading::create_admin_trading_router;
 use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
+use routes::admin_call_records::create_admin_call_records_router;
 use routes::symbols::create_symbols_router;
 use routes::finance::create_finance_router;
 use routes::admin_settings::create_admin_settings_router;
@@ -74,11 +76,10 @@ async fn main() -> anyhow::Result<()> {
     // Create database connection pool
     let pool = create_pool(&database_url).await?;
 
-    // Connect to Redis
+    // Redis: Phase 2 pool (one multiplexed connection) + circuit breaker (503 when unhealthy)
     tracing::info!("Connecting to Redis at {}", redis_url);
-    let redis = redis::Client::open(redis_url.clone())?;
-    redis.get_async_connection().await?;
-    tracing::info!("Connected to Redis");
+    let redis_pool = redis_pool::RedisPool::new(&redis_url).await?;
+    tracing::info!("Redis pool ready (connection-manager + circuit breaker)");
 
     // Bootstrap Redis for per-group price stream (price:groups + symbol:markup:*)
     let markup_service = services::admin_markup_service::AdminMarkupService::new(pool.clone());
@@ -152,25 +153,25 @@ async fn main() -> anyhow::Result<()> {
 
     // Build application state for deposits
     let deposits_state = routes::deposits::DepositsState {
-        redis: Arc::new(redis.clone()),
+        redis: redis_pool.clone(),
         nats: Arc::new(nats_client.clone()),
     };
 
     // Build application state for withdrawals
     let withdrawals_state = routes::withdrawals::WithdrawalsState {
-        redis: Arc::new(redis.clone()),
+        redis: redis_pool.clone(),
         nats: Arc::new(nats_client.clone()),
     };
 
     // Build application state for orders
     let orders_state = routes::orders::OrdersState {
-        redis: Arc::new(redis.clone()),
+        redis: redis_pool.clone(),
         nats: Arc::new(nats_client.clone()),
     };
 
     // Build application state for admin trading
     let admin_trading_state = routes::admin_trading::AdminTradingState {
-        redis: Arc::new(redis.clone()),
+        redis: redis_pool.clone(),
         nats: Arc::new(nats_client.clone()),
     };
 
@@ -186,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/audit", create_admin_audit_router(pool.clone()))
+        .nest("/api/admin/call-records", create_admin_call_records_router(pool.clone()))
         .nest("/api/admin/groups", create_admin_groups_router(pool.clone()).layer(axum::extract::Extension(deposits_state.redis.clone())))
         .nest("/api/admin/group-tags", routes::admin_groups::create_admin_group_tags_router(pool.clone()))
         .nest("/api/admin/leverage-profiles", create_admin_leverage_profiles_router(pool.clone()))
@@ -223,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start order event listener to sync filled orders to database
     let nats_for_events = nats_client.clone();
-    let redis_for_events = redis.clone();
+    let redis_for_events = redis_pool.clone();
     let pool_for_orders = pool_for_events.clone();
     tokio::spawn(async move {
         let event_handler = OrderEventHandler::new(pool_for_orders, redis_for_events);
@@ -240,10 +242,29 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Start admin call record listener (ws-gateway publishes admin_call.events)
+    let nats_for_calls = nats_client.clone();
+    let pool_for_calls = pool.clone();
+    tokio::spawn(async move {
+        use services::call_record_handler::CallRecordHandler;
+        let handler = CallRecordHandler::new(Arc::new(pool_for_calls));
+        match nats_for_calls.subscribe("admin_call.events".to_string()).await {
+            Ok(subscriber) => {
+                info!("✅ Subscribed to admin_call.events for call records");
+                if let Err(e) = handler.start_listener(subscriber).await {
+                    error!("Call record listener error: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Failed to subscribe to admin_call.events: {}", e);
+            }
+        }
+    });
+
     // Start position event listener to sync positions to database
     let nats_for_positions = nats_client.clone();
     let pool_for_positions = pool_for_events.clone();
-    let redis_for_positions = redis.clone();
+    let redis_for_positions = redis_pool.clone();
     tokio::spawn(async move {
         use services::position_event_handler::PositionEventHandler;
         let position_handler = PositionEventHandler::new(pool_for_positions, redis_for_positions);
@@ -264,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
     // When trigger_reason is SL or TP, also create notifications and push via Redis (fire-and-forget).
     let nats_for_closed = nats_client.clone();
     let pool_for_closed = pool.clone();
-    let redis_for_closed = redis.clone();
+    let redis_for_closed = redis_pool.clone();
     tokio::spawn(async move {
         use futures::StreamExt;
         use routes::deposits::{compute_and_cache_account_summary, create_liquidation_notifications_and_push, create_sltp_notifications_and_push};
@@ -281,7 +302,7 @@ async fn main() -> anyhow::Result<()> {
                         let user_id_str = inner.get("user_id").and_then(|v| v.as_str());
                         if let Some(uid) = user_id_str {
                             if let Ok(user_id) = Uuid::parse_str(uid) {
-                                compute_and_cache_account_summary(&pool_for_closed, &redis_for_closed, user_id).await;
+                                compute_and_cache_account_summary(&pool_for_closed, redis_for_closed.as_ref(), user_id).await;
                             }
                         }
                         // If SL/TP or liquidation trigger, spawn notification task (do not await)
@@ -291,14 +312,14 @@ async fn main() -> anyhow::Result<()> {
                             let redis_spawn = redis_for_closed.clone();
                             let inner_clone = inner.clone();
                             tokio::spawn(async move {
-                                create_sltp_notifications_and_push(pool_spawn, redis_spawn, inner_clone).await;
+                                create_sltp_notifications_and_push(pool_spawn, redis_spawn.as_ref(), inner_clone).await;
                             });
                         } else if trigger == Some("liquidated") {
                             let pool_spawn = pool_for_closed.clone();
                             let redis_spawn = redis_for_closed.clone();
                             let inner_clone = inner.clone();
                             tokio::spawn(async move {
-                                create_liquidation_notifications_and_push(pool_spawn, redis_spawn, inner_clone).await;
+                                create_liquidation_notifications_and_push(pool_spawn, redis_spawn.as_ref(), inner_clone).await;
                             });
                         }
                     }
@@ -310,14 +331,15 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Start Redis listener for wallet balance requests
-    let redis_for_balance = redis.clone();
+    // Start Redis listener for wallet balance requests (pub/sub needs a dedicated connection)
+    let client_pubsub = redis::Client::open(redis_url.clone())?;
+    let redis_for_balance = redis_pool.clone();
     tokio::spawn(async move {
-        use redis::AsyncCommands; // for pubsub get_payload
+        use redis::AsyncCommands;
         use routes::deposits::publish_wallet_balance_updated;
 
         loop {
-            match redis_for_balance.get_async_connection().await {
+            match client_pubsub.get_async_connection().await {
                 Ok(mut conn) => {
                     let mut pubsub = conn.into_pubsub();
                     if let Err(e) = pubsub.subscribe("wallet:balance:request").await {
@@ -335,7 +357,7 @@ async fn main() -> anyhow::Result<()> {
                                 if let Some(user_id_str) = request.get("user_id").and_then(|v| v.as_str()) {
                                     if let Ok(user_id) = Uuid::parse_str(user_id_str) {
                                         info!("📥 Received wallet balance request for user {}", user_id);
-                                        publish_wallet_balance_updated(&pool_for_balance, &redis_for_balance, user_id).await;
+                                        publish_wallet_balance_updated(&pool_for_balance, redis_for_balance.as_ref(), user_id).await;
                                     }
                                 }
                             }
@@ -352,7 +374,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start price:ticks subscriber for real-time account summary (UnR PnL, equity, free margin)
     let pool_for_ticks = pool.clone();
-    let redis_for_ticks = redis.clone();
+    let redis_for_ticks = redis_pool.clone();
     let redis_url_ticks = redis_url.clone();
     tokio::spawn(async move {
         use services::price_tick_summary_handler::PriceTickSummaryHandler;
@@ -362,7 +384,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Warm account summary cache for all users so Redis has every user's data (not only on login)
     let pool_warm = pool.clone();
-    let redis_warm = redis.clone();
+    let redis_warm = redis_pool.clone();
     tokio::spawn(async move {
         use services::account_summary_cache_warmup::warm_all_users;
         warm_all_users(pool_warm, redis_warm).await;

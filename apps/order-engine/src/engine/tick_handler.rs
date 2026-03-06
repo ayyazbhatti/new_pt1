@@ -147,7 +147,14 @@ impl TickHandler {
                         };
                         match self.execute_fill(&mut conn, &order, fill_price, order.size).await {
                             Ok(_) => {
-                                info!("Order {} filled at {}", order_id, fill_price);
+                                info!(
+                                    order_id = %order_id,
+                                    user_id = %order.user_id,
+                                    symbol = %order.symbol,
+                                    fill_price = %fill_price,
+                                    size = %order.size,
+                                    "ORDER_FILLED"
+                                );
                                 self.metrics.inc_orders_filled();
                                 filled_any = true;
                             }

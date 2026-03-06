@@ -11,7 +11,7 @@ const DELAY_BETWEEN_BATCHES_MS: u64 = 100;
 
 /// Fetches all user IDs from the database and computes + caches account summary for each.
 /// Runs in background so it does not block server startup.
-pub async fn warm_all_users(pool: PgPool, redis: redis::Client) {
+pub async fn warm_all_users(pool: PgPool, redis: std::sync::Arc<crate::redis_pool::RedisPool>) {
     info!("🔥 Starting account summary cache warm-up for all users...");
 
     let user_ids: Vec<uuid::Uuid> = match sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM users")
@@ -35,7 +35,7 @@ pub async fn warm_all_users(pool: PgPool, redis: redis::Client) {
 
     for (i, chunk) in user_ids.chunks(BATCH_SIZE).enumerate() {
         for &user_id in chunk {
-            compute_and_cache_account_summary(&pool, &redis, user_id).await;
+            compute_and_cache_account_summary(&pool, redis.as_ref(), user_id).await;
         }
         let done = ((i + 1) * BATCH_SIZE).min(total);
         if done % 100 == 0 || done == total {

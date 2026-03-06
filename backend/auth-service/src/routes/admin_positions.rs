@@ -27,14 +27,13 @@ async fn list_admin_positions(
 ) -> Result<Json<PaginatedResponse<AdminPosition>>, (StatusCode, Json<ErrorResponse>)> {
     check_admin(&claims)?;
 
-    let mut conn = admin_state.redis.get_async_connection().await.map_err(|e| {
-        error!("Admin positions: Redis connection failed: {}", e);
+    let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {
                 error: ErrorDetail {
                     code: "REDIS_ERROR".to_string(),
-                    message: "Failed to connect to cache".to_string(),
+                    message: "Cache unavailable".to_string(),
                 },
             }),
         )

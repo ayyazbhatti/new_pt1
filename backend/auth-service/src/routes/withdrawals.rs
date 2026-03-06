@@ -22,7 +22,7 @@ use crate::middleware::auth_middleware;
 
 #[derive(Clone)]
 pub struct WithdrawalsState {
-    pub redis: Arc<redis::Client>,
+    pub redis: Arc<crate::redis_pool::RedisPool>,
     pub nats: Arc<async_nats::Client>,
 }
 
@@ -146,8 +146,8 @@ async fn create_withdrawal_request(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Also publish to Redis for WebSocket gateway
-    let mut redis_conn = withdrawals_state.redis.get_async_connection().await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut redis_conn = withdrawals_state.redis.get().await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let _: Result<(), _> = redis_conn.publish("withdrawals:requests", serde_json::to_string(&event).unwrap_or_default()).await;
 
     Ok(Json(CreateWithdrawalRequestResponse {
@@ -159,7 +159,7 @@ async fn create_withdrawal_request(
 
 pub fn create_withdrawals_router(
     pool: PgPool,
-    redis: Arc<redis::Client>,
+    redis: Arc<crate::redis_pool::RedisPool>,
     nats: Arc<async_nats::Client>,
 ) -> Router<PgPool> {
     let withdrawals_state = WithdrawalsState {

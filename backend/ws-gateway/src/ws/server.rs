@@ -21,6 +21,7 @@ pub struct AppState {
     pub broadcaster: Arc<Broadcaster>,
     pub call_registry: Arc<CallRegistry>,
     pub redis_url: String,
+    pub nats: Option<Arc<async_nats::Client>>,
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -33,7 +34,7 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Response {
-    ws.on_upgrade(|socket| async move {
+    ws.on_upgrade(move |socket| async move {
         let mut session = Session::new(
             state.registry.clone(),
             state.validator.clone(),
@@ -41,6 +42,7 @@ async fn ws_handler(
             state.broadcaster.clone(),
             state.call_registry.clone(),
             state.redis_url.clone(),
+            state.nats.clone(),
         );
         session.handle(socket).await;
     })

@@ -59,3 +59,6 @@ governor = "0.6"
 # Validation
 validator = { version = "0.18", features = ["derive"] }
 
+# NATS (for publishing call records to auth-service)
+async-nats = "0.32"
+

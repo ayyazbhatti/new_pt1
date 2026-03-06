@@ -11,11 +11,11 @@ use uuid::Uuid;
 
 pub struct PositionEventHandler {
     pool: Arc<PgPool>,
-    redis: redis::Client,
+    redis: Arc<crate::redis_pool::RedisPool>,
 }
 
 impl PositionEventHandler {
-    pub fn new(pool: Arc<PgPool>, redis: redis::Client) -> Self {
+    pub fn new(pool: Arc<PgPool>, redis: Arc<crate::redis_pool::RedisPool>) -> Self {
         Self { pool, redis }
     }
 
@@ -57,7 +57,7 @@ impl PositionEventHandler {
                 
                 // Sync position to database
                 self.sync_position_to_database(&event).await?;
-                compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+                compute_and_cache_account_summary(&*self.pool, self.redis.as_ref(), event.user_id).await;
                 // Liquidation email is sent from create_liquidation_notifications_and_push (event.position.closed handler)
                 return Ok(());
             }
@@ -74,7 +74,7 @@ impl PositionEventHandler {
 
         // Sync position to database
         self.sync_position_to_database(&event).await?;
-        compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+        compute_and_cache_account_summary(&*self.pool, self.redis.as_ref(), event.user_id).await;
         // Liquidation email is sent from create_liquidation_notifications_and_push (event.position.closed handler)
 
         Ok(())

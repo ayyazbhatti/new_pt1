@@ -2,9 +2,13 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import http from 'node:http'
+import dns from 'node:dns'
 import type { Connect } from 'vite'
 
-const API_TARGET = 'http://localhost:3000'
+// Prefer IPv4 so localhost resolves to 127.0.0.1 and avoids ERR_ADDRESS_INVALID (Chrome + IPv6 ::1).
+dns.setDefaultResultOrder('ipv4first')
+
+const API_TARGET = 'http://127.0.0.1:3000'
 const PROXY_TIMEOUT_MS = 20_000
 
 /**
@@ -73,18 +77,26 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0',
-    // HTTP by default so Chrome works. On localhost the mic works over HTTP; for other devices use a tunnel (e.g. ngrok) or HTTPS proxy.
+    // Use 127.0.0.1 to avoid ERR_ADDRESS_INVALID when Chrome resolves localhost to IPv6 (::1).
+    host: '127.0.0.1',
+    port: 5173,
+    // Fix HMR WebSocket URL: with host set, the client can get port=undefined → ws://127.0.0.1:undefined/. Set hmr explicitly.
+    hmr: {
+      host: '127.0.0.1',
+      port: 5173,
+      protocol: 'ws',
+    },
+    // For access from other devices use the Network URL or a tunnel (e.g. ngrok). For mic/permissions use HTTP.
     proxy: {
       // /ws-health must come before /ws so GET /ws-health is not matched by /ws
       // ws-gateway: WebSocket on WS_PORT (3003), health on HTTP_PORT (9002)
       '/ws-health': {
-        target: 'http://localhost:9002',
+        target: 'http://127.0.0.1:9002',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ws-health/, '/health'),
       },
       '/ws': {
-        target: 'ws://localhost:3003',
+        target: 'ws://127.0.0.1:3003',
         ws: true,
       },
     },

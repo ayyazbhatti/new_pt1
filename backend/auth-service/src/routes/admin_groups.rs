@@ -309,7 +309,7 @@ async fn create_group(
 async fn update_group(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
-    axum::extract::Extension(redis): axum::extract::Extension<Arc<redis::Client>>,
+    axum::extract::Extension(redis): axum::extract::Extension<Arc<crate::redis_pool::RedisPool>>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateGroupRequest>,
 ) -> Result<Json<UserGroup>, (StatusCode, Json<ErrorResponse>)> {
@@ -341,7 +341,7 @@ async fn update_group(
         Ok(group) => {
             // Update Redis cache so account summary sees new thresholds immediately
             let key = redis_model::keys::Keys::group(id);
-            if let Ok(mut conn) = redis.get_async_connection().await {
+            if let Ok(mut conn) = redis.get().await {
                 if let Some(ref d) = group.margin_call_level {
                     let _: Result<(), _> = conn.hset(&key, "margin_call_level", d.to_string()).await;
                 } else {
