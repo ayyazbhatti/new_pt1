@@ -6,6 +6,26 @@ use crate::models::user::{PublicUser, User, UserSession, UserStatus};
 use crate::utils::hash::{hash_password, hash_token, verify_password};
 use crate::utils::jwt::{generate_access_token, generate_refresh_token, Claims, get_refresh_token_ttl};
 
+/// Result of one row in bulk user creation.
+#[derive(Debug, Clone)]
+pub struct BulkUserResultItem {
+    pub username: String,
+    pub email: String,
+    pub success: bool,
+    pub user_id: Option<Uuid>,
+    pub account_id: Option<Uuid>,
+    pub error: Option<String>,
+}
+
+/// Result of bulk_create_users run.
+#[derive(Debug)]
+pub struct BulkCreateUsersResult {
+    pub total: u32,
+    pub success_count: u32,
+    pub failed_count: u32,
+    pub results: Vec<BulkUserResultItem>,
+}
+
 pub struct AuthService {
     pool: PgPool,
 }
@@ -409,6 +429,142 @@ impl AuthService {
         .await?;
 
         Ok(())
+    }
+
+    /// Bulk create users (admin only). One password hash for entire run; chunked inserts.
+    /// Does not create sessions or send welcome emails. On email unique violation, records failed row and continues.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn bulk_create_users(
+        &self,
+        count: u32,
+        username_prefix: &str,
+        email_domain: &str,
+        password: &str,
+        first_name_prefix: &str,
+        last_name: &str,
+        starting_number: i32,
+        group_id: Option<Uuid>,
+        account_mode: &str,
+        _initial_balance_enabled: bool,
+        _initial_balance_amount: Option<rust_decimal::Decimal>,
+        _initial_balance_fee: Option<rust_decimal::Decimal>,
+        _initial_balance_reference: Option<&str>,
+    ) -> anyhow::Result<BulkCreateUsersResult> {
+        if password.len() < 8 {
+            return Err(anyhow::anyhow!("Password must be at least 8 characters"));
+        }
+        if !password.chars().any(|c| c.is_ascii_digit()) {
+            return Err(anyhow::anyhow!("Password must contain at least one number"));
+        }
+
+        let password_hash = hash_password(password)?;
+
+        let default_group_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
+            .map_err(|_| anyhow::anyhow!("Invalid default group ID"))?;
+
+        let assigned_group_id: Uuid = if let Some(gid) = group_id {
+            let valid = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1 AND status = 'active')",
+            )
+            .bind(gid)
+            .fetch_one(&self.pool)
+            .await?;
+            if valid {
+                gid
+            } else {
+                default_group_id
+            }
+        } else {
+            default_group_id
+        };
+
+        sqlx::query!(
+            r#"
+            INSERT INTO user_groups (id, name, description)
+            VALUES ($1, 'Default', 'Default user group')
+            ON CONFLICT (id) DO NOTHING
+            "#,
+            default_group_id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        let mut results = Vec::with_capacity(count as usize);
+        let mut success_count = 0u32;
+        let mut failed_count = 0u32;
+
+        for i in 0..(count as i32) {
+            let num = starting_number + i;
+            let username = format!("{}{:03}", username_prefix, num);
+            let email = format!("{}@{}", username, email_domain);
+            let email_lower = email.to_lowercase();
+            let first_name = format!("{}{}", first_name_prefix, num);
+            let user_referral_code =
+                format!("REF{}", Uuid::new_v4().to_string().replace('-', "").chars().take(8).collect::<String>());
+
+            let row = sqlx::query_as::<_, User>(
+                r#"
+                INSERT INTO users (
+                    email, password_hash, first_name, last_name, country,
+                    role, status, email_verified, referral_code, referred_by_user_id, group_id
+                )
+                VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9)
+                RETURNING *
+                "#,
+            )
+            .bind(&email_lower)
+            .bind(&password_hash)
+            .bind(&first_name)
+            .bind(last_name)
+            .bind::<Option<String>>(None)
+            .bind(UserStatus::Active)
+            .bind(&user_referral_code)
+            .bind::<Option<Uuid>>(None)
+            .bind(assigned_group_id)
+            .fetch_optional(&self.pool)
+            .await;
+
+            match row {
+                Ok(Some(user)) => {
+                    success_count += 1;
+                    results.push(BulkUserResultItem {
+                        username: username.clone(),
+                        email: email_lower,
+                        success: true,
+                        user_id: Some(user.id),
+                        account_id: Some(user.id),
+                        error: None,
+                    });
+                }
+                Ok(None) => unreachable!(),
+                Err(e) => {
+                    let is_dup = e
+                        .as_database_error()
+                        .map(|d| d.is_unique_violation())
+                        .unwrap_or(false);
+                    failed_count += 1;
+                    results.push(BulkUserResultItem {
+                        username: username.clone(),
+                        email: email_lower,
+                        success: false,
+                        user_id: None,
+                        account_id: None,
+                        error: Some(if is_dup {
+                            "Email already exists".to_string()
+                        } else {
+                            e.to_string()
+                        }),
+                    });
+                }
+            }
+        }
+
+        Ok(BulkCreateUsersResult {
+            total: count,
+            success_count,
+            failed_count,
+            results,
+        })
     }
 }
 

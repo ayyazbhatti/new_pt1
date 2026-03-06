@@ -19,10 +19,13 @@ function apiProxyMiddleware(): Connect.NextHandleFunction {
   return (req, res, next) => {
     const rawUrl = req.url ?? ''
     const pathname = rawUrl.split('?')[0]
-    const isApi = pathname.startsWith('/api') || pathname.startsWith('/v1')
+    const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : ''
+    const pathOnly = pathname.startsWith('http') ? new URL(pathname).pathname : pathname
+    const isApi = pathOnly.startsWith('/api') || pathOnly.startsWith('/v1')
     if (!isApi) return next()
 
-    const targetUrl = new URL(rawUrl, API_TARGET)
+    // Always proxy to API_TARGET using path only (req.url can be full URL in some setups)
+    const targetUrl = new URL(pathOnly + search, API_TARGET)
     const headers = { ...req.headers } as Record<string, string>
     headers.host = targetUrl.host
 
@@ -66,8 +69,9 @@ export default defineConfig({
     react(),
     {
       name: 'api-proxy',
-      configureServer(server) {
-        server.middlewares.use(apiProxyMiddleware())
+      // Return middleware so Vite prepends it; /api and /v1 are proxied before SPA/404.
+      configureServer() {
+        return apiProxyMiddleware()
       },
     },
   ],
@@ -88,6 +92,15 @@ export default defineConfig({
     },
     // For access from other devices use the Network URL or a tunnel (e.g. ngrok). For mic/permissions use HTTP.
     proxy: {
+      // API: forwarded first so /api and /v1 never hit SPA fallback (avoids 404 for bulk, etc.)
+      '/api': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
+      '/v1': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
       // /ws-health must come before /ws so GET /ws-health is not matched by /ws
       // ws-gateway: WebSocket on WS_PORT (3003), health on HTTP_PORT (9002)
       '/ws-health': {

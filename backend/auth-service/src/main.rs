@@ -1,6 +1,6 @@
 use axum::{
     http::Method,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use std::env;
@@ -179,9 +179,18 @@ async fn main() -> anyhow::Result<()> {
     let pool_for_events = Arc::new(pool.clone());
     let pool_for_balance = pool.clone();
 
+    // Bulk routes registered with full path so they always match (avoids nest path issues)
+    let bulk_routes = Router::new()
+        .route("/api/admin/bulk", get(routes::admin_bulk::get_bulk_health))
+        .route("/api/admin/bulk/config", get(routes::admin_bulk::get_bulk_config))
+        .route("/api/admin/bulk/users", post(routes::admin_bulk::post_bulk_users))
+        .layer(axum::middleware::from_fn(middleware::auth_middleware))
+        .with_state(pool.clone());
+
     // Build application
     let app = Router::new()
         .route("/health", get(health_check))
+        .merge(bulk_routes)
         .nest("/api/auth", create_auth_router(pool.clone()))
         .nest("/api/symbols", create_symbols_router(pool.clone())) // Public endpoint for all users
         .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))

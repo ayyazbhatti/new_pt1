@@ -16,6 +16,7 @@ pub mod orders;
 pub mod admin_trading;
 pub mod admin_positions;
 pub mod admin_audit;
+pub mod admin_bulk;
 pub mod admin_call_records;
 pub mod symbols;
 pub mod finance;
