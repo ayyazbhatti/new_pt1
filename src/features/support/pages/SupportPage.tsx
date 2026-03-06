@@ -198,7 +198,7 @@ export function SupportPage() {
     if (!selectUserModalOpen) return
     setUsersLoading(true)
     listUsers({ limit: 500 })
-      .then(setAllUsers)
+      .then((res) => setAllUsers(res.items))
       .catch(() => setAllUsers([]))
       .finally(() => setUsersLoading(false))
   }, [selectUserModalOpen])

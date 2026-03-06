@@ -60,7 +60,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
   // When editing, prefer user from cache so re-opened modal shows latest group
   const displayUser = useMemo(() => {
     if (!user) return null
-    const found = (usersList as UserResponse[] | undefined)?.find((u) => u.id === user.id)
+    const found = usersList?.items?.find((u) => u.id === user.id)
     if (!found) return user
     return {
       ...user,

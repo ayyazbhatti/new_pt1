@@ -75,7 +75,7 @@ export function LeverageProfilesPage() {
         title="Leverage Profiles & Tiers"
         description="Configure leverage profiles with margin-based tiers and assign them to groups"
         actions={
-          <Button onClick={() => setCreateDialogOpen(true)} className="bg-blue-600 hover:bg-blue-700">
+          <Button onClick={() => setCreateDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             Create Profile
           </Button>
@@ -84,61 +84,61 @@ export function LeverageProfilesPage() {
 
       {/* Stats row */}
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
+        <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-blue-400/10 p-2 sm:p-3">
               <Scale className="h-5 w-5 sm:h-6 sm:w-6 text-blue-400" />
             </div>
             <div>
-              <p className="text-xs sm:text-sm text-slate-400">Total Profiles</p>
-              <p className="text-xl sm:text-2xl font-bold text-white">{totalProfiles}</p>
+              <p className="text-xs sm:text-sm text-text-muted">Total Profiles</p>
+              <p className="text-xl sm:text-2xl font-bold text-text">{totalProfiles}</p>
             </div>
           </div>
         </div>
-        <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
+        <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-green-400/10 p-2 sm:p-3">
               <CheckCircle className="h-5 w-5 sm:h-6 sm:w-6 text-green-400" />
             </div>
             <div>
-              <p className="text-xs sm:text-sm text-slate-400">Active Profiles</p>
-              <p className="text-xl sm:text-2xl font-bold text-white">{activeCount}</p>
+              <p className="text-xs sm:text-sm text-text-muted">Active Profiles</p>
+              <p className="text-xl sm:text-2xl font-bold text-text">{activeCount}</p>
             </div>
           </div>
         </div>
-        <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
+        <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-orange-400/10 p-2 sm:p-3">
               <BarChart3 className="h-5 w-5 sm:h-6 sm:w-6 text-orange-400" />
             </div>
             <div>
-              <p className="text-xs sm:text-sm text-slate-400">Total Tiers</p>
-              <p className="text-xl sm:text-2xl font-bold text-white">{totalTiers}</p>
+              <p className="text-xs sm:text-sm text-text-muted">Total Tiers</p>
+              <p className="text-xl sm:text-2xl font-bold text-text">{totalTiers}</p>
             </div>
           </div>
         </div>
       </div>
 
       {/* Leverage profiles block */}
-      <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
-        <h2 className="text-lg font-semibold text-white">Leverage Profiles</h2>
-        <p className="text-sm text-slate-400 mt-0.5">Manage leverage profiles and their associated tiers.</p>
+      <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+        <h2 className="text-lg font-semibold text-text">Leverage Profiles</h2>
+        <p className="text-sm text-text-muted mt-0.5">Manage leverage profiles and their associated tiers.</p>
 
         <div className="mt-4 flex flex-wrap items-end gap-4">
           <div className="flex-1 min-w-[200px]">
-            <label className="mb-1 block text-xs text-slate-400">Search</label>
+            <label className="mb-1 block text-xs text-text-muted">Search</label>
             <div className="relative">
               <Input
                 placeholder="Search profiles by name or notes..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="border-slate-600 bg-slate-700 text-white placeholder:text-slate-400 pr-8"
+                className="pr-8"
               />
               {searchTerm && (
                 <button
                   type="button"
                   onClick={() => setSearchTerm('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -146,9 +146,9 @@ export function LeverageProfilesPage() {
             </div>
           </div>
           <div className="w-36">
-            <label className="mb-1 block text-xs text-slate-400">Status</label>
+            <label className="mb-1 block text-xs text-text-muted">Status</label>
             <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as 'all' | 'active' | 'archived')}>
-              <SelectTrigger className="border-slate-600 bg-slate-700 text-white">
+              <SelectTrigger>
                 <SelectValue placeholder="All Status" />
               </SelectTrigger>
               <SelectContent>
@@ -162,20 +162,20 @@ export function LeverageProfilesPage() {
 
         <div className="mt-6 space-y-3">
           {isLoading ? (
-            <div className="py-12 text-center text-slate-400">Loading profiles...</div>
+            <div className="py-12 text-center text-text-muted">Loading profiles...</div>
           ) : profiles.length === 0 ? (
-            <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-12 text-center">
-              <p className="text-slate-400 font-medium">
+            <div className="rounded-lg border border-border bg-surface-2 p-12 text-center">
+              <p className="text-text-muted font-medium">
                 {searchTerm || statusFilter !== 'all' ? 'No profiles found.' : 'No profiles found.'}
               </p>
-              <p className="text-sm text-slate-500 mt-1">
+              <p className="text-sm text-text-dim mt-1">
                 {searchTerm || statusFilter !== 'all'
                   ? 'Try adjusting your search or filter.'
                   : 'Create your first leverage profile to get started.'}
               </p>
               {!searchTerm && statusFilter === 'all' && (
                 <Button
-                  className="mt-4 bg-blue-600 hover:bg-blue-700"
+                  className="mt-4"
                   onClick={() => setCreateDialogOpen(true)}
                 >
                   <Plus className="h-4 w-4 mr-2" />

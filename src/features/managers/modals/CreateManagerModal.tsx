@@ -35,10 +35,11 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
     queryFn: listPermissionProfiles,
   })
 
-  const { data: users = [] } = useQuery({
+  const { data: usersData } = useQuery({
     queryKey: ['users'],
     queryFn: () => listUsers({ limit: 500 }),
   })
+  const users = usersData?.items ?? []
 
   const { data: managers = [] } = useQuery({
     queryKey: ['managers'],

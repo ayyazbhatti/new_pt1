@@ -319,6 +319,7 @@ impl AuthService {
         let users = sqlx::query_as::<_, User>(
             r#"
             SELECT * FROM users
+            WHERE deleted_at IS NULL
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
             "#,
@@ -329,6 +330,67 @@ impl AuthService {
         .await?;
 
         Ok(users)
+    }
+
+    /// List users with server-side pagination and optional filters. Returns (users, total_count).
+    pub async fn list_users_paginated(
+        &self,
+        search: Option<&str>,
+        status: Option<&str>,
+        group_id: Option<Uuid>,
+        page: i64,
+        page_size: i64,
+    ) -> anyhow::Result<(Vec<User>, i64)> {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let offset = (page - 1) * page_size;
+
+        let search_pattern = search.map(|s| format!("%{}%", s.trim()));
+        let has_search = search_pattern.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
+        let status_filter: Option<String> = status
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty() && ["active", "disabled", "suspended"].contains(&s.as_str()));
+
+        // Count total with same filters
+        let total_row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)::bigint FROM users
+            WHERE deleted_at IS NULL
+              AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
+              AND ($3::text IS NULL OR status::text = $3)
+              AND ($4::uuid IS NULL OR group_id = $4)
+            "#,
+        )
+        .bind(has_search)
+        .bind(search_pattern.as_deref().unwrap_or("%"))
+        .bind(status_filter.as_deref())
+        .bind(group_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let total = total_row.0;
+
+        // Fetch page
+        let users = sqlx::query_as::<_, User>(
+            r#"
+            SELECT * FROM users
+            WHERE deleted_at IS NULL
+              AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
+              AND ($3::text IS NULL OR status::text = $3)
+              AND ($4::uuid IS NULL OR group_id = $4)
+            ORDER BY created_at DESC
+            LIMIT $5 OFFSET $6
+            "#,
+        )
+        .bind(has_search)
+        .bind(search_pattern.as_deref().unwrap_or("%"))
+        .bind(status_filter.as_deref())
+        .bind(group_id)
+        .bind(page_size)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok((users, total))
     }
 
     async fn log_audit(

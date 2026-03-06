@@ -113,7 +113,7 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
     setUsersLoading(true)
     try {
       const list = await listUsers({ limit: 200 })
-      setUsers(list)
+      setUsers(list.items)
     } catch {
       setUsers([])
     } finally {

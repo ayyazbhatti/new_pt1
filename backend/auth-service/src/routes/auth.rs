@@ -97,6 +97,12 @@ pub struct AuthResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ListUsersResponse {
+    pub items: Vec<UserResponse>,
+    pub total: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct UserResponse {
     pub id: Uuid,
     pub email: String,
@@ -1333,7 +1339,7 @@ async fn list_users(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<Vec<UserResponse>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<ListUsersResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Only admins can list users
     if claims.role != "admin" {
         return Err((
@@ -1349,15 +1355,55 @@ async fn list_users(
 
     let service = AuthService::new(pool.clone());
 
-    let limit = params
-        .get("limit")
-        .and_then(|s| s.parse::<i64>().ok());
-    let offset = params
-        .get("offset")
-        .and_then(|s| s.parse::<i64>().ok());
+    // Server-side pagination: page, page_size, search, status, group_id
+    let use_paginated = params.contains_key("page") || params.contains_key("page_size")
+        || params.contains_key("search") || params.contains_key("status") || params.contains_key("group_id");
 
-    match service.list_users(limit, offset).await {
-        Ok(users) => {
+    let (users, total) = if use_paginated {
+        let page = params.get("page").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
+        let page_size = params.get("page_size").and_then(|s| s.parse::<i64>().ok()).unwrap_or(20);
+        let search = params.get("search").map(|s| s.as_str());
+        let status = params.get("status").map(|s| s.as_str());
+        let group_id = params
+            .get("group_id")
+            .and_then(|s| Uuid::parse_str(s).ok());
+
+        match service.list_users_paginated(search, status, group_id, page, page_size).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "LIST_USERS_FAILED".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                ));
+            }
+        }
+    } else {
+        let limit = params.get("limit").and_then(|s| s.parse::<i64>().ok()).unwrap_or(100);
+        let offset = params.get("offset").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let users = match service.list_users(Some(limit), Some(offset)).await {
+            Ok(u) => u,
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "LIST_USERS_FAILED".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                ));
+            }
+        };
+        let total = users.len() as i64;
+        (users, total)
+    };
+
+    {
             let user_ids: Vec<Uuid> = users.iter().map(|u| u.id).collect();
             // Batch query: open position count per user (positions table, status = 'open')
             let open_counts: std::collections::HashMap<Uuid, i32> = if user_ids.is_empty() {
@@ -1459,17 +1505,10 @@ async fn list_users(
                     permissions,
                 });
             }
-            Ok(Json(user_responses))
-        }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "LIST_USERS_FAILED".to_string(),
-                    message: e.to_string(),
-                },
-            }),
-        )),
+            Ok(Json(ListUsersResponse {
+                items: user_responses,
+                total,
+            }))
     }
 }
 

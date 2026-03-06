@@ -7,8 +7,9 @@ import { CreateEditUserModal, MultiUserMetricsModal } from '../modals'
 import { Download, Plus, Activity } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { useState, useMemo, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { listUsers, UserResponse } from '@/shared/api/users.api'
+import { useDebouncedValue } from '@/shared/hooks/useDebounce'
 import { User } from '../types/users'
 
 // Map backend user to frontend User type
@@ -54,32 +55,7 @@ function mapUserResponse(user: UserResponse): User {
 export function AdminUsersPage() {
   const openModal = useModalStore((state) => state.openModal)
   const canCreateUser = useCanAccess('users:create')
-  
-  // Fetch real users from API
-  const { data: usersData, isLoading, error } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => listUsers({ limit: 100 }),
-  })
-  
-  const [usersState, setUsersState] = useState<User[]>([])
 
-  const users = useMemo(() => {
-    if (!usersData) return []
-    return usersData.map(mapUserResponse)
-  }, [usersData])
-
-  // Keep usersState in sync with refetched data (e.g. after group update) so Edit modal shows latest
-  useEffect(() => {
-    if (users.length > 0) {
-      setUsersState(users)
-    }
-  }, [users])
-
-  const handleUserUpdate = (userId: string, updates: Partial<User>) => {
-    setUsersState((prev) =>
-      prev.map((user) => (user.id === userId ? { ...user, ...updates } : user))
-    )
-  }
   const [filters, setFilters] = useState({
     search: '',
     status: 'all',
@@ -93,49 +69,56 @@ export function AdminUsersPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
 
-  // Use state if available, otherwise use computed users
-  const displayUsers = usersState.length > 0 ? usersState : users
-
-  const filteredUsers = useMemo(() => {
-    return displayUsers.filter((user) => {
-      if (filters.search) {
-        const searchLower = filters.search.toLowerCase()
-        if (
-          !user.name.toLowerCase().includes(searchLower) &&
-          !user.email.toLowerCase().includes(searchLower) &&
-          !user.id.toLowerCase().includes(searchLower)
-        ) {
-          return false
-        }
-      }
-      if (filters.status !== 'all' && user.status !== filters.status) return false
-      if (filters.kycStatus !== 'all' && user.kycStatus !== filters.kycStatus) return false
-      if (filters.group !== 'all' && user.group !== filters.group) return false
-      if (filters.country !== 'all' && user.country !== filters.country) return false
-      if (filters.balanceMin) {
-        const min = parseFloat(filters.balanceMin)
-        if (user.balance < min) return false
-      }
-      if (filters.balanceMax) {
-        const max = parseFloat(filters.balanceMax)
-        if (user.balance > max) return false
-      }
-      return true
-    })
-  }, [displayUsers, filters])
-
-  // Reset to page 1 when filters change
+  // Debounce search so we don't refetch on every keystroke (no blink, professional UX)
+  const debouncedSearch = useDebouncedValue(filters.search, 400)
   useEffect(() => {
     setPage(1)
-  }, [filters])
+  }, [debouncedSearch])
 
-  const totalFiltered = filteredUsers.length
-  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize))
+  // Server-side pagination and filtering (supports 1M+ users)
+  const { data: usersData, isLoading, error, isFetching } = useQuery({
+    queryKey: [
+      'users',
+      page,
+      pageSize,
+      debouncedSearch,
+      filters.status,
+      filters.group,
+    ],
+    queryFn: () =>
+      listUsers({
+        page,
+        page_size: pageSize,
+        search: debouncedSearch.trim() || undefined,
+        status: filters.status !== 'all' ? filters.status : undefined,
+        group_id: filters.group !== 'all' ? filters.group : undefined,
+      }),
+    placeholderData: keepPreviousData,
+  })
+
+  const users = useMemo(
+    () => (usersData?.items ?? []).map(mapUserResponse),
+    [usersData?.items]
+  )
+  const total = usersData?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const currentPage = Math.min(page, totalPages)
-  const paginatedUsers = useMemo(() => {
-    const start = (currentPage - 1) * pageSize
-    return filteredUsers.slice(start, start + pageSize)
-  }, [filteredUsers, currentPage, pageSize])
+
+  const [usersState, setUsersState] = useState<User[]>([])
+  useEffect(() => {
+    if (users.length > 0) setUsersState(users)
+  }, [users])
+  const displayUsers = usersState.length > 0 ? usersState : users
+
+  const handleUserUpdate = (userId: string, updates: Partial<User>) => {
+    setUsersState((prev) =>
+      prev.map((user) => (user.id === userId ? { ...user, ...updates } : user))
+    )
+  }
+
+  useEffect(() => {
+    setPage(1)
+  }, [filters.status, filters.group])
 
   const handlePageChange = (newPage: number) => {
     setPage(Math.max(1, Math.min(newPage, totalPages)))
@@ -159,16 +142,7 @@ export function AdminUsersPage() {
 
   const [multiUserMetricsOpen, setMultiUserMetricsOpen] = useState(false)
 
-  if (isLoading) {
-    return (
-      <ContentShell>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-text-muted">Loading users...</div>
-        </div>
-      </ContentShell>
-    )
-  }
-
+  // Full-page loading only on initial load (no data yet). Refetches keep previous data visible.
   if (error) {
     return (
       <ContentShell>
@@ -182,8 +156,17 @@ export function AdminUsersPage() {
     )
   }
 
+  const isInitialLoading = isLoading && !usersData
+
   return (
     <ContentShell>
+      {isInitialLoading && (
+        <div className="flex items-center justify-center h-64">
+          <div className="text-text-muted">Loading users...</div>
+        </div>
+      )}
+      {!isInitialLoading && (
+        <>
       <PageHeader
         title="Users"
         description="Manage client accounts, trading permissions, KYC, risk status, and groups."
@@ -219,15 +202,23 @@ export function AdminUsersPage() {
           </div>
         }
       />
-      <UserKPICards users={displayUsers} />
-      <UserFiltersBar filters={filters} onFilterChange={setFilters} />
+      <UserKPICards users={displayUsers} totalFromServer={total} />
+      <div className="relative">
+        {isFetching && (
+          <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded bg-surface-2/90 px-2 py-1 text-xs text-text-muted">
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-text-muted border-t-transparent" />
+            Updating…
+          </div>
+        )}
+        <UserFiltersBar filters={filters} onFilterChange={setFilters} />
+      </div>
       <UsersTable
-        users={paginatedUsers}
+        users={displayUsers}
         onUserUpdate={handleUserUpdate}
         pagination={{
           page: currentPage,
           pageSize,
-          total: totalFiltered,
+          total,
           onPageChange: handlePageChange,
           onPageSizeChange: handlePageSizeChange,
         }}
@@ -236,6 +227,8 @@ export function AdminUsersPage() {
         open={multiUserMetricsOpen}
         onOpenChange={setMultiUserMetricsOpen}
       />
+        </>
+      )}
     </ContentShell>
   )
 }

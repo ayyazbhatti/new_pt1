@@ -27,17 +27,33 @@ export interface UserResponse {
 export interface ListUsersParams {
   limit?: number
   offset?: number
+  /** Server-side pagination (use with page_size; preferred for large lists) */
+  page?: number
+  page_size?: number
+  search?: string
+  status?: string
+  group_id?: string
 }
 
-export async function listUsers(params?: ListUsersParams): Promise<UserResponse[]> {
+export interface ListUsersResponse {
+  items: UserResponse[]
+  total: number
+}
+
+export async function listUsers(params?: ListUsersParams): Promise<ListUsersResponse> {
   const queryParams = new URLSearchParams()
-  if (params?.limit) queryParams.append('limit', params.limit.toString())
-  if (params?.offset) queryParams.append('offset', params.offset.toString())
-  
+  if (params?.limit != null) queryParams.append('limit', params.limit.toString())
+  if (params?.offset != null) queryParams.append('offset', params.offset.toString())
+  if (params?.page != null) queryParams.append('page', params.page.toString())
+  if (params?.page_size != null) queryParams.append('page_size', params.page_size.toString())
+  if (params?.search) queryParams.append('search', params.search.trim())
+  if (params?.status && params.status !== 'all') queryParams.append('status', params.status)
+  if (params?.group_id && params.group_id !== 'all') queryParams.append('group_id', params.group_id)
+
   const queryString = queryParams.toString()
   const endpoint = `/api/auth/users${queryString ? `?${queryString}` : ''}`
-  
-  return http<UserResponse[]>(endpoint, {
+
+  return http<ListUsersResponse>(endpoint, {
     method: 'GET',
   })
 }

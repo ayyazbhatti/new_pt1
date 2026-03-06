@@ -1,2 +1,2 @@
 export { useBreakpoint } from './useBreakpoint'
-export { useDebouncedCallback } from './useDebounce'
+export { useDebouncedCallback, useDebouncedValue } from './useDebounce'

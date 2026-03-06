@@ -4,10 +4,12 @@ import { User } from '../types/users'
 
 interface UserKPICardsProps {
   users: User[]
+  /** When using server-side pagination, pass total count from API for "Total Users" card */
+  totalFromServer?: number
 }
 
-export function UserKPICards({ users }: UserKPICardsProps) {
-  const totalUsers = users.length
+export function UserKPICards({ users, totalFromServer }: UserKPICardsProps) {
+  const totalUsers = totalFromServer ?? users.length
   const activeTraders = users.filter((u) => u.openPositions > 0).length
   const kycPending = users.filter((u) => u.kycStatus === 'pending').length
   const restrictedAccounts = users.filter(
