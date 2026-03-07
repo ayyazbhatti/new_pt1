@@ -74,9 +74,11 @@ export function RegisterPage() {
         password: data.password,
         confirmPassword: data.confirmPassword,
         country: data.country,
-        // Use ref from URL as referral code so backend sets referred_by_user_id; manual field as override
-        referralCode: refFromLink || data.referralCode,
+        // ref from URL: assign user to group with this signup_slug (backend resolves ref -> group_id)
+        ...(refFromLink ? { groupRef: refFromLink } : {}),
+        // Legacy ?group=<uuid>; optional manual referral code for affiliate
         ...(groupIdFromLink ? { groupId: groupIdFromLink } : {}),
+        referralCode: data.referralCode || undefined,
       })
       toast.success('Account created successfully!')
       navigate('/')
