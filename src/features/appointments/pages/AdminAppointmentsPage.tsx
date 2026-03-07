@@ -35,6 +35,7 @@ import {
 import { Calendar, List, Plus, X } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
+import { useCanAccess } from '@/shared/utils/permissions'
 
 const STORAGE_SEARCH_KEY = 'admin-appointments-search'
 const PAGE_SIZES = [10, 20, 50, 100, 200]
@@ -42,6 +43,12 @@ const QUERY_KEY_ADMIN_APPOINTMENTS = ['admin', 'appointments'] as const
 const QUERY_KEY_STATS = ['admin', 'appointments', 'stats'] as const
 
 export function AdminAppointmentsPage() {
+  const canCreate = useCanAccess('appointments:create')
+  const canEdit = useCanAccess('appointments:edit')
+  const canReschedule = useCanAccess('appointments:reschedule')
+  const canCancel = useCanAccess('appointments:cancel')
+  const canComplete = useCanAccess('appointments:complete')
+  const canSendReminder = useCanAccess('appointments:send_reminder')
   const queryClient = useQueryClient()
   const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list')
   const [calendarDate, setCalendarDate] = useState(() => new Date())
@@ -303,9 +310,11 @@ export function AdminAppointmentsPage() {
                 <Calendar className="h-4 w-4" /> Calendar View
               </button>
             </div>
-            <Button onClick={handleCreate} className="bg-blue-600 hover:bg-blue-700">
-              <Plus className="mr-2 h-4 w-4" /> Create Appointment
-            </Button>
+            {canCreate && (
+              <Button onClick={handleCreate} className="bg-blue-600 hover:bg-blue-700">
+                <Plus className="mr-2 h-4 w-4" /> Create Appointment
+              </Button>
+            )}
           </div>
         }
       />
@@ -417,6 +426,11 @@ export function AdminAppointmentsPage() {
             onCancel={handleCancel}
             onComplete={handleComplete}
             onSendReminder={handleSendReminder}
+            canEdit={canEdit}
+            canReschedule={canReschedule}
+            canCancel={canCancel}
+            canComplete={canComplete}
+            canSendReminder={canSendReminder}
           />
           <div className="mt-4 flex items-center justify-between">
             <div className="text-sm text-slate-400">

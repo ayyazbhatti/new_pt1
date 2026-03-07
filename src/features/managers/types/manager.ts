@@ -8,7 +8,8 @@ export interface Manager {
   role: string
   permissionProfileId: string
   permissionProfileName: string
-  status: ManagerStatus
+  /** Known: 'active' | 'disabled'; backend may send other values (e.g. suspended) */
+  status: ManagerStatus | string
   createdAt: string
   lastLoginAt?: string
   notes?: string

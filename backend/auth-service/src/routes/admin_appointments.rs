@@ -11,12 +11,62 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use tracing::error;
 use crate::middleware::auth_middleware;
 use crate::services::appointment_service::{
     self, CancelPayload, CompletePayload, CreateAppointmentPayload, ListAppointmentsParams,
     ReschedulePayload, SendReminderPayload, UpdateAppointmentPayload,
 };
 use crate::utils::jwt::Claims;
+
+/// Allow if role is admin or user has the given permission from their permission profile.
+async fn check_appointments_permission(
+    pool: &PgPool,
+    claims: &Claims,
+    permission: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if claims.role == "admin" {
+        return Ok(());
+    }
+    let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to get permission profile for appointments check: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+            )
+        })?;
+    let Some(pid) = profile_id else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "No permission profile assigned" } })),
+        ));
+    };
+    let has: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = $2)",
+    )
+    .bind(pid)
+    .bind(permission)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to check appointments permission: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    if !has {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": format!("Missing permission: {}", permission) } })),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ListQuery {
@@ -35,16 +85,6 @@ pub struct ListQuery {
 pub struct SearchUsersQuery {
     pub q: String,
     pub limit: Option<i64>,
-}
-
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Admin access required" })),
-        ));
-    }
-    Ok(())
 }
 
 pub fn create_admin_appointments_router(pool: PgPool) -> Router<PgPool> {
@@ -66,7 +106,7 @@ async fn list_appointments(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:view").await?;
     let params = ListAppointmentsParams {
         limit: q.limit,
         offset: q.offset,
@@ -100,7 +140,7 @@ async fn get_stats(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:view").await?;
     let stats = appointment_service::get_stats(&pool)
         .await
         .map_err(|e| {
@@ -117,7 +157,7 @@ async fn search_users(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Query(q): Query<SearchUsersQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:view").await?;
     let users = appointment_service::search_users(&pool, &q.q, q.limit)
         .await
         .map_err(|e| {
@@ -134,7 +174,7 @@ async fn get_appointment(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:view").await?;
     let row = appointment_service::get_by_id(&pool, id)
         .await
         .map_err(|e| {
@@ -157,7 +197,7 @@ async fn create_appointment(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     axum::Json(payload): axum::Json<CreateAppointmentPayload>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:create").await?;
     let admin_id = claims.sub;
     let row = appointment_service::create(&pool, admin_id, &payload)
         .await
@@ -179,7 +219,7 @@ async fn update_appointment(
     Path(id): Path<Uuid>,
     axum::Json(payload): axum::Json<UpdateAppointmentPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:edit").await?;
     let row = appointment_service::update(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -202,7 +242,7 @@ async fn delete_appointment(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:delete").await?;
     let deleted = appointment_service::delete_by_id(&pool, id)
         .await
         .map_err(|e| {
@@ -229,7 +269,7 @@ async fn send_reminder(
     Path(id): Path<Uuid>,
     axum::Json(payload): axum::Json<SendReminderPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:send_reminder").await?;
     appointment_service::send_reminder(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -247,7 +287,7 @@ async fn reschedule_appointment(
     Path(id): Path<Uuid>,
     axum::Json(payload): axum::Json<ReschedulePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:reschedule").await?;
     let row = appointment_service::reschedule(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -271,7 +311,7 @@ async fn cancel_appointment(
     Path(id): Path<Uuid>,
     axum::Json(payload): axum::Json<CancelPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:cancel").await?;
     let row = appointment_service::cancel(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -295,7 +335,7 @@ async fn complete_appointment(
     Path(id): Path<Uuid>,
     axum::Json(payload): axum::Json<CompletePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_appointments_permission(&pool, &claims, "appointments:complete").await?;
     let row = appointment_service::complete(&pool, id, &payload)
         .await
         .map_err(|e| {

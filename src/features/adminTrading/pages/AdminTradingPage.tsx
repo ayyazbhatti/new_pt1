@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useCallback } from 'react'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
-import { Plus, Circle } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { fetchAdminOrders } from '../api/orders'
 import { fetchAdminPositions } from '../api/positions'
 import { TradingFiltersBar } from '../components/TradingFiltersBar'
 import { OrdersTable } from '../components/OrdersTable'
 import { PositionsTable } from '../components/PositionsTable'
-import { AdminAuditPanel } from '../components/AdminAuditPanel'
 import { OrderCreateModal } from '../components/OrderCreateModal'
 import { OrderDetailsModal } from '../components/OrderDetailsModal'
 import { PositionDetailsModal } from '../components/PositionDetailsModal'
@@ -17,10 +17,10 @@ import { ClosePositionModal } from '../components/ClosePositionModal'
 import { ModifySltpModal } from '../components/ModifySltpModal'
 import { useAdminWebSocket } from '../hooks/useAdminWebSocket'
 import { useDebouncedCallback } from '@/shared/hooks/useDebounce'
-import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 
 export function AdminTradingPage() {
+  const canCreateOrder = useCanAccess('trading:create_order')
   const {
     filters,
     activeTab,
@@ -36,8 +36,6 @@ export function AdminTradingPage() {
     getOrdersArray,
     getPositionsArray,
     setOpenModal,
-    wsStatus,
-    wsLastMessageAt,
   } = useAdminTradingStore()
 
   // WebSocket integration
@@ -102,10 +100,6 @@ export function AdminTradingPage() {
   const ordersArray = useMemo(() => getOrdersArray(), [orders])
   const positionsArray = useMemo(() => getPositionsArray(), [positions])
 
-  const wsStatusColor =
-    wsStatus === 'connected' ? 'text-success' : wsStatus === 'connecting' ? 'text-warning' : 'text-danger'
-  const wsStatusText = wsStatus === 'connected' ? 'Live' : wsStatus === 'connecting' ? 'Connecting...' : 'Offline'
-
   return (
     <ContentShell>
       <PageHeader
@@ -113,34 +107,22 @@ export function AdminTradingPage() {
         description="Monitor orders, positions, and apply trading controls in real-time."
         actions={
           <div className="flex items-center gap-2">
-            {/* WebSocket Status */}
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-2 border border-border">
-              <Circle className={cn('h-2 w-2', wsStatusColor)} fill="currentColor" />
-              <span className="text-xs font-medium text-text-muted">{wsStatusText}</span>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => (activeTab === 'positions' ? loadPositions() : loadOrders())}
-              disabled={activeTab === 'orders' ? ordersLoading : positionsLoading}
-            >
-              Refresh
-            </Button>
-            <Button variant="primary" onClick={() => setOpenModal('create-order')}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Order
-            </Button>
+            {canCreateOrder && (
+              <Button variant="primary" onClick={() => setOpenModal('create-order')}>
+                <Plus className="h-4 w-4 mr-2" />
+                Create Order
+              </Button>
+            )}
           </div>
         }
       />
 
       <TradingFiltersBar />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="mt-6 w-full">
         <TabsList>
           <TabsTrigger value="orders">Orders</TabsTrigger>
           <TabsTrigger value="positions">Positions</TabsTrigger>
-          <TabsTrigger value="audit">Actions Log</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orders" className="mt-4">
@@ -161,10 +143,6 @@ export function AdminTradingPage() {
           ) : (
             <PositionsTable positions={positionsArray} />
           )}
-        </TabsContent>
-
-        <TabsContent value="audit" className="mt-4">
-          <AdminAuditPanel />
         </TabsContent>
       </Tabs>
 

@@ -2,6 +2,7 @@ import { ContentShell, PageHeader } from '@/shared/layout'
 import { SwapRulesTable } from '../components/SwapRulesTable'
 import { SwapFiltersBar } from '../components/SwapFiltersBar'
 import { Button } from '@/shared/ui/button'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { CreateSwapRuleModal } from '../modals/CreateSwapRuleModal'
 import { BulkAssignSwapModal } from '../modals/BulkAssignSwapModal'
 import { useModalStore } from '@/app/store'
@@ -14,6 +15,8 @@ import type { ListSwapRulesParams } from '../types/swap'
 
 export function SwapRulesPage() {
   const openModal = useModalStore((state) => state.openModal)
+  const canCreate = useCanAccess('swap:create')
+  const canEdit = useCanAccess('swap:edit')
   const [filters, setFilters] = useState<{
     group: string
     market: string
@@ -81,14 +84,18 @@ export function SwapRulesPage() {
               <Download className="h-4 w-4 mr-2" />
               Export
             </Button>
-            <Button variant="outline" onClick={handleBulkAssign}>
-              <Upload className="h-4 w-4 mr-2" />
-              Bulk Assign
-            </Button>
-            <Button onClick={handleCreateRule}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Rule
-            </Button>
+            {canEdit && (
+              <Button variant="outline" onClick={handleBulkAssign}>
+                <Upload className="h-4 w-4 mr-2" />
+                Bulk Assign
+              </Button>
+            )}
+            {canCreate && (
+              <Button onClick={handleCreateRule}>
+                <Plus className="h-4 w-4 mr-2" />
+                Create Rule
+              </Button>
+            )}
           </div>
         }
       />

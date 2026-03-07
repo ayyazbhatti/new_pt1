@@ -62,6 +62,8 @@ async function refreshAccessToken(): Promise<string> {
 
       const data = await response.json()
       useAuthStore.getState().setTokens(data.access_token, refreshToken)
+      // Refresh user (and permissions) in background; do not await so retry is not delayed (no polling)
+      useAuthStore.getState().refreshUser().catch((e) => console.error('Failed to refresh user after token refresh', e))
       return data.access_token
     } finally {
       refreshPromise = null

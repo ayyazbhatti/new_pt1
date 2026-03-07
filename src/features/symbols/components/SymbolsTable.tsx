@@ -12,6 +12,7 @@ import { Eye, Edit, Trash2, TrendingUp, Info } from 'lucide-react'
 import { useToggleSymbolEnabled, useDeleteSymbol } from '../hooks/useSymbols'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { useUpdateSymbol } from '../hooks/useSymbols'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { PriceCell } from './PriceCell'
 import { usePriceStreamConnection } from '../hooks/usePriceStream'
@@ -44,6 +45,8 @@ export function SymbolsTable({
   onPageSizeChange,
 }: SymbolsTableProps) {
   const openModal = useModalStore((state) => state.openModal)
+  const canEdit = useCanAccess('symbols:edit')
+  const canDelete = useCanAccess('symbols:delete')
   const toggleEnabled = useToggleSymbolEnabled()
   const deleteSymbol = useDeleteSymbol()
   const updateSymbol = useUpdateSymbol()
@@ -229,7 +232,7 @@ export function SymbolsTable({
             onValueChange={(v) =>
               handleLeverageProfileChange(symbol, v === 'none' ? null : v)
             }
-            disabled={updateSymbol.isPending}
+            disabled={!canEdit || updateSymbol.isPending}
           >
             <SelectTrigger className="w-[180px]">
               <span className="truncate">{displayLabel}</span>
@@ -389,7 +392,7 @@ export function SymbolsTable({
             <Switch
               checked={symbol.isEnabled}
               onCheckedChange={() => handleToggleEnabled(symbol)}
-              disabled={toggleEnabled.isPending}
+              disabled={!canEdit || toggleEnabled.isPending}
             />
             <Badge variant={symbol.isEnabled ? 'success' : 'danger'} className="text-xs">
               {symbol.isEnabled ? 'Enabled' : 'Disabled'}
@@ -420,32 +423,40 @@ export function SymbolsTable({
             <Button variant="ghost" size="sm" onClick={() => handleView(symbol)} title="View">
               <Eye className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => handleEdit(symbol)} title="Edit">
-              <Edit className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleGroupMarkups(symbol)}
-              title="Group Markups"
-            >
-              <TrendingUp className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleDelete(symbol)}
-              title="Delete"
-              className="text-danger hover:text-danger"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {canEdit && (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => handleEdit(symbol)} title="Edit">
+                  <Edit className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleGroupMarkups(symbol)}
+                  title="Group Markups"
+                >
+                  <TrendingUp className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleDelete(symbol)}
+                title="Delete"
+                className="text-danger hover:text-danger"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         )
       },
     },
   ], [
     isConnected,
+    canEdit,
+    canDelete,
     handleView,
     handleEdit,
     handleGroupMarkups,

@@ -17,6 +17,8 @@ export interface ManagerDto {
 }
 
 function fromDto(d: ManagerDto): Manager {
+  const status: Manager['status'] =
+    d.status === 'disabled' ? 'disabled' : d.status === 'active' ? 'active' : d.status
   return {
     id: d.id,
     userId: d.user_id,
@@ -25,7 +27,7 @@ function fromDto(d: ManagerDto): Manager {
     role: d.user_role,
     permissionProfileId: d.permission_profile_id,
     permissionProfileName: d.permission_profile_name,
-    status: d.status === 'disabled' ? 'disabled' : 'active',
+    status,
     createdAt: d.created_at,
     lastLoginAt: d.last_login_at ?? undefined,
     notes: d.notes ?? undefined,

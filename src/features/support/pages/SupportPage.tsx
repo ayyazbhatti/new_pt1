@@ -9,6 +9,7 @@ import {
   getAdminConversationMessages,
   sendAdminChatMessage,
 } from '../api/supportChat.api'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { listUsers, type UserResponse } from '@/shared/api/users.api'
@@ -51,6 +52,8 @@ function dtoToMessage(dto: {
 }
 
 export function SupportPage() {
+  const canReply = useCanAccess('support:reply')
+  const canNewChat = useCanAccess('support:new_chat')
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedUserId = searchParams.get('userId')
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
@@ -282,16 +285,18 @@ export function SupportPage() {
             <p className="text-xs text-text-muted mt-0.5">
               {loadingConversations ? 'Loading...' : `${conversations.length} open`}
             </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full mt-2 gap-2"
-              onClick={() => setSelectUserModalOpen(true)}
-            >
-              <UserPlus className="h-3.5 w-3.5" />
-              New chat
-            </Button>
+            {canNewChat && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full mt-2 gap-2"
+                onClick={() => setSelectUserModalOpen(true)}
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                New chat
+              </Button>
+            )}
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
             {error && <p className="text-xs text-red-400/90 px-4 py-2">{error}</p>}
@@ -362,30 +367,32 @@ export function SupportPage() {
                   </>
                 )}
               </div>
-              <div className="shrink-0 p-4 border-t border-border bg-surface-2/30">
-                <div className="flex items-center gap-2">
-                  <Input
-                    ref={messageInputRef}
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type your reply..."
-                    className="flex-1 min-w-0 h-10 text-sm"
-                    aria-label="Reply to user"
-                    disabled={sending}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleSend()}
-                    disabled={!inputValue.trim() || sending}
-                    className="shrink-0 p-2.5 rounded-lg bg-accent text-white hover:bg-accent/90 disabled:opacity-40 disabled:pointer-events-none transition-colors"
-                    title="Send message"
-                    aria-label="Send message"
-                  >
-                    <Send className="h-4 w-4" />
-                  </button>
+              {canReply && (
+                <div className="shrink-0 p-4 border-t border-border bg-surface-2/30">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      ref={messageInputRef}
+                      value={inputValue}
+                      onChange={(e) => setInputValue(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Type your reply..."
+                      className="flex-1 min-w-0 h-10 text-sm"
+                      aria-label="Reply to user"
+                      disabled={sending}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleSend()}
+                      disabled={!inputValue.trim() || sending}
+                      className="shrink-0 p-2.5 rounded-lg bg-accent text-white hover:bg-accent/90 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                      title="Send message"
+                      aria-label="Send message"
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-8">

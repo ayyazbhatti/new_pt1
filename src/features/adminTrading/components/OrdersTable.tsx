@@ -8,6 +8,7 @@ import { MoreHorizontal, X, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { cancelAdminOrder, forceCancelAdminOrder } from '../api/orders'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 
@@ -18,6 +19,7 @@ interface OrdersTableProps {
 
 export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
   const { setSelectedOrderId, setOpenModal } = useAdminTradingStore()
+  const canCancelOrder = useCanAccess('trading:cancel_order')
 
   const handleCancel = useCallback(
     async (order: AdminOrder, e: React.MouseEvent) => {
@@ -164,7 +166,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
           const canCancel = order.status === 'pending' || order.status === 'open'
           return (
             <div className="flex items-center gap-1">
-              {canCancel && (
+              {canCancel && canCancelOrder && (
                 <>
                   <Button
                     variant="ghost"
@@ -198,7 +200,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
         },
       },
     ],
-    [handleCancel, handleForceCancel, handleRowClick]
+    [handleCancel, handleForceCancel, handleRowClick, canCancelOrder]
   )
 
   const parentRef = useRef<HTMLDivElement>(null)

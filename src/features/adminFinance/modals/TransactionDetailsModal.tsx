@@ -4,6 +4,7 @@ import { Badge } from '@/shared/ui/badge'
 import { Button } from '@/shared/ui/button'
 import { Transaction } from '../types/finance'
 import { useModalStore } from '@/app/store'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { ApproveRejectModal } from './ApproveRejectModal'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { CheckCircle, X } from 'lucide-react'
@@ -15,6 +16,8 @@ interface TransactionDetailsModalProps {
 export function TransactionDetailsModal({ transaction }: TransactionDetailsModalProps) {
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
+  const canApprove = useCanAccess('deposits:approve')
+  const canReject = useCanAccess('deposits:reject')
   const [adminNotes, setAdminNotes] = useState(transaction.adminNotes || '')
 
   const getStatusBadge = (status: string) => {
@@ -204,22 +207,26 @@ export function TransactionDetailsModal({ transaction }: TransactionDetailsModal
           <Button variant="outline" onClick={() => closeModal(`tx-details-${transaction.id}`)}>
             Close
           </Button>
-          <Button
-            variant="outline"
-            className="text-success hover:text-success hover:bg-success/10"
-            onClick={handleApprove}
-          >
-            <CheckCircle className="h-4 w-4 mr-2" />
-            Approve
-          </Button>
-          <Button
-            variant="outline"
-            className="text-danger hover:text-danger hover:bg-danger/10"
-            onClick={handleReject}
-          >
-            <X className="h-4 w-4 mr-2" />
-            Reject
-          </Button>
+          {canApprove && (
+            <Button
+              variant="outline"
+              className="text-success hover:text-success hover:bg-success/10"
+              onClick={handleApprove}
+            >
+              <CheckCircle className="h-4 w-4 mr-2" />
+              Approve
+            </Button>
+          )}
+          {canReject && (
+            <Button
+              variant="outline"
+              className="text-danger hover:text-danger hover:bg-danger/10"
+              onClick={handleReject}
+            >
+              <X className="h-4 w-4 mr-2" />
+              Reject
+            </Button>
+          )}
         </div>
       )}
       {transaction.status !== 'pending' && (

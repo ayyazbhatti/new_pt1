@@ -28,6 +28,7 @@ import {
 import { DataTable, type ColumnDef } from '@/shared/ui/table'
 import { ModalShell } from '@/shared/ui/modal'
 import { toast } from '@/shared/components/common'
+import { useCanAccess } from '@/shared/utils/permissions'
 import {
   getEmailConfig,
   updateEmailConfig,
@@ -57,6 +58,7 @@ type SettingsTabId = (typeof SETTINGS_TABS)[number]['id']
 export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const tab = (searchParams.get('tab') as SettingsTabId) || 'general'
+  const canEditSettings = useCanAccess('settings:edit')
 
   const [siteName, setSiteName] = useState('LandBricks')
   const [supportEmail, setSupportEmail] = useState('support@landbricks.com')
@@ -437,30 +439,32 @@ export function SettingsPage() {
               </Card>
 
               {/* Actions */}
-              <div className="flex justify-end gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setSiteName('LandBricks')
-                    setSupportEmail('support@landbricks.com')
-                    setDefaultCurrency('USD')
-                    setTimezone('America/New_York')
-                    setWhatsapp('+1234567890')
-                    setPhone('+1 (234) 567-8900')
-                    setFacebook('https://facebook.com/...')
-                    setInstagram('https://instagram.com/...')
-                    setTwitter('https://twitter.com/...')
-                  }}
-                >
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Reset
-                </Button>
-                <Button type="button">
-                  <Save className="mr-2 h-4 w-4" />
-                  Save Changes
-                </Button>
-              </div>
+              {canEditSettings && (
+                <div className="flex justify-end gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setSiteName('LandBricks')
+                      setSupportEmail('support@landbricks.com')
+                      setDefaultCurrency('USD')
+                      setTimezone('America/New_York')
+                      setWhatsapp('+1234567890')
+                      setPhone('+1 (234) 567-8900')
+                      setFacebook('https://facebook.com/...')
+                      setInstagram('https://instagram.com/...')
+                      setTwitter('https://twitter.com/...')
+                    }}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Reset
+                  </Button>
+                  <Button type="button">
+                    <Save className="mr-2 h-4 w-4" />
+                    Save Changes
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -487,6 +491,7 @@ export function SettingsPage() {
                       value={smtpHost}
                       onChange={(e) => setSmtpHost(e.target.value)}
                       placeholder="smtp.example.com"
+                      disabled={!canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
                       Hostname or IP of your SMTP server.
@@ -502,6 +507,7 @@ export function SettingsPage() {
                       value={smtpPort}
                       onChange={(e) => setSmtpPort(e.target.value)}
                       placeholder="587"
+                      disabled={!canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
                       Usually 587 (TLS), 465 (SSL), or 25 (none).
@@ -511,7 +517,11 @@ export function SettingsPage() {
                     <label className="mb-1.5 block text-sm font-medium text-text">
                       Encryption
                     </label>
-                    <Select value={smtpEncryption} onValueChange={(v: 'none' | 'tls' | 'ssl') => setSmtpEncryption(v)}>
+                    <Select
+                      value={smtpEncryption}
+                      onValueChange={(v: 'none' | 'tls' | 'ssl') => setSmtpEncryption(v)}
+                      disabled={!canEditSettings}
+                    >
                       <SelectTrigger className="w-full sm:max-w-xs">
                         <SelectValue />
                       </SelectTrigger>
@@ -542,6 +552,7 @@ export function SettingsPage() {
                       onChange={(e) => setSmtpUsername(e.target.value)}
                       placeholder="user@example.com"
                       autoComplete="off"
+                      disabled={!canEditSettings}
                     />
                   </div>
                   <div>
@@ -554,6 +565,7 @@ export function SettingsPage() {
                       onChange={(e) => setSmtpPassword(e.target.value)}
                       placeholder="••••••••"
                       autoComplete="new-password"
+                      disabled={!canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
                       Stored securely. Leave empty to keep existing password.
@@ -578,6 +590,7 @@ export function SettingsPage() {
                       value={mailFromEmail}
                       onChange={(e) => setMailFromEmail(e.target.value)}
                       placeholder="noreply@example.com"
+                      disabled={!canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
                       Must be allowed by your SMTP provider.
@@ -591,6 +604,7 @@ export function SettingsPage() {
                       value={mailFromName}
                       onChange={(e) => setMailFromName(e.target.value)}
                       placeholder="Platform"
+                      disabled={!canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
                       Display name recipients see in their inbox.
@@ -615,7 +629,7 @@ export function SettingsPage() {
                       value={testEmailTo}
                       onChange={(e) => setTestEmailTo(e.target.value)}
                       placeholder="admin@example.com"
-                      disabled={testEmailMutation.isPending}
+                      disabled={testEmailMutation.isPending || !canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
                       A test message will be sent to this address using the current configuration.
@@ -625,7 +639,7 @@ export function SettingsPage() {
                     type="button"
                     variant="outline"
                     onClick={handleSendTestEmail}
-                    disabled={testEmailMutation.isPending}
+                    disabled={testEmailMutation.isPending || !canEditSettings}
                     className="shrink-0 sm:self-end"
                   >
                     {testEmailMutation.isPending ? (
@@ -643,35 +657,36 @@ export function SettingsPage() {
                 </div>
               </Card>
 
-              {/* Actions */}
-              <div className="flex justify-end gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleResetEmailConfig}
-                  disabled={emailConfigLoading || saveEmailConfigMutation.isPending}
-                >
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Reset
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleSaveEmailConfig}
-                  disabled={emailConfigLoading || saveEmailConfigMutation.isPending}
-                >
-                  {saveEmailConfigMutation.isPending ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving…
-                    </>
-                  ) : (
-                    <>
-                      <Save className="mr-2 h-4 w-4" />
-                      Save Changes
-                    </>
-                  )}
-                </Button>
-              </div>
+              {canEditSettings && (
+                <div className="flex justify-end gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleResetEmailConfig}
+                    disabled={emailConfigLoading || saveEmailConfigMutation.isPending}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Reset
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleSaveEmailConfig}
+                    disabled={emailConfigLoading || saveEmailConfigMutation.isPending}
+                  >
+                    {saveEmailConfigMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving…
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-4 w-4" />
+                        Save Changes
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -724,22 +739,26 @@ export function SettingsPage() {
                       </span>
                     ),
                   },
-                  {
-                    id: 'actions',
-                    header: '',
-                    cell: ({ row }) => (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setEditingTemplateId(row.original.id)}
-                        className="h-8 gap-1.5"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                        Edit
-                      </Button>
-                    ),
-                  },
+                  ...(canEditSettings
+                    ? [
+                        {
+                          id: 'actions',
+                          header: '',
+                          cell: ({ row }: { row: { original: { id: string } } }) => (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setEditingTemplateId(row.original.id)}
+                              className="h-8 gap-1.5"
+                            >
+                              <Edit className="h-3.5 w-3.5" />
+                              Edit
+                            </Button>
+                          ),
+                        },
+                      ]
+                    : []),
                 ]}
                 bordered
                 dense

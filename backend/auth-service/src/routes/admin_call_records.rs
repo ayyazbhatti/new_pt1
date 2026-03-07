@@ -12,14 +12,52 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use tracing::error;
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role != "admin" {
+/// Allow if role is admin or user has call:view from their permission profile.
+async fn check_call_permission(
+    pool: &PgPool,
+    claims: &Claims,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if claims.role == "admin" {
+        return Ok(());
+    }
+    let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to get permission profile for call check: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+            )
+        })?;
+    let Some(pid) = profile_id else {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Admin access required" })),
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "No permission profile assigned" } })),
+        ));
+    };
+    let has: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = 'call:view')",
+    )
+    .bind(pid)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to check call permission: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    if !has {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Missing permission: call:view" } })),
         ));
     }
     Ok(())
@@ -70,7 +108,7 @@ async fn list_call_records(
     Extension(claims): Extension<Claims>,
     Query(q): Query<ListCallRecordsQuery>,
 ) -> Result<Json<ListCallRecordsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_call_permission(&pool, &claims).await?;
 
     let limit = q.limit.unwrap_or(50).clamp(1, 100);
     let offset = q.offset.unwrap_or(0).max(0);

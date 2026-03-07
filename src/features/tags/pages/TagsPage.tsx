@@ -28,7 +28,7 @@ export function TagsPage() {
   const queryClient = useQueryClient()
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
-  const canEdit = useCanAccess('users:edit')
+  const canCreateTag = useCanAccess('tags:create')
 
   const [filters, setFilters] = useState({ search: '' })
 
@@ -171,7 +171,7 @@ export function TagsPage() {
         title="Tags"
         description="Create and manage tags. Assign tags to users, managers, and other entities for filtering and organization."
         actions={
-          canEdit ? (
+          canCreateTag ? (
             <Button onClick={handleCreateTag}>
               <Plus className="h-4 w-4 mr-2" />
               Create Tag

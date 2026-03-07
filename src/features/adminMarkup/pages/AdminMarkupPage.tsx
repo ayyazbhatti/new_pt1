@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { useModalStore } from '@/app/store'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { useMarkupProfiles } from '../hooks/useMarkup'
 import { MarkupProfile } from '../types/markup'
 import { CreateEditPriceStreamModal } from '../modals/CreateEditPriceStreamModal'
@@ -21,6 +22,9 @@ import { formatDistanceToNow } from 'date-fns'
 
 export function AdminMarkupPage() {
   const openModal = useModalStore((state) => state.openModal)
+  const canCreate = useCanAccess('markup:create')
+  const canEdit = useCanAccess('markup:edit')
+  const canDelete = useCanAccess('markup:delete')
   const { data: profiles, isLoading, error } = useMarkupProfiles()
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -105,10 +109,12 @@ export function AdminMarkupPage() {
         title="Price Streams Management"
         description="Manage price stream configurations"
         actions={
-          <Button onClick={handleNewStream}>
-            <Plus className="h-4 w-4 mr-2" />
-            New Stream
-          </Button>
+          canCreate ? (
+            <Button onClick={handleNewStream}>
+              <Plus className="h-4 w-4 mr-2" />
+              New Stream
+            </Button>
+          ) : undefined
         }
       />
       {/* Search */}
@@ -189,38 +195,44 @@ export function AdminMarkupPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleConfigureMarkups(profile)}
-                          className="rounded-lg p-2 text-accent hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                          title="Configure Markups"
-                        >
-                          <Settings className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleTransferSettings(profile)}
-                          className="rounded-lg p-2 text-teal-400 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                          title="Transfer Settings"
-                        >
-                          <Copy className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(profile)}
-                          className="rounded-lg p-2 text-text-muted hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                          title="Edit Stream"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(profile)}
-                          className="rounded-lg p-2 text-danger hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                          title="Delete Stream"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {canEdit && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleConfigureMarkups(profile)}
+                              className="rounded-lg p-2 text-accent hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                              title="Configure Markups"
+                            >
+                              <Settings className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleTransferSettings(profile)}
+                              className="rounded-lg p-2 text-teal-400 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                              title="Transfer Settings"
+                            >
+                              <Copy className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleEdit(profile)}
+                              className="rounded-lg p-2 text-text-muted hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                              title="Edit Stream"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          </>
+                        )}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(profile)}
+                            className="rounded-lg p-2 text-danger hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Delete Stream"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

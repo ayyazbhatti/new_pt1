@@ -35,6 +35,7 @@ import { getPositionsByUserId } from '@/features/terminal/api/positions.api'
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { Input } from '@/shared/ui'
 import { cn } from '@/shared/utils'
+import { useCanAccess } from '@/shared/utils/permissions'
 import {
   getAdminConversationMessages,
   sendAdminChatMessage,
@@ -176,6 +177,12 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const chatInputRef = useRef<HTMLInputElement>(null)
   const userRef = useRef(user.id)
   userRef.current = user.id
+
+  const canEditApt = useCanAccess('appointments:edit')
+  const canRescheduleApt = useCanAccess('appointments:reschedule')
+  const canCancelApt = useCanAccess('appointments:cancel')
+  const canCompleteApt = useCanAccess('appointments:complete')
+  const canSendReminderApt = useCanAccess('appointments:send_reminder')
 
   const { data: transactionsData, isLoading: transactionsLoading } = useQuery({
     queryKey: ['user-transactions', user.id, user.email],
@@ -1064,6 +1071,11 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                 onCancel={handleCancelApt}
                 onComplete={handleCompleteApt}
                 onSendReminder={handleSendReminderApt}
+                canEdit={canEditApt}
+                canReschedule={canRescheduleApt}
+                canCancel={canCancelApt}
+                canComplete={canCompleteApt}
+                canSendReminder={canSendReminderApt}
               />
             )}
           </div>

@@ -13,7 +13,7 @@ export function DeleteManagerModal({ manager, onConfirm }: DeleteManagerModalPro
 
   const handleDelete = () => {
     onConfirm()
-    closeModal(modalKey)
+    // Parent closes modal on success
   }
 
   return (

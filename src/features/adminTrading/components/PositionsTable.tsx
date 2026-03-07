@@ -9,6 +9,7 @@ import { MoreHorizontal, X, Edit, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { closeAdminPosition, liquidatePosition } from '../api/positions'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 
@@ -38,6 +39,8 @@ interface PositionsTableProps {
 
 export function PositionsTable({ positions, onPositionClick }: PositionsTableProps) {
   const { setSelectedPositionId, setOpenModal } = useAdminTradingStore()
+  const canClosePosition = useCanAccess('trading:close_position')
+  const canLiquidate = useCanAccess('trading:liquidate')
 
   const handleClose = useCallback(
     async (position: AdminPosition, e: React.MouseEvent) => {
@@ -222,31 +225,37 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
             <div className="flex items-center gap-1">
               {isOpen && (
                 <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleClose(position, e)}
-                    title="Close"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleModifySltp(position, e)}
-                    title="Modify SL/TP"
-                  >
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleLiquidate(position, e)}
-                    title="Liquidate"
-                    className="text-danger hover:text-danger"
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </Button>
+                  {canClosePosition && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => handleClose(position, e)}
+                        title="Close"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => handleModifySltp(position, e)}
+                        title="Modify SL/TP"
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </>
+                  )}
+                  {canLiquidate && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => handleLiquidate(position, e)}
+                      title="Liquidate"
+                      className="text-danger hover:text-danger"
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                    </Button>
+                  )}
                 </>
               )}
               <Button
@@ -262,7 +271,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
         },
       },
     ],
-    [handleClose, handleModifySltp, handleLiquidate, handleRowClick]
+    [handleClose, handleModifySltp, handleLiquidate, handleRowClick, canClosePosition, canLiquidate]
   )
 
   const parentRef = useRef<HTMLDivElement>(null)

@@ -25,7 +25,7 @@ export function ManagersPage() {
   const closeModal = useModalStore((state) => state.closeModal)
   const openModal = useModalStore((state) => state.openModal)
   const queryClient = useQueryClient()
-  const canEditUsers = useCanAccess('users:edit')
+  const canCreateManager = useCanAccess('managers:create')
 
   const [filters, setFilters] = useState({
     search: '',
@@ -141,7 +141,9 @@ export function ManagersPage() {
           <div className="text-center">
             <div className="text-danger mb-2">Failed to load managers</div>
             <div className="text-sm text-text-muted mb-4">
-              {(error as Error)?.message ?? 'Unknown error'}
+              {(error as { response?: { data?: { error?: { message?: string } } }; message?: string })?.response?.data?.error?.message ??
+                (error as Error)?.message ??
+                'Unknown error'}
             </div>
             <Button variant="outline" size="sm" onClick={() => refetch()}>
               Retry
@@ -163,7 +165,7 @@ export function ManagersPage() {
               <Download className="h-4 w-4 mr-2" />
               Export
             </Button>
-            {canEditUsers && (
+            {canCreateManager && (
               <Button onClick={handleCreateManager}>
                 <UserPlus className="h-4 w-4 mr-2" />
                 Create Manager

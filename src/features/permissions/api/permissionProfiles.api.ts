@@ -69,3 +69,22 @@ export async function deletePermissionProfile(id: string): Promise<void> {
 export async function listPermissionKeys(): Promise<string[]> {
   return http<string[]>('/api/admin/permission-profiles/keys', { method: 'GET' })
 }
+
+/** Category with permissions (from DB) for Create/Edit profile modal and Permissions tab */
+export interface PermissionDefinitionDto {
+  id: string
+  key: string
+  label: string
+  sort_order: number
+}
+
+export interface PermissionCategoryDto {
+  id: string
+  name: string
+  sort_order: number
+  permissions: PermissionDefinitionDto[]
+}
+
+export async function listPermissionDefinitions(): Promise<PermissionCategoryDto[]> {
+  return http<PermissionCategoryDto[]>('/api/admin/permission-profiles/definitions', { method: 'GET' })
+}

@@ -63,19 +63,74 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
+/// Allow if role is admin or user has the given permission (from their permission profile).
+async fn check_tags_permission(
+    pool: &PgPool,
+    claims: &Claims,
+    permission: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if claims.role == "admin" {
+        return Ok(());
+    }
+    let profile_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT permission_profile_id FROM users WHERE id = $1",
+    )
+    .bind(claims.sub)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let Some(pid) = profile_id else {
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
                 error: ErrorDetail {
                     code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access tags".to_string(),
+                    message: "No permission profile assigned".to_string(),
                 },
             }),
         ));
+    };
+    let has: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = $2)",
+    )
+    .bind(pid)
+    .bind(permission)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    if has {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: format!("Missing permission: {}", permission),
+                },
+            }),
+        ))
     }
-    Ok(())
 }
 
 fn valid_slug(slug: &str) -> bool {
@@ -119,7 +174,7 @@ async fn list_tags(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Query(params): Query<ListTagsQuery>,
 ) -> Result<Json<Vec<TagResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    check_tags_permission(&pool, &claims, "tags:view").await?;
 
     let search = params
         .search
@@ -190,7 +245,7 @@ async fn create_tag(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     axum::Json(payload): axum::Json<CreateTagRequest>,
 ) -> Result<(StatusCode, Json<TagResponse>), (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    check_tags_permission(&pool, &claims, "tags:create").await?;
 
     let name = payload.name.trim();
     if name.is_empty() {
@@ -337,7 +392,7 @@ async fn update_tag(
     Path(id): Path<Uuid>,
     axum::Json(payload): axum::Json<UpdateTagRequest>,
 ) -> Result<Json<TagResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    check_tags_permission(&pool, &claims, "tags:edit").await?;
 
     let current: Option<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT name, slug, color, description FROM tags WHERE id = $1",
@@ -508,7 +563,7 @@ async fn delete_tag(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    check_tags_permission(&pool, &claims, "tags:delete").await?;
 
     let deleted = sqlx::query("DELETE FROM tags WHERE id = $1")
         .bind(id)

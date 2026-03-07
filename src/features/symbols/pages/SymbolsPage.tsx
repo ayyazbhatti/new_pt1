@@ -2,6 +2,7 @@ import { ContentShell, PageHeader } from '@/shared/layout'
 import { SymbolsTable } from '../components/SymbolsTable'
 import { SymbolsFilters } from '../components/SymbolsFilters'
 import { Button } from '@/shared/ui/button'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { AddSymbolModal } from '../modals/AddSymbolModal'
 import { useModalStore } from '@/app/store'
 import { Plus, Upload } from 'lucide-react'
@@ -26,6 +27,7 @@ function debounce<T extends (...args: any[]) => void>(func: T, wait: number) {
 }
 
 export function SymbolsPage() {
+  const canCreateSymbol = useCanAccess('symbols:create')
   const openModal = useModalStore((state) => state.openModal)
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -107,10 +109,12 @@ export function SymbolsPage() {
               <Upload className="h-4 w-4 mr-2" />
               Import
             </Button>
-            <Button onClick={handleAddSymbol}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Symbol
-            </Button>
+            {canCreateSymbol && (
+              <Button onClick={handleAddSymbol}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Symbol
+              </Button>
+            )}
           </div>
         }
       />
@@ -139,10 +143,12 @@ export function SymbolsPage() {
           title="No symbols found"
           description="Create your first symbol to get started"
           action={
-            <Button onClick={handleAddSymbol}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Symbol
-            </Button>
+            canCreateSymbol ? (
+              <Button onClick={handleAddSymbol}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Symbol
+              </Button>
+            ) : undefined
           }
         />
       ) : (

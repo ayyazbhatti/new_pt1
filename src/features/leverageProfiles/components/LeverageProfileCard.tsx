@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Settings, Edit, Archive, ArchiveRestore, Tra
 import { Button } from '@/shared/ui/button'
 import { LeverageProfile } from '../types/leverageProfile'
 import { useLeverageProfileTiers, useDeleteLeverageTier } from '../hooks/useLeverageProfiles'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { TiersTable } from './TiersTable'
 import { cn } from '@/shared/utils'
 import { formatDistanceToNow } from 'date-fns'
@@ -30,6 +31,8 @@ export function LeverageProfileCard({
   const [expanded, setExpanded] = useState(false)
   const { data: tiers, isLoading: tiersLoading } = useLeverageProfileTiers(profile.id, expanded)
   const deleteTier = useDeleteLeverageTier()
+  const canEdit = useCanAccess('leverage_profiles:edit')
+  const canDelete = useCanAccess('leverage_profiles:delete')
   const isArchived = profile.status === 'disabled'
   const displayStatus = isArchived ? 'Archived' : 'Active'
 
@@ -68,44 +71,50 @@ export function LeverageProfileCard({
           )}
         </div>
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-text-muted hover:text-text hover:bg-surface-2 border border-border"
-            onClick={() => onManageTiers(profile)}
-          >
-            <Settings className="h-4 w-4 mr-1" />
-            Manage Tiers
-          </Button>
-          <Button variant="ghost" size="sm" className="text-text-muted hover:text-text p-2" onClick={() => onEdit(profile)} title="Edit">
-            <Edit className="h-4 w-4" />
-          </Button>
-          {isArchived ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-text-muted hover:text-green-400 p-2"
-              onClick={() => onUnarchive(profile)}
-              disabled={archiveLoading}
-              title="Unarchive"
-            >
-              <ArchiveRestore className="h-4 w-4" />
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-text-muted hover:text-yellow-400 p-2"
-              onClick={() => onArchive(profile)}
-              disabled={archiveLoading}
-              title="Archive"
-            >
-              <Archive className="h-4 w-4" />
+          {canEdit && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-text-muted hover:text-text hover:bg-surface-2 border border-border"
+                onClick={() => onManageTiers(profile)}
+              >
+                <Settings className="h-4 w-4 mr-1" />
+                Manage Tiers
+              </Button>
+              <Button variant="ghost" size="sm" className="text-text-muted hover:text-text p-2" onClick={() => onEdit(profile)} title="Edit">
+                <Edit className="h-4 w-4" />
+              </Button>
+              {isArchived ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-text-muted hover:text-green-400 p-2"
+                  onClick={() => onUnarchive(profile)}
+                  disabled={archiveLoading}
+                  title="Unarchive"
+                >
+                  <ArchiveRestore className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-text-muted hover:text-yellow-400 p-2"
+                  onClick={() => onArchive(profile)}
+                  disabled={archiveLoading}
+                  title="Archive"
+                >
+                  <Archive className="h-4 w-4" />
+                </Button>
+              )}
+            </>
+          )}
+          {canDelete && (
+            <Button variant="ghost" size="sm" className="text-text-muted hover:text-red-400 p-2" onClick={() => onDelete(profile)} title="Delete">
+              <Trash2 className="h-4 w-4" />
             </Button>
           )}
-          <Button variant="ghost" size="sm" className="text-text-muted hover:text-red-400 p-2" onClick={() => onDelete(profile)} title="Delete">
-            <Trash2 className="h-4 w-4" />
-          </Button>
         </div>
       </div>
 
@@ -121,8 +130,8 @@ export function LeverageProfileCard({
             <div className="rounded-lg border border-border overflow-hidden">
               <TiersTable
                 tiers={tiers}
-                onTierEdit={() => onManageTiers(profile)}
-                onTierDelete={(tierId) => deleteTier.mutate({ profileId: profile.id, tierId })}
+                onTierEdit={canEdit ? () => onManageTiers(profile) : undefined}
+                onTierDelete={canEdit ? (tierId) => deleteTier.mutate({ profileId: profile.id, tierId }) : undefined}
               />
             </div>
           )}

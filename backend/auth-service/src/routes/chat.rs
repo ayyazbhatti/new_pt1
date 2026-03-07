@@ -180,11 +180,50 @@ pub struct PostAdminChatRequest {
     pub message: String,
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role != "admin" {
+/// Allow if role is admin or user has the given permission from their permission profile.
+async fn check_support_permission(
+    pool: &PgPool,
+    claims: &Claims,
+    permission: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if claims.role == "admin" {
+        return Ok(());
+    }
+    let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to get permission profile for support check: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+            )
+        })?;
+    let Some(pid) = profile_id else {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Admin access required" } })),
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "No permission profile assigned" } })),
+        ));
+    };
+    let has: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = $2)",
+    )
+    .bind(pid)
+    .bind(permission)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to check support permission: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    if !has {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": format!("Missing permission: {}", permission) } })),
         ));
     }
     Ok(())
@@ -195,7 +234,7 @@ async fn get_admin_conversations(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<ConversationSummary>>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_support_permission(&pool, &claims, "support:view").await?;
 
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -248,7 +287,7 @@ async fn get_admin_conversation_messages(
     Extension(claims): Extension<Claims>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<Vec<ChatMessageRow>>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_support_permission(&pool, &claims, "support:view").await?;
 
     let rows = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, String, DateTime<Utc>)>(
         r#"
@@ -290,7 +329,7 @@ async fn post_admin_message(
     Path(user_id): Path<Uuid>,
     Json(body): Json<PostAdminChatRequest>,
 ) -> Result<Json<ChatMessageRow>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_support_permission(&pool, &claims, "support:reply").await?;
     let sender_id = claims.sub;
     let message = body.message.trim();
     if message.is_empty() {

@@ -55,7 +55,7 @@ export function EditManagerModal({ manager, onSave }: EditManagerModalProps) {
         notes: notes.trim() || null,
       }
       await onSave?.(payload)
-      closeModal(`edit-manager-${manager.id}`)
+      // Parent closes modal on success
     } catch {
       // Error toast handled by parent
     } finally {

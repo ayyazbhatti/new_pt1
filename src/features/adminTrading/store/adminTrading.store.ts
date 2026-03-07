@@ -47,8 +47,8 @@ interface AdminTradingState {
   setGroups: (groups: LookupGroup[]) => void
 
   // UI State
-  activeTab: 'orders' | 'positions' | 'audit'
-  setActiveTab: (tab: 'orders' | 'positions' | 'audit') => void
+  activeTab: 'orders' | 'positions'
+  setActiveTab: (tab: 'orders' | 'positions') => void
   selectedOrderId: string | null
   setSelectedOrderId: (id: string | null) => void
   selectedPositionId: string | null
@@ -159,7 +159,7 @@ export const useAdminTradingStore = create<AdminTradingState>((set, get) => ({
   activeTab: (() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('adminTradingActiveTab')
-      if (saved === 'orders' || saved === 'positions' || saved === 'audit') {
+      if (saved === 'orders' || saved === 'positions') {
         return saved
       }
     }

@@ -1,5 +1,6 @@
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
 import {
   FinanceOverviewPanel,
@@ -17,7 +18,8 @@ const VALID_TABS = ['transactions', 'overview', 'wallets']
 
 export function AdminTransactionsPage() {
   const openModal = useModalStore((state) => state.openModal)
-  
+  const canManualAdjustment = useCanAccess('finance:manual_adjustment')
+
   // Load active tab from localStorage, default to 'transactions'
   const [activeTab, setActiveTab] = useState(() => {
     const savedTab = localStorage.getItem(STORAGE_KEY_TRANSACTIONS_TAB)
@@ -58,10 +60,12 @@ export function AdminTransactionsPage() {
               <Download className="h-4 w-4 mr-2" />
               Export CSV
             </Button>
-            <Button onClick={handleManualAdjustment}>
-              <Plus className="h-4 w-4 mr-2" />
-              Manual Adjustment
-            </Button>
+            {canManualAdjustment && (
+              <Button onClick={handleManualAdjustment}>
+                <Plus className="h-4 w-4 mr-2" />
+                Manual Adjustment
+              </Button>
+            )}
           </div>
         }
       />

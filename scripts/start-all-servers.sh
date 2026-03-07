@@ -26,10 +26,12 @@ NC='\033[0m' # No Color
 
 # Port configuration
 AUTH_SERVICE_PORT=3000
-DATA_PROVIDER_PORT=3001
 ORDER_ENGINE_PORT=3002
 GATEWAY_WS_PORT=3003
+GATEWAY_HTTP_PORT=9002
 CORE_API_PORT=3004
+DATA_PROVIDER_WS_PORT=9003
+DATA_PROVIDER_HTTP_PORT=9004
 FRONTEND_PORT=5173
 
 # PID file to track all processes
@@ -85,19 +87,24 @@ wait_for_service() {
 }
 
 # Function to start a service and track its PID
+# port and health_url can be empty for workers that don't listen on a port
 start_service() {
     local name=$1
     local command=$2
     local port=$3
     local health_url=$4
     
-    # Check if port is already in use
-    if check_port $port; then
+    # Check if port is already in use (skip if no port)
+    if [ -n "$port" ] && check_port $port; then
         print_warning "Port $port is already in use. Skipping $name"
         return 1
     fi
     
-    print_info "Starting $name on port $port..."
+    if [ -n "$port" ]; then
+        print_info "Starting $name on port $port..."
+    else
+        print_info "Starting $name..."
+    fi
     
     # Start the service in background
     eval "$command" > "/tmp/${name}.log" 2>&1 &
@@ -274,11 +281,15 @@ export JWT_ISSUER="${JWT_ISSUER:-newpt}"
 start_service "Auth Service" "cargo run --bin auth-service" $AUTH_SERVICE_PORT "http://localhost:$AUTH_SERVICE_PORT/health" || true
 cd "$REPO_ROOT" || exit 1
 
-# Start Data Provider (port 3001) - use backend/data-provider (Redis price:ticks + markup)
+# Start Data Provider (WS 9003, HTTP 9004) - use backend/data-provider (Redis price:ticks + markup)
+DATA_PROVIDER_WS_PORT=9003
+DATA_PROVIDER_HTTP_PORT=9004
 DATA_PROVIDER_DIR="$REPO_ROOT/backend/data-provider"
-export HTTP_PORT=$DATA_PROVIDER_PORT
+export WS_PORT=$DATA_PROVIDER_WS_PORT
+export HTTP_PORT=$DATA_PROVIDER_HTTP_PORT
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
-start_service "Data Provider" "cd $DATA_PROVIDER_DIR && cargo run --release" $DATA_PROVIDER_PORT "http://localhost:$DATA_PROVIDER_PORT/health" || true
+export NATS_URL="${NATS_URL:-nats://localhost:4222}"
+start_service "Data Provider" "cd $DATA_PROVIDER_DIR && cargo run" $DATA_PROVIDER_HTTP_PORT "http://localhost:$DATA_PROVIDER_HTTP_PORT/health" || true
 
 # Start Order Engine (port 3002) - must run from repo root (workspace member)
 cd "$REPO_ROOT" || exit 1
@@ -296,11 +307,14 @@ if [ -f "$GATEWAY_DIR/.env" ]; then
     set -a; . "$GATEWAY_DIR/.env"; set +a
 fi
 # Health is on HTTP port (9002), not WS port (3003)
-start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run --release" $GATEWAY_WS_PORT "http://localhost:${GATEWAY_HTTP_PORT:-9002}/health" || true
+start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run" $GATEWAY_WS_PORT "http://localhost:${GATEWAY_HTTP_PORT:-9002}/health" || true
 
 # Start Core API (port 3004)
 export PORT=$CORE_API_PORT
 start_service "Core API" "cargo run -p core-api" $CORE_API_PORT "http://localhost:$CORE_API_PORT/health" || true
+
+# Start Email Worker (no port - consumes from NATS/Redis)
+start_service "Email Worker" "cd $REPO_ROOT && cargo run -p email-worker" "" "" || true
 
 echo ""
 
@@ -334,10 +348,11 @@ echo "    - Postgres:    postgresql://localhost:5432"
 echo ""
 echo "  Backend Services:"
 echo "    - Auth Service:    http://localhost:$AUTH_SERVICE_PORT"
-echo "    - Data Provider:   http://localhost:$DATA_PROVIDER_PORT/health"
+echo "    - Data Provider:   http://localhost:$DATA_PROVIDER_HTTP_PORT/health, ws://localhost:$DATA_PROVIDER_WS_PORT"
 echo "    - Order Engine:    http://localhost:$ORDER_ENGINE_PORT/health"
-echo "    - Gateway WS:      ws://localhost:$GATEWAY_WS_PORT/ws"
+echo "    - Gateway WS:      ws://localhost:$GATEWAY_WS_PORT/ws, health http://localhost:${GATEWAY_HTTP_PORT:-9002}/health"
 echo "    - Core API:        http://localhost:$CORE_API_PORT/health"
+echo "    - Email Worker:    (background worker)"
 echo ""
 echo "  Frontend:"
 echo "    - Web UI:          http://localhost:$FRONTEND_PORT"

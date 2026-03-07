@@ -14,7 +14,7 @@ import { Eye, Edit, Shield, X, LogIn, Bell } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { useCanAccess } from '@/shared/utils/permissions'
+import { useCanAccess, ADMIN_PAGE_PERMISSIONS } from '@/shared/utils/permissions'
 import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType, updateUserTradingAccess, impersonateUser } from '../api/users.api'
 
 interface UsersTableProps {
@@ -32,6 +32,10 @@ interface UsersTableProps {
 export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const canEditUser = useCanAccess('users:edit')
+  const canEditGroup = useCanAccess('users:edit_group')
+  const canEditAccountType = useCanAccess('users:edit_account_type')
+  const canEditMargin = useCanAccess('users:edit_margin')
+  const canEditTradingAccess = useCanAccess('users:edit_trading_access')
   const [updatingGroups, setUpdatingGroups] = useState<Set<string>>(new Set())
   const [updatingAccountTypes, setUpdatingAccountTypes] = useState<Set<string>>(new Set())
   const [updatingMarginCalculationTypes, setUpdatingMarginCalculationTypes] = useState<Set<string>>(new Set())
@@ -175,9 +179,12 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     }
   }
 
+  const pagePermissions = ADMIN_PAGE_PERMISSIONS['/admin/users']
+
   const handleView = (user: User) => {
     openModal(`user-details-${user.id}`, <UserDetailsModal user={user} />, {
       variant: 'drawer',
+      pagePermissions,
     })
   }
 
@@ -185,7 +192,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     openModal(
       `edit-user-${user.id}`,
       <CreateEditUserModal user={user} onUserUpdate={onUserUpdate} />,
-      { title: 'Edit User', size: 'md' }
+      { title: 'Edit User', size: 'md', pagePermissions }
     )
   }
 
@@ -193,6 +200,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     openModal(`restrict-user-${user.id}`, <RestrictUserModal user={user} />, {
       title: 'Restrict User',
       size: 'sm',
+      pagePermissions,
     })
   }
 
@@ -200,6 +208,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     openModal(`send-notify-${user.id}`, <SendNotificationModal user={user} />, {
       title: 'Send notification',
       size: 'md',
+      pagePermissions,
     })
   }
 
@@ -345,9 +354,12 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
             <Select
               value={currentGroupId || undefined}
               onValueChange={(value) => handleGroupChange(user.id, user.name, value)}
-              disabled={isUpdating}
+              disabled={isUpdating || !canEditGroup}
             >
-              <SelectTrigger className="h-8 text-sm">
+              <SelectTrigger
+                className="h-8 text-sm"
+                title={!canEditGroup ? 'Requires Assign user to group permission' : undefined}
+              >
                 <SelectValue
                   placeholder={
                     isUpdating ? 'Updating...' : groupsLoading ? 'Loading...' : 'Select group'
@@ -379,7 +391,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
         const currentType = user.accountType ?? 'hedging'
         const isUpdating = updatingAccountTypes.has(user.id)
         const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
-        const disabled = isUpdating || hasOpenPositions
+        const disabled = isUpdating || hasOpenPositions || !canEditAccountType
         return (
           <div className="whitespace-nowrap min-w-[130px]" onClick={(e) => e.stopPropagation()} data-no-row-click>
             <Select
@@ -392,9 +404,11 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
               <SelectTrigger
                 className="h-8 text-sm"
                 title={
-                  hasOpenPositions
-                    ? 'Cannot change account type while user has open positions'
-                    : undefined
+                  !canEditAccountType
+                    ? 'Requires Edit account type permission'
+                    : hasOpenPositions
+                      ? 'Cannot change account type while user has open positions'
+                      : undefined
                 }
               >
                 <SelectValue
@@ -425,7 +439,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
         const currentType = user.marginCalculationType ?? 'hedged'
         const isUpdating = updatingMarginCalculationTypes.has(user.id)
         const hasOpenPositions = (user.openPositionsCount ?? 0) > 0
-        const disabled = isUpdating || hasOpenPositions
+        const disabled = isUpdating || hasOpenPositions || !canEditMargin
         return (
           <div className="whitespace-nowrap min-w-[100px]" onClick={(e) => e.stopPropagation()} data-no-row-click>
             <Select
@@ -438,9 +452,11 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
               <SelectTrigger
                 className="h-8 text-sm"
                 title={
-                  hasOpenPositions
-                    ? 'Cannot change margin type while user has open positions'
-                    : undefined
+                  !canEditMargin
+                    ? 'Requires Edit margin calculation permission'
+                    : hasOpenPositions
+                      ? 'Cannot change margin type while user has open positions'
+                      : undefined
                 }
               >
                 <SelectValue
@@ -477,9 +493,12 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
               onValueChange={(value) =>
                 handleTradingAccessChange(user.id, user.name, value as 'full' | 'close_only' | 'disabled')
               }
-              disabled={isUpdating}
+              disabled={isUpdating || !canEditTradingAccess}
             >
-              <SelectTrigger className="h-8 text-sm">
+              <SelectTrigger
+                className="h-8 text-sm"
+                title={!canEditTradingAccess ? 'Requires Edit trading access permission' : undefined}
+              >
                 <SelectValue placeholder={isUpdating ? 'Updating...' : 'Select'}>
                   {currentAccess === 'full' ? 'Full access' : currentAccess === 'close_only' ? 'Close only' : 'Trading disabled'}
                 </SelectValue>

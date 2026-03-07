@@ -10,6 +10,7 @@ use axum::{
 use serde::Deserialize;
 use sqlx::PgPool;
 
+use tracing::error;
 use crate::middleware::auth_middleware;
 use crate::routes::auth::send_welcome_email_after_signup;
 use crate::services::email_config_service::{
@@ -19,6 +20,55 @@ use crate::services::email_templates_service::{
     EmailTemplatesService, UpdateEmailTemplateRequest,
 };
 use crate::utils::jwt::Claims;
+
+/// Allow if role is admin or user has the given permission from their permission profile.
+async fn check_settings_permission(
+    pool: &PgPool,
+    claims: &Claims,
+    permission: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if claims.role == "admin" {
+        return Ok(());
+    }
+    let profile_id: Option<uuid::Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to get permission profile for settings check: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+            )
+        })?;
+    let Some(pid) = profile_id else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "No permission profile assigned" } })),
+        ));
+    };
+    let has: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = $2)",
+    )
+    .bind(pid)
+    .bind(permission)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to check settings permission: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    if !has {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": format!("Missing permission: {}", permission) } })),
+        ));
+    }
+    Ok(())
+}
 
 pub fn create_admin_settings_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
@@ -31,21 +81,11 @@ pub fn create_admin_settings_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Admin access required" })),
-        ));
-    }
-    Ok(())
-}
-
 async fn get_email_config(
     State(pool): State<PgPool>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_settings_permission(&pool, &claims, "settings:view").await?;
     let service = EmailConfigService::new(pool);
     let config = service.get().await.map_err(|e| {
         (
@@ -61,7 +101,7 @@ async fn put_email_config(
     claims: axum::extract::Extension<Claims>,
     axum::Json(body): axum::Json<UpdateEmailConfigRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
     let service = EmailConfigService::new(pool);
     let config = service.update(body).await.map_err(|e| {
         (
@@ -82,7 +122,7 @@ async fn post_test_email(
     claims: axum::extract::Extension<Claims>,
     axum::Json(body): axum::Json<TestEmailBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
     let to = body.to.trim().to_string();
     if to.is_empty() {
         return Err((
@@ -132,7 +172,7 @@ async fn get_email_templates(
     State(pool): State<PgPool>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_settings_permission(&pool, &claims, "settings:view").await?;
     let service = EmailTemplatesService::new(pool);
     let map = service.get_all().await.map_err(|e| {
         (
@@ -149,7 +189,7 @@ async fn put_email_template(
     Path(id): Path<String>,
     axum::Json(body): axum::Json<UpdateEmailTemplateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
     let id = id.trim();
     if id.is_empty() {
         return Err((
@@ -178,7 +218,7 @@ async fn post_resend_welcome_email(
     claims: axum::extract::Extension<Claims>,
     axum::Json(body): axum::Json<ResendWelcomeEmailBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    check_admin(&claims)?;
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
     let email = body.email.trim();
     if email.is_empty() {
         return Err((

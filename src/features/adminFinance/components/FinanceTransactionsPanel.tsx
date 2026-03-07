@@ -7,6 +7,7 @@ import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Transaction, TransactionType, TransactionStatus, Currency } from '../types/finance'
 import { useModalStore } from '@/app/store'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { TransactionDetailsModal } from '../modals/TransactionDetailsModal'
 import { ApproveRejectModal } from '../modals/ApproveRejectModal'
 import { Eye, CheckCircle, X, Loader2 } from 'lucide-react'
@@ -19,6 +20,8 @@ import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
 export function FinanceTransactionsPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const canApprove = useCanAccess('deposits:approve')
+  const canReject = useCanAccess('deposits:reject')
   const [filters, setFilters] = useState({
     search: '',
     type: 'all' as 'all' | TransactionType,
@@ -310,24 +313,28 @@ export function FinanceTransactionsPanel() {
             </Button>
             {tx.status === 'pending' && (
               <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleApprove(tx)}
-                  className="text-success hover:text-success hover:bg-success/10"
-                  title="Approve"
-                >
-                  <CheckCircle className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleReject(tx)}
-                  className="text-danger hover:text-danger hover:bg-danger/10"
-                  title="Reject"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
+                {canApprove && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleApprove(tx)}
+                    className="text-success hover:text-success hover:bg-success/10"
+                    title="Approve"
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                  </Button>
+                )}
+                {canReject && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleReject(tx)}
+                    className="text-danger hover:text-danger hover:bg-danger/10"
+                    title="Reject"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
               </>
             )}
           </div>

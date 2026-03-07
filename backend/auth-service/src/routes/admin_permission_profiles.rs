@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use tracing::error;
 use crate::middleware::auth_middleware;
 use crate::services::permission_profiles_service::PermissionProfilesService;
 use crate::utils::jwt::Claims;
@@ -51,10 +52,80 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
+/// Allow if role is admin or user has the given permission from their permission profile.
+async fn check_permission(
+    pool: &PgPool,
+    claims: &Claims,
+    permission: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if claims.role == "admin" {
+        return Ok(());
+    }
+    let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to get permission profile for permissions check: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    let Some(pid) = profile_id else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "No permission profile assigned".to_string(),
+                },
+            }),
+        ));
+    };
+    let has: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = $2)",
+    )
+    .bind(pid)
+    .bind(permission)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to check permission: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    if !has {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: format!("Missing permission: {}", permission),
+                },
+            }),
+        ));
+    }
+    Ok(())
+}
+
 pub fn create_admin_permission_profiles_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_profiles).post(create_profile))
         .route("/keys", get(list_keys))
+        .route("/definitions", get(list_definitions))
         .route("/:id", get(get_profile).put(update_profile).delete(delete_profile))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
@@ -64,17 +135,7 @@ async fn list_profiles(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<Vec<PermissionProfileResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can list permission profiles".to_string(),
-                },
-            }),
-        ));
-    }
+    check_permission(&pool, &claims, "permissions:view").await?;
 
     let service = PermissionProfilesService::new(pool);
     let list = service.list().await.map_err(|e| {
@@ -104,24 +165,47 @@ async fn list_profiles(
 }
 
 async fn list_keys(
+    State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<Vec<String>>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
+    check_permission(&pool, &claims, "permissions:view").await?;
+    let keys: Vec<String> = sqlx::query_scalar::<_, String>(
+        "SELECT permission_key FROM permissions ORDER BY permission_key",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can list permission keys".to_string(),
+                    code: "LIST_KEYS_FAILED".to_string(),
+                    message: e.to_string(),
                 },
             }),
-        ));
-    }
-    let keys: Vec<String> = crate::services::permission_profiles_service::ALL_PERMISSION_KEYS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+        )
+    })?;
     Ok(Json(keys))
+}
+
+async fn list_definitions(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+) -> Result<Json<Vec<crate::services::permission_profiles_service::CategoryWithPermissions>>, (StatusCode, Json<ErrorResponse>)> {
+    check_permission(&pool, &claims, "permissions:view").await?;
+    let service = PermissionProfilesService::new(pool);
+    let list = service.list_categories_with_permissions().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "LIST_DEFINITIONS_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(Json(list))
 }
 
 async fn get_profile(
@@ -129,17 +213,7 @@ async fn get_profile(
     Path(id): Path<Uuid>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<PermissionProfileResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can get permission profile".to_string(),
-                },
-            }),
-        ));
-    }
+    check_permission(&pool, &claims, "permissions:view").await?;
 
     let service = PermissionProfilesService::new(pool);
     let Some((p, keys)) = service.get(id).await.map_err(|e| {
@@ -179,17 +253,7 @@ async fn create_profile(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Json(payload): Json<CreateProfileRequest>,
 ) -> Result<(StatusCode, Json<PermissionProfileResponse>), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can create permission profiles".to_string(),
-                },
-            }),
-        ));
-    }
+    check_permission(&pool, &claims, "permissions:edit").await?;
 
     let service = PermissionProfilesService::new(pool);
     let profile = service
@@ -248,17 +312,7 @@ async fn update_profile(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> Result<Json<PermissionProfileResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can update permission profiles".to_string(),
-                },
-            }),
-        ));
-    }
+    check_permission(&pool, &claims, "permissions:edit").await?;
 
     let service = PermissionProfilesService::new(pool);
     let updated = service
@@ -330,17 +384,7 @@ async fn delete_profile(
     Path(id): Path<Uuid>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can delete permission profiles".to_string(),
-                },
-            }),
-        ));
-    }
+    check_permission(&pool, &claims, "permissions:edit").await?;
 
     let service = PermissionProfilesService::new(pool);
     service.delete(id).await.map_err(|e| {

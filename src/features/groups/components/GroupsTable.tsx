@@ -8,7 +8,7 @@ import { GroupFormDialog } from './GroupFormDialog'
 import { DeleteGroupDialog } from './DeleteGroupDialog'
 import { AssignSymbolsModal } from '../modals/AssignSymbolsModal'
 import { Eye, Edit, Trash2, Settings, Copy, Tag, ChevronDown } from 'lucide-react'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useModalStore } from '@/app/store'
 import { toast } from '@/shared/components/common'
@@ -45,6 +45,10 @@ export function GroupsTable({
 }: GroupsTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const canEditGroups = useCanAccess('groups:edit')
+  const canDeleteGroups = useCanAccess('groups:delete')
+  const canSymbolSettings = useCanAccess('groups:symbol_settings')
+  const canPriceProfile = useCanAccess('groups:price_profile')
+  const canTags = useCanAccess('groups:tags')
   const updatePriceProfile = useUpdateGroupPriceProfile()
   const [viewingGroup, setViewingGroup] = useState<UserGroup | null>(null)
   const [editingGroup, setEditingGroup] = useState<UserGroup | null>(null)
@@ -92,7 +96,7 @@ export function GroupsTable({
     setDeleteDialogOpen(true)
   }
 
-  const columns: ColumnDef<UserGroup>[] = [
+  const columns = useMemo((): ColumnDef<UserGroup>[] => [
     {
       accessorKey: 'name',
       header: 'Name',
@@ -177,6 +181,7 @@ export function GroupsTable({
         const isUpdating = updatePriceProfile.isPending && updatePriceProfile.variables?.groupId === group.id
 
         const handleChange = (newValue: string) => {
+          if (!canPriceProfile) return
           const priceProfileId = newValue === NONE_PROFILE_VALUE ? null : newValue
           const profile =
             priceProfileId != null ? availablePriceProfiles.find((p) => String(p.id).toLowerCase() === priceProfileId.toLowerCase()) : null
@@ -200,8 +205,15 @@ export function GroupsTable({
 
         return (
           <div onClick={(e) => e.stopPropagation()} className="w-[140px]">
-            <Select value={value} onValueChange={handleChange} disabled={isUpdating}>
-              <SelectTrigger className="h-8 text-sm w-full">
+            <Select
+              value={value}
+              onValueChange={handleChange}
+              disabled={isUpdating || !canPriceProfile}
+            >
+              <SelectTrigger
+                className="h-8 text-sm w-full"
+                title={!canPriceProfile ? 'Requires Edit price profile permission' : undefined}
+              >
                 {isUpdating && <Spinner className="h-3.5 w-3.5 mr-2 shrink-0" />}
                 <SelectValue placeholder="None" />
               </SelectTrigger>
@@ -218,47 +230,51 @@ export function GroupsTable({
         )
       },
     },
-    {
-      id: 'tags',
-      header: 'Tags',
-      cell: ({ row }) => {
-        const group = row.original
-        const tagIds = group.tagIds ?? []
-        const isOpen = openTagsGroupId === group.id
-        const isUpdating = updatingTagsGroupId === group.id
+    ...(canTags
+      ? [
+          {
+            id: 'tags',
+            header: 'Tags',
+            cell: ({ row }: { row: { original: UserGroup } }) => {
+              const group = row.original
+              const tagIds = group.tagIds ?? []
+              const isOpen = openTagsGroupId === group.id
+              const isUpdating = updatingTagsGroupId === group.id
 
-        const label =
-          tagIds.length > 0
-            ? `${tagIds.length} tag${tagIds.length === 1 ? '' : 's'}`
-            : 'Assign tags'
+              const label =
+                tagIds.length > 0
+                  ? `${tagIds.length} tag${tagIds.length === 1 ? '' : 's'}`
+                  : 'Assign tags'
 
-        return (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 gap-1.5 text-text"
-            onClick={(e) => {
-              e.stopPropagation()
-              if (openTagsGroupId === group.id) {
-                setOpenTagsGroupId(null)
-                setOpenTagsAnchorRect(null)
-              } else {
-                setOpenTagsGroupId(group.id)
-                setOpenTagsAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect())
-              }
-            }}
-            disabled={isUpdating}
-          >
-            {isUpdating && <Spinner className="h-3.5 w-3.5 shrink-0" />}
-            <Tag className="h-4 w-4 shrink-0" />
-            <span className="max-w-[80px] truncate">{label}</span>
-            <ChevronDown
-              className={cn('h-4 w-4 shrink-0 transition-transform', isOpen && 'rotate-180')}
-            />
-          </Button>
-        )
-      },
-    },
+              return (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1.5 text-text"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (openTagsGroupId === group.id) {
+                      setOpenTagsGroupId(null)
+                      setOpenTagsAnchorRect(null)
+                    } else {
+                      setOpenTagsGroupId(group.id)
+                      setOpenTagsAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect())
+                    }
+                  }}
+                  disabled={isUpdating}
+                >
+                  {isUpdating && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+                  <Tag className="h-4 w-4 shrink-0" />
+                  <span className="max-w-[80px] truncate">{label}</span>
+                  <ChevronDown
+                    className={cn('h-4 w-4 shrink-0 transition-transform', isOpen && 'rotate-180')}
+                  />
+                </Button>
+              )
+            },
+          } as ColumnDef<UserGroup>,
+        ]
+      : []),
     {
       accessorKey: 'updatedAt',
       header: 'Updated',
@@ -278,14 +294,16 @@ export function GroupsTable({
         const group = row.original
         return (
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleSettings(group)}
-              title="Symbol settings"
-            >
-              <Settings className="h-4 w-4" />
-            </Button>
+            {canSymbolSettings && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleSettings(group)}
+                title="Symbol settings"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -295,31 +313,31 @@ export function GroupsTable({
               <Eye className="h-4 w-4" />
             </Button>
             {canEditGroups && (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleEdit(group)}
-                  title="Edit"
-                >
-                  <Edit className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDelete(group)}
-                  title="Delete"
-                  className="text-danger hover:text-danger"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleEdit(group)}
+                title="Edit"
+              >
+                <Edit className="h-4 w-4" />
+              </Button>
+            )}
+            {canDeleteGroups && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleDelete(group)}
+                title="Delete"
+                className="text-danger hover:text-danger"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             )}
           </div>
         )
       },
     },
-  ]
+  ], [canTags, openTagsGroupId, updatingTagsGroupId, canEditGroups, canDeleteGroups, canSymbolSettings, canPriceProfile, groups, availablePriceProfiles, allTags])
 
   const openTagsGroup = openTagsGroupId ? groups.find((g) => g.id === openTagsGroupId) : null
   const openTagsTagIds = openTagsGroup?.tagIds ?? []

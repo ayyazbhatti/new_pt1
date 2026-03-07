@@ -10,7 +10,7 @@ import { useMarkupProfiles } from '@/features/adminMarkup/hooks/useMarkup'
 import { useQuery } from '@tanstack/react-query'
 import { listTags } from '@/features/tags/api/tags.api'
 import type { UserGroup } from '../types/group'
-import { Plus, RefreshCw, X } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Skeleton } from '@/shared/ui/loading'
@@ -31,7 +31,7 @@ function debounce<T extends (...args: any[]) => void>(func: T, wait: number) {
 export function GroupsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
-  const canEditGroups = useCanAccess('groups:edit')
+  const canCreateGroups = useCanAccess('groups:create')
 
   // Get params from URL
   const search = searchParams.get('search') || ''
@@ -160,10 +160,7 @@ export function GroupsPage() {
         description="Manage user group risk limits and trading permissions"
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => refetch()} title="Refresh">
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-            {canEditGroups && (
+            {canCreateGroups && (
               <Button onClick={() => setCreateDialogOpen(true)}>
                 <Plus className="h-4 w-4 mr-2" />
                 Create Group
@@ -241,7 +238,7 @@ export function GroupsPage() {
           title="No groups found"
           description="Create your first user group to get started"
           action={
-            canEditGroups ? (
+            canCreateGroups ? (
               <Button onClick={() => setCreateDialogOpen(true)}>
                 <Plus className="h-4 w-4 mr-2" />
                 Create Group

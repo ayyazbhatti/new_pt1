@@ -14,99 +14,19 @@ import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
 import {
   listPermissionProfiles,
+  listPermissionDefinitions,
+  getPermissionProfile,
   createPermissionProfile,
   updatePermissionProfile,
   deletePermissionProfile,
   type PermissionProfile as ApiPermissionProfile,
+  type PermissionCategoryDto,
 } from '../api/permissionProfiles.api'
-
-// Permission definitions: categories and their access rights (must match backend ALL_PERMISSION_KEYS)
-const PERMISSION_CATEGORIES = [
-  {
-    name: 'Leads',
-    permissions: [
-      { id: 'leads:view_all', label: 'View all leads' },
-      { id: 'leads:view_assigned', label: 'View assigned leads' },
-      { id: 'leads:create', label: 'Create leads' },
-      { id: 'leads:edit', label: 'Edit leads' },
-      { id: 'leads:delete', label: 'Delete leads' },
-      { id: 'leads:assign', label: 'Assign leads' },
-      { id: 'leads:change_stage', label: 'Change stage' },
-      { id: 'leads:export', label: 'Export' },
-      { id: 'leads:settings', label: 'Settings' },
-      { id: 'leads:templates', label: 'Templates' },
-      { id: 'leads:assignment', label: 'Assignment rules' },
-      { id: 'leads:import', label: 'Import leads' },
-    ],
-  },
-  {
-    name: 'Trading & Finance',
-    permissions: [
-      { id: 'trading:view', label: 'View trading' },
-      { id: 'trading:place_orders', label: 'Place orders' },
-      { id: 'deposits:approve', label: 'Approve deposits' },
-      { id: 'deposits:reject', label: 'Reject deposits' },
-      { id: 'finance:view', label: 'View finance' },
-    ],
-  },
-  {
-    name: 'Support',
-    permissions: [
-      { id: 'support:view', label: 'View support chat' },
-      { id: 'support:reply', label: 'Reply to users' },
-    ],
-  },
-  {
-    name: 'Users & Groups',
-    permissions: [
-      { id: 'users:view', label: 'View users' },
-      { id: 'users:edit', label: 'Edit users' },
-      { id: 'users:create', label: 'Create users' },
-      { id: 'groups:view', label: 'View groups' },
-      { id: 'groups:edit', label: 'Edit groups' },
-    ],
-  },
-  {
-    name: 'Configuration',
-    permissions: [
-      { id: 'symbols:view', label: 'View symbols' },
-      { id: 'symbols:edit', label: 'Edit symbols' },
-      { id: 'markup:view', label: 'View price markup' },
-      { id: 'markup:edit', label: 'Edit price markup' },
-      { id: 'swap:view', label: 'View swap rules' },
-      { id: 'swap:edit', label: 'Edit swap rules' },
-      { id: 'leverage_profiles:view', label: 'View leverage profiles' },
-      { id: 'leverage_profiles:edit', label: 'Edit leverage profiles' },
-    ],
-  },
-  {
-    name: 'Risk & Reports',
-    permissions: [
-      { id: 'risk:view', label: 'View risk' },
-      { id: 'risk:edit', label: 'Edit risk settings' },
-      { id: 'reports:view', label: 'View reports' },
-    ],
-  },
-  {
-    name: 'Other Admin',
-    permissions: [
-      { id: 'dashboard:view', label: 'View dashboard' },
-      { id: 'bonus:view', label: 'View bonus' },
-      { id: 'bonus:edit', label: 'Edit bonus' },
-      { id: 'affiliate:view', label: 'View affiliate' },
-      { id: 'affiliate:edit', label: 'Edit affiliate' },
-      { id: 'permissions:view', label: 'View permission profiles' },
-      { id: 'permissions:edit', label: 'Edit permission profiles' },
-      { id: 'system:view', label: 'View system' },
-      { id: 'settings:view', label: 'View settings' },
-      { id: 'settings:edit', label: 'Edit settings' },
-    ],
-  },
-] as const
 
 export type PermissionProfile = ApiPermissionProfile
 
 const QUERY_KEY = ['permission-profiles'] as const
+const DEFINITIONS_QUERY_KEY = ['permission-definitions'] as const
 
 export function PermissionsPage() {
   const queryClient = useQueryClient()
@@ -114,6 +34,51 @@ export function PermissionsPage() {
     queryKey: QUERY_KEY,
     queryFn: listPermissionProfiles,
   })
+  const { data: permissionCategories = [], isLoading: definitionsLoading, error: definitionsError } = useQuery({
+    queryKey: DEFINITIONS_QUERY_KEY,
+    queryFn: listPermissionDefinitions,
+  })
+  /** Categories with Users, Tags, Groups, Managers, Trading, Leverage Profiles, Symbols, Markup, Swap, Finance, Affiliate, Permissions, Support, Call, Appointments, Settings, then rest in the Create/Edit profile modal */
+  const permissionCategoriesSorted = useMemo(() => {
+    const users = permissionCategories.filter((c) => c.name === 'Users')
+    const tags = permissionCategories.filter((c) => c.name === 'Tags')
+    const groups = permissionCategories.filter((c) => c.name === 'Groups')
+    const managers = permissionCategories.filter((c) => c.name === 'Managers')
+    const trading = permissionCategories.filter((c) => c.name === 'Trading')
+    const leverageProfiles = permissionCategories.filter((c) => c.name === 'Leverage Profiles')
+    const symbols = permissionCategories.filter((c) => c.name === 'Symbols')
+    const markup = permissionCategories.filter((c) => c.name === 'Markup')
+    const swap = permissionCategories.filter((c) => c.name === 'Swap')
+    const finance = permissionCategories.filter((c) => c.name === 'Finance')
+    const affiliate = permissionCategories.filter((c) => c.name === 'Affiliate')
+    const permissions = permissionCategories.filter((c) => c.name === 'Permissions')
+    const support = permissionCategories.filter((c) => c.name === 'Support')
+    const call = permissionCategories.filter((c) => c.name === 'Call')
+    const appointments = permissionCategories.filter((c) => c.name === 'Appointments')
+    const settings = permissionCategories.filter((c) => c.name === 'Settings')
+    const rest = permissionCategories.filter(
+      (c) =>
+        c.name !== 'Users' &&
+        c.name !== 'Groups' &&
+        c.name !== 'Tags' &&
+        c.name !== 'Managers' &&
+        c.name !== 'Trading' &&
+        c.name !== 'Leverage Profiles' &&
+        c.name !== 'Symbols' &&
+        c.name !== 'Markup' &&
+        c.name !== 'Swap' &&
+        c.name !== 'Finance' &&
+        c.name !== 'Affiliate' &&
+        c.name !== 'Permissions' &&
+        c.name !== 'Support' &&
+        c.name !== 'Call' &&
+        c.name !== 'Appointments' &&
+        c.name !== 'Settings' &&
+        c.name !== 'Configuration' &&
+        c.name !== 'Risk & Reports'
+    )
+    return [...users, ...tags, ...groups, ...managers, ...trading, ...leverageProfiles, ...symbols, ...markup, ...swap, ...finance, ...affiliate, ...permissions, ...support, ...call, ...appointments, ...settings, ...rest]
+  }, [permissionCategories])
   const createMutation = useMutation({
     mutationFn: (payload: { name: string; description?: string; permission_keys: string[] }) =>
       createPermissionProfile(payload),
@@ -152,6 +117,7 @@ export function PermissionsPage() {
   const [formName, setFormName] = useState('')
   const [formDescription, setFormDescription] = useState('')
   const [formPermissionIds, setFormPermissionIds] = useState<Set<string>>(new Set())
+  const [editLoadingId, setEditLoadingId] = useState<string | null>(null)
 
   const openCreate = useCallback(() => {
     setEditingId(null)
@@ -162,11 +128,21 @@ export function PermissionsPage() {
   }, [])
 
   const openEdit = useCallback((profile: PermissionProfile) => {
-    setEditingId(profile.id)
-    setFormName(profile.name)
-    setFormDescription(profile.description ?? '')
-    setFormPermissionIds(new Set(profile.permissionIds))
-    setDialogOpen(true)
+    setEditLoadingId(profile.id)
+    getPermissionProfile(profile.id)
+      .then((p) => {
+        if (p) {
+          setEditingId(p.id)
+          setFormName(p.name)
+          setFormDescription(p.description ?? '')
+          setFormPermissionIds(new Set(p.permissionIds))
+          setDialogOpen(true)
+        } else {
+          toast.error('Failed to load profile')
+        }
+      })
+      .catch(() => toast.error('Failed to load profile'))
+      .finally(() => setEditLoadingId(null))
   }, [])
 
   const closeDialog = useCallback(() => {
@@ -179,6 +155,16 @@ export function PermissionsPage() {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleCategory = useCallback((category: PermissionCategoryDto, selectAll: boolean) => {
+    const keys = category.permissions.map((p) => p.key)
+    setFormPermissionIds((prev) => {
+      const next = new Set(prev)
+      if (selectAll) keys.forEach((k) => next.add(k))
+      else keys.forEach((k) => next.delete(k))
       return next
     })
   }, [])
@@ -239,9 +225,15 @@ export function PermissionsPage() {
           if (!canEditPermissions) return null
           return (
             <div className="flex items-center justify-end gap-2">
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => openEdit(profile)}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => openEdit(profile)}
+                disabled={editLoadingId === profile.id}
+              >
                 <Pencil className="h-3.5 w-3.5" />
-                Edit
+                {editLoadingId === profile.id ? 'Loading…' : 'Edit'}
               </Button>
               <Button
                 variant="outline"
@@ -257,7 +249,7 @@ export function PermissionsPage() {
         },
       },
     ],
-    [openEdit, handleDelete, canEditPermissions]
+    [openEdit, handleDelete, canEditPermissions, editLoadingId]
   )
 
   return (
@@ -280,8 +272,16 @@ export function PermissionsPage() {
           {error instanceof Error ? error.message : 'Failed to load profiles'}
         </div>
       )}
+      {definitionsError && (
+        <div className="rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          Failed to load permission definitions. Create/Edit profile and the Permissions table may be incomplete.
+        </div>
+      )}
       {isLoading && (
         <p className="text-text-muted text-sm">Loading profiles…</p>
+      )}
+      {definitionsLoading && !definitionsError && (
+        <p className="text-text-muted text-sm">Loading permission definitions…</p>
       )}
 
       <Tabs defaultValue="profiles" className="w-full">
@@ -302,6 +302,13 @@ export function PermissionsPage() {
 
         <TabsContent value="permissions" className="mt-0">
           <div className="rounded-lg border border-border overflow-hidden">
+            {definitionsLoading ? (
+              <p className="p-4 text-sm text-text-muted">Loading permission definitions…</p>
+            ) : definitionsError ? (
+              <p className="p-4 text-sm text-danger">Failed to load permission definitions.</p>
+            ) : permissionCategories.length === 0 ? (
+              <p className="p-4 text-sm text-text-muted">No permission definitions in the database. Run migrations to seed them.</p>
+            ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[600px]">
                 <thead className="bg-surface-2 border-b border-border">
@@ -320,8 +327,8 @@ export function PermissionsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {PERMISSION_CATEGORIES.map((category) => (
-                    <Fragment key={category.name}>
+                  {permissionCategories.map((category: PermissionCategoryDto) => (
+                    <Fragment key={category.id}>
                       <tr className="bg-surface-2/50">
                         <td
                           colSpan={profiles.length + 1}
@@ -340,7 +347,7 @@ export function PermissionsPage() {
                               key={profile.id}
                               className="align-middle text-sm text-text whitespace-nowrap p-4 text-center"
                             >
-                              {profile.permissionIds.includes(perm.id) ? (
+                              {profile.permissionIds.includes(perm.key) ? (
                                 <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-accent/20 text-accent">
                                   <Check className="h-3.5 w-3.5" />
                                 </span>
@@ -356,6 +363,7 @@ export function PermissionsPage() {
                 </tbody>
               </table>
             </div>
+            )}
           </div>
         </TabsContent>
       </Tabs>
@@ -398,40 +406,73 @@ export function PermissionsPage() {
           {/* Static: Access rights label + hint */}
           <div className="flex items-center justify-between gap-2 mb-2 flex-shrink-0">
             <label className="text-sm font-medium text-text">Access rights</label>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="text-xs h-8"
-              onClick={() => setFormPermissionIds(new Set(PERMISSION_CATEGORIES.flatMap((c) => c.permissions.map((p) => p.id))))}
-            >
-              Select all
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs h-8"
+                onClick={() => setFormPermissionIds(new Set(permissionCategories.flatMap((c) => c.permissions.map((p) => p.key))))}
+              >
+                Select all
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs h-8"
+                onClick={() => setFormPermissionIds(new Set())}
+              >
+                Unselect all
+              </Button>
+            </div>
           </div>
           <p className="text-xs text-text-muted mb-3 flex-shrink-0">Select the permissions included in this profile.</p>
-          {/* Scrollable: permission list only */}
+          {/* Scrollable: permission list only (from DB); Users & Groups first */}
           <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-border bg-surface-2/30 p-4 pr-2">
+            {definitionsLoading ? (
+              <p className="text-sm text-text-muted">Loading access rights…</p>
+            ) : definitionsError ? (
+              <p className="text-sm text-danger">Failed to load access rights. Please try again later.</p>
+            ) : (
             <div className="space-y-4">
-              {PERMISSION_CATEGORIES.map((category) => (
-                <div key={category.name}>
-                  <h4 className="text-sm font-medium text-text mb-2">{category.name}</h4>
-                  <div className="flex flex-wrap gap-x-6 gap-y-2">
-                    {category.permissions.map((perm) => (
-                      <label
-                        key={perm.id}
-                        className="flex items-center gap-2 cursor-pointer text-sm text-text-muted hover:text-text"
-                      >
+              {permissionCategoriesSorted.map((category: PermissionCategoryDto) => {
+                const categoryKeys = category.permissions.map((p) => p.key)
+                const selectedInCategory = categoryKeys.filter((k) => formPermissionIds.has(k)).length
+                const allSelected = category.permissions.length > 0 && selectedInCategory === category.permissions.length
+                const someSelected = selectedInCategory > 0
+                const sectionIndeterminate = someSelected && !allSelected
+                return (
+                  <div key={category.id}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-text hover:opacity-90">
                         <Checkbox
-                          checked={formPermissionIds.has(perm.id)}
-                          onChange={() => togglePermission(perm.id)}
+                          checked={allSelected}
+                          indeterminate={sectionIndeterminate}
+                          onChange={() => toggleCategory(category, !allSelected)}
                         />
-                        <span>{perm.label}</span>
+                        <span>{category.name}</span>
                       </label>
-                    ))}
+                    </div>
+                    <div className="flex flex-wrap gap-x-6 gap-y-2 pl-6">
+                      {category.permissions.map((perm) => (
+                        <label
+                          key={perm.id}
+                          className="flex items-center gap-2 cursor-pointer text-sm text-text-muted hover:text-text"
+                        >
+                          <Checkbox
+                            checked={formPermissionIds.has(perm.key)}
+                            onChange={() => togglePermission(perm.key)}
+                          />
+                          <span>{perm.label}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
+            )}
           </div>
           <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border flex-shrink-0">
             <Button variant="outline" onClick={closeDialog}>
@@ -439,7 +480,7 @@ export function PermissionsPage() {
             </Button>
             <Button
               onClick={handleSave}
-              disabled={!formName.trim() || createMutation.isPending || updateMutation.isPending}
+              disabled={!formName.trim() || createMutation.isPending || updateMutation.isPending || definitionsLoading || !!definitionsError}
             >
               {editingId ? (updateMutation.isPending ? 'Saving…' : 'Save changes') : createMutation.isPending ? 'Creating…' : 'Create profile'}
             </Button>

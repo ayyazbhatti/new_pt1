@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useLeverageProfilesList } from '../hooks/useLeverageProfiles'
@@ -17,6 +18,7 @@ import { cn } from '@/shared/utils'
 const STORAGE_SEARCH_KEY = 'leverage-tiers-management-search'
 
 export function LeverageProfilesPage() {
+  const canCreateProfile = useCanAccess('leverage_profiles:create')
   const [searchTerm, setSearchTerm] = useState(() => localStorage.getItem(STORAGE_SEARCH_KEY) ?? '')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived'>('all')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
@@ -75,10 +77,12 @@ export function LeverageProfilesPage() {
         title="Leverage Profiles & Tiers"
         description="Configure leverage profiles with margin-based tiers and assign them to groups"
         actions={
-          <Button onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            Create Profile
-          </Button>
+          canCreateProfile ? (
+            <Button onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Profile
+            </Button>
+          ) : undefined
         }
       />
 
@@ -173,7 +177,7 @@ export function LeverageProfilesPage() {
                   ? 'Try adjusting your search or filter.'
                   : 'Create your first leverage profile to get started.'}
               </p>
-              {!searchTerm && statusFilter === 'all' && (
+              {!searchTerm && statusFilter === 'all' && canCreateProfile && (
                 <Button
                   className="mt-4"
                   onClick={() => setCreateDialogOpen(true)}

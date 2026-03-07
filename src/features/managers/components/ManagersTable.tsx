@@ -25,7 +25,8 @@ export function ManagersTable({
   onManagerRemoved,
 }: ManagersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
-  const canEditUsers = useCanAccess('users:edit')
+  const canEditManagers = useCanAccess('managers:edit')
+  const canDeleteManagers = useCanAccess('managers:delete')
 
   const handleEdit = (manager: Manager) => {
     openModal(
@@ -69,7 +70,8 @@ export function ManagersTable({
 
   const getStatusBadge = (status: string) => {
     if (status === 'active') return <Badge variant="success">Active</Badge>
-    return <Badge variant="neutral">Disabled</Badge>
+    if (status === 'disabled') return <Badge variant="neutral">Disabled</Badge>
+    return <Badge variant="neutral" className="capitalize">{status}</Badge>
   }
 
   const columns: ColumnDef<Manager>[] = [
@@ -137,7 +139,7 @@ export function ManagersTable({
         const manager = row.original
         return (
           <div className="flex items-center gap-1">
-            {canEditUsers && (
+            {canEditManagers && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -147,19 +149,21 @@ export function ManagersTable({
                 <Pencil className="h-4 w-4" />
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleToggleStatus(manager)}
-              title={manager.status === 'active' ? 'Disable manager' : 'Enable manager'}
-            >
-              {manager.status === 'active' ? (
-                <UserX className="h-4 w-4" />
-              ) : (
-                <UserCheck className="h-4 w-4" />
-              )}
-            </Button>
-            {canEditUsers && (
+            {canEditManagers && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleToggleStatus(manager)}
+                title={manager.status === 'active' ? 'Disable manager' : 'Enable manager'}
+              >
+                {manager.status === 'active' ? (
+                  <UserX className="h-4 w-4" />
+                ) : (
+                  <UserCheck className="h-4 w-4" />
+                )}
+              </Button>
+            )}
+            {canDeleteManagers && (
               <Button
                 variant="ghost"
                 size="sm"

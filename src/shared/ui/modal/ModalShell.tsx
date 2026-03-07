@@ -8,6 +8,8 @@ interface ModalShellProps {
   onOpenChange?: (open: boolean) => void
   title?: string
   description?: string
+  /** Page-related permissions shown at top of modal (e.g. users:view, users:create, users:edit) */
+  pagePermissions?: string[]
   children: ReactNode
   className?: string
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full' | 'content'
@@ -31,6 +33,7 @@ export function ModalShell({
   onClose,
   title,
   description,
+  pagePermissions,
   children,
   className,
   size = 'md',
@@ -70,10 +73,22 @@ export function ModalShell({
           {isDrawer ? (
             <>
               <Dialog.Title className="sr-only">User details</Dialog.Title>
+              {pagePermissions && pagePermissions.length > 0 && (
+                <div className="shrink-0 rounded-md border border-border/60 bg-muted/40 px-3 py-1.5 text-xs text-text-muted">
+                  <span className="font-medium">Page permissions:</span>{' '}
+                  {pagePermissions.join(' · ')}
+                </div>
+              )}
               <div className="flex flex-1 flex-col min-h-0 overflow-hidden">{children}</div>
             </>
           ) : (
             <>
+              {pagePermissions && pagePermissions.length > 0 && (
+                <div className="rounded-md border border-border/60 bg-muted/40 px-3 py-1.5 text-xs text-text-muted">
+                  <span className="font-medium">Page permissions:</span>{' '}
+                  {pagePermissions.join(' · ')}
+                </div>
+              )}
               <div className="flex flex-col space-y-1.5">
                 {title && (
                   <Dialog.Title className="text-lg font-semibold leading-none tracking-tight text-text">

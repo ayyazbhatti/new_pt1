@@ -1,58 +1,9 @@
 //! Permission profiles: CRUD and effective-permissions helper.
-//! Matches the unified list in docs/PERMISSIONS_DYNAMIC_PLAN.md.
+//! Permission definitions (categories + permissions) come from DB (permission_categories, permissions).
 
 use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
-
-/// All permission keys (single source of truth for backend). Must match frontend permissions.ts and plan.
-pub const ALL_PERMISSION_KEYS: &[&str] = &[
-    "leads:view_all",
-    "leads:view_assigned",
-    "leads:create",
-    "leads:edit",
-    "leads:delete",
-    "leads:assign",
-    "leads:change_stage",
-    "leads:export",
-    "leads:settings",
-    "leads:templates",
-    "leads:assignment",
-    "leads:import",
-    "trading:view",
-    "trading:place_orders",
-    "deposits:approve",
-    "deposits:reject",
-    "finance:view",
-    "support:view",
-    "support:reply",
-    "users:view",
-    "users:edit",
-    "users:create",
-    "groups:view",
-    "groups:edit",
-    "symbols:view",
-    "symbols:edit",
-    "markup:view",
-    "markup:edit",
-    "swap:view",
-    "swap:edit",
-    "leverage_profiles:view",
-    "leverage_profiles:edit",
-    "risk:view",
-    "risk:edit",
-    "reports:view",
-    "dashboard:view",
-    "bonus:view",
-    "bonus:edit",
-    "affiliate:view",
-    "affiliate:edit",
-    "permissions:view",
-    "permissions:edit",
-    "system:view",
-    "settings:view",
-    "settings:edit",
-];
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PermissionProfile {
@@ -67,6 +18,22 @@ pub struct PermissionProfile {
 pub struct PermissionProfileGrant {
     pub profile_id: Uuid,
     pub permission_key: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PermissionDefinition {
+    pub id: Uuid,
+    pub key: String,
+    pub label: String,
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CategoryWithPermissions {
+    pub id: Uuid,
+    pub name: String,
+    pub sort_order: i32,
+    pub permissions: Vec<PermissionDefinition>,
 }
 
 pub struct PermissionProfilesService {
@@ -129,7 +96,7 @@ impl PermissionProfilesService {
         if name_trim.is_empty() {
             return Err(anyhow::anyhow!("Name is required"));
         }
-        self.validate_permission_keys(permission_keys)?;
+        self.validate_permission_keys(permission_keys).await?;
 
         let profile = sqlx::query_as::<_, PermissionProfile>(
             r#"
@@ -197,7 +164,7 @@ impl PermissionProfilesService {
                 .await?;
         }
         if let Some(keys) = permission_keys {
-            self.validate_permission_keys(keys)?;
+            self.validate_permission_keys(keys).await?;
             sqlx::query("DELETE FROM permission_profile_grants WHERE profile_id = $1")
                 .bind(id)
                 .execute(&self.pool)
@@ -252,18 +219,60 @@ impl PermissionProfilesService {
         Ok(result.rows_affected() > 0)
     }
 
-    fn validate_permission_keys(&self, keys: &[String]) -> anyhow::Result<()> {
-        let set: std::collections::HashSet<&str> = ALL_PERMISSION_KEYS.iter().copied().collect();
+    async fn validate_permission_keys(&self, keys: &[String]) -> anyhow::Result<()> {
         for k in keys {
             let key = k.trim();
             if key.is_empty() {
                 continue;
             }
-            if !set.contains(key) {
+            let exists: (bool,) = sqlx::query_as(
+                "SELECT EXISTS(SELECT 1 FROM permissions WHERE permission_key = $1)",
+            )
+            .bind(key)
+            .fetch_one(&self.pool)
+            .await?;
+            if !exists.0 {
                 return Err(anyhow::anyhow!("Unknown permission key: {}", key));
             }
         }
         Ok(())
+    }
+
+    /// List permission categories with their permissions (for admin UI). From DB.
+    pub async fn list_categories_with_permissions(
+        &self,
+    ) -> anyhow::Result<Vec<CategoryWithPermissions>> {
+        let categories: Vec<(Uuid, String, i32)> = sqlx::query_as(
+            "SELECT id, name, sort_order FROM permission_categories ORDER BY sort_order, name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut result = Vec::with_capacity(categories.len());
+        for (cat_id, name, sort_order) in categories {
+            let perms: Vec<(Uuid, String, String, i32)> = sqlx::query_as(
+                "SELECT id, permission_key, label, sort_order FROM permissions WHERE category_id = $1 ORDER BY sort_order, permission_key",
+            )
+            .bind(cat_id)
+            .fetch_all(&self.pool)
+            .await?;
+            let permissions = perms
+                .into_iter()
+                .map(|(id, permission_key, label, sort_order)| PermissionDefinition {
+                    id,
+                    key: permission_key,
+                    label,
+                    sort_order,
+                })
+                .collect();
+            result.push(CategoryWithPermissions {
+                id: cat_id,
+                name,
+                sort_order,
+                permissions,
+            });
+        }
+        Ok(result)
     }
 
     /// Returns effective permission keys for a user from their assigned permission profile.

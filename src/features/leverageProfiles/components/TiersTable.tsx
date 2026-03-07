@@ -94,15 +94,17 @@ export function TiersTable({ tiers, onTierDelete, onTierUpdate, onTierEdit }: Ti
                 <Edit className="h-4 w-4" />
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleDelete(tier.id)}
-              className="text-danger hover:text-danger hover:bg-danger/10"
-              title="Delete Tier"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {onTierDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleDelete(tier.id)}
+                className="text-danger hover:text-danger hover:bg-danger/10"
+                title="Delete Tier"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         )
       },

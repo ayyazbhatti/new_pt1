@@ -4,6 +4,7 @@ import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
 import { SwapRule } from '../types/swap'
 import { useModalStore } from '@/app/store'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { EditSwapRuleModal } from '../modals/EditSwapRuleModal'
 import { PreviewSwapModal } from '../modals/PreviewSwapModal'
 import { ConfirmDeleteModal } from '../modals/ConfirmDeleteModal'
@@ -17,6 +18,8 @@ interface SwapRulesTableProps {
 
 export function SwapRulesTable({ rules, isLoading, onDisable }: SwapRulesTableProps) {
   const openModal = useModalStore((state) => state.openModal)
+  const canEdit = useCanAccess('swap:edit')
+  const canDelete = useCanAccess('swap:delete')
 
   const handlePreview = (rule: SwapRule) => {
     openModal(`preview-swap-${rule.id}`, <PreviewSwapModal rule={rule} />, {
@@ -176,31 +179,37 @@ export function SwapRulesTable({ rules, isLoading, onDisable }: SwapRulesTablePr
             >
               <Eye className="h-4 w-4" />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleEdit(rule)}
-              title="Edit"
-            >
-              <Edit className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleDisable(rule)}
-              title={rule.status === 'active' ? 'Disable' : 'Enable'}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleDelete(rule)}
-              className="text-danger hover:text-danger hover:bg-danger/10"
-              title="Delete"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {canEdit && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleEdit(rule)}
+                  title="Edit"
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDisable(rule)}
+                  title={rule.status === 'active' ? 'Disable' : 'Enable'}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleDelete(rule)}
+                className="text-danger hover:text-danger hover:bg-danger/10"
+                title="Delete"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         )
       },

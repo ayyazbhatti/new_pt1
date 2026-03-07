@@ -88,7 +88,9 @@ export function AffiliatePage() {
   const [viewingAffiliate, setViewingAffiliate] = useState<AffiliateUser | null>(null)
   const [deleteAffiliate, setDeleteAffiliate] = useState<AffiliateUser | null>(null)
 
+  const canCreate = useCanAccess('affiliate:create')
   const canEdit = useCanAccess('affiliate:edit')
+  const canDelete = useCanAccess('affiliate:delete')
   const { data: layers = [], isLoading: layersLoading } = useAffiliateLayers()
   const { data: users = [], isLoading: usersLoading } = useAffiliateUsers()
 
@@ -188,31 +190,31 @@ export function AffiliatePage() {
                 <Eye className="w-4 h-4" />
               </button>
               {canEdit && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setEditingLayer(layer)}
-                    className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text"
-                    title="Edit"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDeleteScheme(layer)}
-                    className="p-2 rounded-lg hover:bg-surface-2 text-red-500 hover:text-red-400"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={() => setEditingLayer(layer)}
+                  className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text"
+                  title="Edit"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              )}
+              {canDelete && (
+                <button
+                  type="button"
+                  onClick={() => setDeleteScheme(layer)}
+                  className="p-2 rounded-lg hover:bg-surface-2 text-red-500 hover:text-red-400"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               )}
             </div>
           )
         },
       },
     ],
-    [canEdit]
+    [canEdit, canDelete]
   )
 
   const affiliateColumns: ColumnDef<AffiliateUser>[] = useMemo(
@@ -265,7 +267,7 @@ export function AffiliatePage() {
               >
                 <Eye className="w-4 h-4" />
               </button>
-              {canEdit && (
+              {canDelete && (
                 <button
                   type="button"
                   onClick={() => setDeleteAffiliate(user)}
@@ -280,7 +282,7 @@ export function AffiliatePage() {
         },
       },
     ],
-    [canEdit]
+    [canEdit, canDelete]
   )
 
   const referralColumns: ColumnDef<PlaceholderReferral>[] = useMemo(
@@ -415,7 +417,7 @@ export function AffiliatePage() {
           </p>
         </div>
         <div className="w-full sm:w-auto">
-          {canEdit && (
+          {canCreate && (
             <button
               type="button"
               onClick={() => setSchemeModal('create')}

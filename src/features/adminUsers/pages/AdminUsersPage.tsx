@@ -1,6 +1,6 @@
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
-import { useCanAccess } from '@/shared/utils/permissions'
+import { useCanAccess, ADMIN_PAGE_PERMISSIONS } from '@/shared/utils/permissions'
 import { UserKPICards, UserFiltersBar, UsersTable } from '../components'
 import { useModalStore } from '@/app/store'
 import { CreateEditUserModal, MultiUserMetricsModal } from '../modals'
@@ -133,6 +133,7 @@ export function AdminUsersPage() {
     openModal('create-user', <CreateEditUserModal />, {
       title: 'Create User',
       size: 'md',
+      pagePermissions: ADMIN_PAGE_PERMISSIONS['/admin/users'],
     })
   }
 

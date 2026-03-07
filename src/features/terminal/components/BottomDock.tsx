@@ -1,4 +1,4 @@
-import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, Bot, AlertCircle, Maximize2, Minimize2 } from 'lucide-react'
+import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, AlertCircle, Maximize2, Minimize2 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/shared/utils'
@@ -27,7 +27,7 @@ import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
 export function BottomDock() {
   // Valid tab IDs
-  const validTabs = ['positions', 'orders', 'order-history', 'position-history', 'bot-positions']
+  const validTabs = ['positions', 'orders', 'order-history', 'position-history']
   
   // Load active tab from localStorage, default to 'positions'
   // Validate that the saved tab is one of the valid tabs
@@ -108,7 +108,6 @@ export function BottomDock() {
     { id: 'orders', label: 'Orders' },
     { id: 'order-history', label: 'Order History' },
     { id: 'position-history', label: 'Position History' },
-    { id: 'bot-positions', label: 'Bot Positions' },
   ]
   
   // Handler to change tab and persist to localStorage
@@ -1060,15 +1059,6 @@ export function BottomDock() {
           </>
         )}
 
-        {activeTab === 'bot-positions' && (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center text-muted">
-              <Bot className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <div className="text-sm font-medium">No bot positions</div>
-              <div className="text-xs mt-1">Bot trading positions will appear here</div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Bottom Stats Bar - hover each stat to see formula (tooltip in portal so it's not clipped) */}

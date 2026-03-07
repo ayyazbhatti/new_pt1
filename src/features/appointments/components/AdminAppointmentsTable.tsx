@@ -20,6 +20,11 @@ interface AdminAppointmentsTableProps {
   onCancel: (apt: Appointment) => void
   onComplete: (apt: Appointment) => void
   onSendReminder: (apt: Appointment) => void
+  canEdit?: boolean
+  canReschedule?: boolean
+  canCancel?: boolean
+  canComplete?: boolean
+  canSendReminder?: boolean
 }
 
 export function AdminAppointmentsTable({
@@ -30,6 +35,11 @@ export function AdminAppointmentsTable({
   onCancel,
   onComplete,
   onSendReminder,
+  canEdit = true,
+  canReschedule = true,
+  canCancel = true,
+  canComplete = true,
+  canSendReminder = true,
 }: AdminAppointmentsTableProps) {
   const canAct = (apt: Appointment) =>
     apt.status !== 'cancelled' && apt.status !== 'completed'
@@ -118,16 +128,18 @@ export function AdminAppointmentsTable({
                     </Button>
                     {canAct(apt) && (
                       <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 text-slate-400 hover:text-white"
-                          onClick={() => onSendReminder(apt)}
-                          title="Send reminder"
-                        >
-                          <Mail className="h-4 w-4" />
-                        </Button>
-                        {(apt.status === 'scheduled' || apt.status === 'rescheduled') && (
+                        {canSendReminder && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-slate-400 hover:text-white"
+                            onClick={() => onSendReminder(apt)}
+                            title="Send reminder"
+                          >
+                            <Mail className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {canEdit && (apt.status === 'scheduled' || apt.status === 'rescheduled') && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -138,7 +150,7 @@ export function AdminAppointmentsTable({
                             <Pencil className="h-4 w-4" />
                           </Button>
                         )}
-                        {apt.status === 'scheduled' && (
+                        {canReschedule && apt.status === 'scheduled' && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -149,7 +161,7 @@ export function AdminAppointmentsTable({
                             <Calendar className="h-4 w-4" />
                           </Button>
                         )}
-                        {(apt.status === 'scheduled' || apt.status === 'confirmed') && (
+                        {canComplete && (apt.status === 'scheduled' || apt.status === 'confirmed') && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -160,15 +172,17 @@ export function AdminAppointmentsTable({
                             <CheckCircle className="h-4 w-4" />
                           </Button>
                         )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 text-slate-400 hover:text-red-400"
-                          onClick={() => onCancel(apt)}
-                          title="Cancel"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {canCancel && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-slate-400 hover:text-red-400"
+                            onClick={() => onCancel(apt)}
+                            title="Cancel"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
                       </>
                     )}
                   </div>

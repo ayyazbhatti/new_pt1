@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
@@ -15,9 +16,10 @@ interface TagsTableProps {
 }
 
 export function TagsTable({ tags, onEdit, onDelete, hasActiveFilters }: TagsTableProps) {
-  const canEdit = useCanAccess('users:edit')
+  const canEdit = useCanAccess('tags:edit')
+  const canDelete = useCanAccess('tags:delete')
 
-  const columns: ColumnDef<Tag>[] = [
+  const columns: ColumnDef<Tag>[] = useMemo(() => [
     {
       accessorKey: 'name',
       header: 'Name',
@@ -102,30 +104,30 @@ export function TagsTable({ tags, onEdit, onDelete, hasActiveFilters }: TagsTabl
         return (
           <div className="flex items-center gap-1">
             {canEdit && (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onEdit?.(tag)}
-                  title="Edit tag"
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onDelete?.(tag)}
-                  title="Delete tag"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onEdit?.(tag)}
+                title="Edit tag"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onDelete?.(tag)}
+                title="Delete tag"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             )}
           </div>
         )
       },
     },
-  ]
+  ], [canEdit, canDelete, onEdit, onDelete])
 
   if (tags.length === 0) {
     return (
