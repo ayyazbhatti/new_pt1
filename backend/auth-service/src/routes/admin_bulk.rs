@@ -1,6 +1,7 @@
 //! Admin bulk operations: config and bulk user creation (sync).
 //! See docs/BULK_OPERATIONS_DYNAMIC_SPEC.md.
 
+use tracing::error;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -15,6 +16,75 @@ use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
+
+const BULK_PERMISSION: &str = "users:bulk_create";
+
+async fn check_bulk_permission(
+    pool: &PgPool,
+    claims: &Claims,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if claims.role == "admin" {
+        return Ok(());
+    }
+    let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to get permission profile for bulk check: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    let Some(pid) = profile_id else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "No permission profile assigned".to_string(),
+                },
+            }),
+        ));
+    };
+    let has: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = $2)",
+    )
+    .bind(pid)
+    .bind(BULK_PERMISSION)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to check bulk permission: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    if !has {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: format!("Missing permission: {}", BULK_PERMISSION),
+                },
+            }),
+        ));
+    }
+    Ok(())
+}
 
 // ---------- Config (static, matches spec §3.1) ----------
 
@@ -241,19 +311,10 @@ pub async fn get_bulk_health() -> Json<serde_json::Value> {
 }
 
 pub async fn get_bulk_config(
+    State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<BulkConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access bulk config".to_string(),
-                },
-            }),
-        ));
-    }
+    check_bulk_permission(&pool, &claims).await?;
     Ok(Json(bulk_config()))
 }
 
@@ -262,17 +323,7 @@ pub async fn post_bulk_users(
     Extension(claims): Extension<Claims>,
     Json(body): Json<BulkCreateUsersRequest>,
 ) -> Result<Json<BulkCreateUsersResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can run bulk user creation".to_string(),
-                },
-            }),
-        ));
-    }
+    check_bulk_permission(&pool, &claims).await?;
 
     let config = bulk_config().bulk_user_creation;
 

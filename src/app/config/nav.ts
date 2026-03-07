@@ -12,7 +12,7 @@ export interface NavItem {
 export const adminNavItems: NavItem[] = [
   { label: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard, permission: 'dashboard:view' },
   { label: 'Users', path: '/admin/users', icon: Users, permission: 'users:view' },
-  { label: 'Bulk operations', path: '/admin/bulk-operations', icon: CopyPlus, permission: 'users:create' },
+  { label: 'Bulk operations', path: '/admin/bulk-operations', icon: CopyPlus, permission: 'users:bulk_create' },
   { label: 'Tags', path: '/admin/tag', icon: Tag, permission: 'tags:view' },
   { label: 'Groups', path: '/admin/groups', icon: UserCog, permission: 'groups:view' },
   { label: 'Managers', path: '/admin/manager', icon: BadgeCheck, permission: 'managers:view' },

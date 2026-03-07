@@ -25,7 +25,7 @@ export const ALL_PERMISSION_KEYS: readonly string[] = [
   'support:view', 'support:reply', 'support:new_chat',
   'call:view',
   'appointments:view', 'appointments:create', 'appointments:edit', 'appointments:delete', 'appointments:reschedule', 'appointments:cancel', 'appointments:complete', 'appointments:send_reminder',
-  'users:view', 'users:edit', 'users:create', 'groups:view', 'groups:create', 'groups:edit', 'groups:delete', 'groups:symbol_settings', 'groups:price_profile', 'groups:tags',
+  'users:view', 'users:edit', 'users:create', 'users:bulk_create', 'groups:view', 'groups:create', 'groups:edit', 'groups:delete', 'groups:symbol_settings', 'groups:price_profile', 'groups:tags',
   'managers:view', 'managers:create', 'managers:edit', 'managers:delete',
   'symbols:view', 'symbols:create', 'symbols:edit', 'symbols:delete', 'markup:view', 'markup:create', 'markup:edit', 'markup:delete', 'swap:view', 'swap:create', 'swap:edit', 'swap:delete',
   'leverage_profiles:view', 'leverage_profiles:create', 'leverage_profiles:edit', 'leverage_profiles:delete',
@@ -93,6 +93,7 @@ export function useCanAccess(permissionKey: string): boolean {
 /** Permissions used on each admin page (for display in modals). Route guard uses the first. */
 export const ADMIN_PAGE_PERMISSIONS: Record<string, string[]> = {
   '/admin/users': ['users:view', 'users:create', 'users:edit', 'users:edit_group', 'users:edit_account_type', 'users:edit_margin', 'users:edit_trading_access'],
+  '/admin/bulk-operations': ['users:bulk_create'],
   '/admin/tag': ['tags:view', 'tags:create', 'tags:edit', 'tags:delete'],
   '/admin/groups': ['groups:view', 'groups:create', 'groups:edit', 'groups:delete', 'groups:symbol_settings', 'groups:price_profile', 'groups:tags'],
   '/admin/manager': ['managers:view', 'managers:create', 'managers:edit', 'managers:delete'],
@@ -116,6 +117,7 @@ export const ADMIN_PAGE_PERMISSIONS: Record<string, string[]> = {
 export const ADMIN_ROUTE_PERMISSIONS: Record<string, string> = {
   '/admin/dashboard': 'dashboard:view',
   '/admin/users': 'users:view',
+  '/admin/bulk-operations': 'users:bulk_create',
   '/admin/groups': 'groups:view',
   '/admin/manager': 'managers:view',
   '/admin/tag': 'tags:view',
