@@ -18,18 +18,10 @@ import { toast } from '@/shared/components/common'
 import { ColumnDef } from '@tanstack/react-table'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
-import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { Skeleton } from '@/shared/ui/loading'
 import { Copy, ArrowRightLeft } from 'lucide-react'
 import { getGroupSymbols, updateGroupSymbols } from '../api/groups.api'
 import { groupsQueryKeys } from '../hooks/useGroups'
-
-function formatPrice(value: string | undefined): string {
-  if (value == null || value === '') return '—'
-  const num = parseFloat(value)
-  if (Number.isNaN(num)) return value
-  return num.toFixed(8).replace(/\.?0+$/, '') || '0'
-}
 
 interface AssignSymbolsModalProps {
   group: UserGroup
@@ -58,11 +50,6 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
   const [transferSelectedIds, setTransferSelectedIds] = useState<Set<string>>(new Set())
 
   const displaySymbolsList = symbols.length > 0 ? symbols : initialSymbols
-  const symbolCodesForPrice = useMemo(
-    () => displaySymbolsList.map((s) => s.symbolCode.toUpperCase().trim()).filter(Boolean),
-    [displaySymbolsList]
-  )
-  const { prices } = usePriceStream(symbolCodesForPrice)
 
   useEffect(() => {
     if (group.id !== populatedForGroupIdRef.current && initialSymbols.length > 0) {
@@ -203,32 +190,6 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
       ),
     },
     {
-      id: 'bid',
-      header: 'Bid',
-      cell: ({ row }) => {
-        const code = row.original.symbolCode
-        const price = prices.get(normalizeSymbolKey(code))
-        return (
-          <span className="font-mono text-sm text-success">
-            {formatPrice(price?.bid)}
-          </span>
-        )
-      },
-    },
-    {
-      id: 'ask',
-      header: 'Ask',
-      cell: ({ row }) => {
-        const code = row.original.symbolCode
-        const price = prices.get(normalizeSymbolKey(code))
-        return (
-          <span className="font-mono text-sm text-danger">
-            {formatPrice(price?.ask)}
-          </span>
-        )
-      },
-    },
-    {
       accessorKey: 'leverageProfileName',
       header: 'Leverage Profile',
       cell: ({ row }) => {
@@ -352,7 +313,7 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
       </div>
 
       <Dialog open={!!transferSource} onOpenChange={(open) => !open && closeTransferDialog()}>
-        <DialogContent className="max-w-md" showClose={true}>
+        <DialogContent className="max-w-md z-[110]" showClose={true}>
           <DialogHeader>
             <DialogTitle>Transfer settings to specific symbols</DialogTitle>
             <DialogDescription>

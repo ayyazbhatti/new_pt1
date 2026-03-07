@@ -11,7 +11,7 @@ import { toast } from '@/shared/components/common'
 import { User, UserStatus } from '../types/users'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
 import { updateUserProfile, updateUserGroup, updateUserPermissionProfile } from '../api/users.api'
-import { listUsers, type UserResponse } from '@/shared/api/users.api'
+import { listUsers, type UserResponse, type ListUsersResponse } from '@/shared/api/users.api'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
 
 const userSchema = z.object({
@@ -162,27 +162,30 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           permissionProfileId: permId ?? undefined,
           permissionProfileName,
         })
-        queryClient.setQueryData<UserResponse[]>(['users'], (old) => {
-          if (!old) return old
-          return old.map((u) =>
-            u.id === user.id
-              ? {
-                  ...u,
-                  first_name: data.firstName,
-                  last_name: data.lastName,
-                  email: data.email,
-                  phone: data.phone ?? null,
-                  country: data.country ?? null,
-                  status: data.status,
-                  group_id: data.group,
-                  group_name: groupName,
-                  min_leverage: data.minLeverage,
-                  max_leverage: data.maxLeverage,
-                  permission_profile_id: permId,
-                  permission_profile_name: permissionProfileName ?? null,
-                }
-              : u
-          )
+        queryClient.setQueryData<ListUsersResponse>(['users'], (old) => {
+          if (!old || !('items' in old) || !Array.isArray(old.items)) return old
+          return {
+            ...old,
+            items: old.items.map((u) =>
+              u.id === user.id
+                ? {
+                    ...u,
+                    first_name: data.firstName,
+                    last_name: data.lastName,
+                    email: data.email,
+                    phone: data.phone ?? null,
+                    country: data.country ?? null,
+                    status: data.status,
+                    group_id: data.group,
+                    group_name: groupName,
+                    min_leverage: data.minLeverage,
+                    max_leverage: data.maxLeverage,
+                    permission_profile_id: permId,
+                    permission_profile_name: permissionProfileName ?? null,
+                  }
+                : u
+            ),
+          }
         })
         await queryClient.invalidateQueries({ queryKey: ['users'] })
         toast.success(`User ${data.firstName} ${data.lastName} updated`)

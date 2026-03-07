@@ -17,6 +17,7 @@ const PROXY_TIMEOUT_MS = 20_000
  */
 function apiProxyMiddleware(): Connect.NextHandleFunction {
   return (req, res, next) => {
+    if (!req || !res) return next?.()
     const rawUrl = req.url ?? ''
     const pathname = rawUrl.split('?')[0]
     const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : ''
