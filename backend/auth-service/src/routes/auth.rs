@@ -1335,40 +1335,183 @@ async fn symbol_leverage(
     }))
 }
 
+/// Resolve allowed group IDs for list users. Returns None = no filter (see all users), Some(ids) = restrict to those groups.
+/// Admins with no manager row see all users. Admins or managers with a manager row + tags are scoped to tag-linked groups.
+async fn resolve_allowed_group_ids_for_list_users(
+    pool: &PgPool,
+    claims: &Claims,
+) -> Result<Option<Vec<Uuid>>, (StatusCode, Json<ErrorResponse>)> {
+    let manager_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM managers WHERE user_id = $1")
+        .bind(claims.sub)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    // Admin with no manager row → no filter (see all users)
+    if claims.role == "admin" && manager_id.is_none() {
+        return Ok(None);
+    }
+
+    // Non-admin: must have users:view via permission profile
+    if claims.role != "admin" {
+        let profile_id: Option<Uuid> =
+            sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+                .bind(claims.sub)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DB_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+        let pid = match profile_id {
+            Some(p) => p,
+            None => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "FORBIDDEN".to_string(),
+                            message: "No permission profile assigned".to_string(),
+                        },
+                    }),
+                ));
+            }
+        };
+        let has_view: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = 'users:view')",
+        )
+        .bind(pid)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        if !has_view {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "FORBIDDEN".to_string(),
+                        message: "Missing permission: users:view".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    // No manager row (manager path only: non-admin with no manager) → no users
+    let Some(mid) = manager_id else {
+        return Ok(Some(vec![]));
+    };
+    #[derive(sqlx::FromRow)]
+    struct TagRow { tag_id: Uuid }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'manager' AND entity_id = $1",
+    )
+    .bind(mid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let manager_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+    if manager_tag_ids.is_empty() {
+        return Ok(Some(vec![]));
+    }
+    #[derive(sqlx::FromRow)]
+    struct GroupRow { entity_id: Uuid }
+    let group_rows = sqlx::query_as::<_, GroupRow>(
+        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+    )
+    .bind(&manager_tag_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let allowed: Vec<Uuid> = group_rows.into_iter().map(|r| r.entity_id).collect();
+    Ok(Some(allowed))
+}
+
 async fn list_users(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<ListUsersResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Only admins can list users
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can list users".to_string(),
-                },
-            }),
-        ));
-    }
-
+    let allowed_group_ids = resolve_allowed_group_ids_for_list_users(&pool, &claims).await?;
     let service = AuthService::new(pool.clone());
 
     // Server-side pagination: page, page_size, search, status, group_id
     let use_paginated = params.contains_key("page") || params.contains_key("page_size")
         || params.contains_key("search") || params.contains_key("status") || params.contains_key("group_id");
 
+    let group_id_param = params
+        .get("group_id")
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let effective_group_id = match (&allowed_group_ids, group_id_param) {
+        (Some(ids), Some(g)) if ids.contains(&g) => Some(g),
+        (Some(_), _) => None,
+        (None, g) => g,
+    };
+
     let (users, total) = if use_paginated {
         let page = params.get("page").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
         let page_size = params.get("page_size").and_then(|s| s.parse::<i64>().ok()).unwrap_or(20);
         let search = params.get("search").map(|s| s.as_str());
         let status = params.get("status").map(|s| s.as_str());
-        let group_id = params
-            .get("group_id")
-            .and_then(|s| Uuid::parse_str(s).ok());
 
-        match service.list_users_paginated(search, status, group_id, page, page_size).await {
+        match service
+            .list_users_paginated(
+                search,
+                status,
+                effective_group_id,
+                page,
+                page_size,
+                allowed_group_ids.as_deref(),
+            )
+            .await
+        {
             Ok(pair) => pair,
             Err(e) => {
                 return Err((
@@ -1385,7 +1528,10 @@ async fn list_users(
     } else {
         let limit = params.get("limit").and_then(|s| s.parse::<i64>().ok()).unwrap_or(100);
         let offset = params.get("offset").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        let users = match service.list_users(Some(limit), Some(offset)).await {
+        let users = match service
+            .list_users(Some(limit), Some(offset), allowed_group_ids.as_deref())
+            .await
+        {
             Ok(u) => u,
             Err(e) => {
                 return Err((

@@ -206,6 +206,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/user-notes", create_admin_user_notes_router(pool.clone()))
         .nest("/api/admin/users", create_admin_users_router(pool.clone(), deposits_state.clone()))
         .nest("/api/admin/managers", create_admin_managers_router(pool.clone()))
+        .nest("/api/admin/manager-tags", routes::admin_managers::create_admin_manager_tags_router(pool.clone()))
         .nest("/api/admin/permission-profiles", create_admin_permission_profiles_router(pool.clone()))
         .nest("/api/admin/affiliate", create_admin_affiliate_router(pool.clone()))
         .nest("/api/admin/settings", create_admin_settings_router(pool.clone()))

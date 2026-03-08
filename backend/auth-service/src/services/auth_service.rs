@@ -328,31 +328,58 @@ impl AuthService {
         Ok((access_token, refresh_token))
     }
 
+    /// List users (no pagination). When allowed_group_ids is Some(empty), returns empty.
+    /// When allowed_group_ids is Some(ids), restricts to users in those groups (one extra AND; no extra round-trips).
     pub async fn list_users(
         &self,
         limit: Option<i64>,
         offset: Option<i64>,
+        allowed_group_ids: Option<&[Uuid]>,
     ) -> anyhow::Result<Vec<User>> {
         let limit = limit.unwrap_or(100);
         let offset = offset.unwrap_or(0);
 
-        let users = sqlx::query_as::<_, User>(
-            r#"
-            SELECT * FROM users
-            WHERE deleted_at IS NULL
-            ORDER BY created_at DESC
-            LIMIT $1 OFFSET $2
-            "#,
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+        if let Some(ids) = allowed_group_ids {
+            if ids.is_empty() {
+                return Ok(vec![]);
+            }
+        }
+
+        let users = if let Some(ids) = allowed_group_ids {
+            sqlx::query_as::<_, User>(
+                r#"
+                SELECT * FROM users
+                WHERE deleted_at IS NULL
+                  AND group_id = ANY($1)
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(ids)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, User>(
+                r#"
+                SELECT * FROM users
+                WHERE deleted_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT $1 OFFSET $2
+                "#,
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?
+        };
 
         Ok(users)
     }
 
     /// List users with server-side pagination and optional filters. Returns (users, total_count).
+    /// When allowed_group_ids is Some(empty), returns (vec![], 0). When Some(ids), adds one AND group_id = ANY(ids) (index-friendly; no extra round-trips).
     pub async fn list_users_paginated(
         &self,
         search: Option<&str>,
@@ -360,10 +387,17 @@ impl AuthService {
         group_id: Option<Uuid>,
         page: i64,
         page_size: i64,
+        allowed_group_ids: Option<&[Uuid]>,
     ) -> anyhow::Result<(Vec<User>, i64)> {
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
         let offset = (page - 1) * page_size;
+
+        if let Some(ids) = allowed_group_ids {
+            if ids.is_empty() {
+                return Ok((vec![], 0));
+            }
+        }
 
         let search_pattern = search.map(|s| format!("%{}%", s.trim()));
         let has_search = search_pattern.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
@@ -371,44 +405,83 @@ impl AuthService {
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty() && ["active", "disabled", "suspended"].contains(&s.as_str()));
 
-        // Count total with same filters
-        let total_row: (i64,) = sqlx::query_as(
-            r#"
-            SELECT COUNT(*)::bigint FROM users
-            WHERE deleted_at IS NULL
-              AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
-              AND ($3::text IS NULL OR status::text = $3)
-              AND ($4::uuid IS NULL OR group_id = $4)
-            "#,
-        )
-        .bind(has_search)
-        .bind(search_pattern.as_deref().unwrap_or("%"))
-        .bind(status_filter.as_deref())
-        .bind(group_id)
-        .fetch_one(&self.pool)
-        .await?;
-        let total = total_row.0;
-
-        // Fetch page
-        let users = sqlx::query_as::<_, User>(
-            r#"
-            SELECT * FROM users
-            WHERE deleted_at IS NULL
-              AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
-              AND ($3::text IS NULL OR status::text = $3)
-              AND ($4::uuid IS NULL OR group_id = $4)
-            ORDER BY created_at DESC
-            LIMIT $5 OFFSET $6
-            "#,
-        )
-        .bind(has_search)
-        .bind(search_pattern.as_deref().unwrap_or("%"))
-        .bind(status_filter.as_deref())
-        .bind(group_id)
-        .bind(page_size)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+        let (total, users) = if let Some(ids) = allowed_group_ids {
+            let total_row: (i64,) = sqlx::query_as(
+                r#"
+                SELECT COUNT(*)::bigint FROM users
+                WHERE deleted_at IS NULL
+                  AND group_id = ANY($1)
+                  AND (NOT $2::boolean OR (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3))
+                  AND ($4::text IS NULL OR status::text = $4)
+                  AND ($5::uuid IS NULL OR group_id = $5)
+                "#,
+            )
+            .bind(ids)
+            .bind(has_search)
+            .bind(search_pattern.as_deref().unwrap_or("%"))
+            .bind(status_filter.as_deref())
+            .bind(group_id)
+            .fetch_one(&self.pool)
+            .await?;
+            let users = sqlx::query_as::<_, User>(
+                r#"
+                SELECT * FROM users
+                WHERE deleted_at IS NULL
+                  AND group_id = ANY($1)
+                  AND (NOT $2::boolean OR (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3))
+                  AND ($4::text IS NULL OR status::text = $4)
+                  AND ($5::uuid IS NULL OR group_id = $5)
+                ORDER BY created_at DESC
+                LIMIT $6 OFFSET $7
+                "#,
+            )
+            .bind(ids)
+            .bind(has_search)
+            .bind(search_pattern.as_deref().unwrap_or("%"))
+            .bind(status_filter.as_deref())
+            .bind(group_id)
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+            (total_row.0, users)
+        } else {
+            let total_row: (i64,) = sqlx::query_as(
+                r#"
+                SELECT COUNT(*)::bigint FROM users
+                WHERE deleted_at IS NULL
+                  AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
+                  AND ($3::text IS NULL OR status::text = $3)
+                  AND ($4::uuid IS NULL OR group_id = $4)
+                "#,
+            )
+            .bind(has_search)
+            .bind(search_pattern.as_deref().unwrap_or("%"))
+            .bind(status_filter.as_deref())
+            .bind(group_id)
+            .fetch_one(&self.pool)
+            .await?;
+            let users = sqlx::query_as::<_, User>(
+                r#"
+                SELECT * FROM users
+                WHERE deleted_at IS NULL
+                  AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
+                  AND ($3::text IS NULL OR status::text = $3)
+                  AND ($4::uuid IS NULL OR group_id = $4)
+                ORDER BY created_at DESC
+                LIMIT $5 OFFSET $6
+                "#,
+            )
+            .bind(has_search)
+            .bind(search_pattern.as_deref().unwrap_or("%"))
+            .bind(status_filter.as_deref())
+            .bind(group_id)
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+            (total_row.0, users)
+        };
 
         Ok((users, total))
     }

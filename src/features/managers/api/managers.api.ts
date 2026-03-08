@@ -14,6 +14,7 @@ export interface ManagerDto {
   notes: string | null
   created_at: string
   last_login_at: string | null
+  tag_ids?: string[]
 }
 
 function fromDto(d: ManagerDto): Manager {
@@ -31,6 +32,7 @@ function fromDto(d: ManagerDto): Manager {
     createdAt: d.created_at,
     lastLoginAt: d.last_login_at ?? undefined,
     notes: d.notes ?? undefined,
+    tagIds: Array.isArray(d.tag_ids) ? d.tag_ids : undefined,
   }
 }
 
@@ -84,4 +86,20 @@ export async function updateManager(id: string, payload: UpdateManagerPayload): 
 
 export async function deleteManager(id: string): Promise<void> {
   await http(`/api/admin/managers/${id}`, { method: 'DELETE' })
+}
+
+/** Get tag IDs assigned to a manager. */
+export async function getManagerTags(managerId: string): Promise<string[]> {
+  const res = await http<{ tag_ids: string[] }>(`/api/admin/manager-tags/${managerId}`, {
+    method: 'GET',
+  })
+  return res.tag_ids ?? []
+}
+
+/** Assign tags to a manager (replaces existing). */
+export async function setManagerTags(managerId: string, tagIds: string[]): Promise<void> {
+  await http(`/api/admin/manager-tags/${managerId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tag_ids: tagIds }),
+  })
 }

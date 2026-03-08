@@ -29,6 +29,8 @@ pub struct ManagerResponse {
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_ids: Option<Vec<Uuid>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -177,20 +179,54 @@ async fn list_managers(
         )
     })?;
 
+    let manager_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let tag_map: std::collections::HashMap<Uuid, Vec<Uuid>> = if manager_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        #[derive(sqlx::FromRow)]
+        struct TagRow { entity_id: Uuid, tag_id: Uuid }
+        let tag_rows = sqlx::query_as::<_, TagRow>(
+            "SELECT entity_id, tag_id FROM tag_assignments WHERE entity_type = 'manager' AND entity_id = ANY($1)",
+        )
+        .bind(&manager_ids)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        let mut map: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
+        for r in tag_rows {
+            map.entry(r.entity_id).or_default().push(r.tag_id);
+        }
+        map
+    };
+
     let list: Vec<ManagerResponse> = rows
         .into_iter()
-        .map(|r| ManagerResponse {
-            id: r.id,
-            user_id: r.user_id,
-            user_name: r.user_name,
-            user_email: r.user_email,
-            user_role: r.user_role,
-            permission_profile_id: r.permission_profile_id,
-            permission_profile_name: r.permission_profile_name,
-            status: r.status,
-            notes: r.notes,
-            created_at: r.created_at,
-            last_login_at: r.last_login_at,
+        .map(|r| {
+            let tag_ids = tag_map.get(&r.id).cloned().unwrap_or_default();
+            ManagerResponse {
+                id: r.id,
+                user_id: r.user_id,
+                user_name: r.user_name,
+                user_email: r.user_email,
+                user_role: r.user_role,
+                permission_profile_id: r.permission_profile_id,
+                permission_profile_name: r.permission_profile_name,
+                status: r.status,
+                notes: r.notes,
+                created_at: r.created_at,
+                last_login_at: r.last_login_at,
+                tag_ids: Some(tag_ids),
+            }
         })
         .collect();
     Ok(Json(list))
@@ -376,6 +412,7 @@ async fn create_manager(
             notes: payload.notes,
             created_at: Utc::now(),
             last_login_at: user_row.2,
+            tag_ids: Some(vec![]),
         }),
     ))
 }
@@ -562,6 +599,7 @@ async fn update_manager(
         notes: new_notes,
         created_at,
         last_login_at,
+        tag_ids: None,
     }))
 }
 
@@ -640,4 +678,173 @@ async fn delete_manager(
         StatusCode::OK,
         Json(serde_json::json!({ "success": true })),
     ))
+}
+
+// ---------- Manager tags (GET/PUT /api/admin/manager-tags/:id) ----------
+
+#[derive(Debug, Serialize)]
+pub struct ManagerTagsResponse {
+    pub tag_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutManagerTagsRequest {
+    pub tag_ids: Vec<Uuid>,
+}
+
+pub fn create_admin_manager_tags_router(pool: PgPool) -> Router<PgPool> {
+    Router::new()
+        .route("/:id", get(get_manager_tags).put(put_manager_tags))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .with_state(pool)
+}
+
+async fn get_manager_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ManagerTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    check_admin(&claims)?;
+    let manager_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM managers WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+    if !manager_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "MANAGER_NOT_FOUND".to_string(),
+                    message: "Manager not found".to_string(),
+                },
+            }),
+        ));
+    }
+    #[derive(sqlx::FromRow)]
+    struct Row { tag_id: Uuid }
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'manager' AND entity_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let tag_ids = rows.into_iter().map(|r| r.tag_id).collect();
+    Ok(Json(ManagerTagsResponse { tag_ids }))
+}
+
+async fn put_manager_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<PutManagerTagsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    check_admin(&claims)?;
+    let manager_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM managers WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+    if !manager_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "MANAGER_NOT_FOUND".to_string(),
+                    message: "Manager not found".to_string(),
+                },
+            }),
+        ));
+    }
+    let mut tx = pool.begin().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    sqlx::query("DELETE FROM tag_assignments WHERE entity_type = 'manager' AND entity_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    for tag_id in &payload.tag_ids {
+        sqlx::query(
+            "INSERT INTO tag_assignments (tag_id, entity_type, entity_id, created_at) VALUES ($1, 'manager', $2, NOW())",
+        )
+        .bind(tag_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    }
+    tx.commit().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(Json(serde_json::json!({ "success": true })))
 }

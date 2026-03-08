@@ -13,6 +13,8 @@ export interface Manager {
   createdAt: string
   lastLoginAt?: string
   notes?: string
+  /** Tag IDs assigned to this manager (from list API). */
+  tagIds?: string[]
 }
 
 /** User from users table that can be promoted to manager (for Create Manager dropdown) */

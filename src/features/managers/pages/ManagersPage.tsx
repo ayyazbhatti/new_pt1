@@ -5,6 +5,7 @@ import { useModalStore } from '@/app/store'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
+import { listTags } from '@/features/tags/api/tags.api'
 import {
   listManagers,
   createManager,
@@ -85,6 +86,12 @@ export function ManagersPage() {
     queryKey: ['permission-profiles'],
     queryFn: listPermissionProfiles,
   })
+
+  const { data: tagsList = [] } = useQuery({
+    queryKey: ['admin', 'tags'],
+    queryFn: () => listTags(),
+  })
+  const allTags = tagsList.map((t) => ({ id: t.id, name: t.name }))
 
   const permissionProfileOptions = useMemo(() => {
     const fromManagers = managers.map((m) => ({
@@ -182,8 +189,10 @@ export function ManagersPage() {
       />
       <ManagersTable
         managers={managers}
+        allTags={allTags}
         onManagerUpdate={handleManagerUpdate}
         onManagerRemoved={handleManagerRemoved}
+        onRefresh={() => refetch()}
       />
     </ContentShell>
   )
