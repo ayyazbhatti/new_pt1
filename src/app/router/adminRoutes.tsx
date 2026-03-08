@@ -21,6 +21,7 @@ import { AdminAppointmentsPage } from '@/features/appointments'
 import { AdminProfilePage } from '@/features/adminProfile'
 import { AdminCallUserPage } from '@/features/adminCalls/pages/AdminCallUserPage'
 import { AdminBulkOperationsPage } from '@/features/adminBulkOperations'
+import { AdminPromotionsPage } from '@/features/adminPromotions'
 
 export const adminRoutes: RouteObject[] = [
   {
@@ -58,6 +59,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/markup',
     element: <AdminMarkupPage />,
+  },
+  {
+    path: '/admin/promotions',
+    element: <AdminPromotionsPage />,
   },
   {
     path: '/admin/swap',

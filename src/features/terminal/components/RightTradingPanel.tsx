@@ -27,6 +27,8 @@ import {
 import { AdminSymbol } from '@/features/symbols/types/symbol'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
+import { getPromotionSlides } from '../api/promotions.api'
+import type { PromotionSlidePublic } from '../api/promotions.api'
 
 // Local storage key for trading panel state
 const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
@@ -494,31 +496,37 @@ export function RightTradingPanel() {
   const [wsConnected, setWsConnected] = useState(false)
   // Real-time ping (RTT to WS server health endpoint)
   const [pingMs, setPingMs] = useState<number | null>(null)
-  // Promo carousel (static dummy slides)
-  const PROMO_SLIDES = [
-    {
-      image: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=400&h=180&fit=crop',
-      title: 'Premium Analytics',
-      subtitle: 'Real-time insights & advanced charts',
-    },
-    {
-      image: 'https://images.unsplash.com/photo-1642790106117-e829e14a795f?w=400&h=180&fit=crop',
-      title: 'Trading Signals',
-      subtitle: 'Smart alerts for key market moves',
-    },
-    {
-      image: 'https://images.unsplash.com/photo-1639762681485-074b7f938ba0?w=400&h=180&fit=crop',
-      title: 'Risk Management',
-      subtitle: 'Protect your portfolio with pro tools',
-    },
-  ]
+  // Promo carousel: fetch once on mount (no polling)
+  const [promoSlides, setPromoSlides] = useState<PromotionSlidePublic[]>([])
+  const [promoLoading, setPromoLoading] = useState(true)
+  const [promoError, setPromoError] = useState(false)
   const [promoSlideIndex, setPromoSlideIndex] = useState(0)
   useEffect(() => {
+    let cancelled = false
+    getPromotionSlides()
+      .then((data) => {
+        if (!cancelled) setPromoSlides(Array.isArray(data) ? data : [])
+      })
+      .catch(() => {
+        if (!cancelled) setPromoError(true)
+      })
+      .finally(() => {
+        if (!cancelled) setPromoLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  useEffect(() => {
+    setPromoSlideIndex((i) => (promoSlides.length ? Math.min(i, promoSlides.length - 1) : 0))
+  }, [promoSlides.length])
+  useEffect(() => {
+    if (promoSlides.length <= 1) return
     const t = setInterval(() => {
-      setPromoSlideIndex((i) => (i + 1) % PROMO_SLIDES.length)
+      setPromoSlideIndex((i) => (i + 1) % promoSlides.length)
     }, 4000)
     return () => clearInterval(t)
-  }, [])
+  }, [promoSlides.length])
 
   // Live current time (local timezone)
   const [currentTimeLabel, setCurrentTimeLabel] = useState(() => {
@@ -1538,61 +1546,83 @@ export function RightTradingPanel() {
             )}
           </div>
 
-          {/* Promo carousel - trading imagery, static dummy slides */}
-          <div className="p-4">
-            <div className="relative rounded-xl border border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-black/10">
-              <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 px-2 py-1.5">
-                <span className="text-[10px] font-bold text-white/70 uppercase tracking-widest">Promoted</span>
-                <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent">New</span>
-              </div>
-              <div className="relative aspect-[400/180] w-full overflow-hidden bg-slate-800">
-                {PROMO_SLIDES.map((slide, idx) => (
-                  <div
-                    key={idx}
-                    className={cn(
-                      'absolute inset-0 transition-opacity duration-500',
-                      idx === promoSlideIndex ? 'opacity-100 z-0' : 'opacity-0 z-0 pointer-events-none'
-                    )}
-                  >
-                    <img
-                      src={slide.image}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-                    <div className="absolute bottom-0 left-0 right-0 p-3 text-left">
-                      <h3 className="text-sm font-bold text-white drop-shadow-sm">{slide.title}</h3>
-                      <p className="text-[11px] text-white/80 mt-0.5">{slide.subtitle}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex items-center justify-between gap-2 px-3 py-2.5 bg-surface-2/40 border-t border-white/5">
-                <div className="flex items-center gap-1.5">
-                  {PROMO_SLIDES.map((_, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      aria-label={`Go to slide ${idx + 1}`}
-                      onClick={() => setPromoSlideIndex(idx)}
-                      className={cn(
-                        'h-1.5 rounded-full transition-all',
-                        idx === promoSlideIndex ? 'w-4 bg-accent' : 'w-1.5 bg-white/30 hover:bg-white/50'
-                      )}
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 rounded-lg bg-accent/15 hover:bg-accent/25 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent transition-colors"
-                  onClick={() => toast('Coming soon')}
-                >
-                  Learn more
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
+          {/* Promo carousel - from API (fetch once on mount, no polling) */}
+          {promoLoading && (
+            <div className="p-4">
+              <div className="relative rounded-xl border border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-black/10">
+                <div className="aspect-[400/180] w-full animate-pulse bg-slate-800 rounded-xl" />
               </div>
             </div>
-          </div>
+          )}
+          {!promoLoading && !promoError && promoSlides.length > 0 && (
+            <div className="p-4">
+              <div className="relative rounded-xl border border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-black/10">
+                <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 px-2 py-1.5">
+                  <span className="text-[10px] font-bold text-white/70 uppercase tracking-widest">Promoted</span>
+                  <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent">New</span>
+                </div>
+                <div className="relative aspect-[400/180] w-full overflow-hidden bg-slate-800">
+                  {promoSlides.map((slide, idx) => (
+                    <div
+                      key={slide.id}
+                      className={cn(
+                        'absolute inset-0 transition-opacity duration-500',
+                        idx === promoSlideIndex ? 'opacity-100 z-0' : 'opacity-0 z-0 pointer-events-none'
+                      )}
+                    >
+                      <img
+                        src={slide.image_url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                      <div className="absolute bottom-0 left-0 right-0 p-3 text-left">
+                        <h3 className="text-sm font-bold text-white drop-shadow-sm">{slide.title}</h3>
+                        <p className="text-[11px] text-white/80 mt-0.5">{slide.subtitle ?? ''}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between gap-2 px-3 py-2.5 bg-surface-2/40 border-t border-white/5">
+                  <div className="flex items-center gap-1.5">
+                    {promoSlides.map((_, idx) => (
+                      <button
+                        key={promoSlides[idx]?.id ?? idx}
+                        type="button"
+                        aria-label={`Go to slide ${idx + 1}`}
+                        onClick={() => setPromoSlideIndex(idx)}
+                        className={cn(
+                          'h-1.5 rounded-full transition-all',
+                          idx === promoSlideIndex ? 'w-4 bg-accent' : 'w-1.5 bg-white/30 hover:bg-white/50'
+                        )}
+                      />
+                    ))}
+                  </div>
+                  {promoSlides[promoSlideIndex]?.link_url ? (
+                    <a
+                      href={promoSlides[promoSlideIndex].link_url!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 rounded-lg bg-accent/15 hover:bg-accent/25 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent transition-colors"
+                    >
+                      {promoSlides[promoSlideIndex].link_label || 'Learn more'}
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 rounded-lg bg-accent/15 hover:bg-accent/25 border border-accent/30 px-2.5 py-1.5 text-xs font-semibold text-accent transition-colors"
+                      onClick={() => toast('Coming soon')}
+                    >
+                      Learn more
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

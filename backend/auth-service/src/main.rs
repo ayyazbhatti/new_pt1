@@ -46,6 +46,7 @@ use routes::admin_settings::create_admin_settings_router;
 use routes::appointments::create_appointments_router;
 use routes::user_preferences::create_user_preferences_router;
 use routes::admin_appointments::create_admin_appointments_router;
+use routes::promotions::{create_promotions_public_router, create_admin_promotions_router};
 use services::order_event_handler::OrderEventHandler;
 
 #[tokio::main]
@@ -221,6 +222,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/account", routes::deposits::create_account_router(pool.clone(), deposits_state.clone()))
         .nest("/api/notifications", routes::deposits::create_notifications_router(pool.clone(), deposits_state.clone()))
         .nest("/api/user", create_user_preferences_router(pool.clone()))
+        .nest("/api/promotions", create_promotions_public_router(pool.clone()))
+        .nest("/api/admin/promotions", create_admin_promotions_router(pool.clone()))
         .nest(
             "/v1/users",
             routes::deposits::create_positions_router(pool.clone(), deposits_state.clone())

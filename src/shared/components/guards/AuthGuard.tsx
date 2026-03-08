@@ -8,17 +8,17 @@ interface AuthGuardProps {
 }
 
 export function AuthGuard({ children }: AuthGuardProps) {
-  const { isAuthenticated, isHydrated, hydrateFromStorage, user } = useAuthStore()
+  const { isAuthenticated, isHydrated, persistRehydrated, hydrateFromStorage, user } = useAuthStore()
   const location = useLocation()
 
   useEffect(() => {
-    if (!isHydrated) {
+    if (persistRehydrated && !isHydrated) {
       hydrateFromStorage()
     }
-  }, [isHydrated, hydrateFromStorage])
+  }, [persistRehydrated, isHydrated, hydrateFromStorage])
 
-  // Show loading while hydrating
-  if (!isHydrated) {
+  // Wait for persist rehydration so we don't treat the user as unauthenticated before tokens are in memory (e.g. new tab).
+  if (!persistRehydrated || !isHydrated) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-background">
         <div className="text-text-muted">Loading...</div>

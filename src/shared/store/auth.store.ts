@@ -25,6 +25,8 @@ interface AuthState {
   refreshToken: string | null
   user: User | null
   isAuthenticated: boolean
+  /** True after persist middleware has rehydrated from storage (so tokens are in memory). Not persisted. */
+  persistRehydrated: boolean
   isHydrated: boolean
   login: (email: string, password: string) => Promise<void>
   register: (data: RegisterData) => Promise<void>
@@ -59,6 +61,7 @@ export const useAuthStore = create<AuthState>()(
       refreshToken: null,
       user: null,
       isAuthenticated: false,
+      persistRehydrated: false,
       isHydrated: false,
 
       login: async (email: string, password: string) => {
@@ -258,6 +261,10 @@ export const useAuthStore = create<AuthState>()(
         if (state) {
           state.isHydrated = false
         }
+        // Signal that persist has finished so guards can safely read tokens / decide auth (avoids new-tab race).
+        setTimeout(() => {
+          useAuthStore.setState({ persistRehydrated: true })
+        }, 0)
       },
     }
   )

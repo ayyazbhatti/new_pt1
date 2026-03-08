@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, CopyPlus } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, CopyPlus, Megaphone } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -20,6 +20,7 @@ export const adminNavItems: NavItem[] = [
   { label: 'Leverage Profiles', path: '/admin/leverage-profiles', icon: Layers, permission: 'leverage_profiles:view' },
   { label: 'Symbols', path: '/admin/symbols', icon: Coins, permission: 'symbols:view' },
   { label: 'Price Markup', path: '/admin/markup', icon: TrendingUp, permission: 'markup:view' },
+  { label: 'Promotions', path: '/admin/promotions', icon: Megaphone, permission: 'promotions:view' },
   { label: 'Swap Fees', path: '/admin/swap', icon: Clock, permission: 'swap:view' },
   { label: 'Transactions', path: '/admin/transactions', icon: Receipt, permission: 'finance:view' },
   { label: 'Bonus', path: '/admin/bonus', icon: Gift, permission: 'bonus:view' },
