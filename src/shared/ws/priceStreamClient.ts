@@ -32,6 +32,9 @@ function isGatewayUrl(url: string): boolean {
   return /[:/]8090[/?]/.test(url) || /[:/]3003[/?]/.test(url) || url.includes('localhost:8090') || url.includes('localhost:3003') || (url.includes('/ws') && typeof location !== 'undefined' && url.startsWith('ws://' + location.host))
 }
 
+/** Interval (ms) for sending ping to gateway to keep connection from being marked stale (server timeout default 300s). */
+const PING_INTERVAL_MS = 60_000
+
 /** HTTP base URL for data-provider (e.g. http://localhost:3001) for GET /prices snapshot. Empty if using gateway. */
 export function getDataProviderPricesBaseUrl(): string {
   const env = typeof import.meta !== 'undefined' && (import.meta as any).env
@@ -59,6 +62,7 @@ class PriceStreamClient {
   private listeners = new Set<TickListener>()
   private reconnectAttempts = 0
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+  private pingIntervalId: ReturnType<typeof setInterval> | null = null
   private pendingSymbols: string[] = []
   private subscribedSymbols = new Set<string>()
 
@@ -89,6 +93,27 @@ class PriceStreamClient {
     return this.authToken ? getGatewayPriceWsUrl() : this.url
   }
 
+  /** Start sending ping every PING_INTERVAL_MS so gateway keeps connection alive (gateway only). */
+  private startPingLoop(): void {
+    this.stopPingLoop()
+    if (!isGatewayUrl(this.getEffectiveUrl())) return
+    this.pingIntervalId = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping' }))
+        } catch (_) {}
+      }
+    }, PING_INTERVAL_MS)
+  }
+
+  /** Stop ping timer (on close or disconnect). */
+  private stopPingLoop(): void {
+    if (this.pingIntervalId !== null) {
+      clearInterval(this.pingIntervalId)
+      this.pingIntervalId = null
+    }
+  }
+
   connect(): void {
     if (this.ws?.readyState === WebSocket.OPEN) return
     if (this.ws?.readyState === WebSocket.CONNECTING) return
@@ -117,6 +142,9 @@ class PriceStreamClient {
             if (this.pendingSymbols.length > 0) {
               this.sendSubscribe(this.pendingSymbols)
             }
+            if (isGatewayUrl(this.getEffectiveUrl())) {
+              this.startPingLoop()
+            }
           }
           if (data.type === 'tick' && data.symbol) {
             const bid = typeof data.bid === 'number' ? String(data.bid) : (data.bid ?? '')
@@ -130,6 +158,7 @@ class PriceStreamClient {
       }
       this.ws.onerror = () => {}
       this.ws.onclose = () => {
+        this.stopPingLoop()
         this.ws = null
         this.authenticated = false
         // Keep reconnecting so connection stays server-based and recovers from drops
@@ -143,6 +172,7 @@ class PriceStreamClient {
   }
 
   disconnect(): void {
+    this.stopPingLoop()
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null

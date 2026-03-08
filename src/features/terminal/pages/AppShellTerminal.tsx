@@ -90,6 +90,7 @@ export function AppShellTerminal() {
     setSymbols,
     setLoading,
     symbols,
+    selectedSymbol,
     notificationPanelOpen,
     chatPanelOpen,
     paymentPanelOpen,
@@ -200,6 +201,19 @@ export function AppShellTerminal() {
   useEffect(() => {
     setLoading(isLoading)
   }, [isLoading, setLoading])
+
+  const DEFAULT_TITLE = 'Trading UI'
+  useEffect(() => {
+    if (selectedSymbol?.code) {
+      const priceStr = selectedSymbol.numericPrice > 0 ? ` ${selectedSymbol.price}` : ''
+      document.title = `${selectedSymbol.code}${priceStr} | ${DEFAULT_TITLE}`
+    } else {
+      document.title = DEFAULT_TITLE
+    }
+    return () => {
+      document.title = DEFAULT_TITLE
+    }
+  }, [selectedSymbol?.code, selectedSymbol?.price, selectedSymbol?.numericPrice])
 
   return (
     <>
