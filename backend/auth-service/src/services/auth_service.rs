@@ -117,14 +117,17 @@ impl AuthService {
         .execute(&self.pool)
         .await?;
 
-        // Insert user
+        // Insert user (default leverage 1–500 so terminal shows "Your min – max" without admin edit)
+        const DEFAULT_MIN_LEVERAGE: i32 = 1;
+        const DEFAULT_MAX_LEVERAGE: i32 = 500;
         let user = sqlx::query_as::<_, User>(
             r#"
             INSERT INTO users (
                 email, password_hash, first_name, last_name, country,
-                role, status, email_verified, referral_code, referred_by_user_id, group_id
+                role, status, email_verified, referral_code, referred_by_user_id, group_id,
+                min_leverage, max_leverage
             )
-            VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9, $10, $11)
             RETURNING *
             "#,
         )
@@ -137,6 +140,8 @@ impl AuthService {
         .bind(&user_referral_code)
         .bind(referred_by_user_id)
         .bind(assigned_group_id)
+        .bind(DEFAULT_MIN_LEVERAGE)
+        .bind(DEFAULT_MAX_LEVERAGE)
         .fetch_one(&self.pool)
         .await?;
 
@@ -575,13 +580,16 @@ impl AuthService {
             let user_referral_code =
                 format!("REF{}", Uuid::new_v4().to_string().replace('-', "").chars().take(8).collect::<String>());
 
+            const DEFAULT_MIN_LEVERAGE: i32 = 1;
+            const DEFAULT_MAX_LEVERAGE: i32 = 500;
             let row = sqlx::query_as::<_, User>(
                 r#"
                 INSERT INTO users (
                     email, password_hash, first_name, last_name, country,
-                    role, status, email_verified, referral_code, referred_by_user_id, group_id
+                    role, status, email_verified, referral_code, referred_by_user_id, group_id,
+                    min_leverage, max_leverage
                 )
-                VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9)
+                VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9, $10, $11)
                 RETURNING *
                 "#,
             )
@@ -594,6 +602,8 @@ impl AuthService {
             .bind(&user_referral_code)
             .bind::<Option<Uuid>>(None)
             .bind(assigned_group_id)
+            .bind(DEFAULT_MIN_LEVERAGE)
+            .bind(DEFAULT_MAX_LEVERAGE)
             .fetch_optional(&self.pool)
             .await;
 

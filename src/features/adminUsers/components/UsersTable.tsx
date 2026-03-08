@@ -14,7 +14,7 @@ import { Eye, Edit, Shield, X, LogIn, Bell } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { useCanAccess, ADMIN_PAGE_PERMISSIONS } from '@/shared/utils/permissions'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType, updateUserTradingAccess, impersonateUser } from '../api/users.api'
 
 interface UsersTableProps {
@@ -179,12 +179,9 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     }
   }
 
-  const pagePermissions = ADMIN_PAGE_PERMISSIONS['/admin/users']
-
   const handleView = (user: User) => {
     openModal(`user-details-${user.id}`, <UserDetailsModal user={user} />, {
       variant: 'drawer',
-      pagePermissions,
     })
   }
 
@@ -192,7 +189,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     openModal(
       `edit-user-${user.id}`,
       <CreateEditUserModal user={user} onUserUpdate={onUserUpdate} />,
-      { title: 'Edit User', size: 'md', pagePermissions }
+      { title: 'Edit User', size: 'md' }
     )
   }
 
@@ -200,7 +197,6 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     openModal(`restrict-user-${user.id}`, <RestrictUserModal user={user} />, {
       title: 'Restrict User',
       size: 'sm',
-      pagePermissions,
     })
   }
 
@@ -208,7 +204,6 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     openModal(`send-notify-${user.id}`, <SendNotificationModal user={user} />, {
       title: 'Send notification',
       size: 'md',
-      pagePermissions,
     })
   }
 
