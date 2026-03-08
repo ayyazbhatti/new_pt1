@@ -16,6 +16,7 @@ import { PositionDetailsModal } from '../components/PositionDetailsModal'
 import { ClosePositionModal } from '../components/ClosePositionModal'
 import { ModifySltpModal } from '../components/ModifySltpModal'
 import { useAdminWebSocket } from '../hooks/useAdminWebSocket'
+import { useAdminTradingLivePrices } from '../hooks/useAdminTradingLivePrices'
 import { useDebouncedCallback } from '@/shared/hooks/useDebounce'
 import { toast } from '@/shared/components/common'
 
@@ -99,6 +100,9 @@ export function AdminTradingPage() {
 
   const ordersArray = useMemo(() => getOrdersArray(), [orders])
   const positionsArray = useMemo(() => getPositionsArray(), [positions])
+
+  // Live PnL: subscribe to price stream for position symbols (event-driven, no polling)
+  useAdminTradingLivePrices(positionsArray)
 
   return (
     <ContentShell>

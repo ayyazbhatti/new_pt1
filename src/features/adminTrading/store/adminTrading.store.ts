@@ -61,6 +61,11 @@ interface AdminTradingState {
   wsLastMessageAt: number | null
   setWsStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'authenticated') => void
   setWsLastMessageAt: (timestamp: number) => void
+
+  // Live mark prices (symbol → mid price) for Live PnL column; updated via price stream, no polling
+  liveMarkBySymbol: Record<string, number>
+  setLiveMark: (symbol: string, mark: number) => void
+  clearLiveMarks: () => void
 }
 
 const defaultFilters: TradingFilters = {
@@ -183,5 +188,16 @@ export const useAdminTradingStore = create<AdminTradingState>((set, get) => ({
   wsLastMessageAt: null,
   setWsStatus: (status) => set({ wsStatus: status }),
   setWsLastMessageAt: (timestamp) => set({ wsLastMessageAt: timestamp }),
+
+  // Live mark prices (event-driven from price stream)
+  liveMarkBySymbol: {},
+  setLiveMark: (symbol, mark) =>
+    set((state) => ({
+      liveMarkBySymbol: {
+        ...state.liveMarkBySymbol,
+        [symbol.toUpperCase()]: mark,
+      },
+    })),
+  clearLiveMarks: () => set({ liveMarkBySymbol: {} }),
 }))
 

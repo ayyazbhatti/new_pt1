@@ -12,6 +12,7 @@ import { closeAdminPosition, liquidatePosition } from '../api/positions'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
+import { computePositionPnl, computePnlPercent } from '../utils/pnl'
 
 /** Fixed column widths so header and body columns stay aligned when cells are empty */
 const COLUMN_WIDTHS = [
@@ -24,13 +25,15 @@ const COLUMN_WIDTHS = [
   '80px',  // Size
   '95px',  // Entry
   '90px',  // Mark
-  '100px', // PnL
+  '100px', // Live PnL
   '90px',  // Margin
   '85px',  // SL
   '85px',  // TP
   '85px',  // Status
   '160px', // Actions
 ]
+const TABLE_MIN_WIDTH = 1420 // sum of COLUMN_WIDTHS for horizontal scroll
+const GRID_COLUMNS = COLUMN_WIDTHS.join(' ')
 
 interface PositionsTableProps {
   positions: AdminPosition[]
@@ -38,7 +41,7 @@ interface PositionsTableProps {
 }
 
 export function PositionsTable({ positions, onPositionClick }: PositionsTableProps) {
-  const { setSelectedPositionId, setOpenModal } = useAdminTradingStore()
+  const { setSelectedPositionId, setOpenModal, liveMarkBySymbol } = useAdminTradingStore()
   const canClosePosition = useCanAccess('trading:close_position')
   const canLiquidate = useCanAccess('trading:liquidate')
 
@@ -160,10 +163,18 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
         ),
       },
       {
-        accessorKey: 'pnl',
-        header: 'PnL',
+        id: 'livePnl',
+        header: 'Live PnL',
         cell: ({ row }) => {
-          const pnl = row.original.pnl
+          const position = row.original
+          const liveMark = position.symbol ? liveMarkBySymbol[position.symbol.toUpperCase()] : undefined
+          const isLive = typeof liveMark === 'number' && Number.isFinite(liveMark)
+          const pnl = isLive
+            ? computePositionPnl(position.entryPrice, liveMark, position.size, position.side)
+            : position.pnl
+          const pnlPercent = isLive
+            ? computePnlPercent(pnl, position.marginUsed || 1)
+            : position.pnlPercent
           const isPositive = pnl >= 0
           return (
             <div>
@@ -172,7 +183,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
               </div>
               <div className={cn('text-xs', isPositive ? 'text-success' : 'text-danger')}>
                 {isPositive ? '+' : ''}
-                {row.original.pnlPercent.toFixed(2)}%
+                {pnlPercent.toFixed(2)}%
               </div>
             </div>
           )
@@ -183,7 +194,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
         header: 'Margin',
         cell: ({ row }) => (
           <span className="text-sm font-mono text-text">
-            ${row.original.marginUsed.toFixed(2)}
+            ${row.original.marginUsed.toFixed(4)}
           </span>
         ),
       },
@@ -271,7 +282,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
         },
       },
     ],
-    [handleClose, handleModifySltp, handleLiquidate, handleRowClick, canClosePosition, canLiquidate]
+    [handleClose, handleModifySltp, handleLiquidate, handleRowClick, canClosePosition, canLiquidate, liveMarkBySymbol]
   )
 
   const parentRef = useRef<HTMLDivElement>(null)
@@ -292,87 +303,74 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
 
   return (
     <div className="rounded-lg border border-border overflow-hidden">
-      {/* Header */}
-      <div className="bg-surface-2 border-b border-border sticky top-0 z-10">
-        <table className="w-full" style={{ tableLayout: 'fixed' }}>
-          <colgroup>
-            {COLUMN_WIDTHS.map((w, i) => (
-              <col key={i} style={{ width: w }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th
-                  key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
-                  className="px-4 py-3 text-left text-xs font-semibold text-text-muted uppercase tracking-wider truncate"
-                >
-                  {typeof column.header === 'string' ? column.header : '—'}
-                </th>
-              ))}
-            </tr>
-          </thead>
-        </table>
-      </div>
-
-      {/* Virtualized Body */}
+      {/* Single scroll container so header and body scroll together horizontally */}
       <div ref={parentRef} className="h-[600px] overflow-auto">
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            position: 'relative',
-          }}
-        >
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const position = positions[virtualRow.index]
-            return (
+        <div style={{ minWidth: TABLE_MIN_WIDTH, width: 'max-content' }}>
+          {/* Header row - sticky for vertical scroll only, scrolls with content horizontally */}
+          <div
+            className="sticky top-0 z-10 grid bg-surface-2 border-b border-border"
+            style={{ gridTemplateColumns: GRID_COLUMNS }}
+          >
+            {columns.map((column) => (
               <div
-                key={virtualRow.key}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-                className={cn(
-                  'border-b border-border hover:bg-surface-2/50 transition-colors cursor-pointer',
-                  'flex items-center'
-                )}
-                onClick={() => handleRowClick(position)}
+                key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
+                className="px-4 py-3 text-left text-xs font-semibold text-text-muted uppercase tracking-wider truncate"
               >
-                <table className="w-full" style={{ tableLayout: 'fixed' }}>
-                  <colgroup>
-                    {COLUMN_WIDTHS.map((w, i) => (
-                      <col key={i} style={{ width: w }} />
-                    ))}
-                  </colgroup>
-                  <tbody>
-                    <tr>
-                      {columns.map((column) => (
-                        <td
-                          key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
-                          className="px-4 py-3 truncate"
-                          onClick={(e) => {
-                            if (column.id === 'actions') {
-                              e.stopPropagation()
-                            }
-                          }}
-                        >
-                          {column.cell
-                            ? flexRender(column.cell, {
-                                row: { original: position, getValue: () => position },
-                              } as any)
-                            : '—'}
-                        </td>
-                      ))}
-                    </tr>
-                  </tbody>
-                </table>
+                {typeof column.header === 'string' ? column.header : '—'}
               </div>
-            )
-          })}
+            ))}
+          </div>
+
+          {/* Virtualized body */}
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              position: 'relative',
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const position = positions[virtualRow.index]
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    minWidth: TABLE_MIN_WIDTH,
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                    display: 'grid',
+                    gridTemplateColumns: GRID_COLUMNS,
+                    alignItems: 'center',
+                  }}
+                  className={cn(
+                    'border-b border-border hover:bg-surface-2/50 transition-colors cursor-pointer'
+                  )}
+                  onClick={() => handleRowClick(position)}
+                >
+                  {columns.map((column) => (
+                    <div
+                      key={(column as { id?: string; accessorKey?: string }).id || (column as { id?: string; accessorKey?: string }).accessorKey}
+                      className="px-4 py-3 truncate"
+                      onClick={(e) => {
+                        if (column.id === 'actions') {
+                          e.stopPropagation()
+                        }
+                      }}
+                    >
+                      {column.cell
+                        ? flexRender(column.cell, {
+                            row: { original: position, getValue: () => position },
+                          } as any)
+                        : '—'}
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>
