@@ -11,6 +11,12 @@
     font-size: 80%;
   }
 
+  /* Prevent pinch-zoom on mobile (works with viewport meta + JS gesture blocking) */
+  html {
+    touch-action: manipulation;
+    -ms-touch-action: manipulation;
+  }
+
   body {
     background-color: #0b1220;
     color: #e5e7eb;

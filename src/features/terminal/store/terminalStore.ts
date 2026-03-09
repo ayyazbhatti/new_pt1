@@ -12,6 +12,12 @@ interface TerminalStore {
   notificationPanelOpen: boolean
   paymentPanelOpen: boolean
   chatPanelOpen: boolean
+  /** Mobile: left sidebar / menu overlay open (hamburger). */
+  mobileMenuOpen: boolean
+  setMobileMenuOpen: (open: boolean) => void
+  /** Mobile: symbol live price panel overlay open (from Positions header icon). */
+  mobileSymbolPanelOpen: boolean
+  setMobileSymbolPanelOpen: (open: boolean) => void
   /** Show ask price line on chart (persisted in localStorage only). */
   chartShowAskPrice: boolean
   /** Show position open marker (dot) on chart (persisted in localStorage only). */
@@ -22,6 +28,9 @@ interface TerminalStore {
   enableLiquidationEmail: boolean
   /** Receive an email when position is closed by SL or TP (persisted in user terminal preferences). */
   enableSlTpEmail: boolean
+  /** Mobile bottom nav tab (only used when viewport < 1024px). */
+  mobileTab: 'quotes' | 'chart' | 'trade' | 'positions' | 'account' | 'history'
+  setMobileTab: (tab: 'quotes' | 'chart' | 'trade' | 'positions' | 'account' | 'history') => void
   setSymbols: (symbols: MockSymbol[]) => void
   setLoading: (loading: boolean) => void
   setSelectedSymbol: (symbol: MockSymbol) => void
@@ -32,6 +41,8 @@ interface TerminalStore {
   setNotificationPanelOpen: (open: boolean) => void
   setPaymentPanelOpen: (open: boolean) => void
   setChatPanelOpen: (open: boolean) => void
+  setMobileMenuOpen: (open: boolean) => void
+  setMobileSymbolPanelOpen: (open: boolean) => void
   setChartShowAskPrice: (show: boolean) => void
   setChartShowPositionMarker: (show: boolean) => void
   setChartShowClosedPositionMarker: (show: boolean) => void
@@ -39,6 +50,8 @@ interface TerminalStore {
   setEnableSlTpEmail: (value: boolean) => void
   getFilteredSymbols: () => MockSymbol[]
 }
+
+const STORAGE_KEY_MOBILE_TAB = 'terminal.mobileTab'
 
 const STORAGE_KEY_SELECTED_SYMBOL = 'terminal.selectedSymbolId'
 const STORAGE_KEY_CHART_SHOW_ASK = 'terminal.chartShowAskPrice'
@@ -161,6 +174,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   setPaymentPanelOpen: (open) => set({ paymentPanelOpen: open }),
   chatPanelOpen: false,
   setChatPanelOpen: (open) => set({ chatPanelOpen: open }),
+  mobileMenuOpen: false,
+  setMobileMenuOpen: (open) => set({ mobileMenuOpen: open }),
+  mobileSymbolPanelOpen: false,
+  setMobileSymbolPanelOpen: (open) => set({ mobileSymbolPanelOpen: open }),
   chartShowAskPrice: getChartShowAskPriceFromStorage(),
   setChartShowAskPrice: (show) => {
     try {
@@ -195,6 +212,19 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       localStorage.setItem(STORAGE_KEY_ENABLE_SLTP_EMAIL, String(value))
     } catch {}
     set({ enableSlTpEmail: value })
+  },
+  mobileTab: (() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_MOBILE_TAB)
+      if (s === 'quotes' || s === 'chart' || s === 'trade' || s === 'positions' || s === 'account' || s === 'history') return s
+    } catch {}
+    return 'chart'
+  })(),
+  setMobileTab: (tab) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_MOBILE_TAB, tab)
+    } catch {}
+    set({ mobileTab: tab })
   },
   getFilteredSymbols: () => {
     const { searchQuery, activeTab, watchlist, symbols } = get()

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useMediaQuery } from '@/shared/hooks'
 import { TerminalLayout } from '../layout/TerminalLayout'
 import { LeftSidebar } from '../components/LeftSidebar'
 import { CenterWorkspace } from '../components/CenterWorkspace'
@@ -7,6 +8,11 @@ import { SettingsPanel } from '../components/SettingsPanel'
 import { NotificationsPanel } from '../components/NotificationsPanel'
 import { PaymentPanel } from '../components/PaymentPanel'
 import { ChatPanel } from '../components/ChatPanel'
+import { TerminalAccountView } from '../components/TerminalAccountView'
+import { TerminalHistoryView } from '../components/TerminalHistoryView'
+import { TerminalPositionsView } from '../components/TerminalPositionsView'
+import { TerminalMobileMenuPage } from '../components/TerminalMobileMenuPage'
+import { TerminalSymbolsPage } from '../components/TerminalSymbolsPage'
 import { useTerminalStore } from '../store'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
@@ -95,6 +101,11 @@ export function AppShellTerminal() {
     chatPanelOpen,
     paymentPanelOpen,
     settingsPanelOpen,
+    mobileMenuOpen,
+    setMobileMenuOpen,
+    mobileSymbolPanelOpen,
+    setMobileSymbolPanelOpen,
+    setMobileTab,
     setChartShowAskPrice,
     setChartShowPositionMarker,
     setChartShowClosedPositionMarker,
@@ -215,9 +226,64 @@ export function AppShellTerminal() {
     }
   }, [selectedSymbol?.code, selectedSymbol?.price, selectedSymbol?.numericPrice])
 
+  const isDesktopMedia = useMediaQuery('(min-width: 1024px)')
+  // Sync with actual width so mobile nav shows on narrow viewports (handles mobile browser quirks)
+  const [isNarrowViewport, setIsNarrowViewport] = useState(
+    () => (typeof window !== 'undefined' ? window.innerWidth < 1024 : true)
+  )
+  useEffect(() => {
+    const check = () => setIsNarrowViewport(window.innerWidth < 1024)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+  const isDesktop = isDesktopMedia && !isNarrowViewport
+  const mobileTab = useTerminalStore((s) => s.mobileTab)
+
+  const mobileMain =
+    mobileTab === 'quotes' ? (
+      <TerminalSymbolsPage
+        onClose={() => setMobileTab('chart')}
+        onOpenMenu={() => setMobileTab('account')}
+      />
+    ) : mobileTab === 'chart' ? (
+      <CenterWorkspace hideBottomDock />
+    ) : mobileTab === 'trade' ? (
+      <RightTradingPanel />
+    ) : mobileTab === 'positions' ? (
+      <TerminalPositionsView />
+    ) : mobileTab === 'history' ? (
+      <TerminalHistoryView />
+    ) : (
+      <TerminalAccountView onOpenDeposit={() => setDepositModalOpen(true)} />
+    )
+
   return (
     <>
+      {/* Mobile: full-screen menu page when hamburger opens (not the symbol panel) */}
+      {!isDesktop && mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <TerminalMobileMenuPage
+            onClose={() => setMobileMenuOpen(false)}
+            onOpenDeposit={() => setDepositModalOpen(true)}
+          />
+        </div>
+      )}
+      {/* Mobile: full-screen live prices page when symbol icon is clicked in Positions header */}
+      {!isDesktop && mobileSymbolPanelOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <TerminalSymbolsPage
+            onClose={() => setMobileSymbolPanelOpen(false)}
+            onOpenMenu={() => {
+              setMobileSymbolPanelOpen(false)
+              setMobileTab('account')
+            }}
+          />
+        </div>
+      )}
       <TerminalLayout
+        isMobile={!isDesktop}
+        mobileMain={!isDesktop ? mobileMain : undefined}
         left={
           <LeftSidebar
             onOpenDeposit={() => setDepositModalOpen(true)}

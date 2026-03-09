@@ -1,9 +1,9 @@
-import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity, Loader2, Clock, Gauge, ArrowRight, User } from 'lucide-react'
+import { X, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Activity, Loader2, Clock, Gauge, ArrowRight, User, Search, Check } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Segmented } from '@/shared/ui'
 import { Checkbox } from '@/shared/ui'
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { cn } from '@/shared/utils'
 import { useTerminalStore } from '../store'
 import { toast } from '@/shared/components/common'
@@ -127,8 +127,38 @@ export function RightTradingPanel() {
   const [symbolDetailsOpen, setSymbolDetailsOpen] = useState(() => loadTradingPanelState().symbolDetailsOpen || false)
   const [userDetailsOpen, setUserDetailsOpen] = useState(() => loadTradingPanelState().userDetailsOpen || false)
   const [leverageDetailsOpen, setLeverageDetailsOpen] = useState(() => loadTradingPanelState().leverageDetailsOpen || false)
+  const [symbolDropdownOpen, setSymbolDropdownOpen] = useState(false)
+  const [symbolSearchQuery, setSymbolSearchQuery] = useState('')
+  const symbolDropdownRef = useRef<HTMLDivElement>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
+
+  // Filter symbols for dropdown by search (code or price)
+  const filteredSymbolsForDropdown = useMemo(() => {
+    if (!symbolSearchQuery.trim()) return symbols
+    const q = symbolSearchQuery.toLowerCase().trim()
+    return symbols.filter(
+      (s) =>
+        s.code.toLowerCase().includes(q) ||
+        s.price.toLowerCase().includes(q)
+    )
+  }, [symbols, symbolSearchQuery])
+
+  // Close symbol dropdown when clicking outside
+  useEffect(() => {
+    if (!symbolDropdownOpen) return
+    const handleClick = (e: MouseEvent) => {
+      if (symbolDropdownRef.current && !symbolDropdownRef.current.contains(e.target as Node)) {
+        setSymbolDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('touchstart', handleClick, { passive: true })
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('touchstart', handleClick)
+    }
+  }, [symbolDropdownOpen])
   
   // Save state to localStorage whenever it changes (keeps tab and values after reload)
   useEffect(() => {
@@ -800,26 +830,67 @@ export function RightTradingPanel() {
           </div>
 
           {/* Symbol */}
-          <div className="mb-4">
+          <div className="mb-4 relative" ref={symbolDropdownRef}>
             <label className="text-xs font-semibold text-muted mb-2 block uppercase tracking-wider">Symbol</label>
-            <select
-              value={selectedSymbol?.code || ''}
-              onChange={(e) => {
-                const symbol = symbols.find((s) => s.code === e.target.value)
-                if (symbol) setSelectedSymbol(symbol)
-              }}
-              className="w-full rounded-lg bg-surface-2 border border-white/5 px-3 py-2.5 text-sm font-medium text-text focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200 hover:border-accent/30"
-            >
-              {symbols.length === 0 ? (
-                <option value="">No symbols available</option>
-              ) : (
-                symbols.map((symbol) => (
-                  <option key={symbol.id} value={symbol.code}>
-                    {symbol.code}
-                  </option>
-                ))
+            <button
+              type="button"
+              onClick={() => setSymbolDropdownOpen((o) => !o)}
+              className={cn(
+                'w-full rounded-lg bg-surface-2 border px-3 py-2.5 text-sm font-medium text-text focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200 hover:border-accent/30 flex items-center justify-between gap-2',
+                symbolDropdownOpen ? 'border-accent/50' : 'border-white/5'
               )}
-            </select>
+            >
+              <span className="truncate">{selectedSymbol?.code || 'Select symbol'}</span>
+              <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted transition-transform', symbolDropdownOpen && 'rotate-180')} />
+            </button>
+            {symbolDropdownOpen && (
+              <div
+                className="absolute left-0 right-0 top-full mt-1 z-50 rounded-lg bg-surface-2 border border-white/10 shadow-xl shadow-black/40 overflow-hidden flex flex-col"
+                style={{ maxHeight: 'min(60vh, 320px)' }}
+              >
+                <div className="shrink-0 p-2 border-b border-white/5">
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
+                    <Input
+                      placeholder="Search symbols..."
+                      value={symbolSearchQuery}
+                      onChange={(e) => setSymbolSearchQuery(e.target.value)}
+                      className={cn(
+                        'pl-8 h-9 text-sm bg-white/5 border-white/10 text-text placeholder:text-muted',
+                        'focus:border-accent/50 focus:ring-1 focus:ring-accent/20'
+                      )}
+                      autoFocus
+                    />
+                  </div>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  {filteredSymbolsForDropdown.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-muted text-sm">No symbols match</div>
+                  ) : (
+                    filteredSymbolsForDropdown.map((symbol) => (
+                      <button
+                        key={symbol.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedSymbol(symbol)
+                          setSymbolDropdownOpen(false)
+                          setSymbolSearchQuery('')
+                        }}
+                        className={cn(
+                          'w-full px-3 py-2.5 text-left text-sm font-medium flex items-center justify-between gap-2 transition-colors',
+                          selectedSymbol?.id === symbol.id
+                            ? 'bg-accent/15 text-accent'
+                            : 'text-text hover:bg-white/5'
+                        )}
+                      >
+                        <span className="truncate">{symbol.code}</span>
+                        {selectedSymbol?.id === symbol.id ? <Check className="h-4 w-4 shrink-0 text-accent" /> : null}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Live Quote - Enhanced Professional Design */}

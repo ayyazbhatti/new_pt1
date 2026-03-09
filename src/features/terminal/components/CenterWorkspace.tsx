@@ -23,7 +23,14 @@ function getInitialToolbarState(): PersistedChartToolbar {
   return initialToolbarState
 }
 
-export function CenterWorkspace() {
+export interface CenterWorkspaceProps {
+  /** When true (e.g. mobile Chart tab), hide BottomDock so chart gets full height. */
+  hideBottomDock?: boolean
+  /** When true (e.g. mobile Positions tab), render only BottomDock in a full-height container. */
+  mobileShowOnlyBottomDock?: boolean
+}
+
+export function CenterWorkspace({ hideBottomDock = false, mobileShowOnlyBottomDock = false }: CenterWorkspaceProps = {}) {
   const [chartType, setChartType] = useState<ChartTypeKey>(() => getInitialToolbarState().chartType)
   const [timeframe, setTimeframe] = useState<TimeframeKey>(() => getInitialToolbarState().timeframe)
   const [indicators, setIndicators] = useState<ChartIndicator[]>(() => getInitialToolbarState().indicators)
@@ -72,6 +79,16 @@ export function CenterWorkspace() {
     a.href = url
     a.download = `chart-${Date.now()}.${ext}`
     a.click()
+  }
+
+  if (mobileShowOnlyBottomDock) {
+    return (
+      <div className="h-full min-h-0 overflow-hidden flex flex-col bg-background">
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <BottomDock fullHeight />
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -126,7 +143,7 @@ export function CenterWorkspace() {
         settings={chartSettings}
         onSettingsChange={setChartSettings}
       />
-      {!isChartFullscreen && (
+      {!isChartFullscreen && !hideBottomDock && (
         <div className="shrink-0">
           <BottomDock />
         </div>

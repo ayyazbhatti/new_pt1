@@ -1,4 +1,4 @@
-import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, AlertCircle, Maximize2, Minimize2 } from 'lucide-react'
+import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, AlertCircle, Maximize2, Minimize2, Search, MoreVertical } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/shared/utils'
@@ -24,11 +24,20 @@ import { useWalletStore } from '@/shared/store/walletStore'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
+import { useTerminalStore } from '../store/terminalStore'
 
-export function BottomDock() {
+export interface BottomDockProps {
+  /** When true (e.g. mobile Positions tab), dock fills available height instead of fixed 300px. */
+  fullHeight?: boolean
+  /** When set, only show content for this tab (no tab strip). Used by TerminalPositionsView. */
+  standaloneTab?: 'positions' | 'orders'
+}
+
+export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProps = {}) {
   // Valid tab IDs
   const validTabs = ['positions', 'orders', 'order-history', 'position-history']
-  
+  const effectiveTab = standaloneTab ?? null
+
   // Load active tab from localStorage, default to 'positions'
   // Validate that the saved tab is one of the valid tabs
   const [activeTab, setActiveTab] = useState(() => {
@@ -62,6 +71,11 @@ export function BottomDock() {
   const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
   const canClosePosition = tradingAccess !== 'disabled'
   const [formulaTooltip, setFormulaTooltip] = useState<{ formula: string; rect: DOMRect } | null>(null)
+  const [expandedPositionId, setExpandedPositionId] = useState<string | null>(null)
+  const [actionMenuPositionId, setActionMenuPositionId] = useState<string | null>(null)
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longPressHandledRef = useRef(false)
+  const setMobileTab = useTerminalStore((s) => s.setMobileTab)
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -103,11 +117,38 @@ export function BottomDock() {
   // Subscribe to live price stream for position symbols
   const { prices: livePrices } = usePriceStream(positionSymbols)
 
+  // Open positions with live price and PnL for table and mobile cards
+  const openPositionsWithComputed = useMemo(() => {
+    const open = positions
+      .filter(p => p.status === 'OPEN')
+      .sort((a, b) => {
+        const aTime = a.opened_at || a.updated_at || 0
+        const bTime = b.opened_at || b.updated_at || 0
+        return bTime - aTime
+      })
+    return open.map(pos => {
+      const sizeNum = parseFloat(pos.size || '0')
+      const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
+      const symbolKey = normalizeSymbolKey(pos.symbol)
+      let priceData = livePrices.get(symbolKey)
+      if (!priceData) priceData = livePrices.get(pos.symbol.toUpperCase())
+      const livePrice = priceData
+        ? (pos.side === 'LONG' ? parseFloat(priceData.bid) : parseFloat(priceData.ask))
+        : null
+      const unrealizedPnl = livePrice !== null
+        ? (pos.side === 'LONG'
+            ? (livePrice - entryPrice) * sizeNum
+            : (entryPrice - livePrice) * sizeNum)
+        : parseFloat(pos.unrealized_pnl || '0')
+      return { position: pos, livePrice, unrealizedPnl, sizeNum, entryPrice }
+    })
+  }, [positions, livePrices])
+
   const tabs = [
     { id: 'positions', label: 'Positions' },
     { id: 'orders', label: 'Orders' },
-    { id: 'order-history', label: 'Order History' },
-    { id: 'position-history', label: 'Position History' },
+    { id: 'order-history', label: 'O. History' },
+    { id: 'position-history', label: 'P. History' },
   ]
   
   // Handler to change tab and persist to localStorage
@@ -451,19 +492,22 @@ export function BottomDock() {
     }
   }, [])
 
+  const tabForContent = effectiveTab ?? activeTab
+
   // Fetch data when tab changes - silent for positions so no skeleton flash
   useEffect(() => {
-    if (activeTab === 'positions') {
+    const tab = effectiveTab ?? activeTab
+    if (tab === 'positions') {
       fetchPositions(true)
-    } else if (activeTab === 'orders') {
+    } else if (tab === 'orders') {
       fetchOrders()
-    } else if (activeTab === 'order-history') {
+    } else if (tab === 'order-history') {
       setIsLoading(true)
       fetchFilledOrders().finally(() => setIsLoading(false))
-    } else if (activeTab === 'position-history') {
+    } else if (tab === 'position-history') {
       fetchPositions(true)
     }
-  }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
+  }, [activeTab, effectiveTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
   // WebSocket handles real-time updates, no polling needed
 
@@ -472,45 +516,47 @@ export function BottomDock() {
       ref={bottomDockRef}
       className={cn(
         'min-h-0 overflow-hidden flex flex-col border-t border-white/5 bg-gradient-to-b from-surface to-surface-2/30 shadow-lg shadow-black/10',
-        isBottomDockFullscreen ? 'h-screen' : 'h-[300px]'
+        isBottomDockFullscreen ? 'h-screen' : fullHeight ? 'flex-1 min-h-0' : 'h-[300px]'
       )}
     >
-      {/* Tab Strip + Toolbar - Enhanced */}
-      <div className="shrink-0 h-12 border-b border-white/5 flex items-center justify-between px-4 bg-gradient-to-r from-white/[0.02] to-transparent">
-        <div className="flex items-center gap-1">
+      {/* Tab Strip + Toolbar: hide when standaloneTab is set (parent shows sub-tabs) */}
+      {!effectiveTab && (
+      <div className="shrink-0 min-h-12 border-b border-white/5 flex items-center justify-between gap-2 px-3 sm:px-4 bg-gradient-to-r from-white/[0.02] to-transparent">
+        <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-thin py-2">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => handleTabChange(tab.id)}
               className={cn(
-                'px-4 py-2 text-xs font-bold rounded-lg transition-all duration-200 relative uppercase tracking-wider',
+                'shrink-0 px-3 py-2 text-xs font-bold transition-all duration-200 uppercase tracking-wider whitespace-nowrap relative',
+                'md:rounded-lg',
                 activeTab === tab.id
-                  ? 'bg-accent text-white shadow-md shadow-accent/20'
-                  : 'text-muted hover:text-text hover:bg-surface-2/50'
+                  ? 'text-white border-b-2 border-accent pb-2 -mb-px md:bg-accent md:shadow-md md:shadow-accent/20 md:border-b-0 md:pb-2'
+                  : 'text-muted hover:text-text border-b-2 border-transparent md:border-b-0 md:hover:bg-surface-2/50'
               )}
             >
               {tab.label}
               {activeTab === tab.id && (
-                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white"></div>
+                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white hidden md:block" />
               )}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 shrink-0">
           {activeTab === 'positions' && (
             <button
               onClick={() => setCloseAllDialogOpen(true)}
               disabled={!canClosePosition || positions.filter(p => p.status === 'OPEN').length === 0}
-              className="px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5 border border-transparent disabled:opacity-50 disabled:pointer-events-none"
+              className="px-2 py-2 sm:px-3 sm:py-1.5 text-xs font-semibold text-danger hover:bg-danger/20 rounded-lg transition-all duration-200 flex items-center gap-1.5 border border-transparent disabled:opacity-50 disabled:pointer-events-none min-h-[44px] sm:min-h-0"
               title={!canClosePosition ? 'Trading is disabled' : 'Close All Positions'}
             >
-              <XCircle className="h-3.5 w-3.5" />
-              <span>Close All</span>
+              <XCircle className="h-4 w-4 sm:h-3.5 sm:w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Close All</span>
             </button>
           )}
           <button
             onClick={() => toast('Column customization coming soon')}
-            className="px-3 py-1.5 text-xs font-semibold text-text hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5"
+            className="hidden sm:flex px-3 py-1.5 text-xs font-semibold text-text hover:bg-surface-2 rounded-lg transition-all duration-200 items-center gap-1.5"
             title="Customize Columns"
           >
             <Columns className="h-3.5 w-3.5" />
@@ -518,7 +564,7 @@ export function BottomDock() {
           </button>
           <button
             onClick={() => toast.success('Data exported successfully')}
-            className="px-3 py-1.5 text-xs font-semibold text-text hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-1.5"
+            className="hidden sm:flex px-3 py-1.5 text-xs font-semibold text-text hover:bg-surface-2 rounded-lg transition-all duration-200 items-center gap-1.5"
             title="Export Data"
           >
             <Download className="h-3.5 w-3.5" />
@@ -527,7 +573,7 @@ export function BottomDock() {
           <button
             type="button"
             onClick={toggleBottomDockFullscreen}
-            className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 shrink-0"
+            className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"
             title={isBottomDockFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
           >
             {isBottomDockFullscreen ? (
@@ -538,10 +584,11 @@ export function BottomDock() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Table */}
       <div className="flex-1 min-h-0 overflow-auto scrollbar-thin">
-        {activeTab === 'positions' && (
+        {tabForContent === 'positions' && (
           <>
             {isLoading ? (
               <div className="p-4 space-y-3">
@@ -562,15 +609,265 @@ export function BottomDock() {
                   </div>
                 ))}
               </div>
-            ) : positions.length === 0 && filledOrders.length === 0 ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center text-muted">
-                  <Package className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <div className="text-sm font-medium">No open positions</div>
-                  <div className="text-xs mt-1">Open a position to see it here</div>
-                </div>
-              </div>
             ) : (
+              <>
+                {/* Mobile: account summary + Positions sub-header + list (flat list like reference) */}
+                <div className="md:hidden overflow-auto flex-1 min-h-0 p-3 space-y-4">
+                  {/* Account Summary - flat label/value list, no card border */}
+                  <section className="space-y-2 py-1">
+                    {[
+                      { label: 'Balance', value: accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—', valueClass: 'text-text' },
+                      { label: 'Equity', value: accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—', valueClass: 'text-text' },
+                      { label: 'Margin', value: accountSummary != null ? `$${(accountSummary.marginLevel === 'inf' ? 0 : accountSummary.marginUsed).toFixed(2)}` : '—', valueClass: 'text-text' },
+                      { label: 'Free Margin', value: accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—', valueClass: 'text-text' },
+                      { label: 'Margin Level (%)', value: accountSummary != null ? (accountSummary.marginLevel === 'inf' ? '∞' : `${accountSummary.marginLevel}%`) : '—', valueClass: 'text-accent font-semibold' },
+                      { label: 'Total Positions', value: String(openPositionsWithComputed.length), valueClass: 'text-text' },
+                    ].map(({ label, value, valueClass }) => (
+                      <div key={label} className="flex justify-between items-center text-sm">
+                        <span className="text-muted">{label}</span>
+                        <span className={cn('font-medium', valueClass)}>{value}</span>
+                      </div>
+                    ))}
+                  </section>
+                  {/* Positions sub-header with search and options */}
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-text">Positions</h3>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => toast('Search coming soon')}
+                        className="p-2 rounded-lg hover:bg-surface-2 text-muted hover:text-text min-h-[44px] min-w-[44px] flex items-center justify-center"
+                        aria-label="Search positions"
+                      >
+                        <Search className="h-5 w-5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toast('Options coming soon')}
+                        className="p-2 rounded-lg hover:bg-surface-2 text-muted hover:text-text min-h-[44px] min-w-[44px] flex items-center justify-center"
+                        aria-label="More options"
+                      >
+                        <MoreVertical className="h-5 w-5" />
+                      </button>
+                    </div>
+                  </div>
+                  {openPositionsWithComputed.length === 0 ? (
+                    <div className="text-center text-muted py-8 text-sm">No positions found</div>
+                  ) : (
+                    <>
+                  {openPositionsWithComputed.map(({ position: pos, livePrice, unrealizedPnl, sizeNum, entryPrice }) => {
+                    const openEditPositionPopup = () => {
+                      const currentPos = positions.find(p => p.id === pos.id)
+                      if (!currentPos) return
+                      setEditingPosition(currentPos)
+                      setEditItem({ type: 'position', id: pos.id })
+                      const slPrice = currentPos.sl && currentPos.sl !== 'null' ? currentPos.sl : ''
+                      const tpPrice = currentPos.tp && currentPos.tp !== 'null' ? currentPos.tp : ''
+                      setEditSl(slPrice)
+                      setEditTp(tpPrice)
+                      if (slPrice) {
+                        const entry = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                        const size = parseFloat(currentPos.size || '0')
+                        const slNum = parseFloat(slPrice)
+                        const slAmount = currentPos.side === 'LONG' ? (entry - slNum) * size : (slNum - entry) * size
+                        setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
+                      } else setEditSlAmount('')
+                      if (tpPrice) {
+                        const entry = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                        const size = parseFloat(currentPos.size || '0')
+                        const tpNum = parseFloat(tpPrice)
+                        const tpAmount = currentPos.side === 'LONG' ? (tpNum - entry) * size : (entry - tpNum) * size
+                        setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
+                      } else setEditTpAmount('')
+                      setEditDialogOpen(true)
+                    }
+                    const ts = pos.opened_at != null ? (pos.opened_at < 1e12 ? pos.opened_at * 1000 : pos.opened_at) : Date.now()
+                    const openedAtStr = new Date(ts).toLocaleString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
+                    const d = new Date(ts)
+                    const openedAtLongStr = `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} at ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })}`
+                    const currentStr = livePrice != null ? livePrice.toFixed(5) : '—'
+                    const isExpanded = expandedPositionId === pos.id
+                    const marginNum = parseFloat(pos.margin || '0')
+                    const hasValidSl = pos.sl != null && String(pos.sl).trim() !== '' && pos.sl !== 'null' && !Number.isNaN(Number(pos.sl))
+                    const hasValidTp = pos.tp != null && String(pos.tp).trim() !== '' && pos.tp !== 'null' && !Number.isNaN(Number(pos.tp))
+                    const handleRowClick = () => {
+                      if (longPressHandledRef.current) {
+                        longPressHandledRef.current = false
+                        return
+                      }
+                      setExpandedPositionId((prev) => (prev === pos.id ? null : pos.id))
+                    }
+                    const handleTouchStart = () => {
+                      longPressHandledRef.current = false
+                      longPressTimerRef.current = setTimeout(() => {
+                        longPressTimerRef.current = null
+                        longPressHandledRef.current = true
+                        window.getSelection()?.removeAllRanges()
+                        setActionMenuPositionId(pos.id)
+                      }, 500)
+                    }
+                    const handleTouchEnd = () => {
+                      if (longPressTimerRef.current) {
+                        clearTimeout(longPressTimerRef.current)
+                        longPressTimerRef.current = null
+                      }
+                    }
+                    const handleContextMenu = (e: React.MouseEvent) => {
+                      e.preventDefault()
+                      setActionMenuPositionId(pos.id)
+                    }
+                    return (
+                      <div
+                        key={pos.id}
+                        className="border-b border-white/10 py-3 flex flex-col gap-1"
+                      >
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={handleRowClick}
+                          onKeyDown={(e) => e.key === 'Enter' && handleRowClick()}
+                          onTouchStart={handleTouchStart}
+                          onTouchEnd={handleTouchEnd}
+                          onTouchMove={handleTouchEnd}
+                          onContextMenu={handleContextMenu}
+                          className="flex items-start justify-between gap-3 cursor-pointer active:opacity-90 select-none [-webkit-touch-callout:none]"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-text">
+                              <span className="font-mono">{pos.symbol}</span>
+                              <span className="font-bold text-text ml-1">{pos.side === 'LONG' ? 'Buy' : 'Sell'}</span>
+                              <span className="font-bold text-text ml-1">{sizeNum.toFixed(8)}</span>
+                            </div>
+                            <div className="text-xs text-muted font-mono mt-0.5">
+                              {entryPrice.toFixed(5)} → {currentStr}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-[11px] text-muted">{openedAtStr}</div>
+                            <div className={cn('text-sm font-semibold', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
+                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(2)}
+                            </div>
+                          </div>
+                        </div>
+                        {isExpanded && (
+                          <div className="pt-3 pb-2 space-y-2 border-t border-white/5 mt-2" onClick={(e) => e.stopPropagation()}>
+                            <div className={cn('text-lg font-bold', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
+                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(2)}
+                            </div>
+                            <div className="text-xs text-muted font-mono">
+                              {entryPrice.toFixed(2)} → {livePrice != null ? livePrice.toFixed(2) : '—'}
+                            </div>
+                            <div className="text-xs text-muted">{openedAtLongStr}</div>
+                            <div className="flex justify-between gap-4 text-xs">
+                              <div className="space-y-1 text-muted">
+                                {hasValidSl && <div>S/L {Number(pos.sl).toFixed(2)}</div>}
+                                <div>Margin {Number.isFinite(marginNum) ? marginNum.toFixed(2) : '—'}</div>
+                              </div>
+                              <div className="space-y-1 text-muted text-right">
+                                {hasValidTp && <div>T/P {Number(pos.tp).toFixed(2)}</div>}
+                                <div className="font-mono">PID {pos.id.slice(0, 8)}</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 pt-2">
+                              <button
+                                onClick={openEditPositionPopup}
+                                className="flex-1 min-h-[40px] flex items-center justify-center gap-2 rounded-lg bg-accent/20 text-accent font-semibold text-xs"
+                              >
+                                <Edit className="h-4 w-4" />
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (!canClosePosition) return
+                                  setClosePositionId(pos.id)
+                                  setClosePositionDialogOpen(true)
+                                }}
+                                disabled={!canClosePosition}
+                                className="flex-1 min-h-[40px] flex items-center justify-center gap-2 rounded-lg bg-danger/20 text-danger font-semibold text-xs disabled:opacity-50 disabled:pointer-events-none"
+                              >
+                                <X className="h-4 w-4" />
+                                Close
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {openPositionsWithComputed.length > 0 && (
+                    <div className="text-center text-muted text-xs py-3">No more data</div>
+                  )}
+                    </>
+                  )}
+                </div>
+                {/* Full-width action menu popup (long-press or right-click on position) - mobile only */}
+                {actionMenuPositionId && (() => {
+                  const menuPosition = positions.find((p) => p.id === actionMenuPositionId)
+                  if (!menuPosition) return null
+                  const openEditForMenu = () => {
+                    setActionMenuPositionId(null)
+                    setEditingPosition(menuPosition)
+                    setEditItem({ type: 'position', id: menuPosition.id })
+                    const slPrice = menuPosition.sl && menuPosition.sl !== 'null' ? menuPosition.sl : ''
+                    const tpPrice = menuPosition.tp && menuPosition.tp !== 'null' ? menuPosition.tp : ''
+                    setEditSl(slPrice)
+                    setEditTp(tpPrice)
+                    if (slPrice) {
+                      const entry = parseFloat(menuPosition.avg_price || menuPosition.entry_price || '0')
+                      const size = parseFloat(menuPosition.size || '0')
+                      const slNum = parseFloat(slPrice)
+                      const slAmount = menuPosition.side === 'LONG' ? (entry - slNum) * size : (slNum - entry) * size
+                      setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
+                    } else setEditSlAmount('')
+                    if (tpPrice) {
+                      const entry = parseFloat(menuPosition.avg_price || menuPosition.entry_price || '0')
+                      const size = parseFloat(menuPosition.size || '0')
+                      const tpNum = parseFloat(tpPrice)
+                      const tpAmount = menuPosition.side === 'LONG' ? (tpNum - entry) * size : (entry - tpNum) * size
+                      setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
+                    } else setEditTpAmount('')
+                    setEditDialogOpen(true)
+                  }
+                  const actions = [
+                    { label: 'Close position', onClick: () => { setActionMenuPositionId(null); setClosePositionId(menuPosition.id); setClosePositionDialogOpen(true); }, disabled: !canClosePosition },
+                    { label: 'Modify position', onClick: () => { setActionMenuPositionId(null); openEditForMenu(); } },
+                    { label: 'New order', onClick: () => { setActionMenuPositionId(null); setMobileTab('trade'); } },
+                    { label: 'Chart', onClick: () => { setActionMenuPositionId(null); setMobileTab('chart'); } },
+                    { label: 'Bulk Operations...', onClick: () => { setActionMenuPositionId(null); toast('Bulk operations coming soon'); } },
+                  ]
+                  return createPortal(
+                    <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
+                      <div className="absolute inset-0 bg-black/50" onClick={() => setActionMenuPositionId(null)} aria-hidden />
+                      <div className="relative rounded-t-xl border-t border-white/10 bg-surface shadow-xl safe-area-pb">
+                        <div className="divide-y divide-white/10">
+                          {actions.map(({ label, onClick, disabled }) => (
+                            <button
+                              key={label}
+                              type="button"
+                              onClick={onClick}
+                              disabled={disabled}
+                              className="w-full py-4 px-4 text-left text-sm font-medium text-text hover:bg-white/5 active:bg-white/10 disabled:opacity-50 disabled:pointer-events-none"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )
+                })()}
+                {/* Desktop: table or empty state */}
+                <div className="hidden md:block overflow-auto flex-1 min-h-0">
+                  {positions.length === 0 && filledOrders.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center text-muted">
+                        <Package className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                        <div className="text-sm font-medium">No open positions</div>
+                        <div className="text-xs mt-1">Open a position to see it here</div>
+                      </div>
+                    </div>
+                  ) : (
               <table className="w-full text-xs">
                 <thead className="bg-gradient-to-r from-surface-2 to-surface-2/80 sticky top-0 z-10 border-b border-white/5">
                   <tr>
@@ -740,11 +1037,14 @@ export function BottomDock() {
                   })()}
                 </tbody>
               </table>
+                  )}
+                </div>
+              </>
             )}
           </>
         )}
 
-        {activeTab === 'orders' && (
+        {tabForContent === 'orders' && (
           <>
             {isLoading ? (
               <div className="p-4 space-y-3">
@@ -867,7 +1167,7 @@ export function BottomDock() {
           </>
         )}
 
-        {activeTab === 'order-history' && (
+        {tabForContent === 'order-history' && (
           <>
             {isLoading ? (
               <div className="p-4 space-y-3">
@@ -958,7 +1258,7 @@ export function BottomDock() {
           </>
         )}
 
-        {activeTab === 'position-history' && (
+        {tabForContent === 'position-history' && (
           <>
             {(() => {
               const closedPositions = positions
@@ -1061,8 +1361,8 @@ export function BottomDock() {
 
       </div>
 
-      {/* Bottom Stats Bar - hover each stat to see formula (tooltip in portal so it's not clipped) */}
-      <div className="shrink-0 h-14 border-t border-white/5 bg-surface-2 flex items-center px-4 text-sm overflow-x-auto scrollbar-thin scrollbar-hide">
+      {/* Bottom Stats Bar - hidden on mobile when fullHeight (Positions tab) to match reference */}
+      <div className={cn('shrink-0 h-14 border-t border-white/5 bg-surface-2 items-center px-4 text-sm overflow-x-auto scrollbar-thin scrollbar-hide', fullHeight ? 'hidden md:flex' : 'flex')}>
         <div className="flex items-center gap-4 min-w-max">
           {([
             { formula: 'Balance = Deposits − Withdrawals + Realized PnL', icon: Wallet, label: 'Balance ', value: accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—', valueClass: 'text-text' },
