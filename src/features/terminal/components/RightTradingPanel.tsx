@@ -1153,7 +1153,12 @@ export function RightTradingPanel() {
                 step="0.1"
                 value={marginPercent}
                 onChange={(e) => handleFreeMarginSliderChange(Number(e.target.value))}
-                className="w-full h-2 bg-surface-2 rounded-lg appearance-none cursor-pointer accent-accent"
+                className="w-full h-2 bg-surface-2 rounded-lg appearance-none cursor-pointer accent-accent
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer
+                  [&::-webkit-slider-thumb]:shadow [&::-webkit-slider-thumb]:border-0
+                  [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:rounded-full
+                  [&::-moz-range-thumb]:bg-accent [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer"
               />
               <div className="flex justify-between text-xs text-muted mt-1">
                 <span>0.1%</span>

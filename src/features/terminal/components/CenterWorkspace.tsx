@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { ChartTopBar } from './ChartTopBar'
 import { ChartPlaceholder, type ChartPlaceholderHandle } from './ChartPlaceholder'
 import { ChartSettingsModal } from './ChartSettingsModal'
+import { ChartTradingStrip } from './ChartTradingStrip'
 import { BottomDock } from './BottomDock'
 import type { ChartTypeKey, TimeframeKey } from '../utils/chartOptions'
 import { DEFAULT_CHART_SETTINGS, type ChartSettings, type DrawingMagnetMode } from '../utils/chartOptions'
@@ -125,7 +126,7 @@ export function CenterWorkspace({ hideBottomDock = false, mobileShowOnlyBottomDo
             onOpenSettings={() => setChartSettingsOpen(true)}
           />
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden min-h-[200px]">
           <ChartPlaceholder
             ref={chartRef}
             chartType={chartType}
@@ -136,6 +137,7 @@ export function CenterWorkspace({ hideBottomDock = false, mobileShowOnlyBottomDo
             chartSettings={chartSettings}
           />
         </div>
+        {!isChartFullscreen && hideBottomDock && <ChartTradingStrip />}
       </div>
       <ChartSettingsModal
         open={chartSettingsOpen}

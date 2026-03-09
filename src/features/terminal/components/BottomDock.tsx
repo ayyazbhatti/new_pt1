@@ -80,6 +80,12 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const wsRef = useRef<WebSocket | null>(null)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const lastPositionCountRef = useRef<number>(0)
+  const [positionsSearchQuery, setPositionsSearchQuery] = useState('')
+  const [positionsSearchOpen, setPositionsSearchOpen] = useState(false)
+  const positionsSearchInputRef = useRef<HTMLInputElement>(null)
+  const [positionsOptionsMenuOpen, setPositionsOptionsMenuOpen] = useState(false)
+  const [closeProfitableOnlyDialogOpen, setCloseProfitableOnlyDialogOpen] = useState(false)
+  const [closeProfitableOnlyLoading, setCloseProfitableOnlyLoading] = useState(false)
 
   useEffect(() => {
     const el = bottomDockRef.current
@@ -143,6 +149,23 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       return { position: pos, livePrice, unrealizedPnl, sizeNum, entryPrice }
     })
   }, [positions, livePrices])
+
+  // Mobile positions list filtered by search (symbol or side)
+  const mobileFilteredPositions = useMemo(() => {
+    const q = positionsSearchQuery.trim().toLowerCase()
+    if (!q) return openPositionsWithComputed
+    return openPositionsWithComputed.filter(({ position: pos }) => {
+      const symbolMatch = (pos.symbol || '').toLowerCase().includes(q)
+      const sideMatch = (pos.side || '').toLowerCase().includes(q) || (pos.side === 'LONG' && q === 'buy') || (pos.side === 'SHORT' && q === 'sell')
+      return symbolMatch || sideMatch
+    })
+  }, [openPositionsWithComputed, positionsSearchQuery])
+
+  useEffect(() => {
+    if (positionsSearchOpen) {
+      positionsSearchInputRef.current?.focus()
+    }
+  }, [positionsSearchOpen])
 
   const tabs = [
     { id: 'positions', label: 'Positions' },
@@ -635,15 +658,21 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={() => toast('Search coming soon')}
-                        className="p-2 rounded-lg hover:bg-surface-2 text-muted hover:text-text min-h-[44px] min-w-[44px] flex items-center justify-center"
+                        onClick={() => {
+                          setPositionsSearchOpen((o) => !o)
+                          if (!positionsSearchOpen) setPositionsSearchQuery('')
+                        }}
+                        className={cn(
+                          'p-2 rounded-lg hover:bg-surface-2 text-muted hover:text-text min-h-[44px] min-w-[44px] flex items-center justify-center',
+                          positionsSearchOpen && 'bg-surface-2 text-text'
+                        )}
                         aria-label="Search positions"
                       >
                         <Search className="h-5 w-5" />
                       </button>
                       <button
                         type="button"
-                        onClick={() => toast('Options coming soon')}
+                        onClick={() => setPositionsOptionsMenuOpen(true)}
                         className="p-2 rounded-lg hover:bg-surface-2 text-muted hover:text-text min-h-[44px] min-w-[44px] flex items-center justify-center"
                         aria-label="More options"
                       >
@@ -651,11 +680,39 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       </button>
                     </div>
                   </div>
+                  {positionsSearchOpen && (
+                    <div className="flex items-center gap-2 py-1">
+                      <Search className="h-4 w-4 text-muted shrink-0" />
+                      <Input
+                        ref={positionsSearchInputRef}
+                        type="text"
+                        placeholder="Search by symbol or side (e.g. ETH, Buy)"
+                        value={positionsSearchQuery}
+                        onChange={(e) => setPositionsSearchQuery(e.target.value)}
+                        className="flex-1 min-w-0 h-9 text-sm bg-background border-border"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPositionsSearchQuery('')
+                          setPositionsSearchOpen(false)
+                        }}
+                        className="p-2 rounded-lg hover:bg-surface-2 text-muted hover:text-text shrink-0"
+                        aria-label="Close search"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
                   {openPositionsWithComputed.length === 0 ? (
                     <div className="text-center text-muted py-8 text-sm">No positions found</div>
+                  ) : mobileFilteredPositions.length === 0 ? (
+                    <div className="text-center text-muted py-8 text-sm">
+                      No positions match &quot;{positionsSearchQuery.trim()}&quot;
+                    </div>
                   ) : (
                     <>
-                  {openPositionsWithComputed.map(({ position: pos, livePrice, unrealizedPnl, sizeNum, entryPrice }) => {
+                  {mobileFilteredPositions.map(({ position: pos, livePrice, unrealizedPnl, sizeNum, entryPrice }) => {
                     const openEditPositionPopup = () => {
                       const currentPos = positions.find(p => p.id === pos.id)
                       if (!currentPos) return
@@ -794,7 +851,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       </div>
                     )
                   })}
-                  {openPositionsWithComputed.length > 0 && (
+                  {mobileFilteredPositions.length > 0 && (
                     <div className="text-center text-muted text-xs py-3">No more data</div>
                   )}
                     </>
@@ -1404,6 +1461,46 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
           document.body
         )}
 
+      {/* Positions 3-dot menu: Close All + Close only profitable (mobile) */}
+      {positionsOptionsMenuOpen &&
+        createPortal(
+          <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setPositionsOptionsMenuOpen(false)} aria-hidden />
+            <div className="relative rounded-t-xl border-t border-white/10 bg-surface shadow-xl safe-area-pb">
+              <div className="divide-y divide-white/10">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPositionsOptionsMenuOpen(false)
+                    setCloseAllDialogOpen(true)
+                  }}
+                  disabled={!canClosePosition || positions.filter((p) => p.status === 'OPEN').length === 0}
+                  className="w-full py-4 px-4 text-left text-sm font-medium text-text hover:bg-white/5 active:bg-white/10 disabled:opacity-50 disabled:pointer-events-none flex items-center gap-3"
+                >
+                  <XCircle className="h-5 w-5 text-danger shrink-0" />
+                  Close All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPositionsOptionsMenuOpen(false)
+                    setCloseProfitableOnlyDialogOpen(true)
+                  }}
+                  disabled={
+                    !canClosePosition ||
+                    openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0).length === 0
+                  }
+                  className="w-full py-4 px-4 text-left text-sm font-medium text-text hover:bg-white/5 active:bg-white/10 disabled:opacity-50 disabled:pointer-events-none flex items-center gap-3"
+                >
+                  <TrendingUp className="h-5 w-5 text-success shrink-0" />
+                  Close only profitable positions
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
       {/* Close All Positions Dialog */}
       <Dialog.Root open={closeAllDialogOpen} onOpenChange={(open) => !closeAllLoading && setCloseAllDialogOpen(open)}>
         <Dialog.Portal>
@@ -1464,6 +1561,86 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 className="px-4 py-2 text-sm bg-danger text-white hover:bg-danger/90 rounded transition-colors disabled:opacity-50"
               >
                 {closeAllLoading ? 'Closing...' : 'Close All'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Close only profitable positions Dialog */}
+      <Dialog.Root
+        open={closeProfitableOnlyDialogOpen}
+        onOpenChange={(open) => !closeProfitableOnlyLoading && setCloseProfitableOnlyDialogOpen(open)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-surface border border-border rounded-lg p-6 z-50 w-full max-w-md">
+            <Dialog.Title className="text-lg font-semibold text-text mb-2 flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-success" />
+              Close only profitable positions
+            </Dialog.Title>
+            <Dialog.Description className="text-sm text-muted mb-6">
+              {(() => {
+                const profitable = openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0)
+                const count = profitable.length
+                if (count === 0) return 'No profitable positions to close.'
+                return `Close ${count} position(s) with positive unrealized PnL? This action cannot be undone.`
+              })()}
+            </Dialog.Description>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setCloseProfitableOnlyDialogOpen(false)}
+                disabled={closeProfitableOnlyLoading}
+                className="px-4 py-2 text-sm text-text hover:bg-surface-2 rounded transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const toClose = openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0).map((x) => x.position)
+                  if (toClose.length === 0) {
+                    setCloseProfitableOnlyDialogOpen(false)
+                    return
+                  }
+                  setCloseProfitableOnlyLoading(true)
+                  let closed = 0
+                  const failedPositions: { id: string; symbol: string; error: string }[] = []
+                  try {
+                    for (const pos of toClose) {
+                      try {
+                        await closePosition(pos.id)
+                        closed++
+                      } catch (err: unknown) {
+                        failedPositions.push({ id: pos.id, symbol: pos.symbol, error: closePositionErrorMessage(err) })
+                      }
+                    }
+                    if (closed > 0) {
+                      toast.success(
+                        closed === toClose.length
+                          ? `Closed ${closed} profitable position(s)`
+                          : `Closed ${closed} position(s)${failedPositions.length > 0 ? `, ${failedPositions.length} failed` : ''}`
+                      )
+                    }
+                    if (failedPositions.length > 0) {
+                      const detail =
+                        failedPositions.length === 1
+                          ? `${failedPositions[0].symbol}: ${failedPositions[0].error}`
+                          : `${failedPositions.length} position(s) failed to close`
+                      toast.error(closed === 0 ? detail : detail)
+                    }
+                    setCloseProfitableOnlyDialogOpen(false)
+                    fetchPositions(true)
+                  } finally {
+                    setCloseProfitableOnlyLoading(false)
+                  }
+                }}
+                disabled={
+                  closeProfitableOnlyLoading ||
+                  openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0).length === 0
+                }
+                className="px-4 py-2 text-sm bg-success text-white hover:bg-success/90 rounded transition-colors disabled:opacity-50"
+              >
+                {closeProfitableOnlyLoading ? 'Closing...' : 'Close profitable'}
               </button>
             </div>
           </Dialog.Content>

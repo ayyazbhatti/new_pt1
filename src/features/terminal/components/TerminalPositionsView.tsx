@@ -21,9 +21,9 @@ export function TerminalPositionsView() {
   const pnlStr = unrealizedPnl >= 0 ? `+$${unrealizedPnl.toFixed(2)}` : `-$${Math.abs(unrealizedPnl).toFixed(2)}`
 
   return (
-    <div className="h-full min-h-0 flex flex-col bg-background">
-      {/* Header bar: hamburger (left) | UnR Net PNL + value (center) | + and notification (right) */}
-      <div className="shrink-0 border-b border-white/5 px-3 py-2.5 flex items-center justify-between gap-2 min-h-[52px]">
+    <div className="h-full min-h-0 flex flex-col bg-surface">
+      {/* Header bar: hamburger (left) | UnR Net PNL + value (center) | + and notification (right) — same surface as content */}
+      <div className="shrink-0 bg-surface border-b border-white/5 px-3 py-2.5 flex items-center justify-between gap-2 min-h-[52px]">
         <button
           type="button"
           onClick={() => setMobileTab('account')}
@@ -68,7 +68,7 @@ export function TerminalPositionsView() {
       </div>
 
       {/* Sub-tabs: POSITIONS | ORDERS */}
-      <div className="shrink-0 flex border-b border-white/5">
+      <div className="shrink-0 flex border-b border-white/5 bg-surface">
         {(['positions', 'orders'] as const).map((tab) => (
           <button
             key={tab}
