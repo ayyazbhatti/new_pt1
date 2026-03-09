@@ -217,7 +217,22 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
       },
     })
 
+    // ResizeObserver: keep chart in sync with container size (fixes mobile tab switch / flex layout)
+    const resizeObserver = new ResizeObserver(() => {
+      chartRef.current?.resize()
+    })
+    resizeObserver.observe(container)
+
+    // One-time resize after first paint so chart gets correct dimensions on mobile
+    const rafId = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        chartRef.current?.resize()
+      })
+    })
+
     return () => {
+      resizeObserver.disconnect()
+      cancelAnimationFrame(rafId)
       subscribeBarCallbackRef.current = null
       lastBarRef.current = null
       currentBarRef.current = null

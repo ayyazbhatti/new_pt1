@@ -153,8 +153,8 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
 
   if (!selectedSymbol) {
     return (
-      <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-white/5 px-4 flex items-center justify-start shadow-sm">
-        <div className="flex items-center gap-3">
+      <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-white/5 flex items-center overflow-x-auto scrollbar-thin shadow-sm">
+        <div className="flex items-center gap-3 flex-nowrap min-w-max px-4 py-2">
           <Segmented
             options={[
               { value: 'candles', label: 'Candles' },
@@ -214,11 +214,11 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             )}
           </div>
           {indicators.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1">
+            <div className="flex items-center gap-1 flex-nowrap shrink-0">
               {indicators.map((ind) => (
                 <span
                   key={ind.name}
-                  className="inline-flex items-center gap-1 rounded-md bg-surface-2/80 px-2 py-0.5 text-xs text-text"
+                  className="inline-flex items-center gap-1 rounded-md bg-surface-2/80 px-2 py-0.5 text-xs text-text shrink-0"
                 >
                   {ind.name}
                   <button
@@ -328,8 +328,8 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
   }
 
   return (
-    <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-border/50 px-4 flex items-center justify-between shadow-sm">
-      <div className="flex items-center gap-3">
+    <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-border/50 flex items-center overflow-x-auto scrollbar-thin shadow-sm">
+      <div className="flex items-center gap-3 flex-nowrap min-w-max px-4 py-2">
         <Segmented
           options={[
             { value: 'candles', label: 'Candles' },
@@ -379,9 +379,9 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
           )}
         </div>
         {indicators.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex items-center gap-1 flex-nowrap shrink-0">
             {indicators.map((ind) => (
-              <span key={ind.name} className="inline-flex items-center gap-1 rounded-md bg-surface-2/80 px-2 py-0.5 text-xs text-text">
+              <span key={ind.name} className="inline-flex items-center gap-1 rounded-md bg-surface-2/80 px-2 py-0.5 text-xs text-text shrink-0">
                 {ind.name}
                 <button type="button" onClick={() => setEditingIndicator(ind)} className="rounded p-0.5 hover:bg-surface-2 text-muted hover:text-text" title={`Edit ${ind.name} parameters`} aria-label={`Edit ${ind.name} parameters`}>
                   <SlidersHorizontal className="h-3 w-3" />
@@ -506,7 +506,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
       {onToggleFullscreen && (
         <button
           onClick={onToggleFullscreen}
-          className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 shrink-0"
+          className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 shrink-0 mx-2"
           title={isChartFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
         >
           {isChartFullscreen ? (

@@ -1,13 +1,22 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, RefreshCw, Calendar, History } from 'lucide-react'
+import { format, parse } from 'date-fns'
+import DatePicker from 'react-datepicker'
+import 'react-datepicker/dist/react-datepicker.css'
+import { Search, Calendar, History, X } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { getPositions, type Position } from '../api/positions.api'
 import { listOrders, type Order } from '../api/orders.api'
-import { Skeleton } from '@/shared/ui'
+import { Skeleton, Input } from '@/shared/ui'
 
 type HistorySubTab = 'positions' | 'orders'
+
+/** Timestamp (ms or sec) to YYYY-MM-DD for date range comparison */
+function toDateString(ts: number): string {
+  const ms = ts < 1e12 ? ts * 1000 : ts
+  return format(new Date(ms), 'yyyy-MM-dd')
+}
 
 /**
  * Mobile History tab: Position History and Order History sub-tabs with account summary.
@@ -19,6 +28,11 @@ export function TerminalHistoryView() {
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
   const [loadingPositions, setLoadingPositions] = useState(true)
   const [loadingOrders, setLoadingOrders] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [calendarOpen, setCalendarOpen] = useState(false)
   const { accountSummary } = useAccountSummary()
 
   const fetchPositions = useCallback(async () => {
@@ -52,12 +66,6 @@ export function TerminalHistoryView() {
     fetchOrders()
   }, [fetchPositions, fetchOrders])
 
-  const handleRefresh = () => {
-    if (historySubTab === 'positions') fetchPositions()
-    else fetchOrders()
-    toast.success('Refreshed')
-  }
-
   const closedPositions = positions
     .filter((p) => p.status === 'CLOSED' || p.status === 'LIQUIDATED')
     .sort((a, b) => {
@@ -65,6 +73,43 @@ export function TerminalHistoryView() {
       const bTime = b.closed_at ?? b.updated_at ?? 0
       return (bTime < 1e12 ? bTime * 1000 : bTime) - (aTime < 1e12 ? aTime * 1000 : aTime)
     })
+
+  const q = searchQuery.trim().toLowerCase()
+  const searchFilteredClosed = q
+    ? closedPositions.filter(
+        (p) =>
+          (p.symbol && p.symbol.toLowerCase().includes(q)) ||
+          (p.side && p.side.toLowerCase().includes(q))
+      )
+    : closedPositions
+  const searchFilteredOrders = q
+    ? filledOrders.filter(
+        (o) =>
+          (o.symbol && o.symbol.toLowerCase().includes(q)) ||
+          (o.side && o.side.toLowerCase().includes(q)) ||
+          (o.order_type && o.order_type.toLowerCase().includes(q))
+      )
+    : filledOrders
+
+  const hasDateFilter = dateFrom !== '' || dateTo !== ''
+  const filteredClosedPositions = hasDateFilter
+    ? searchFilteredClosed.filter((p) => {
+        const ts = p.closed_at ?? p.updated_at ?? 0
+        const d = toDateString(ts)
+        if (dateFrom && d < dateFrom) return false
+        if (dateTo && d > dateTo) return false
+        return true
+      })
+    : searchFilteredClosed
+  const filteredFilledOrders = hasDateFilter
+    ? searchFilteredOrders.filter((o) => {
+        const ts = new Date(o.created_at).getTime()
+        const d = toDateString(ts)
+        if (dateFrom && d < dateFrom) return false
+        if (dateTo && d > dateTo) return false
+        return true
+      })
+    : searchFilteredOrders
 
   const lastTenClosed = closedPositions.length
   const lastTenOrders = Math.min(filledOrders.length, 10)
@@ -116,31 +161,93 @@ export function TerminalHistoryView() {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => toast('Search coming soon')}
-              className="p-2 rounded-lg hover:bg-white/10 text-muted min-h-[44px] min-w-[44px] flex items-center justify-center"
+              onClick={() => setSearchOpen((open) => !open)}
+              className={cn(
+                'p-2 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center',
+                searchOpen ? 'bg-white/10 text-accent' : 'hover:bg-white/10 text-muted'
+              )}
               aria-label="Search"
             >
               <Search className="h-5 w-5" />
             </button>
             <button
               type="button"
-              onClick={handleRefresh}
-              className="p-2 rounded-lg hover:bg-white/10 text-muted min-h-[44px] min-w-[44px] flex items-center justify-center"
-              aria-label="Refresh"
-            >
-              <RefreshCw className="h-5 w-5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => toast('Calendar filter coming soon')}
-              className="p-2 rounded-lg hover:bg-white/10 text-muted min-h-[44px] min-w-[44px] flex items-center justify-center"
-              aria-label="Calendar"
+              onClick={() => setCalendarOpen((open) => !open)}
+              className={cn(
+                'p-2 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center',
+                calendarOpen || hasDateFilter ? 'bg-white/10 text-accent' : 'hover:bg-white/10 text-muted'
+              )}
+              aria-label="Date range filter"
             >
               <Calendar className="h-5 w-5" />
             </button>
           </div>
         </div>
       </div>
+
+      {/* Date range filter (when Calendar icon is active) */}
+      {calendarOpen && (
+        <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5 bg-surface/50">
+          <label className="text-xs text-muted shrink-0 w-10">From</label>
+          <DatePicker
+            selected={dateFrom ? parse(dateFrom, 'yyyy-MM-dd', new Date()) : null}
+            onChange={(d) => setDateFrom(d ? format(d, 'yyyy-MM-dd') : '')}
+            dateFormat="dd-MMM-yyyy"
+            placeholderText="From"
+            className="flex-1 min-w-0 rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent h-10 w-full"
+            calendarClassName="react-datepicker--dark"
+            aria-label="From date"
+          />
+          <span className="text-xs text-muted shrink-0">To</span>
+          <DatePicker
+            selected={dateTo ? parse(dateTo, 'yyyy-MM-dd', new Date()) : null}
+            onChange={(d) => setDateTo(d ? format(d, 'yyyy-MM-dd') : '')}
+            dateFormat="dd-MMM-yyyy"
+            placeholderText="To"
+            className="flex-1 min-w-0 rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent h-10 w-full"
+            calendarClassName="react-datepicker--dark"
+            aria-label="To date"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setDateFrom('')
+              setDateTo('')
+              setCalendarOpen(false)
+            }}
+            className="shrink-0 px-3 py-2 text-xs font-medium text-muted hover:text-text hover:bg-white/10 rounded-lg transition-colors h-10"
+          >
+            Clear dates
+          </button>
+        </div>
+      )}
+
+      {/* Search bar (when Search icon is active) */}
+      {searchOpen && (
+        <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-surface/50">
+          <Search className="h-4 w-4 text-muted shrink-0" />
+          <Input
+            type="text"
+            placeholder="Symbol, side (e.g. BTC, long)..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-1 min-w-0 bg-background border-border text-sm"
+            autoFocus
+            aria-label="Search history"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('')
+              setSearchOpen(false)
+            }}
+            className="p-2 rounded-lg hover:bg-white/10 text-muted shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"
+            aria-label="Clear search"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+      )}
 
       {/* Sub-tabs: POSITIONS | ORDERS */}
       <div className="shrink-0 flex border-b border-white/5">
@@ -180,15 +287,27 @@ export function TerminalHistoryView() {
                 <Skeleton key={i} className="h-16 w-full" variant="text" />
               ))}
             </div>
-          ) : closedPositions.length === 0 ? (
+          ) : filteredClosedPositions.length === 0 ? (
             <div className="text-center text-muted py-8">
               <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <p className="text-sm font-medium">No position history</p>
-              <p className="text-xs mt-1">Closed positions will appear here</p>
+              <p className="text-sm font-medium">
+                {searchQuery.trim()
+                  ? 'No matching positions'
+                  : hasDateFilter
+                    ? 'No positions in this date range'
+                    : 'No position history'}
+              </p>
+              <p className="text-xs mt-1">
+                {searchQuery.trim()
+                  ? 'Try a different search'
+                  : hasDateFilter
+                    ? 'Change or clear the date filter'
+                    : 'Closed positions will appear here'}
+              </p>
             </div>
           ) : (
             <div className="space-y-0">
-              {closedPositions.map((pos) => {
+              {filteredClosedPositions.map((pos) => {
                 const sizeVal = (pos.status === 'CLOSED' || pos.status === 'LIQUIDATED') && pos.original_size ? pos.original_size : pos.size
                 const sizeNum = parseFloat(sizeVal || '0')
                 const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
@@ -238,15 +357,27 @@ export function TerminalHistoryView() {
                 <Skeleton key={i} className="h-16 w-full" variant="text" />
               ))}
             </div>
-          ) : filledOrders.length === 0 ? (
+          ) : filteredFilledOrders.length === 0 ? (
             <div className="text-center text-muted py-8">
               <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <p className="text-sm font-medium">No order history</p>
-              <p className="text-xs mt-1">Filled orders will appear here</p>
+              <p className="text-sm font-medium">
+                {searchQuery.trim()
+                  ? 'No matching orders'
+                  : hasDateFilter
+                    ? 'No orders in this date range'
+                    : 'No order history'}
+              </p>
+              <p className="text-xs mt-1">
+                {searchQuery.trim()
+                  ? 'Try a different search'
+                  : hasDateFilter
+                    ? 'Change or clear the date filter'
+                    : 'Filled orders will appear here'}
+              </p>
             </div>
           ) : (
             <div className="space-y-0">
-              {filledOrders.map((order) => {
+              {filteredFilledOrders.map((order) => {
                 const filledSize = parseFloat(order.filled_size || order.size || '0')
                 const avgPrice = parseFloat(order.average_price || order.price || '0')
                 const createdStr = new Date(order.created_at).toLocaleString(undefined, {
