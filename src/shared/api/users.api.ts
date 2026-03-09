@@ -58,6 +58,24 @@ export async function listUsers(params?: ListUsersParams): Promise<ListUsersResp
   })
 }
 
+const PAGE_SIZE = 200
+
+/** Fetch all users via pagination (for dropdowns that need the full list, e.g. Create Manager). */
+export async function listAllUsers(params?: Omit<ListUsersParams, 'limit' | 'offset' | 'page' | 'page_size'>): Promise<UserResponse[]> {
+  const first = await listUsers({ ...params, page: 1, page_size: PAGE_SIZE })
+  const items = [...first.items]
+  const total = first.total
+  if (items.length >= total) return items
+  const pages = Math.ceil(total / PAGE_SIZE)
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) =>
+      listUsers({ ...params, page: i + 2, page_size: PAGE_SIZE })
+    )
+  )
+  rest.forEach((r) => items.push(...r.items))
+  return items
+}
+
 export async function updateUserPermissionProfile(
   userId: string,
   permissionProfileId: string | null

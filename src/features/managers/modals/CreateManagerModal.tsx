@@ -4,11 +4,14 @@ import { Button } from '@/shared/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useModalStore } from '@/app/store'
 import { useQuery } from '@tanstack/react-query'
+import { useDebouncedValue } from '@/shared/hooks/useDebounce'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
 import { listUsers } from '@/shared/api/users.api'
 import { listManagers } from '../api/managers.api'
 import type { CreateManagerPayload } from '../api/managers.api'
 import { toast } from '@/shared/components/common'
+
+const USER_PAGE_SIZE = 100
 
 interface CreateManagerModalProps {
   onCreated?: (payload: CreateManagerPayload) => void | Promise<void>
@@ -17,6 +20,7 @@ interface CreateManagerModalProps {
 export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const [selectedUserId, setSelectedUserId] = useState<string>('')
+  const [selectedUserLabel, setSelectedUserLabel] = useState<string>('')
   const [selectedProfileId, setSelectedProfileId] = useState<string>('')
   const [selectedRole, setSelectedRole] = useState<string>('manager')
   const [userSearch, setUserSearch] = useState('')
@@ -35,11 +39,17 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
     queryFn: listPermissionProfiles,
   })
 
-  const { data: usersData } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => listUsers({ limit: 500 }),
+  const debouncedUserSearch = useDebouncedValue(userSearch.trim(), 300)
+
+  const { data: usersResponse, isLoading: usersLoading } = useQuery({
+    queryKey: ['users', 'manager-dropdown', debouncedUserSearch],
+    queryFn: () =>
+      listUsers({
+        search: debouncedUserSearch || undefined,
+        page: 1,
+        page_size: USER_PAGE_SIZE,
+      }),
   })
-  const users = usersData?.items ?? []
 
   const { data: managers = [] } = useQuery({
     queryKey: ['managers'],
@@ -49,24 +59,15 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
   const managerUserIds = useMemo(() => new Set(managers.map((m) => m.userId)), [managers])
 
   const userOptions = useMemo(() => {
-    return users
+    const items = usersResponse?.items ?? []
+    return items
       .filter((u) => !managerUserIds.has(u.id))
       .map((u) => ({
         id: u.id,
         name: `${u.first_name} ${u.last_name}`.trim() || u.email,
         email: u.email,
       }))
-  }, [users, managerUserIds])
-
-  const filteredUserOptions = useMemo(() => {
-    if (!userSearch.trim()) return userOptions
-    const q = userSearch.trim().toLowerCase()
-    return userOptions.filter(
-      (u) =>
-        u.name.toLowerCase().includes(q) ||
-        u.email.toLowerCase().includes(q)
-    )
-  }, [userOptions, userSearch])
+  }, [usersResponse?.items, managerUserIds])
 
   const filteredProfiles = useMemo(() => {
     if (!profileSearch.trim()) return profiles
@@ -112,12 +113,18 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
         <label className="block text-sm font-medium text-text mb-1.5">User</label>
         <Select
           value={selectedUserId}
-          onValueChange={setSelectedUserId}
+          onValueChange={(id) => {
+            setSelectedUserId(id)
+            const opt = userOptions.find((o) => o.id === id)
+            setSelectedUserLabel(opt ? `${opt.name} — ${opt.email}` : '')
+          }}
           onOpenChange={(open) => !open && setUserSearch('')}
           required
         >
           <SelectTrigger>
-            <SelectValue placeholder="Select user to promote to manager" />
+            <SelectValue placeholder="Select user to promote to manager">
+              {selectedUserId ? selectedUserLabel : null}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent
             onCloseAutoFocus={() => setUserSearch('')}
@@ -139,12 +146,16 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
               />
             </div>
             <div className="max-h-[240px] overflow-y-auto p-1">
-              {filteredUserOptions.length === 0 ? (
+              {usersLoading ? (
                 <div className="py-4 text-center text-sm text-text-muted">
-                  {userSearch.trim() ? 'No users match your search.' : 'No users available.'}
+                  Searching...
+                </div>
+              ) : userOptions.length === 0 ? (
+                <div className="py-4 text-center text-sm text-text-muted">
+                  {debouncedUserSearch ? 'No users match your search.' : 'Type to search users.'}
                 </div>
               ) : (
-                filteredUserOptions.map((u) => (
+                userOptions.map((u) => (
                   <SelectItem key={u.id} value={u.id}>
                     {u.name} — {u.email}
                   </SelectItem>

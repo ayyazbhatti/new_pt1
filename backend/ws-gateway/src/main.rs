@@ -13,9 +13,11 @@ use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info};
 use anyhow::Result;
+use futures_util::StreamExt;
 
 use config::Config;
 use ws::server::{AppState, create_router};
+use ws::protocol::ServerMessage;
 use auth::jwt::JwtAuth;
 use state::call_registry::CallRegistry;
 use state::connection_registry::ConnectionRegistry;
@@ -118,8 +120,66 @@ async fn main() -> Result<()> {
         broadcaster: broadcaster.clone(),
         call_registry: call_registry.clone(),
         redis_url: config.redis.url.clone(),
-        nats: nats_client,
+        nats: nats_client.clone(),
     };
+
+    // NATS chat subscriber: forward chat.support and chat.user.* to the right WebSocket connections
+    if let Some(nats) = nats_client {
+        let registry_chat = registry.clone();
+        let broadcaster_chat = broadcaster.clone();
+        tokio::spawn(async move {
+            use tracing::{error, info, warn};
+            let sub = match nats.subscribe("chat.>".to_string()).await {
+                Ok(s) => {
+                    info!("Subscribed to NATS chat.> for real-time support chat");
+                    s
+                }
+                Err(e) => {
+                    error!("Failed to subscribe to NATS chat.>: {}", e);
+                    return;
+                }
+            };
+            let mut msgs = sub;
+            while let Some(msg) = msgs.next().await {
+                let subject = msg.subject.to_string();
+                let body = match std::str::from_utf8(&msg.payload) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => continue,
+                };
+                let payload: serde_json::Value = match serde_json::from_str(&body) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("Invalid JSON on {}: {}", subject, e);
+                        continue;
+                    }
+                };
+                // Auth-service sends { type: "chat.message", payload: { id, userId, ... } }
+                let chat_payload = match payload.get("payload").cloned() {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let ws_msg = ServerMessage::ChatMessage {
+                    payload: chat_payload,
+                };
+                let conn_ids: Vec<uuid::Uuid> = if subject == "chat.support" {
+                    registry_chat.get_admin_connection_ids()
+                } else if subject.starts_with("chat.user.") {
+                    let user_id = subject.strip_prefix("chat.user.").unwrap_or("");
+                    let mut ids = registry_chat.get_user_connections(user_id);
+                    let mut admin_ids = registry_chat.get_admin_connection_ids();
+                    ids.append(&mut admin_ids);
+                    ids.sort();
+                    ids.dedup();
+                    ids
+                } else {
+                    continue;
+                };
+                if !conn_ids.is_empty() {
+                    broadcaster_chat.send_to_connections(&conn_ids, ws_msg);
+                }
+            }
+        });
+    }
 
     // Create WebSocket router
     let ws_app = create_router(app_state);

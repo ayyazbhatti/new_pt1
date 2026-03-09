@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
-import { X, Settings as SettingsIcon, Palette, Bell, BarChart3, TrendingUp } from 'lucide-react'
+import { X, Settings as SettingsIcon, Palette, Bell, BarChart3, TrendingUp, ArrowLeft } from 'lucide-react'
+import { useMediaQuery } from '@/shared/hooks'
 import { useTerminalStore } from '../store'
 import { Switch } from '@/shared/ui'
 import { Label } from '@/shared/ui/label'
@@ -7,9 +8,10 @@ import { cn } from '@/shared/utils'
 import { updateTerminalPreferences } from '../api/preferences.api'
 import { toast } from '@/shared/components/common'
 
-const PANEL_WIDTH = 288
+const PANEL_WIDTH_DESKTOP = 288
 
 export function SettingsPanel() {
+  const isMobile = !useMediaQuery('(min-width: 1024px)')
   const {
     settingsPanelOpen,
     setSettingsPanelOpen,
@@ -125,32 +127,43 @@ export function SettingsPanel() {
   return (
     <div
       className={cn(
-        'h-full min-h-0 flex flex-col shrink-0',
-        'bg-background/95 backdrop-blur-sm',
-        'border-l border-white/10 shadow-[-4px_0_24px_rgba(0,0,0,0.25)]',
+        'h-full min-h-0 flex flex-col',
+        isMobile ? 'w-full bg-background' : 'shrink-0 bg-background/95 backdrop-blur-sm border-l border-white/10 shadow-[-4px_0_24px_rgba(0,0,0,0.25)]',
         'animate-fade-in'
       )}
-      style={{ width: PANEL_WIDTH }}
+      style={isMobile ? undefined : { width: PANEL_WIDTH_DESKTOP }}
       role="dialog"
-      aria-label="Settings panel"
+      aria-label={isMobile ? 'Settings page' : 'Settings panel'}
     >
       {/* Header */}
       <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3.5 border-b border-white/10 bg-gradient-to-r from-white/[0.03] to-transparent">
         <div className="flex items-center gap-2.5 min-w-0">
+          {isMobile ? (
+            <button
+              type="button"
+              onClick={() => setSettingsPanelOpen(false)}
+              className="shrink-0 p-2 -ml-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
+              aria-label="Back"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          ) : null}
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
             <SettingsIcon className="h-4 w-4" />
           </div>
           <h2 className="text-sm font-semibold text-text truncate">Settings</h2>
         </div>
-        <button
-          type="button"
-          onClick={() => setSettingsPanelOpen(false)}
-          className="shrink-0 p-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
-          title="Close panel"
-          aria-label="Close settings panel"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {!isMobile && (
+          <button
+            type="button"
+            onClick={() => setSettingsPanelOpen(false)}
+            className="shrink-0 p-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
+            title="Close panel"
+            aria-label="Close settings panel"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Content - single flowing list, no card borders */}

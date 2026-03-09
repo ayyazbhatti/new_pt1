@@ -162,6 +162,11 @@ pub enum ServerMessage {
     CallWebrtcAnswer { call_id: String, sdp: String },
     #[serde(rename = "call.webrtc.ice")]
     CallWebrtcIce { call_id: String, candidate: String },
+    // Support chat: payload matches auth-service shape { id, userId, senderType, senderId, body, createdAt }
+    #[serde(rename = "chat.message")]
+    ChatMessage {
+        payload: serde_json::Value,
+    },
 }
 
 impl ServerMessage {

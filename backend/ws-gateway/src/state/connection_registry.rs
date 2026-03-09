@@ -124,6 +124,15 @@ impl ConnectionRegistry {
             .unwrap_or_default()
     }
 
+    /// Connection IDs for all connections with role "admin" (case-insensitive). Used for chat.support routing.
+    pub fn get_admin_connection_ids(&self) -> Vec<Uuid> {
+        self.connections
+            .iter()
+            .filter(|entry| entry.value().role.eq_ignore_ascii_case("admin"))
+            .map(|entry| entry.conn_id)
+            .collect()
+    }
+
     pub fn update_heartbeat(&self, conn_id: Uuid) {
         if let Some(mut conn) = self.connections.get_mut(&conn_id) {
             conn.last_heartbeat = std::time::Instant::now();

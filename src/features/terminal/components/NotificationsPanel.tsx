@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { X, Bell } from 'lucide-react'
+import { X, Bell, ArrowLeft } from 'lucide-react'
+import { useMediaQuery } from '@/shared/hooks'
 import { useTerminalStore } from '../store'
 import { useNotificationsStore } from '@/shared/store/notificationsStore'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
@@ -8,7 +9,7 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { cn } from '@/shared/utils'
 import type { NotificationPushPayload } from '@/shared/ws/wsEvents'
 
-const PANEL_WIDTH = 288
+const PANEL_WIDTH_DESKTOP = 288
 
 /** Format ISO date to relative time (e.g. "2 min ago", "1 hour ago") */
 function formatRelativeTime(createdAt: string): string {
@@ -66,6 +67,7 @@ function getTypeLabel(kind: NotificationPushPayload['kind']): string {
 export function NotificationsPanel() {
   const { notificationPanelOpen, setNotificationPanelOpen } = useTerminalStore()
   const { user } = useAuthStore()
+  const isMobile = !useMediaQuery('(min-width: 1024px)')
   const {
     items,
     unreadCount,
@@ -93,18 +95,27 @@ export function NotificationsPanel() {
   return (
     <div
       className={cn(
-        'h-full min-h-0 flex flex-col shrink-0',
-        'bg-background/95 backdrop-blur-sm',
-        'border-l border-white/10 shadow-[-4px_0_24px_rgba(0,0,0,0.25)]',
+        'h-full min-h-0 flex flex-col',
+        isMobile ? 'w-full bg-background' : 'shrink-0 bg-background/95 backdrop-blur-sm border-l border-white/10 shadow-[-4px_0_24px_rgba(0,0,0,0.25)]',
         'animate-fade-in'
       )}
-      style={{ width: PANEL_WIDTH }}
+      style={isMobile ? undefined : { width: PANEL_WIDTH_DESKTOP }}
       role="dialog"
-      aria-label="Notifications panel"
+      aria-label={isMobile ? 'Notifications page' : 'Notifications panel'}
     >
       {/* Header */}
       <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3.5 border-b border-white/10 bg-gradient-to-r from-white/[0.03] to-transparent">
         <div className="flex items-center gap-2.5 min-w-0">
+          {isMobile ? (
+            <button
+              type="button"
+              onClick={() => setNotificationPanelOpen(false)}
+              className="shrink-0 p-2 -ml-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
+              aria-label="Back"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          ) : null}
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
             <Bell className="h-4 w-4" />
           </div>
@@ -120,15 +131,17 @@ export function NotificationsPanel() {
               Mark all read
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setNotificationPanelOpen(false)}
-            className="shrink-0 p-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
-            title="Close panel"
-            aria-label="Close notifications panel"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {!isMobile && (
+            <button
+              type="button"
+              onClick={() => setNotificationPanelOpen(false)}
+              className="shrink-0 p-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
+              title="Close panel"
+              aria-label="Close notifications panel"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 

@@ -1,11 +1,12 @@
-import { X, CreditCard, ArrowDownCircle, Clock, CheckCircle, XCircle } from 'lucide-react'
+import { X, CreditCard, ArrowDownCircle, Clock, CheckCircle, XCircle, ArrowLeft } from 'lucide-react'
+import { useMediaQuery } from '@/shared/hooks'
 import { useTerminalStore } from '../store'
 import { useQuery } from '@tanstack/react-query'
 import { fetchDepositHistory, type DepositHistoryItem } from '@/features/wallet/api'
 import { cn } from '@/shared/utils'
 import { Spinner } from '@/shared/ui/loading'
 
-const PANEL_WIDTH = 288
+const PANEL_WIDTH_DESKTOP = 288
 
 function formatDate(iso: string): string {
   try {
@@ -50,6 +51,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export function PaymentPanel() {
   const { paymentPanelOpen, setPaymentPanelOpen } = useTerminalStore()
+  const isMobile = !useMediaQuery('(min-width: 1024px)')
   const { data: deposits, isLoading, error, refetch, isError } = useQuery({
     queryKey: ['account', 'deposits'],
     queryFn: fetchDepositHistory,
@@ -62,32 +64,43 @@ export function PaymentPanel() {
   return (
     <div
       className={cn(
-        'h-full min-h-0 flex flex-col shrink-0',
-        'bg-background/95 backdrop-blur-sm',
-        'border-l border-white/10 shadow-[-4px_0_24px_rgba(0,0,0,0.25)]',
+        'h-full min-h-0 flex flex-col',
+        isMobile ? 'w-full bg-background' : 'shrink-0 bg-background/95 backdrop-blur-sm border-l border-white/10 shadow-[-4px_0_24px_rgba(0,0,0,0.25)]',
         'animate-fade-in'
       )}
-      style={{ width: PANEL_WIDTH }}
+      style={isMobile ? undefined : { width: PANEL_WIDTH_DESKTOP }}
       role="dialog"
-      aria-label="Deposit history panel"
+      aria-label={isMobile ? 'Deposit history page' : 'Deposit history panel'}
     >
       {/* Header */}
       <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3.5 border-b border-white/10 bg-gradient-to-r from-white/[0.03] to-transparent">
         <div className="flex items-center gap-2.5 min-w-0">
+          {isMobile ? (
+            <button
+              type="button"
+              onClick={() => setPaymentPanelOpen(false)}
+              className="shrink-0 p-2 -ml-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
+              aria-label="Back"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          ) : null}
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
             <CreditCard className="h-4 w-4" />
           </div>
           <h2 className="text-sm font-semibold text-text truncate">Deposit History</h2>
         </div>
-        <button
-          type="button"
-          onClick={() => setPaymentPanelOpen(false)}
-          className="shrink-0 p-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
-          title="Close panel"
-          aria-label="Close deposit history panel"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {!isMobile && (
+          <button
+            type="button"
+            onClick={() => setPaymentPanelOpen(false)}
+            className="shrink-0 p-2 rounded-lg text-text-muted hover:text-text hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50"
+            title="Close panel"
+            aria-label="Close deposit history panel"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Content */}

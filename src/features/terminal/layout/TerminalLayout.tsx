@@ -30,7 +30,7 @@ export function TerminalLayout({
           {mobileMain}
         </div>
         {hasRightPanel && (
-          <div className="fixed inset-0 z-50 flex bg-background/95">
+          <div className="fixed inset-0 z-50 flex flex-col bg-background">
             {rightPanel}
           </div>
         )}
