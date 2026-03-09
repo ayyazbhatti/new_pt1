@@ -4,6 +4,7 @@ import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { IncomingCallModal } from './components/IncomingCallModal'
 import { InCallBar } from './components/InCallBar'
+import { ensureAudioUnlockListener } from './audioUnlock'
 
 const CALL_EVENT_TYPES = new Set([
   'call.incoming',
@@ -99,6 +100,10 @@ export function UserCallProvider() {
       }
     }
   }, [activeCallId, setIncomingCall, clearCall, cleanupWebRTC])
+
+  useEffect(() => {
+    ensureAudioUnlockListener()
+  }, [])
 
   useEffect(() => {
     const unsub = wsClient.subscribe((ev) => handlerRef.current(ev))

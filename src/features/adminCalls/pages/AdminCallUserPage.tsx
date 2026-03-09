@@ -1,14 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui'
+import { DataTable, type ColumnDef } from '@/shared/ui/table'
 import { searchUsersForAppointment } from '@/features/appointments/api/appointments.api'
 import type { UserSearchResult } from '@/features/appointments/types'
 import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { getCallRecords, type CallRecordRow } from '../api/callRecords.api'
-import { Phone, PhoneOff, Loader2, RefreshCw } from 'lucide-react'
+import { playRingtone } from '@/features/call/playRingtone'
+import { Phone, PhoneOff, Loader2, Bell } from 'lucide-react'
 import { format } from 'date-fns'
 
 type CallStatus = 'idle' | 'ringing' | 'connected' | 'declined' | 'error'
@@ -31,7 +33,10 @@ export function AdminCallUserPage() {
   const [recordsTotal, setRecordsTotal] = useState(0)
   const [recordsLoading, setRecordsLoading] = useState(false)
   const [recordsPage, setRecordsPage] = useState(0)
-  const recordsLimit = 20
+  const [recordsPageSize, setRecordsPageSize] = useState(20)
+  const [ringTestPlaying, setRingTestPlaying] = useState(false)
+  const ringTestStopRef = useRef<(() => void) | null>(null)
+  const ringTestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
@@ -211,12 +216,34 @@ export function AdminCallUserPage() {
   const displayName = (u: UserSearchResult) =>
     u.full_name ?? ([u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id)
 
+  /** Call again the user from a call history record (sets selected user and initiates call). */
+  const handleCallAgain = useCallback(
+    (record: CallRecordRow) => {
+      const recordAsUser: UserSearchResult = {
+        id: record.userId,
+        email: record.userEmail ?? '',
+        full_name: record.userDisplayName ?? undefined,
+      }
+      setSelectedUser(recordAsUser)
+      setStatus('ringing')
+      setTargetUserId(record.userId)
+      setErrorMessage(null)
+      const displayNameStr = user?.name ?? ([user?.firstName, user?.lastName].filter(Boolean).join(' ') || undefined)
+      wsClient.send({
+        type: 'call.initiate',
+        target_user_id: record.userId,
+        caller_display_name: displayNameStr,
+      })
+    },
+    [user?.name, user?.firstName, user?.lastName]
+  )
+
   const fetchCallRecords = useCallback(async () => {
     setRecordsLoading(true)
     try {
       const res = await getCallRecords({
-        limit: recordsLimit,
-        offset: recordsPage * recordsLimit,
+        limit: recordsPageSize,
+        offset: recordsPage * recordsPageSize,
       })
       setCallRecords(res.records)
       setRecordsTotal(res.total)
@@ -226,7 +253,7 @@ export function AdminCallUserPage() {
     } finally {
       setRecordsLoading(false)
     }
-  }, [recordsPage])
+  }, [recordsPage, recordsPageSize])
 
   useEffect(() => {
     fetchCallRecords()
@@ -247,13 +274,149 @@ export function AdminCallUserPage() {
     }
   }, [remoteStream])
 
+  const callHistoryColumns = useMemo<ColumnDef<CallRecordRow>[]>(
+    () => [
+      {
+        accessorKey: 'initiatedAt',
+        header: 'Initiated at',
+        cell: ({ row }) => (
+          <span className="text-sm whitespace-nowrap">
+            {format(new Date(row.original.initiatedAt), 'MMM d, yyyy HH:mm:ss')}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'adminDisplayName',
+        header: 'Admin',
+        cell: ({ row }) => (
+          <span className="text-sm" title={row.original.adminEmail ?? undefined}>
+            {row.original.adminDisplayName || row.original.adminEmail || row.original.adminUserId}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'userDisplayName',
+        header: 'User (callee)',
+        cell: ({ row }) => (
+          <span className="text-sm" title={row.original.userEmail ?? undefined}>
+            {row.original.userDisplayName || row.original.userEmail || row.original.userId}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'userEmail',
+        header: 'Email',
+        cell: ({ row }) => (
+          <span className="text-sm text-text-muted whitespace-nowrap">
+            {row.original.userEmail ?? '—'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'status',
+        header: 'Status',
+        cell: ({ row }) => (
+          <span className="text-sm capitalize">{row.original.status}</span>
+        ),
+      },
+      {
+        id: 'duration',
+        header: 'Duration',
+        cell: ({ row }) => (
+          <span className="text-sm whitespace-nowrap">
+            {row.original.durationSeconds != null
+              ? `${Math.floor(row.original.durationSeconds / 60)}m ${row.original.durationSeconds % 60}s`
+              : '—'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'endedBy',
+        header: 'Ended by',
+        cell: ({ row }) => (
+          <span className="text-sm">{row.original.endedBy ?? '—'}</span>
+        ),
+      },
+      {
+        id: 'actions',
+        header: 'Actions',
+        cell: ({ row }) => (
+          <div onClick={(e) => e.stopPropagation()} data-no-row-click>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleCallAgain(row.original)}
+              disabled={status !== 'idle'}
+              className="gap-1.5"
+              title="Call this user again"
+            >
+              <Phone className="h-3.5 w-3.5" />
+              Call again
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [status, handleCallAgain]
+  )
+
+  const handleRingTest = () => {
+    if (ringTestPlaying) {
+      if (ringTestTimeoutRef.current) {
+        clearTimeout(ringTestTimeoutRef.current)
+        ringTestTimeoutRef.current = null
+      }
+      ringTestStopRef.current?.()
+      ringTestStopRef.current = null
+      setRingTestPlaying(false)
+      return
+    }
+    const stop = playRingtone({ durationMs: 6000 })
+    ringTestStopRef.current = stop
+    setRingTestPlaying(true)
+    ringTestTimeoutRef.current = setTimeout(() => {
+      ringTestTimeoutRef.current = null
+      setRingTestPlaying(false)
+      ringTestStopRef.current = null
+    }, 6000)
+  }
+
   return (
     <ContentShell>
       <PageHeader
         title="Call user"
         description="Select a user and start a call. They will see an incoming call and can accept or reject."
       />
-      <div className="space-y-6 max-w-2xl">
+      <div className="space-y-6 w-full">
+        {/* Ring test: same sound the user hears on incoming call */}
+        <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-surface-2/50">
+          <Bell className="h-5 w-5 text-muted" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">Ring test</p>
+            <p className="text-xs text-muted">
+              Play the same ring the user hears when you call. Use this to verify audio works. If the user does not hear the ring, ask them to click or tap anywhere on the page first (browser requirement).
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRingTest}
+            className="gap-1.5 shrink-0"
+          >
+            {ringTestPlaying ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Stop
+              </>
+            ) : (
+              <>
+                <Bell className="h-4 w-4" />
+                Play ring
+              </>
+            )}
+          </Button>
+        </div>
+
         {/* User search */}
         <div className="space-y-2">
           <label className="text-sm font-medium text-text-muted">Search user</label>
@@ -349,97 +512,34 @@ export function AdminCallUserPage() {
           </div>
         )}
 
-        {/* Call history table */}
+        {/* Call history table - same DataTable as admin Users page */}
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Call history</h2>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => fetchCallRecords()}
-              disabled={recordsLoading}
-              className="gap-1"
-            >
-              <RefreshCw className={`h-4 w-4 ${recordsLoading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-          </div>
-          <div className="rounded-lg border border-border overflow-hidden bg-surface">
-            {recordsLoading && callRecords.length === 0 ? (
-              <div className="p-8 text-center text-text-muted flex items-center justify-center gap-2">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                Loading records...
-              </div>
-            ) : callRecords.length === 0 ? (
-              <div className="p-8 text-center text-text-muted">No call records yet.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border bg-surface-2">
-                      <th className="text-left px-4 py-3 font-medium">Initiated at</th>
-                      <th className="text-left px-4 py-3 font-medium">Admin</th>
-                      <th className="text-left px-4 py-3 font-medium">User (callee)</th>
-                      <th className="text-left px-4 py-3 font-medium">Status</th>
-                      <th className="text-left px-4 py-3 font-medium">Duration</th>
-                      <th className="text-left px-4 py-3 font-medium">Ended by</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {callRecords.map((r) => (
-                      <tr key={r.id} className="border-b border-border last:border-0">
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          {format(new Date(r.initiatedAt), 'MMM d, yyyy HH:mm:ss')}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span title={r.adminEmail ?? undefined}>
-                            {r.adminDisplayName || r.adminEmail || r.adminUserId}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span title={r.userEmail ?? undefined}>
-                            {r.userDisplayName || r.userEmail || r.userId}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 capitalize">{r.status}</td>
-                        <td className="px-4 py-3">
-                          {r.durationSeconds != null
-                            ? `${Math.floor(r.durationSeconds / 60)}m ${r.durationSeconds % 60}s`
-                            : '—'}
-                        </td>
-                        <td className="px-4 py-3">{r.endedBy ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {recordsTotal > recordsLimit && (
-              <div className="px-4 py-2 border-t border-border flex items-center justify-between text-text-muted text-xs">
-                <span>
-                  Showing {recordsPage * recordsLimit + 1}–{Math.min((recordsPage + 1) * recordsLimit, recordsTotal)} of {recordsTotal}
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={recordsPage === 0 || recordsLoading}
-                    onClick={() => setRecordsPage((p) => p - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={(recordsPage + 1) * recordsLimit >= recordsTotal || recordsLoading}
-                    onClick={() => setRecordsPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
+          <h2 className="text-lg font-semibold">Call history</h2>
+          {recordsLoading && callRecords.length === 0 ? (
+            <div className="rounded-lg border border-border p-8 text-center text-text-muted flex items-center justify-center gap-2">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Loading records...
+            </div>
+          ) : callRecords.length === 0 && recordsTotal === 0 ? (
+            <div className="rounded-lg border border-border p-8 text-center text-text-muted">
+              No call records yet.
+            </div>
+          ) : (
+            <DataTable<CallRecordRow>
+              data={callRecords}
+              columns={callHistoryColumns}
+              pagination={{
+                page: recordsPage + 1,
+                pageSize: recordsPageSize,
+                total: recordsTotal,
+                onPageChange: (p) => setRecordsPage(p - 1),
+                onPageSizeChange: (size) => {
+                  setRecordsPageSize(size)
+                  setRecordsPage(0)
+                },
+              }}
+            />
+          )}
         </div>
       </div>
     </ContentShell>
