@@ -43,6 +43,8 @@ export interface User {
   maxDailyLoss: number
   permissionProfileId?: string | null
   permissionProfileName?: string | null
+  /** admin | super_admin | manager | agent | user. Used for Super Admin toggle. */
+  role?: string
 }
 
 export interface UserWallet {

@@ -1,6 +1,7 @@
 use crate::models::swap_rule::{SwapRule, SwapRuleWithGroupName};
 use anyhow::Result;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 const VALID_MARKETS: &[&str] = &["crypto", "forex", "commodities", "indices", "stocks"];
@@ -62,6 +63,7 @@ impl AdminSwapService {
         }
     }
 
+    /// List swap rules. When allowed_rule_ids is None (e.g. super_admin), returns all. When Some(empty), returns (vec![], 0).
     pub async fn list_rules(
         &self,
         group_id: Option<Uuid>,
@@ -71,14 +73,21 @@ impl AdminSwapService {
         calc_mode: Option<&str>,
         page: Option<i64>,
         page_size: Option<i64>,
+        allowed_rule_ids: Option<&[Uuid]>,
     ) -> Result<(Vec<SwapRuleWithGroupName>, i64)> {
+        if let Some(ids) = allowed_rule_ids {
+            if ids.is_empty() {
+                return Ok((vec![], 0));
+            }
+        }
+
         let page = page.unwrap_or(1).max(1);
         let page_size = page_size.unwrap_or(20).min(100).max(1);
         let offset = (page - 1) * page_size;
 
         let symbol_pattern: Option<String> = symbol.map(|s| format!("%{}%", s));
 
-        let mut conditions = Vec::with_capacity(5);
+        let mut conditions = Vec::with_capacity(6);
         let mut bind_count = 0u8;
 
         if group_id.is_some() {
@@ -100,6 +109,10 @@ impl AdminSwapService {
         if calc_mode.is_some() {
             bind_count += 1;
             conditions.push(format!("sr.calc_mode = ${}", bind_count));
+        }
+        if allowed_rule_ids.is_some() {
+            bind_count += 1;
+            conditions.push(format!("sr.id = ANY(${})", bind_count));
         }
 
         let where_clause = if conditions.is_empty() {
@@ -167,6 +180,10 @@ impl AdminSwapService {
         if let Some(c) = calc_mode {
             count_query = count_query.bind(c);
             list_query = list_query.bind(c);
+        }
+        if let Some(ids) = allowed_rule_ids {
+            count_query = count_query.bind(ids);
+            list_query = list_query.bind(ids);
         }
 
         let total: i64 = count_query.fetch_one(&self.pool).await?;
@@ -369,6 +386,52 @@ impl AdminSwapService {
         if done.rows_affected() == 0 {
             return Err(anyhow::anyhow!("Swap rule not found"));
         }
+        Ok(())
+    }
+
+    /// Get tag IDs assigned to each swap rule (entity_type = 'swap_rule').
+    pub async fn get_tag_ids_for_swap_rules(
+        &self,
+        rule_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<Uuid>>> {
+        if rule_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            entity_id: Uuid,
+            tag_id: Uuid,
+        }
+        let rows = sqlx::query_as::<_, Row>(
+            "SELECT entity_id, tag_id FROM tag_assignments WHERE entity_type = 'swap_rule' AND entity_id = ANY($1)",
+        )
+        .bind(rule_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for r in rows {
+            map.entry(r.entity_id).or_default().push(r.tag_id);
+        }
+        Ok(map)
+    }
+
+    /// Replace tag assignments for a swap rule.
+    pub async fn set_swap_rule_tags(&self, rule_id: Uuid, tag_ids: &[Uuid]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM tag_assignments WHERE entity_type = 'swap_rule' AND entity_id = $1")
+            .bind(rule_id)
+            .execute(&mut *tx)
+            .await?;
+        for tag_id in tag_ids {
+            sqlx::query(
+                "INSERT INTO tag_assignments (tag_id, entity_type, entity_id, created_at) VALUES ($1, 'swap_rule', $2, NOW())",
+            )
+            .bind(tag_id)
+            .bind(rule_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 }

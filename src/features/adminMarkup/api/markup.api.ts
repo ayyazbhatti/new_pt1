@@ -24,6 +24,7 @@ function toCamelCaseProfile(obj: any): MarkupProfile {
     askMarkup: obj?.ask_markup ?? obj?.askMarkup,
     createdAt: obj?.created_at ?? obj?.createdAt,
     updatedAt: obj?.updated_at ?? obj?.updatedAt,
+    tagIds: obj?.tag_ids ?? [],
   }
 }
 
@@ -120,5 +121,21 @@ export async function transferMarkupsToProfiles(
     }
   )
   return response
+}
+
+/** Get tag IDs assigned to a markup profile. Uses /api/admin/markup-profile-tags/:id */
+export async function getMarkupProfileTags(profileId: string): Promise<string[]> {
+  const res = await http<{ tag_ids: string[] }>(`/api/admin/markup-profile-tags/${profileId}`, {
+    method: 'GET',
+  })
+  return res.tag_ids ?? []
+}
+
+/** Assign tags to a markup profile (replaces existing). */
+export async function setMarkupProfileTags(profileId: string, tagIds: string[]): Promise<void> {
+  await http(`/api/admin/markup-profile-tags/${profileId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tag_ids: tagIds }),
+  })
 }
 

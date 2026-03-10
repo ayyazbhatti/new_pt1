@@ -2,7 +2,7 @@ import { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/shared/store/auth.store'
 
-const ALLOWED_ROLES = ['admin', 'manager', 'agent']
+const ALLOWED_ROLES = ['admin', 'super_admin', 'manager', 'agent']
 
 interface AgentGuardProps {
   children: ReactNode

@@ -9,6 +9,8 @@ export interface MarkupProfile {
   askMarkup: string
   createdAt: string
   updatedAt: string
+  /** Tag IDs assigned to this profile */
+  tagIds?: string[]
 }
 
 export interface SymbolMarkupOverride {

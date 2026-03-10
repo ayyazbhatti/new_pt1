@@ -1,6 +1,7 @@
 use crate::models::markup_profile::{MarkupProfile, MarkupProfileWithGroup, SymbolMarkupOverride};
 use anyhow::Result;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub struct AdminMarkupService {
@@ -12,7 +13,18 @@ impl AdminMarkupService {
         Self { pool }
     }
 
-    pub async fn list_profiles(&self) -> Result<Vec<MarkupProfileWithGroup>> {
+    /// List markup (price stream) profiles. When allowed_profile_ids is None (e.g. super_admin), returns all.
+    /// When Some(ids) with empty slice, returns none. When Some(ids) with non-empty, only those profiles.
+    pub async fn list_profiles(
+        &self,
+        allowed_profile_ids: Option<&[Uuid]>,
+    ) -> Result<Vec<MarkupProfileWithGroup>> {
+        if let Some(ids) = allowed_profile_ids {
+            if ids.is_empty() {
+                return Ok(vec![]);
+            }
+        }
+
         let query_with_group = r#"
             SELECT 
                 psp.id,
@@ -27,7 +39,6 @@ impl AdminMarkupService {
                 psp.updated_at
             FROM price_stream_profiles psp
             LEFT JOIN user_groups ug ON psp.group_id = ug.id
-            ORDER BY psp.name
             "#;
         let query_without_group = r#"
             SELECT 
@@ -42,19 +53,38 @@ impl AdminMarkupService {
                 psp.created_at,
                 psp.updated_at
             FROM price_stream_profiles psp
-            ORDER BY psp.name
             "#;
 
-        match sqlx::query_as::<_, MarkupProfileWithGroup>(query_with_group)
-            .fetch_all(&self.pool)
-            .await
-        {
+        let run_with_group = async {
+            if let Some(ids) = allowed_profile_ids {
+                let q = format!("{} WHERE psp.id = ANY($1) ORDER BY psp.name", query_with_group);
+                sqlx::query_as::<_, MarkupProfileWithGroup>(&q)
+                    .bind(ids)
+                    .fetch_all(&self.pool)
+                    .await
+            } else {
+                let q = format!("{} ORDER BY psp.name", query_with_group);
+                sqlx::query_as::<_, MarkupProfileWithGroup>(&q)
+                    .fetch_all(&self.pool)
+                    .await
+            }
+        };
+        match run_with_group.await.map_err(anyhow::Error::from) {
             Ok(profiles) => Ok(profiles),
             Err(_) => {
-                let profiles = sqlx::query_as::<_, MarkupProfileWithGroup>(query_without_group)
-                    .fetch_all(&self.pool)
-                    .await?;
-                Ok(profiles)
+                if let Some(ids) = allowed_profile_ids {
+                    let q = format!("{} WHERE psp.id = ANY($1) ORDER BY psp.name", query_without_group);
+                    sqlx::query_as::<_, MarkupProfileWithGroup>(&q)
+                        .bind(ids)
+                        .fetch_all(&self.pool)
+                        .await
+                } else {
+                    let q = format!("{} ORDER BY psp.name", query_without_group);
+                    sqlx::query_as::<_, MarkupProfileWithGroup>(&q)
+                        .fetch_all(&self.pool)
+                        .await
+                }
+                .map_err(anyhow::Error::from)
             }
         }
     }
@@ -443,6 +473,52 @@ impl AdminMarkupService {
         })
         .await
         .map_err(|e| anyhow::anyhow!("join: {}", e))??;
+        Ok(())
+    }
+
+    /// Get tag IDs assigned to each markup profile (price_stream_profiles; entity_type = 'markup_profile').
+    pub async fn get_tag_ids_for_markup_profiles(
+        &self,
+        profile_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<Uuid>>> {
+        if profile_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            entity_id: Uuid,
+            tag_id: Uuid,
+        }
+        let rows = sqlx::query_as::<_, Row>(
+            "SELECT entity_id, tag_id FROM tag_assignments WHERE entity_type = 'markup_profile' AND entity_id = ANY($1)",
+        )
+        .bind(profile_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for r in rows {
+            map.entry(r.entity_id).or_default().push(r.tag_id);
+        }
+        Ok(map)
+    }
+
+    /// Replace tag assignments for a markup profile.
+    pub async fn set_markup_profile_tags(&self, profile_id: Uuid, tag_ids: &[Uuid]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM tag_assignments WHERE entity_type = 'markup_profile' AND entity_id = $1")
+            .bind(profile_id)
+            .execute(&mut *tx)
+            .await?;
+        for tag_id in tag_ids {
+            sqlx::query(
+                "INSERT INTO tag_assignments (tag_id, entity_type, entity_id, created_at) VALUES ($1, 'markup_profile', $2, NOW())",
+            )
+            .bind(tag_id)
+            .bind(profile_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 }

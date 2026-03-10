@@ -49,6 +49,7 @@ function mapUserResponse(user: UserResponse): User {
     maxDailyLoss: 0, // TODO: Get from risk settings
     permissionProfileId: user.permission_profile_id ?? undefined,
     permissionProfileName: user.permission_profile_name ?? undefined,
+    role: user.role,
   }
 }
 

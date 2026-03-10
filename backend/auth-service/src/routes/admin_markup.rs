@@ -63,6 +63,16 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Serialize)]
+pub struct MarkupProfileTagsResponse {
+    pub tag_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutMarkupProfileTagsRequest {
+    pub tag_ids: Vec<Uuid>,
+}
+
 pub fn create_admin_markup_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/profiles", get(list_profiles).post(create_profile))
@@ -70,6 +80,14 @@ pub fn create_admin_markup_router(pool: PgPool) -> Router<PgPool> {
         .route("/profiles/:id/symbols", get(get_symbol_overrides))
         .route("/profiles/:id/symbols/:symbol_id", put(upsert_symbol_override))
         .route("/profiles/:id/transfer", post(transfer_markups))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .with_state(pool)
+}
+
+/// Router for GET/PUT markup profile tags. Mount at `/api/admin/markup-profile-tags` so path is `/:id`.
+pub fn create_admin_markup_profile_tags_router(pool: PgPool) -> Router<PgPool> {
+    Router::new()
+        .route("/:id", get(get_markup_profile_tags).put(put_markup_profile_tags))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -102,6 +120,60 @@ fn ensure_percent_markup(markup_type: &str) -> Result<(), (StatusCode, Json<Erro
     Ok(())
 }
 
+/// Resolve markup profile IDs that share at least one tag with the given user (for tag-scoped admin list).
+async fn resolve_allowed_markup_profile_ids_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    #[derive(sqlx::FromRow)]
+    struct TagRow {
+        tag_id: Uuid,
+    }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'user' AND entity_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+    if user_tag_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    #[derive(sqlx::FromRow)]
+    struct ProfileRow {
+        entity_id: Uuid,
+    }
+    let profile_rows = sqlx::query_as::<_, ProfileRow>(
+        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'markup_profile' AND tag_id = ANY($1)",
+    )
+    .bind(&user_tag_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(profile_rows.into_iter().map(|r| r.entity_id).collect())
+}
+
 async fn list_profiles(
     State(pool): State<PgPool>,
     claims: axum::extract::Extension<Claims>,
@@ -110,8 +182,18 @@ async fn list_profiles(
         .await
         .map_err(permission_denied_to_response)?;
 
+    let allowed_profile_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_markup_profile_ids_for_user(&pool, claims.sub).await?;
+        Some(ids)
+    };
+
     let service = AdminMarkupService::new(pool);
-    let profiles = service.list_profiles().await.map_err(|e| {
+    let profiles = service
+        .list_profiles(allowed_profile_ids.as_deref())
+        .await
+        .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -123,9 +205,16 @@ async fn list_profiles(
         )
     })?;
 
+    let profile_ids: Vec<Uuid> = profiles.iter().map(|p| p.id).collect();
+    let tag_map = service
+        .get_tag_ids_for_markup_profiles(&profile_ids)
+        .await
+        .unwrap_or_default();
+
     let items: Vec<serde_json::Value> = profiles
         .into_iter()
         .map(|p| {
+            let tag_ids = tag_map.get(&p.id).cloned().unwrap_or_default();
             serde_json::json!({
                 "id": p.id,
                 "name": p.name,
@@ -137,6 +226,7 @@ async fn list_profiles(
                 "ask_markup": p.ask_markup,
                 "created_at": p.created_at,
                 "updated_at": p.updated_at,
+                "tag_ids": tag_ids,
             })
         })
         .collect();
@@ -489,5 +579,81 @@ async fn sync_redis_markup_for_override(
                 .query(&mut conn);
         }
     }
+}
+
+async fn get_markup_profile_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<MarkupProfileTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "markup:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let service = AdminMarkupService::new(pool);
+    let profile_ids = vec![id];
+    let map = service.get_tag_ids_for_markup_profiles(&profile_ids).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let tag_ids = map.get(&id).cloned().unwrap_or_default();
+    Ok(Json(MarkupProfileTagsResponse { tag_ids }))
+}
+
+async fn put_markup_profile_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<PutMarkupProfileTagsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "markup:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let profile_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM price_stream_profiles WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+    if !profile_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "PROFILE_NOT_FOUND".to_string(),
+                    message: "Markup profile not found".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AdminMarkupService::new(pool);
+    if let Err(e) = service.set_markup_profile_tags(id, &payload.tag_ids).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_PROFILE_TAGS_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        ));
+    }
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 

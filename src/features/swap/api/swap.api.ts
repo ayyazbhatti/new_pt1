@@ -27,6 +27,7 @@ function toCamelCaseRule(obj: any): SwapRule {
     updatedAt: obj.updated_at ?? new Date().toISOString(),
     updatedBy: String(obj.updated_by ?? ''),
     notes: obj.notes ?? undefined,
+    tagIds: obj.tag_ids ?? [],
   }
 }
 
@@ -129,4 +130,20 @@ export async function updateSwapRule(
 
 export async function deleteSwapRule(id: string): Promise<void> {
   await http(`/api/admin/swap/rules/${id}`, { method: 'DELETE' })
+}
+
+/** Get tag IDs assigned to a swap rule. Uses /api/admin/swap-rule-tags/:id */
+export async function getSwapRuleTags(ruleId: string): Promise<string[]> {
+  const res = await http<{ tag_ids: string[] }>(`/api/admin/swap-rule-tags/${ruleId}`, {
+    method: 'GET',
+  })
+  return res.tag_ids ?? []
+}
+
+/** Assign tags to a swap rule (replaces existing). */
+export async function setSwapRuleTags(ruleId: string, tagIds: string[]): Promise<void> {
+  await http(`/api/admin/swap-rule-tags/${ruleId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tag_ids: tagIds }),
+  })
 }

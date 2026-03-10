@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
 import { useCanAccess } from '@/shared/utils/permissions'
@@ -11,8 +12,8 @@ import { DeleteProfileDialog } from '../components/DeleteProfileDialog'
 import { ManageTiersModal } from '../modals/ManageTiersModal'
 import { ArchiveConfirmModal } from '../modals/ArchiveConfirmModal'
 import { Plus, Scale, CheckCircle, BarChart3, X } from 'lucide-react'
-import { useModalStore } from '@/app/store'
 import { LeverageProfile } from '../types/leverageProfile'
+import { listTags } from '@/features/tags/api/tags.api'
 import { cn } from '@/shared/utils'
 
 const STORAGE_SEARCH_KEY = 'leverage-tiers-management-search'
@@ -43,6 +44,11 @@ export function LeverageProfilesPage() {
   )
 
   const { data, isLoading, refetch } = useLeverageProfilesList(listParams)
+  const { data: tagsList = [] } = useQuery({
+    queryKey: ['admin', 'tags'],
+    queryFn: () => listTags(),
+  })
+  const allTags = useMemo(() => tagsList.map((t) => ({ id: t.id, name: t.name })), [tagsList])
   const profiles = data?.items ?? []
   const totalProfiles = data?.total ?? 0
   const activeCount = useMemo(() => profiles.filter((p) => p.status === 'active').length, [profiles])
@@ -197,6 +203,8 @@ export function LeverageProfilesPage() {
                 onArchive={handleArchive}
                 onUnarchive={handleUnarchive}
                 onDelete={handleDelete}
+                allTags={allTags}
+                onRefresh={refetch}
               />
             ))
           )}

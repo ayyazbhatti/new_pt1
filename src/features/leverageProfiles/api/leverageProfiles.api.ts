@@ -23,6 +23,7 @@ function toCamelCaseProfile(obj: any): LeverageProfile {
     symbolsCount: obj.symbols_count,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
+    tagIds: obj.tag_ids ?? [],
   }
 }
 
@@ -166,6 +167,22 @@ export async function setLeverageProfileSymbols(profileId: string, payload: SetP
   await http(`/api/admin/leverage-profiles/${profileId}/symbols`, {
     method: 'PUT',
     body: JSON.stringify(payload),
+  })
+}
+
+/** Get tag IDs assigned to a leverage profile. Uses /api/admin/leverage-profile-tags/:id */
+export async function getLeverageProfileTags(profileId: string): Promise<string[]> {
+  const res = await http<{ tag_ids: string[] }>(`/api/admin/leverage-profile-tags/${profileId}`, {
+    method: 'GET',
+  })
+  return res.tag_ids ?? []
+}
+
+/** Assign tags to a leverage profile (replaces existing). */
+export async function setLeverageProfileTags(profileId: string, tagIds: string[]): Promise<void> {
+  await http(`/api/admin/leverage-profile-tags/${profileId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tag_ids: tagIds }),
   })
 }
 

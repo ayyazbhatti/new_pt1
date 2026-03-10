@@ -3,7 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/shared/store/auth.store'
 
 /** Roles that belong to the admin panel; they are redirected away from /user/* */
-const ADMIN_PANEL_ROLES = ['admin', 'manager', 'agent']
+const ADMIN_PANEL_ROLES = ['admin', 'super_admin', 'manager', 'agent']
 
 interface UserGuardProps {
   children: ReactNode

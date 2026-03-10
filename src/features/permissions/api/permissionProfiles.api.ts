@@ -7,6 +7,7 @@ export interface PermissionProfileDto {
   permission_keys: string[]
   created_at: string
   updated_at: string
+  tag_ids?: string[]
 }
 
 export interface PermissionProfile {
@@ -14,6 +15,7 @@ export interface PermissionProfile {
   name: string
   description?: string
   permissionIds: string[]
+  tagIds?: string[]
 }
 
 function fromDto(d: PermissionProfileDto): PermissionProfile {
@@ -22,6 +24,7 @@ function fromDto(d: PermissionProfileDto): PermissionProfile {
     name: d.name,
     description: d.description ?? undefined,
     permissionIds: d.permission_keys ?? [],
+    tagIds: Array.isArray(d.tag_ids) ? d.tag_ids : [],
   }
 }
 
@@ -64,6 +67,26 @@ export async function updatePermissionProfile(
 
 export async function deletePermissionProfile(id: string): Promise<void> {
   await http(`/api/admin/permission-profiles/${id}`, { method: 'DELETE' })
+}
+
+/** Get tag IDs assigned to a permission profile. */
+export async function getPermissionProfileTags(profileId: string): Promise<string[]> {
+  const res = await http<{ tag_ids: string[] }>(
+    `/api/admin/permission-profile-tags/${profileId}`,
+    { method: 'GET' }
+  )
+  return res.tag_ids ?? []
+}
+
+/** Assign tags to a permission profile (replaces existing). */
+export async function setPermissionProfileTags(
+  profileId: string,
+  tagIds: string[]
+): Promise<void> {
+  await http(`/api/admin/permission-profile-tags/${profileId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tag_ids: tagIds }),
+  })
 }
 
 export async function listPermissionKeys(): Promise<string[]> {

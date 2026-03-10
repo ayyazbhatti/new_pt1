@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Button } from '@/shared/ui/button'
+import { Checkbox } from '@/shared/ui/Checkbox'
 import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useModalStore } from '@/app/store'
 import { useQuery } from '@tanstack/react-query'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
+import { updateUserRole } from '@/features/adminUsers/api/users.api'
 import type { Manager } from '../types/manager'
 import type { UpdateManagerPayload } from '../api/managers.api'
 import { toast } from '@/shared/components/common'
@@ -19,7 +21,10 @@ export function EditManagerModal({ manager, onSave }: EditManagerModalProps) {
   const [profileId, setProfileId] = useState(manager.permissionProfileId)
   const [profileSearch, setProfileSearch] = useState('')
   const [notes, setNotes] = useState(manager.notes ?? '')
+  const [isSuperAdmin, setIsSuperAdmin] = useState(manager.role === 'super_admin')
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const showSuperAdminToggle = manager.role === 'admin' || manager.role === 'super_admin'
 
   const { data: profiles = [] } = useQuery({
     queryKey: ['permission-profiles'],
@@ -29,6 +34,9 @@ export function EditManagerModal({ manager, onSave }: EditManagerModalProps) {
   useEffect(() => {
     setProfileId(manager.permissionProfileId)
     setNotes(manager.notes ?? '')
+    if (manager.role === 'admin' || manager.role === 'super_admin') {
+      setIsSuperAdmin(manager.role === 'super_admin')
+    }
   }, [manager])
 
   const filteredProfiles = useMemo(() => {
@@ -50,6 +58,12 @@ export function EditManagerModal({ manager, onSave }: EditManagerModalProps) {
     }
     setIsSubmitting(true)
     try {
+      if (showSuperAdminToggle) {
+        const newRole = isSuperAdmin ? 'super_admin' : 'admin'
+        if (newRole !== manager.role) {
+          await updateUserRole(manager.userId, { role: newRole })
+        }
+      }
       const payload: UpdateManagerPayload = {
         permission_profile_id: profile.id,
         notes: notes.trim() || null,
@@ -125,6 +139,19 @@ export function EditManagerModal({ manager, onSave }: EditManagerModalProps) {
           className="w-full"
         />
       </div>
+      {showSuperAdminToggle && (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            checked={isSuperAdmin}
+            onChange={(e) => setIsSuperAdmin(e.target.checked)}
+            id="edit-manager-super-admin"
+          />
+          <label htmlFor="edit-manager-super-admin" className="text-sm font-medium text-text cursor-pointer">
+            Super Admin
+          </label>
+          <span className="text-xs text-text-muted">Can see and manage all tags without assignment.</span>
+        </div>
+      )}
       <div className="flex justify-end gap-2 pt-4 border-t border-border">
         <Button type="button" variant="outline" onClick={() => closeModal(`edit-manager-${manager.id}`)}>
           Cancel

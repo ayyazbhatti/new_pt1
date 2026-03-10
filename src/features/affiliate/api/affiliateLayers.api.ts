@@ -8,6 +8,7 @@ export interface AffiliateLayerDto {
   commission_percent: number
   created_at: string
   updated_at: string
+  tag_ids?: string[]
 }
 
 export interface AffiliateLayer {
@@ -17,6 +18,7 @@ export interface AffiliateLayer {
   commissionPercent: number
   createdAt: string
   updatedAt: string
+  tagIds?: string[]
 }
 
 function fromDto(d: AffiliateLayerDto): AffiliateLayer {
@@ -27,6 +29,7 @@ function fromDto(d: AffiliateLayerDto): AffiliateLayer {
     commissionPercent: d.commission_percent,
     createdAt: d.created_at,
     updatedAt: d.updated_at,
+    tagIds: d.tag_ids ?? [],
   }
 }
 
@@ -80,4 +83,20 @@ export async function updateAffiliateLayer(
 
 export async function deleteAffiliateLayer(id: string): Promise<void> {
   await http(`/api/admin/affiliate/layers/${id}`, { method: 'DELETE' })
+}
+
+/** Get tag IDs assigned to an affiliate scheme. Uses /api/admin/affiliate-scheme-tags/:id */
+export async function getAffiliateSchemeTags(schemeId: string): Promise<string[]> {
+  const res = await http<{ tag_ids: string[] }>(`/api/admin/affiliate-scheme-tags/${schemeId}`, {
+    method: 'GET',
+  })
+  return res.tag_ids ?? []
+}
+
+/** Assign tags to an affiliate scheme (replaces existing). */
+export async function setAffiliateSchemeTags(schemeId: string, tagIds: string[]): Promise<void> {
+  await http(`/api/admin/affiliate-scheme-tags/${schemeId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tag_ids: tagIds }),
+  })
 }

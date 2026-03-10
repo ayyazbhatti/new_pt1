@@ -21,6 +21,8 @@ export interface SwapRule {
   updatedAt: string
   updatedBy: string
   notes?: string
+  /** Tag IDs assigned to this rule */
+  tagIds?: string[]
 }
 
 export interface ListSwapRulesParams {

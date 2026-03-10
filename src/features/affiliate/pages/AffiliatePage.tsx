@@ -1,4 +1,6 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { ContentShell } from '@/shared/layout'
 import { DataTable, type ColumnDef } from '@/shared/ui/table'
@@ -13,12 +15,20 @@ import {
   Pencil,
   Trash2,
   CheckCircle,
+  Tag,
+  ChevronDown,
 } from 'lucide-react'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { useAffiliateLayers } from '../hooks/useAffiliateLayers'
 import { useAffiliateUsers } from '../hooks/useAffiliateUsers'
 import type { AffiliateLayer } from '../api/affiliateLayers.api'
 import type { AffiliateUser } from '../api/affiliateUsers.api'
+import { listTags } from '@/features/tags/api/tags.api'
+import { Checkbox } from '@/shared/ui/Checkbox'
+import { setAffiliateSchemeTags } from '../api/affiliateLayers.api'
+import { toast } from '@/shared/components/common'
+import { cn } from '@/shared/utils'
+import { Spinner } from '@/shared/ui/loading'
 import { CreateEditSchemeModal } from '../modals/CreateEditSchemeModal'
 import { SchemeDetailsModal } from '../modals/SchemeDetailsModal'
 import { DeleteSchemeModal } from '../modals/DeleteSchemeModal'
@@ -91,8 +101,30 @@ export function AffiliatePage() {
   const canCreate = useCanAccess('affiliate:create')
   const canEdit = useCanAccess('affiliate:edit')
   const canDelete = useCanAccess('affiliate:delete')
-  const { data: layers = [], isLoading: layersLoading } = useAffiliateLayers()
+  const canTags = useCanAccess('affiliate:edit')
+  const { data: layers = [], isLoading: layersLoading, refetch: refetchLayers } = useAffiliateLayers()
   const { data: users = [], isLoading: usersLoading } = useAffiliateUsers()
+  const { data: tagsList = [] } = useQuery({
+    queryKey: ['admin', 'tags'],
+    queryFn: () => listTags(),
+  })
+  const allTags = useMemo(() => tagsList.map((t) => ({ id: t.id, name: t.name })), [tagsList])
+  const [openTagsSchemeId, setOpenTagsSchemeId] = useState<string | null>(null)
+  const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
+  const [updatingTagsSchemeId, setUpdatingTagsSchemeId] = useState<string | null>(null)
+  const tagsDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (openTagsSchemeId == null) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagsDropdownRef.current && !tagsDropdownRef.current.contains(e.target as Node)) {
+        setOpenTagsSchemeId(null)
+        setOpenTagsAnchorRect(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [openTagsSchemeId])
 
   const searchPlaceholder =
     activeTab === 'schemes'
@@ -159,6 +191,48 @@ export function AffiliatePage() {
           </span>
         ),
       },
+      ...(canTags
+        ? [
+            {
+              id: 'tags',
+              header: 'Tags',
+              cell: ({ row }: { row: { original: AffiliateLayer } }) => {
+                const layer = row.original
+                const tagIds = layer.tagIds ?? []
+                const isOpen = openTagsSchemeId === layer.id
+                const isUpdating = updatingTagsSchemeId === layer.id
+                const label =
+                  tagIds.length > 0
+                    ? `${tagIds.length} tag${tagIds.length === 1 ? '' : 's'}`
+                    : 'Assign tags'
+                return (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (isOpen) {
+                        setOpenTagsSchemeId(null)
+                        setOpenTagsAnchorRect(null)
+                      } else {
+                        setOpenTagsSchemeId(layer.id)
+                        setOpenTagsAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect())
+                      }
+                    }}
+                    disabled={isUpdating}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text text-sm"
+                  >
+                    {isUpdating && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+                    <Tag className="h-4 w-4 shrink-0" />
+                    <span className="max-w-[80px] truncate">{label}</span>
+                    <ChevronDown
+                      className={cn('h-4 w-4 shrink-0 transition-transform', isOpen && 'rotate-180')}
+                    />
+                  </button>
+                )
+              },
+            } as ColumnDef<AffiliateLayer>,
+          ]
+        : []),
       {
         id: 'qualifiers',
         header: 'Qualifiers',
@@ -214,7 +288,7 @@ export function AffiliatePage() {
         },
       },
     ],
-    [canEdit, canDelete]
+    [canEdit, canDelete, canTags, openTagsSchemeId, updatingTagsSchemeId]
   )
 
   const affiliateColumns: ColumnDef<AffiliateUser>[] = useMemo(
@@ -480,13 +554,64 @@ export function AffiliatePage() {
           <p className="text-sm text-text-muted">Loading affiliates data...</p>
         </div>
       ) : activeTab === 'schemes' ? (
-        <DataTable
-          data={filteredLayers}
-          columns={schemeColumns}
-          bordered
-          onRowClick={canEdit ? openEdit : undefined}
-          className="space-y-0"
-        />
+        <>
+          <DataTable
+            data={filteredLayers}
+            columns={schemeColumns}
+            bordered
+            onRowClick={canEdit ? openEdit : undefined}
+            className="space-y-0"
+          />
+          {openTagsSchemeId && openTagsAnchorRect &&
+            (() => {
+              const openTagsTagIds =
+                filteredLayers.find((l) => l.id === openTagsSchemeId)?.tagIds ?? []
+              return createPortal(
+                <div
+                  ref={tagsDropdownRef}
+                  className="fixed z-[100] min-w-[180px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg"
+                  style={{
+                    left: openTagsAnchorRect.left,
+                    top: openTagsAnchorRect.bottom + 4,
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {allTags.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-text-muted">No tags defined</div>
+                  ) : (
+                    <div className="max-h-[220px] overflow-y-auto">
+                      {allTags.map((tag) => (
+                        <label
+                          key={tag.id}
+                          className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-surface-2"
+                        >
+                          <Checkbox
+                            checked={openTagsTagIds.includes(tag.id)}
+                            onChange={(e) => {
+                              const checked = e.target.checked
+                              const next = checked
+                                ? [...openTagsTagIds, tag.id]
+                                : openTagsTagIds.filter((id) => id !== tag.id)
+                              setUpdatingTagsSchemeId(openTagsSchemeId)
+                              setAffiliateSchemeTags(openTagsSchemeId, next)
+                                .then(() => {
+                                  refetchLayers()
+                                  toast.success('Tags updated')
+                                })
+                                .catch(() => toast.error('Failed to update tags'))
+                                .finally(() => setUpdatingTagsSchemeId(null))
+                            }}
+                          />
+                          <span className="text-text">{tag.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>,
+                document.body
+              )
+            })()}
+        </>
       ) : activeTab === 'affiliates' ? (
         <DataTable
           data={filteredUsers}

@@ -16,14 +16,14 @@ pub struct PermissionDenied {
     pub message: String,
 }
 
-/// Allow if `claims.role == "admin"` or the user has the given permission in their assigned profile.
+/// Allow if `claims.role == "admin"` or `"super_admin"` or the user has the given permission in their assigned profile.
 /// Returns `Ok(())` if allowed, `Err(PermissionDenied)` otherwise.
 pub async fn check_permission(
     pool: &PgPool,
     claims: &Claims,
     permission: &str,
 ) -> Result<(), PermissionDenied> {
-    if claims.role == "admin" {
+    if claims.role == "admin" || claims.role == "super_admin" {
         return Ok(());
     }
     let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")

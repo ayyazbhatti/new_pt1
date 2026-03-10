@@ -63,13 +63,13 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
-/// Allow if role is admin or user has the given permission (from their permission profile).
+/// Allow if role is admin or super_admin or user has the given permission (from their permission profile).
 async fn check_tags_permission(
     pool: &PgPool,
     claims: &Claims,
     permission: &str,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role == "admin" {
+    if claims.role == "admin" || claims.role == "super_admin" {
         return Ok(());
     }
     let profile_id: Option<Uuid> = sqlx::query_scalar(
@@ -183,17 +183,50 @@ async fn list_tags(
         .filter(|s| !s.is_empty())
         .map(|s| format!("%{}%", s.to_lowercase()));
 
-    let rows = if let Some(ref pattern) = search {
+    let is_super_admin = claims.role == "super_admin";
+    let user_id = claims.sub;
+
+    let rows = if is_super_admin {
+        if let Some(ref pattern) = search {
+            sqlx::query_as::<_, TagRow>(
+                r#"
+                SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
+                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
+                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
+                FROM tags t
+                WHERE LOWER(t.name) LIKE $1 OR LOWER(t.slug) LIKE $1
+                ORDER BY t.created_at DESC
+                "#,
+            )
+            .bind(pattern)
+            .fetch_all(&pool)
+            .await
+        } else {
+            sqlx::query_as::<_, TagRow>(
+                r#"
+                SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
+                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
+                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
+                FROM tags t
+                ORDER BY t.created_at DESC
+                "#,
+            )
+            .fetch_all(&pool)
+            .await
+        }
+    } else if let Some(ref pattern) = search {
         sqlx::query_as::<_, TagRow>(
             r#"
             SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
                    COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
                    COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
             FROM tags t
-            WHERE LOWER(t.name) LIKE $1 OR LOWER(t.slug) LIKE $1
+            WHERE EXISTS (SELECT 1 FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user' AND a.entity_id = $1)
+              AND (LOWER(t.name) LIKE $2 OR LOWER(t.slug) LIKE $2)
             ORDER BY t.created_at DESC
             "#,
         )
+        .bind(user_id)
         .bind(pattern)
         .fetch_all(&pool)
         .await
@@ -204,9 +237,11 @@ async fn list_tags(
                    COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
                    COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
             FROM tags t
+            WHERE EXISTS (SELECT 1 FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user' AND a.entity_id = $1)
             ORDER BY t.created_at DESC
             "#,
         )
+        .bind(user_id)
         .fetch_all(&pool)
         .await
     };
@@ -348,6 +383,25 @@ async fn create_tag(
         )
     })?;
 
+    sqlx::query(
+        r#"INSERT INTO tag_assignments (tag_id, entity_type, entity_id, created_at) VALUES ($1, 'user', $2, NOW())"#,
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "ASSIGN_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
     let row: TagRow = sqlx::query_as(
         r#"
         SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
@@ -393,6 +447,38 @@ async fn update_tag(
     axum::Json(payload): axum::Json<UpdateTagRequest>,
 ) -> Result<Json<TagResponse>, (StatusCode, Json<ErrorResponse>)> {
     check_tags_permission(&pool, &claims, "tags:edit").await?;
+
+    if claims.role != "super_admin" {
+        let assigned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM tag_assignments WHERE tag_id = $1 AND entity_type = 'user' AND entity_id = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        if !assigned {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "TAG_NOT_FOUND".to_string(),
+                        message: "Tag not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
 
     let current: Option<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT name, slug, color, description FROM tags WHERE id = $1",
@@ -564,6 +650,38 @@ async fn delete_tag(
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<ErrorResponse>)> {
     check_tags_permission(&pool, &claims, "tags:delete").await?;
+
+    if claims.role != "super_admin" {
+        let assigned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM tag_assignments WHERE tag_id = $1 AND entity_type = 'user' AND entity_id = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        if !assigned {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "TAG_NOT_FOUND".to_string(),
+                        message: "Tag not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
 
     let deleted = sqlx::query("DELETE FROM tags WHERE id = $1")
         .bind(id)

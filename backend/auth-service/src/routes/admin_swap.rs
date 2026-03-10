@@ -80,6 +80,14 @@ pub fn create_admin_swap_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
+/// Router for GET/PUT swap rule tags. Mount at `/api/admin/swap-rule-tags` so path is `/:id`.
+pub fn create_admin_swap_rule_tags_router(pool: PgPool) -> Router<PgPool> {
+    Router::new()
+        .route("/:id", get(get_swap_rule_tags).put(put_swap_rule_tags))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .with_state(pool)
+}
+
 fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
     (
         e.status,
@@ -92,7 +100,7 @@ fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (Stat
     )
 }
 
-fn rule_to_json(r: &crate::models::swap_rule::SwapRuleWithGroupName) -> serde_json::Value {
+fn rule_to_json(r: &crate::models::swap_rule::SwapRuleWithGroupName, tag_ids: &[Uuid]) -> serde_json::Value {
     serde_json::json!({
         "id": r.id,
         "group_id": r.group_id,
@@ -112,7 +120,72 @@ fn rule_to_json(r: &crate::models::swap_rule::SwapRuleWithGroupName) -> serde_js
         "notes": r.notes,
         "updated_at": r.updated_at,
         "updated_by": r.updated_by,
+        "tag_ids": tag_ids,
     })
+}
+
+#[derive(Debug, Serialize)]
+pub struct SwapRuleTagsResponse {
+    pub tag_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutSwapRuleTagsRequest {
+    pub tag_ids: Vec<Uuid>,
+}
+
+/// Resolve swap rule IDs that share at least one tag with the given user (for tag-scoped admin list).
+async fn resolve_allowed_swap_rule_ids_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    #[derive(sqlx::FromRow)]
+    struct TagRow {
+        tag_id: Uuid,
+    }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'user' AND entity_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+    if user_tag_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    #[derive(sqlx::FromRow)]
+    struct RuleRow {
+        entity_id: Uuid,
+    }
+    let rule_rows = sqlx::query_as::<_, RuleRow>(
+        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'swap_rule' AND tag_id = ANY($1)",
+    )
+    .bind(&user_tag_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(rule_rows.into_iter().map(|r| r.entity_id).collect())
 }
 
 async fn list_rules(
@@ -123,6 +196,13 @@ async fn list_rules(
     permission_check::check_permission(&pool, &claims, "swap:view")
         .await
         .map_err(permission_denied_to_response)?;
+
+    let allowed_rule_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_swap_rule_ids_for_user(&pool, claims.sub).await?;
+        Some(ids)
+    };
 
     let group_id = params
         .get("group_id")
@@ -136,7 +216,16 @@ async fn list_rules(
 
     let service = AdminSwapService::new(pool);
     let (rows, total) = service
-        .list_rules(group_id, market, symbol, status, calc_mode, page, page_size)
+        .list_rules(
+            group_id,
+            market,
+            symbol,
+            status,
+            calc_mode,
+            page,
+            page_size,
+            allowed_rule_ids.as_deref(),
+        )
         .await
         .map_err(|e| {
             (
@@ -153,7 +242,16 @@ async fn list_rules(
     let page = page.unwrap_or(1);
     let page_size = page_size.unwrap_or(20);
 
-    let items: Vec<serde_json::Value> = rows.iter().map(rule_to_json).collect();
+    let rule_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let tag_map = service
+        .get_tag_ids_for_swap_rules(&rule_ids)
+        .await
+        .unwrap_or_default();
+
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| rule_to_json(r, tag_map.get(&r.id).map(|v| v.as_slice()).unwrap_or(&[])))
+        .collect();
 
     Ok(Json(ListSwapRulesResponse {
         items,
@@ -185,7 +283,13 @@ async fn get_rule(
         )
     })?;
 
-    Ok(Json(rule_to_json(&rule)))
+    let tag_ids = service
+        .get_tag_ids_for_swap_rules(&[id])
+        .await
+        .ok()
+        .and_then(|m| m.get(&id).cloned())
+        .unwrap_or_default();
+    Ok(Json(rule_to_json(&rule, &tag_ids)))
 }
 
 async fn create_rule(
@@ -231,7 +335,7 @@ async fn create_rule(
             )
         })?;
 
-    Ok(Json(rule_to_json(&rule)))
+    Ok(Json(rule_to_json(&rule, &[])))
 }
 
 async fn update_rule(
@@ -282,7 +386,7 @@ async fn update_rule(
             )
         })?;
 
-    Ok(Json(rule_to_json(&rule)))
+    Ok(Json(rule_to_json(&rule, &[])))
 }
 
 async fn delete_rule(
@@ -308,4 +412,79 @@ async fn delete_rule(
     })?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_swap_rule_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<SwapRuleTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "swap:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let service = AdminSwapService::new(pool);
+    let rule_ids = vec![id];
+    let map = service.get_tag_ids_for_swap_rules(&rule_ids).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let tag_ids = map.get(&id).cloned().unwrap_or_default();
+    Ok(Json(SwapRuleTagsResponse { tag_ids }))
+}
+
+async fn put_swap_rule_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<PutSwapRuleTagsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "swap:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let rule_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM swap_rules WHERE id = $1)")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    if !rule_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "SWAP_RULE_NOT_FOUND".to_string(),
+                    message: "Swap rule not found".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AdminSwapService::new(pool);
+    if let Err(e) = service.set_swap_rule_tags(id, &payload.tag_ids).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_SWAP_RULE_TAGS_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        ));
+    }
+    Ok(Json(serde_json::json!({ "success": true })))
 }

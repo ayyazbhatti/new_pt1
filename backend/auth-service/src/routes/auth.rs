@@ -1360,12 +1360,12 @@ async fn resolve_allowed_group_ids_for_list_users(
         })?;
 
     // Admin with no manager row → no filter (see all users)
-    if claims.role == "admin" && manager_id.is_none() {
+    if (claims.role == "admin" || claims.role == "super_admin") && manager_id.is_none() {
         return Ok(None);
     }
 
     // Non-admin: must have users:view via permission profile
-    if claims.role != "admin" {
+    if claims.role != "admin" && claims.role != "super_admin" {
         let profile_id: Option<Uuid> =
             sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
                 .bind(claims.sub)

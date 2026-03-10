@@ -117,6 +117,9 @@ impl AdminGroupsService {
         Self { pool }
     }
 
+    /// List groups with optional filter by allowed group IDs (tag-scoped: admin sees only groups sharing a tag with them).
+    /// When `allowed_group_ids` is `None` (e.g. super_admin), all groups are returned.
+    /// When `Some(ids)` with empty slice, returns 0 groups. When `Some(ids)` with non-empty, only those groups.
     pub async fn list_groups(
         &self,
         search: Option<&str>,
@@ -124,10 +127,17 @@ impl AdminGroupsService {
         page: Option<i64>,
         page_size: Option<i64>,
         sort: Option<&str>,
+        allowed_group_ids: Option<&[Uuid]>,
     ) -> anyhow::Result<(Vec<UserGroup>, i64)> {
         let page = page.unwrap_or(1);
         let page_size = page_size.unwrap_or(20);
         let offset = (page - 1) * page_size;
+
+        if let Some(ids) = allowed_group_ids {
+            if ids.is_empty() {
+                return Ok((vec![], 0));
+            }
+        }
 
         let mut count_query = sqlx::QueryBuilder::new(
             "SELECT COUNT(*) FROM user_groups WHERE 1=1"
@@ -145,6 +155,11 @@ impl AdminGroupsService {
                 count_query.push_bind(status);
             }
         }
+        if let Some(ids) = allowed_group_ids {
+            count_query.push(" AND id = ANY(");
+            count_query.push_bind(ids);
+            count_query.push(")");
+        }
 
         let total: i64 = count_query
             .build_query_scalar()
@@ -159,7 +174,7 @@ impl AdminGroupsService {
 
         // Try full query first; then minimal-with-profiles (so price profile dropdown shows saved value); then minimal
         let groups = match self
-            .list_groups_full(search, status, page_size, offset, order_by)
+            .list_groups_full(search, status, page_size, offset, order_by, allowed_group_ids)
             .await
         {
             Ok(g) => g,
@@ -173,12 +188,12 @@ impl AdminGroupsService {
                     || msg.contains("does not exist")
                 {
                     match self
-                        .list_groups_minimal_with_profiles(search, status, page_size, offset, order_by)
+                        .list_groups_minimal_with_profiles(search, status, page_size, offset, order_by, allowed_group_ids)
                         .await
                     {
                         Ok(g) => g,
                         Err(_) => {
-                            self.list_groups_minimal(search, status, page_size, offset, order_by)
+                            self.list_groups_minimal(search, status, page_size, offset, order_by, allowed_group_ids)
                                 .await?
                         }
                     }
@@ -198,6 +213,7 @@ impl AdminGroupsService {
         page_size: i64,
         offset: i64,
         order_by: &str,
+        allowed_group_ids: Option<&[Uuid]>,
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, signup_slug, default_price_profile_id, \
@@ -214,6 +230,11 @@ impl AdminGroupsService {
                 query.push(" AND status = ");
                 query.push_bind(status);
             }
+        }
+        if let Some(ids) = allowed_group_ids {
+            query.push(" AND id = ANY(");
+            query.push_bind(ids);
+            query.push(")");
         }
         query.push(" ORDER BY ");
         query.push(order_by);
@@ -236,6 +257,7 @@ impl AdminGroupsService {
         page_size: i64,
         offset: i64,
         order_by: &str,
+        allowed_group_ids: Option<&[Uuid]>,
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, created_at, updated_at \
@@ -252,6 +274,11 @@ impl AdminGroupsService {
                 query.push(" AND status = ");
                 query.push_bind(status);
             }
+        }
+        if let Some(ids) = allowed_group_ids {
+            query.push(" AND id = ANY(");
+            query.push_bind(ids);
+            query.push(")");
         }
         query.push(" ORDER BY ");
         query.push(order_by);
@@ -276,6 +303,7 @@ impl AdminGroupsService {
         page_size: i64,
         offset: i64,
         order_by: &str,
+        allowed_group_ids: Option<&[Uuid]>,
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, created_at, updated_at, \
@@ -292,6 +320,11 @@ impl AdminGroupsService {
                 query.push(" AND status = ");
                 query.push_bind(status);
             }
+        }
+        if let Some(ids) = allowed_group_ids {
+            query.push(" AND id = ANY(");
+            query.push_bind(ids);
+            query.push(")");
         }
         query.push(" ORDER BY ");
         query.push(order_by);

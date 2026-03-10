@@ -124,6 +124,57 @@ pub fn create_admin_groups_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
+/// Resolve group IDs that share at least one tag with the given user (for tag-scoped admin list).
+/// Returns groups that have any tag also assigned to the user. Super_admin should not use this (pass None to list_groups).
+async fn resolve_allowed_group_ids_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    #[derive(sqlx::FromRow)]
+    struct TagRow { tag_id: Uuid }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'user' AND entity_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+    if user_tag_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    #[derive(sqlx::FromRow)]
+    struct GroupRow { entity_id: Uuid }
+    let group_rows = sqlx::query_as::<_, GroupRow>(
+        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+    )
+    .bind(&user_tag_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(group_rows.into_iter().map(|r| r.entity_id).collect())
+}
+
 async fn list_groups(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
@@ -132,6 +183,13 @@ async fn list_groups(
     permission_check::check_permission(&pool, &claims, "groups:view")
         .await
         .map_err(permission_denied_to_response)?;
+
+    let allowed_group_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_group_ids_for_user(&pool, claims.sub).await?;
+        Some(ids)
+    };
 
     let service = AdminGroupsService::new(pool);
     let search = params.get("search").map(|s| s.as_str());
@@ -144,7 +202,7 @@ async fn list_groups(
         .and_then(|s| s.parse::<i64>().ok());
     let sort = params.get("sort").map(|s| s.as_str());
 
-    match service.list_groups(search, status, page, page_size, sort).await {
+    match service.list_groups(search, status, page, page_size, sort, allowed_group_ids.as_deref()).await {
         Ok((groups, total)) => {
             let page = page.unwrap_or(1);
             let page_size = page_size.unwrap_or(20);

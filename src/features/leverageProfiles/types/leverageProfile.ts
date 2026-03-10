@@ -27,6 +27,8 @@ export type LeverageProfile = {
   symbolsCount: number
   createdAt: string
   updatedAt: string
+  /** Tag IDs assigned to this profile (from list or GET tags) */
+  tagIds?: string[]
   /** Tiers for modal/display - optional, loaded separately */
   tiers?: LeverageTier[]
 }

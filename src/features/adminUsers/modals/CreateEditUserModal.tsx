@@ -5,13 +5,14 @@ import { z } from 'zod'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
+import { Checkbox } from '@/shared/ui/Checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useModalStore } from '@/app/store'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { toast } from '@/shared/components/common'
 import { User, UserStatus } from '../types/users'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { updateUserProfile, updateUserGroup, updateUserPermissionProfile } from '../api/users.api'
+import { updateUserProfile, updateUserGroup, updateUserPermissionProfile, updateUserRole } from '../api/users.api'
 import { listUsers, type UserResponse, type ListUsersResponse } from '@/shared/api/users.api'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
 
@@ -45,6 +46,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
   const currentUserId = useAuthStore((s) => s.user?.id ?? null)
   const refreshUser = useAuthStore((s) => s.refreshUser)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
 
   // Fetch groups and permission profiles
   const { data: groupsData, isLoading: groupsLoading } = useGroupsList({
@@ -73,6 +75,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       leverageLimitMax: found.max_leverage ?? user.leverageLimitMax ?? 500,
       permissionProfileId: found.permission_profile_id ?? user.permissionProfileId,
       permissionProfileName: found.permission_profile_name ?? user.permissionProfileName,
+      role: found.role ?? user.role,
     }
   }, [user, usersList])
 
@@ -125,7 +128,9 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       maxLeverage: defaultMaxLeverage,
       permissionProfile: defaultPermissionProfile,
     })
-  }, [formUser?.id, defaultGroup, defaultPermissionProfile, defaultStatus, defaultMinLeverage, defaultMaxLeverage, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country])
+    const r = formUser.role ?? ''
+    if (r === 'admin' || r === 'super_admin') setIsSuperAdmin(r === 'super_admin')
+  }, [formUser?.id, defaultGroup, defaultPermissionProfile, defaultStatus, defaultMinLeverage, defaultMaxLeverage, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country, formUser?.role])
 
   const group = watch('group')
   const groups = groupsData?.items || []
@@ -134,6 +139,11 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
     if (user) {
       setIsSubmitting(true)
       try {
+        const newRole = isSuperAdmin ? 'super_admin' : 'admin'
+        const roleChanged = (formUser?.role === 'admin' || formUser?.role === 'super_admin') && newRole !== formUser?.role
+        if (roleChanged) {
+          await updateUserRole(user.id, { role: newRole })
+        }
         await updateUserProfile(user.id, {
           first_name: data.firstName,
           last_name: data.lastName,
@@ -164,6 +174,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           leverageLimitMax: data.maxLeverage,
           permissionProfileId: permId ?? undefined,
           permissionProfileName,
+          role: newRole,
         })
         queryClient.setQueryData<ListUsersResponse>(['users'], (old) => {
           if (!old || !('items' in old) || !Array.isArray(old.items)) return old
@@ -185,6 +196,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
                     max_leverage: data.maxLeverage,
                     permission_profile_id: permId,
                     permission_profile_name: permissionProfileName ?? null,
+                    role: newRole,
                   }
                 : u
             ),
@@ -302,6 +314,19 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           </Select>
         </div>
       </div>
+      {user && (formUser?.role === 'admin' || formUser?.role === 'super_admin') && (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            checked={isSuperAdmin}
+            onChange={(e) => setIsSuperAdmin(e.target.checked)}
+            id="super-admin-toggle"
+          />
+          <label htmlFor="super-admin-toggle" className="text-sm font-medium text-text cursor-pointer">
+            Super Admin
+          </label>
+          <span className="text-xs text-text-muted">Can see and manage all tags without assignment.</span>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="text-sm font-medium text-text mb-2 block">Min leverage *</label>

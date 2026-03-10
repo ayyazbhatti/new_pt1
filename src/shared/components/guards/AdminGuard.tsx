@@ -25,7 +25,7 @@ export function AdminGuard({ children }: AdminGuardProps) {
   }
 
   const role = user?.role?.toLowerCase()
-  const allowedRoles = ['admin', 'manager', 'agent']
+  const allowedRoles = ['admin', 'super_admin', 'manager', 'agent']
   if (!role || !allowedRoles.includes(role)) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-background">

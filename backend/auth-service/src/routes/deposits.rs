@@ -296,7 +296,7 @@ async fn create_deposit_request(
     let _: Result<(), _> = redis_conn.publish("deposits:requests", serde_json::to_string(&event).unwrap_or_default()).await;
 
     let admin_rows = sqlx::query(
-        r#"SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL LIMIT 10"#,
+        r#"SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND deleted_at IS NULL LIMIT 10"#,
     )
     .fetch_all(&pool)
     .await
@@ -1266,7 +1266,7 @@ pub async fn create_sltp_notifications_and_push(
 
     // Query admins and create one notification per admin
     let admin_rows = match sqlx::query(
-        r#"SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL LIMIT 50"#,
+        r#"SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND deleted_at IS NULL LIMIT 50"#,
     )
     .fetch_all(&pool)
     .await
@@ -1519,7 +1519,7 @@ pub async fn create_liquidation_notifications_and_push(
 
     // Notify admins
     let admin_rows = match sqlx::query(
-        r#"SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL LIMIT 50"#,
+        r#"SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND deleted_at IS NULL LIMIT 50"#,
     )
     .fetch_all(&pool)
     .await

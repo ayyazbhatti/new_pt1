@@ -8,10 +8,12 @@ import { BulkAssignSwapModal } from '../modals/BulkAssignSwapModal'
 import { useModalStore } from '@/app/store'
 import { Plus, Upload, Download } from 'lucide-react'
 import { useState, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Card } from '@/shared/ui/card'
 import { toast } from '@/shared/components/common'
 import { useSwapRulesList, useUpdateSwapRule } from '../hooks/useSwapRules'
 import type { ListSwapRulesParams } from '../types/swap'
+import { listTags } from '@/features/tags/api/tags.api'
 
 export function SwapRulesPage() {
   const openModal = useModalStore((state) => state.openModal)
@@ -42,7 +44,12 @@ export function SwapRulesPage() {
     [filters]
   )
 
-  const { data, isLoading, error } = useSwapRulesList(listParams)
+  const { data, isLoading, error, refetch } = useSwapRulesList(listParams)
+  const { data: tagsList = [] } = useQuery({
+    queryKey: ['admin', 'tags'],
+    queryFn: () => listTags(),
+  })
+  const allTags = useMemo(() => tagsList.map((t) => ({ id: t.id, name: t.name })), [tagsList])
   const updateRule = useUpdateSwapRule()
   const rules = data?.items ?? []
 
@@ -115,6 +122,8 @@ export function SwapRulesPage() {
         rules={rules}
         isLoading={isLoading}
         onDisable={handleDisable}
+        allTags={allTags}
+        onRefresh={refetch}
       />
     </ContentShell>
   )

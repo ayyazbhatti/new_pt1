@@ -37,6 +37,7 @@ export function getCurrentUserPermissions(user: User | null): string[] {
 
 export function canAccess(permissionKey: string, user: User | null): boolean {
   if (!user) return false
+  if (user.role?.toLowerCase() === 'super_admin') return true
   const perms = getCurrentUserPermissions(user)
   return perms.includes(permissionKey)
 }

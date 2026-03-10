@@ -1,4 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { useQuery } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { useModalStore } from '@/app/store'
 import { useCanAccess } from '@/shared/utils/permissions'
@@ -17,16 +19,46 @@ import {
   Copy,
   Pencil,
   Trash2,
+  Tag,
+  ChevronDown,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { listTags } from '@/features/tags/api/tags.api'
+import { Checkbox } from '@/shared/ui/Checkbox'
+import { setMarkupProfileTags } from '../api/markup.api'
+import { toast } from '@/shared/components/common'
+import { cn } from '@/shared/utils'
+import { Spinner } from '@/shared/ui/loading'
 
 export function AdminMarkupPage() {
   const openModal = useModalStore((state) => state.openModal)
   const canCreate = useCanAccess('markup:create')
   const canEdit = useCanAccess('markup:edit')
   const canDelete = useCanAccess('markup:delete')
-  const { data: profiles, isLoading, error } = useMarkupProfiles()
+  const canTags = useCanAccess('markup:edit')
+  const { data: profiles, isLoading, error, refetch } = useMarkupProfiles()
+  const { data: tagsList = [] } = useQuery({
+    queryKey: ['admin', 'tags'],
+    queryFn: () => listTags(),
+  })
+  const allTags = useMemo(() => tagsList.map((t) => ({ id: t.id, name: t.name })), [tagsList])
   const [searchTerm, setSearchTerm] = useState('')
+  const [openTagsProfileId, setOpenTagsProfileId] = useState<string | null>(null)
+  const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
+  const [updatingTagsProfileId, setUpdatingTagsProfileId] = useState<string | null>(null)
+  const tagsDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (openTagsProfileId == null) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagsDropdownRef.current && !tagsDropdownRef.current.contains(e.target as Node)) {
+        setOpenTagsProfileId(null)
+        setOpenTagsAnchorRect(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [openTagsProfileId])
 
   const filteredProfiles = useMemo(() => {
     if (!profiles) return []
@@ -153,6 +185,11 @@ export function AdminMarkupPage() {
                 <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
                   Groups
                 </th>
+                {canTags && (
+                  <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
+                    Tags
+                  </th>
+                )}
                 <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
                   Created At
                 </th>
@@ -164,12 +201,20 @@ export function AdminMarkupPage() {
             <tbody>
               {filteredProfiles.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center text-sm text-text-muted">
+                  <td colSpan={canTags ? 5 : 4} className="px-4 py-12 text-center text-sm text-text-muted">
                     No price streams found.
                   </td>
                 </tr>
               ) : (
-                filteredProfiles.map((profile) => (
+                filteredProfiles.map((profile) => {
+                  const tagIds = profile.tagIds ?? []
+                  const isOpen = openTagsProfileId === profile.id
+                  const isUpdating = updatingTagsProfileId === profile.id
+                  const tagsLabel =
+                    tagIds.length > 0
+                      ? `${tagIds.length} tag${tagIds.length === 1 ? '' : 's'}`
+                      : 'Assign tags'
+                  return (
                   <tr
                     key={profile.id}
                     className="border-b border-border hover:bg-white/5"
@@ -186,6 +231,32 @@ export function AdminMarkupPage() {
                         <span className="text-text-muted">Unassigned</span>
                       )}
                     </td>
+                    {canTags && (
+                      <td className="px-4 py-3">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 gap-1.5 text-text"
+                          disabled={isUpdating}
+                          onClick={(e) => {
+                            if (isOpen) {
+                              setOpenTagsProfileId(null)
+                              setOpenTagsAnchorRect(null)
+                            } else {
+                              setOpenTagsProfileId(profile.id)
+                              setOpenTagsAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect())
+                            }
+                          }}
+                        >
+                          {isUpdating && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+                          <Tag className="h-4 w-4 shrink-0" />
+                          <span className="max-w-[80px] truncate">{tagsLabel}</span>
+                          <ChevronDown
+                            className={cn('h-4 w-4 shrink-0 transition-transform', isOpen && 'rotate-180')}
+                          />
+                        </Button>
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-sm text-text-muted">
                       {profile.createdAt
                         ? formatDistanceToNow(new Date(profile.createdAt), {
@@ -236,12 +307,62 @@ export function AdminMarkupPage() {
                       </div>
                     </td>
                   </tr>
-                ))
+                  )
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {openTagsProfileId && openTagsAnchorRect &&
+        (() => {
+          const openTagsTagIds = filteredProfiles.find((p) => p.id === openTagsProfileId)?.tagIds ?? []
+          return createPortal(
+            <div
+              ref={tagsDropdownRef}
+              className="fixed z-[100] min-w-[180px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg"
+              style={{
+                left: openTagsAnchorRect.left,
+                top: openTagsAnchorRect.bottom + 4,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {allTags.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-text-muted">No tags defined</div>
+              ) : (
+                <div className="max-h-[220px] overflow-y-auto">
+                  {allTags.map((tag) => (
+                    <label
+                      key={tag.id}
+                      className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-surface-2"
+                    >
+                      <Checkbox
+                        checked={openTagsTagIds.includes(tag.id)}
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          const next = checked
+                            ? [...openTagsTagIds, tag.id]
+                            : openTagsTagIds.filter((id) => id !== tag.id)
+                          setUpdatingTagsProfileId(openTagsProfileId)
+                          setMarkupProfileTags(openTagsProfileId, next)
+                            .then(() => {
+                              refetch()
+                              toast.success('Tags updated')
+                            })
+                            .catch(() => toast.error('Failed to update tags'))
+                            .finally(() => setUpdatingTagsProfileId(null))
+                        }}
+                      />
+                      <span className="text-text">{tag.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>,
+            document.body
+          )
+        })()}
     </ContentShell>
   )
 }

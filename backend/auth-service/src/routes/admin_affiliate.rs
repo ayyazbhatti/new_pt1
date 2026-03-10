@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
@@ -27,6 +28,8 @@ pub struct LayerResponse {
     pub commission_percent: Decimal,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tag_ids: Vec<Uuid>,
 }
 
 fn serialize_decimal<S>(d: &Decimal, s: S) -> Result<S::Ok, S::Error>
@@ -108,6 +111,16 @@ struct AffiliateUserRow {
     commission_percent: Decimal,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AffiliateSchemeTagsResponse {
+    pub tag_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutAffiliateSchemeTagsRequest {
+    pub tag_ids: Vec<Uuid>,
+}
+
 pub fn create_admin_affiliate_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/users", get(list_affiliate_users))
@@ -115,6 +128,61 @@ pub fn create_admin_affiliate_router(pool: PgPool) -> Router<PgPool> {
         .route("/layers/:id", put(update_layer).delete(delete_layer))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+/// Router for GET/PUT affiliate scheme (layer) tags. Mount at `/api/admin/affiliate-scheme-tags` so path is `/:id`.
+pub fn create_admin_affiliate_scheme_tags_router(pool: PgPool) -> Router<PgPool> {
+    Router::new()
+        .route("/:id", get(get_affiliate_scheme_tags).put(put_affiliate_scheme_tags))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .with_state(pool)
+}
+
+async fn get_affiliate_scheme_tag_ids(pool: &PgPool, scheme_ids: &[Uuid]) -> HashMap<Uuid, Vec<Uuid>> {
+    if scheme_ids.is_empty() {
+        return HashMap::new();
+    }
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        entity_id: Uuid,
+        tag_id: Uuid,
+    }
+    let rows = match sqlx::query_as::<_, Row>(
+        "SELECT entity_id, tag_id FROM tag_assignments WHERE entity_type = 'affiliate_scheme' AND entity_id = ANY($1)",
+    )
+    .bind(scheme_ids)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+    let mut map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for r in rows {
+        map.entry(r.entity_id).or_default().push(r.tag_id);
+    }
+    map
+}
+
+async fn set_affiliate_scheme_tags(pool: &PgPool, scheme_id: Uuid, tag_ids: &[Uuid]) -> Result<(), String> {
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM tag_assignments WHERE entity_type = 'affiliate_scheme' AND entity_id = $1")
+        .bind(scheme_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    for tag_id in tag_ids {
+        sqlx::query(
+            "INSERT INTO tag_assignments (tag_id, entity_type, entity_id, created_at) VALUES ($1, 'affiliate_scheme', $2, NOW())",
+        )
+        .bind(tag_id)
+        .bind(scheme_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 async fn list_affiliate_users(
@@ -171,6 +239,60 @@ async fn list_affiliate_users(
     Ok(Json(list))
 }
 
+/// Resolve affiliate scheme (layer) IDs that share at least one tag with the given user (for tag-scoped admin list).
+async fn resolve_allowed_affiliate_scheme_ids_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    #[derive(sqlx::FromRow)]
+    struct TagRow {
+        tag_id: Uuid,
+    }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'user' AND entity_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+    if user_tag_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    #[derive(sqlx::FromRow)]
+    struct SchemeRow {
+        entity_id: Uuid,
+    }
+    let scheme_rows = sqlx::query_as::<_, SchemeRow>(
+        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'affiliate_scheme' AND tag_id = ANY($1)",
+    )
+    .bind(&user_tag_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(scheme_rows.into_iter().map(|r| r.entity_id).collect())
+}
+
 async fn list_layers(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
@@ -179,26 +301,65 @@ async fn list_layers(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let rows = sqlx::query_as::<_, LayerRow>(
-        r#"
-        SELECT id, level, name, commission_percent, created_at, updated_at
-        FROM affiliate_commission_layers
-        ORDER BY level ASC
-        "#,
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "LIST_FAILED".to_string(),
-                    message: e.to_string(),
-                },
-            }),
+    let allowed_scheme_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_affiliate_scheme_ids_for_user(&pool, claims.sub).await?;
+        Some(ids)
+    };
+
+    let rows: Vec<LayerRow> = if let Some(ids) = &allowed_scheme_ids {
+        if ids.is_empty() {
+            vec![]
+        } else {
+            sqlx::query_as::<_, LayerRow>(
+                r#"
+                SELECT id, level, name, commission_percent, created_at, updated_at
+                FROM affiliate_commission_layers
+                WHERE id = ANY($1)
+                ORDER BY level ASC
+                "#,
+            )
+            .bind(ids)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "LIST_FAILED".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?
+        }
+    } else {
+        sqlx::query_as::<_, LayerRow>(
+            r#"
+            SELECT id, level, name, commission_percent, created_at, updated_at
+            FROM affiliate_commission_layers
+            ORDER BY level ASC
+            "#,
         )
-    })?;
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "LIST_FAILED".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?
+    };
+
+    let layer_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let tag_map = get_affiliate_scheme_tag_ids(&pool, &layer_ids).await;
 
     let list: Vec<LayerResponse> = rows
         .into_iter()
@@ -209,6 +370,7 @@ async fn list_layers(
             commission_percent: r.commission_percent,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            tag_ids: tag_map.get(&r.id).cloned().unwrap_or_default(),
         })
         .collect();
     Ok(Json(list))
@@ -356,6 +518,7 @@ async fn create_layer(
             commission_percent: row.commission_percent,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            tag_ids: vec![],
         }),
     ))
 }
@@ -457,6 +620,7 @@ async fn update_layer(
         commission_percent: row.commission_percent,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        tag_ids: vec![],
     }))
 }
 
@@ -497,4 +661,69 @@ async fn delete_layer(
         ));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_affiliate_scheme_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AffiliateSchemeTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "affiliate:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let ids = vec![id];
+    let map = get_affiliate_scheme_tag_ids(&pool, &ids).await;
+    let tag_ids = map.get(&id).cloned().unwrap_or_default();
+    Ok(Json(AffiliateSchemeTagsResponse { tag_ids }))
+}
+
+async fn put_affiliate_scheme_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<PutAffiliateSchemeTagsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "affiliate:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM affiliate_commission_layers WHERE id = $1)")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    if !exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Affiliate scheme not found".to_string(),
+                },
+            }),
+        ));
+    }
+    set_affiliate_scheme_tags(&pool, id, &payload.tag_ids)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "UPDATE_SCHEME_TAGS_FAILED".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({ "success": true })))
 }

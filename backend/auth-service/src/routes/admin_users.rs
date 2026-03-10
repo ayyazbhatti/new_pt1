@@ -49,6 +49,12 @@ pub struct UpdateUserPermissionProfileRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateUserRoleRequest {
+    /// One of: admin, super_admin. Only admins can be toggled to/from super_admin.
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateUserProfileRequest {
     pub first_name: Option<String>,
     pub last_name: Option<String>,
@@ -134,6 +140,7 @@ pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) ->
         .route("/:id/margin-calculation-type", put(update_user_margin_calculation_type))
         .route("/:id/trading-access", put(update_user_trading_access))
         .route("/:id/permission-profile", put(update_user_permission_profile))
+        .route("/:id/role", put(update_user_role))
         .route("/:id/impersonate", post(impersonate_user))
         .route("/:id/notify", post(admin_send_notify))
         .route("/:id/account-summary", get(get_admin_user_account_summary))
@@ -1206,6 +1213,95 @@ async fn update_user_permission_profile(
     Ok(Json(serde_json::json!({
         "success": true,
         "message": "Permission profile updated successfully"
+    })))
+}
+
+async fn update_user_role(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserRoleRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "users:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let role = payload.role.trim().to_lowercase();
+    if role != "admin" && role != "super_admin" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_ROLE".to_string(),
+                    message: "role must be one of: admin, super_admin".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let current_role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL")
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    let current = match &current_role {
+        Some(r) => r.as_str(),
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "USER_NOT_FOUND".to_string(),
+                        message: "User not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    };
+
+    if current != "admin" && current != "super_admin" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_TARGET".to_string(),
+                    message: "Can only set role for users who are already admin or super_admin".to_string(),
+                },
+            }),
+        ));
+    }
+
+    sqlx::query("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&role)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "UPDATE_FAILED".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Role updated successfully"
     })))
 }
 

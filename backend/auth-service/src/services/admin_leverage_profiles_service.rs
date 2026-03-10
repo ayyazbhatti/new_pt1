@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use sqlx::{PgPool, postgres::PgRow, Row};
 use uuid::Uuid;
 use serde::Serialize;
@@ -12,6 +13,9 @@ impl AdminLeverageProfilesService {
         Self { pool }
     }
 
+    /// List leverage profiles with optional filter by allowed profile IDs (tag-scoped: admin sees only profiles sharing a tag with them).
+    /// When `allowed_profile_ids` is `None` (e.g. super_admin), all profiles are returned.
+    /// When `Some(ids)` with empty slice, returns 0 profiles. When `Some(ids)` with non-empty, only those profiles.
     pub async fn list_profiles(
         &self,
         search: Option<&str>,
@@ -19,10 +23,17 @@ impl AdminLeverageProfilesService {
         page: Option<i64>,
         page_size: Option<i64>,
         sort: Option<&str>,
+        allowed_profile_ids: Option<&[Uuid]>,
     ) -> anyhow::Result<(Vec<LeverageProfileWithCounts>, i64)> {
         let page = page.unwrap_or(1);
         let page_size = page_size.unwrap_or(20);
         let offset = (page - 1) * page_size;
+
+        if let Some(ids) = allowed_profile_ids {
+            if ids.is_empty() {
+                return Ok((vec![], 0));
+            }
+        }
 
         let mut query = sqlx::QueryBuilder::new(
             r#"
@@ -61,6 +72,15 @@ impl AdminLeverageProfilesService {
                 count_query.push(" AND status::text = ");
                 count_query.push_bind(status);
             }
+        }
+
+        if let Some(ids) = allowed_profile_ids {
+            query.push(" AND lp.id = ANY(");
+            query.push_bind(ids);
+            query.push(")");
+            count_query.push(" AND id = ANY(");
+            count_query.push_bind(ids);
+            count_query.push(")");
         }
 
         query.push(" GROUP BY lp.id, lp.name, lp.description, lp.status::text, lp.created_at, lp.updated_at");
@@ -493,6 +513,52 @@ impl AdminLeverageProfilesService {
 
         tx.commit().await?;
 
+        Ok(())
+    }
+
+    /// Get tag IDs assigned to each leverage profile (entity_type = 'leverage_profile').
+    pub async fn get_tag_ids_for_leverage_profiles(
+        &self,
+        profile_ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<Uuid, Vec<Uuid>>> {
+        if profile_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            entity_id: Uuid,
+            tag_id: Uuid,
+        }
+        let rows = sqlx::query_as::<_, Row>(
+            "SELECT entity_id, tag_id FROM tag_assignments WHERE entity_type = 'leverage_profile' AND entity_id = ANY($1)",
+        )
+        .bind(profile_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for r in rows {
+            map.entry(r.entity_id).or_default().push(r.tag_id);
+        }
+        Ok(map)
+    }
+
+    /// Replace tag assignments for a leverage profile.
+    pub async fn set_leverage_profile_tags(&self, profile_id: Uuid, tag_ids: &[Uuid]) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM tag_assignments WHERE entity_type = 'leverage_profile' AND entity_id = $1")
+            .bind(profile_id)
+            .execute(&mut *tx)
+            .await?;
+        for tag_id in tag_ids {
+            sqlx::query(
+                "INSERT INTO tag_assignments (tag_id, entity_type, entity_id, created_at) VALUES ($1, 'leverage_profile', $2, NOW())",
+            )
+            .bind(tag_id)
+            .bind(profile_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 }

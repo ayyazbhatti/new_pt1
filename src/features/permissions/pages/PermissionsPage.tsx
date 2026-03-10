@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { Fragment } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ColumnDef } from '@tanstack/react-table'
 import { ContentShell, PageHeader } from '@/shared/layout'
@@ -9,10 +10,13 @@ import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
 import { ModalShell } from '@/shared/ui/modal'
 import { Checkbox } from '@/shared/ui/Checkbox'
-import { KeyRound, Plus, Pencil, Trash2, Shield, Check } from 'lucide-react'
+import { Spinner } from '@/shared/ui/loading'
+import { KeyRound, Plus, Pencil, Trash2, Shield, Check, Tag, ChevronDown } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useCanAccess } from '@/shared/utils/permissions'
+import { cn } from '@/shared/utils'
+import { listTags } from '@/features/tags/api/tags.api'
 import {
   listPermissionProfiles,
   listPermissionDefinitions,
@@ -20,6 +24,7 @@ import {
   createPermissionProfile,
   updatePermissionProfile,
   deletePermissionProfile,
+  setPermissionProfileTags,
   type PermissionProfile as ApiPermissionProfile,
   type PermissionCategoryDto,
 } from '../api/permissionProfiles.api'
@@ -28,6 +33,7 @@ export type PermissionProfile = ApiPermissionProfile
 
 const QUERY_KEY = ['permission-profiles'] as const
 const DEFINITIONS_QUERY_KEY = ['permission-definitions'] as const
+const TAGS_QUERY_KEY = ['admin', 'tags'] as const
 
 export function PermissionsPage() {
   const queryClient = useQueryClient()
@@ -40,6 +46,11 @@ export function PermissionsPage() {
     queryKey: DEFINITIONS_QUERY_KEY,
     queryFn: listPermissionDefinitions,
   })
+  const { data: tagsList = [] } = useQuery({
+    queryKey: TAGS_QUERY_KEY,
+    queryFn: () => listTags(),
+  })
+  const allTags = useMemo(() => tagsList.map((t) => ({ id: t.id, name: t.name })), [tagsList])
   /** Categories with Users, Tags, Groups, Managers, Trading, Leverage Profiles, Symbols, Markup, Swap, Finance, Affiliate, Permissions, Support, Call, Appointments, Settings, then rest in the Create/Edit profile modal */
   const permissionCategoriesSorted = useMemo(() => {
     const users = permissionCategories.filter((c) => c.name === 'Users')
@@ -121,6 +132,22 @@ export function PermissionsPage() {
   const [formDescription, setFormDescription] = useState('')
   const [formPermissionIds, setFormPermissionIds] = useState<Set<string>>(new Set())
   const [editLoadingId, setEditLoadingId] = useState<string | null>(null)
+  const [openTagsProfileId, setOpenTagsProfileId] = useState<string | null>(null)
+  const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
+  const [updatingTagsProfileId, setUpdatingTagsProfileId] = useState<string | null>(null)
+  const tagsDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (openTagsProfileId == null) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagsDropdownRef.current && !tagsDropdownRef.current.contains(e.target as Node)) {
+        setOpenTagsProfileId(null)
+        setOpenTagsAnchorRect(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [openTagsProfileId])
 
   const openCreate = useCallback(() => {
     setEditingId(null)
@@ -239,6 +266,49 @@ export function PermissionsPage() {
           <span className="text-text-muted text-right block">{row.original.permissionIds.length}</span>
         ),
       },
+      ...(canEditPermissions
+        ? [
+            {
+              id: 'tags',
+              header: 'Tags',
+              cell: ({ row }: { row: { original: PermissionProfile } }) => {
+                const profile = row.original
+                const tagIds = profile.tagIds ?? []
+                const isOpen = openTagsProfileId === profile.id
+                const isUpdating = updatingTagsProfileId === profile.id
+                const label =
+                  tagIds.length > 0
+                    ? `${tagIds.length} tag${tagIds.length === 1 ? '' : 's'}`
+                    : 'Assign tags'
+                return (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 text-text"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (openTagsProfileId === profile.id) {
+                        setOpenTagsProfileId(null)
+                        setOpenTagsAnchorRect(null)
+                      } else {
+                        setOpenTagsProfileId(profile.id)
+                        setOpenTagsAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect())
+                      }
+                    }}
+                    disabled={isUpdating}
+                  >
+                    {isUpdating && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+                    <Tag className="h-4 w-4 shrink-0" />
+                    <span className="max-w-[80px] truncate">{label}</span>
+                    <ChevronDown
+                      className={cn('h-4 w-4 shrink-0 transition-transform', isOpen && 'rotate-180')}
+                    />
+                  </Button>
+                )
+              },
+            } as ColumnDef<PermissionProfile>,
+          ]
+        : []),
       {
         id: 'actions',
         header: () => <span className="text-right block w-full">Actions</span>,
@@ -271,8 +341,59 @@ export function PermissionsPage() {
         },
       },
     ],
-    [openEdit, handleDelete, canEditPermissions, editLoadingId]
+    [openEdit, handleDelete, canEditPermissions, editLoadingId, openTagsProfileId, updatingTagsProfileId]
   )
+
+  const openTagsProfile = openTagsProfileId ? profiles.find((p) => p.id === openTagsProfileId) : null
+  const openTagsTagIds = openTagsProfile?.tagIds ?? []
+
+  const tagsDropdownPanel =
+    openTagsProfileId && openTagsAnchorRect
+      ? createPortal(
+          <div
+            ref={tagsDropdownRef}
+            className="fixed z-[100] min-w-[180px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg"
+            style={{
+              left: openTagsAnchorRect.left,
+              top: openTagsAnchorRect.bottom + 4,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {allTags.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-text-muted">No tags defined</div>
+            ) : (
+              <div className="max-h-[220px] overflow-y-auto">
+                {allTags.map((tag) => (
+                  <label
+                    key={tag.id}
+                    className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-surface-2"
+                  >
+                    <Checkbox
+                      checked={openTagsTagIds.includes(tag.id)}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        const next = checked
+                          ? [...openTagsTagIds, tag.id]
+                          : openTagsTagIds.filter((id) => id !== tag.id)
+                        setUpdatingTagsProfileId(openTagsProfileId)
+                        setPermissionProfileTags(openTagsProfileId, next)
+                          .then(() => {
+                            queryClient.invalidateQueries({ queryKey: QUERY_KEY })
+                            toast.success('Tags updated')
+                          })
+                          .catch(() => toast.error('Failed to update tags'))
+                          .finally(() => setUpdatingTagsProfileId(null))
+                      }}
+                    />
+                    <span className="text-text">{tag.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>,
+          document.body
+        )
+      : null
 
   return (
     <ContentShell>
@@ -393,6 +514,8 @@ export function PermissionsPage() {
       <p className="mt-6 text-xs text-text-muted">
         Assign a permission profile to a manager in the Users page when creating or editing their account.
       </p>
+
+      {tagsDropdownPanel}
 
       {/* Create / Edit profile modal */}
       <ModalShell

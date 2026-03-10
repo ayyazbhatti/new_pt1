@@ -97,6 +97,21 @@ export async function updateUserPermissionProfile(
   })
 }
 
+export interface UpdateUserRolePayload {
+  role: 'admin' | 'super_admin'
+}
+
+/** Toggle an admin user between admin and super_admin. Only allowed for users who are already admin or super_admin. */
+export async function updateUserRole(
+  userId: string,
+  payload: UpdateUserRolePayload
+): Promise<void> {
+  await http(`/api/admin/users/${userId}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role: payload.role }),
+  })
+}
+
 export interface ImpersonateResponse {
   access_token: string
   refresh_token: string

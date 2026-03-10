@@ -127,7 +127,7 @@ async fn list_managers(
         SELECT m.id, m.user_id, m.permission_profile_id, m.status, m.notes, m.created_at,
                CONCAT(u.first_name, ' ', u.last_name) AS user_name,
                u.email AS user_email,
-               u.role AS user_role,
+               u."role" AS user_role,
                p.name AS permission_profile_name,
                u.last_login_at AS last_login_at
         FROM managers m
@@ -383,7 +383,7 @@ async fn create_manager(
         .unwrap_or_else(|_| "".to_string());
 
     let user_row: (String, String, Option<DateTime<Utc>>, String) = sqlx::query_as(
-        "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at, role FROM users WHERE id = $1",
+        "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at, \"role\" FROM users WHERE id = $1",
     )
     .bind(payload.user_id)
     .fetch_one(&pool)
@@ -525,9 +525,9 @@ async fn update_manager(
     // When active: set role to 'manager' and permission_profile_id so they can access admin panel (never overwrite 'admin').
     // When disabled: set role to 'user' and clear permission_profile_id (never overwrite 'admin').
     let (role_sql, user_profile_value) = if new_status == "active" {
-        ("CASE WHEN role = 'admin' THEN role ELSE 'manager' END", Some(new_profile_id))
+        ("CASE WHEN role IN ('admin', 'super_admin') THEN role ELSE 'manager' END", Some(new_profile_id))
     } else {
-        ("CASE WHEN role = 'admin' THEN role ELSE 'user' END", None)
+        ("CASE WHEN role IN ('admin', 'super_admin') THEN role ELSE 'user' END", None)
     };
     let update_sql = format!(
         "UPDATE users SET role = {}, permission_profile_id = $1, updated_at = NOW() WHERE id = $2",
@@ -558,7 +558,7 @@ async fn update_manager(
 
     let (user_name, user_email, last_login_at, user_role): (String, String, Option<DateTime<Utc>>, String) =
         sqlx::query_as(
-            "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at, role FROM users WHERE id = $1",
+            "SELECT CONCAT(first_name, ' ', last_name), email, last_login_at, \"role\" FROM users WHERE id = $1",
         )
         .bind(user_id)
         .fetch_one(&pool)
@@ -664,7 +664,7 @@ async fn delete_manager(
         })?;
 
     // Revoke manager admin access: set role to 'user' and clear permission_profile_id (never overwrite 'admin')
-    sqlx::query("UPDATE users SET role = CASE WHEN role = 'admin' THEN role ELSE 'user' END, permission_profile_id = NULL, updated_at = NOW() WHERE id = $1")
+    sqlx::query("UPDATE users SET role = CASE WHEN role IN ('admin', 'super_admin') THEN role ELSE 'user' END, permission_profile_id = NULL, updated_at = NOW() WHERE id = $1")
         .bind(user_id)
         .execute(&pool)
         .await

@@ -55,12 +55,30 @@ pub struct SetProfileSymbolsRequest {
     pub symbol_ids: Vec<Uuid>,
 }
 
+/// List item with tag_ids for the frontend (flattened so JSON has id, name, ..., tag_ids).
+#[derive(Debug, Serialize)]
+pub struct ProfileListItem {
+    #[serde(flatten)]
+    pub profile: LeverageProfileWithCounts,
+    pub tag_ids: Vec<Uuid>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ListProfilesResponse {
-    pub items: Vec<LeverageProfileWithCounts>,
+    pub items: Vec<ProfileListItem>,
     pub page: i64,
     pub page_size: i64,
     pub total: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LeverageProfileTagsResponse {
+    pub tag_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutLeverageProfileTagsRequest {
+    pub tag_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +109,14 @@ pub fn create_admin_leverage_profiles_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
+/// Router for GET/PUT leverage profile tags. Mount at `/api/admin/leverage-profile-tags` so path is `/:id`.
+pub fn create_admin_leverage_profile_tags_router(pool: PgPool) -> Router<PgPool> {
+    Router::new()
+        .route("/:id", get(get_leverage_profile_tags).put(put_leverage_profile_tags))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .with_state(pool)
+}
+
 fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
     (
         e.status,
@@ -103,6 +129,61 @@ fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (Stat
     )
 }
 
+/// Resolve leverage profile IDs that share at least one tag with the given user (for tag-scoped admin list).
+/// Returns profiles that have any tag also assigned to the user. Super_admin should not use this (pass None to list_profiles).
+async fn resolve_allowed_leverage_profile_ids_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    #[derive(sqlx::FromRow)]
+    struct TagRow {
+        tag_id: Uuid,
+    }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'user' AND entity_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+    if user_tag_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    #[derive(sqlx::FromRow)]
+    struct ProfileRow {
+        entity_id: Uuid,
+    }
+    let profile_rows = sqlx::query_as::<_, ProfileRow>(
+        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'leverage_profile' AND tag_id = ANY($1)",
+    )
+    .bind(&user_tag_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(profile_rows.into_iter().map(|r| r.entity_id).collect())
+}
+
 async fn list_profiles(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
@@ -112,6 +193,13 @@ async fn list_profiles(
         .await
         .map_err(permission_denied_to_response)?;
 
+    let allowed_profile_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_leverage_profile_ids_for_user(&pool, claims.sub).await?;
+        Some(ids)
+    };
+
     let service = AdminLeverageProfilesService::new(pool);
     let search = params.get("search").map(|s| s.as_str());
     let status = params.get("status").map(|s| s.as_str());
@@ -119,12 +207,27 @@ async fn list_profiles(
     let page_size = params.get("page_size").and_then(|s| s.parse::<i64>().ok());
     let sort = params.get("sort").map(|s| s.as_str());
 
-    match service.list_profiles(search, status, page, page_size, sort).await {
+    match service
+        .list_profiles(search, status, page, page_size, sort, allowed_profile_ids.as_deref())
+        .await
+    {
         Ok((profiles, total)) => {
             let page = page.unwrap_or(1);
             let page_size = page_size.unwrap_or(20);
+            let profile_ids: Vec<Uuid> = profiles.iter().map(|p| p.id).collect();
+            let tag_map = service
+                .get_tag_ids_for_leverage_profiles(&profile_ids)
+                .await
+                .unwrap_or_default();
+            let items: Vec<ProfileListItem> = profiles
+                .into_iter()
+                .map(|profile| ProfileListItem {
+                    tag_ids: tag_map.get(&profile.id).cloned().unwrap_or_default(),
+                    profile,
+                })
+                .collect();
             Ok(Json(ListProfilesResponse {
-                items: profiles,
+                items,
                 page,
                 page_size,
                 total,
@@ -559,5 +662,81 @@ async fn set_profile_symbols(
             }),
         )),
     }
+}
+
+async fn get_leverage_profile_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<LeverageProfileTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let service = AdminLeverageProfilesService::new(pool);
+    let profile_ids = vec![id];
+    let map = service.get_tag_ids_for_leverage_profiles(&profile_ids).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let tag_ids = map.get(&id).cloned().unwrap_or_default();
+    Ok(Json(LeverageProfileTagsResponse { tag_ids }))
+}
+
+async fn put_leverage_profile_tags(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<PutLeverageProfileTagsRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let profile_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM leverage_profiles WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+    if !profile_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "PROFILE_NOT_FOUND".to_string(),
+                    message: "Leverage profile not found".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AdminLeverageProfilesService::new(pool);
+    if let Err(e) = service.set_leverage_profile_tags(id, &payload.tag_ids).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_PROFILE_TAGS_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        ));
+    }
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 

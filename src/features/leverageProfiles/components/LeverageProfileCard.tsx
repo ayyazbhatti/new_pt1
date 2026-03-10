@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { ChevronDown, ChevronRight, Settings, Edit, Archive, ArchiveRestore, Trash2, CheckCircle } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { ChevronDown, ChevronRight, Settings, Edit, Archive, ArchiveRestore, Trash2, CheckCircle, Tag } from 'lucide-react'
 import { Button } from '@/shared/ui/button'
 import { LeverageProfile } from '../types/leverageProfile'
 import { useLeverageProfileTiers, useDeleteLeverageTier } from '../hooks/useLeverageProfiles'
@@ -8,6 +9,9 @@ import { TiersTable } from './TiersTable'
 import { cn } from '@/shared/utils'
 import { formatDistanceToNow } from 'date-fns'
 import { Spinner } from '@/shared/ui/loading'
+import { Checkbox } from '@/shared/ui/Checkbox'
+import { setLeverageProfileTags } from '../api/leverageProfiles.api'
+import { toast } from '@/shared/components/common'
 
 interface LeverageProfileCardProps {
   profile: LeverageProfile
@@ -16,6 +20,10 @@ interface LeverageProfileCardProps {
   onArchive: (profile: LeverageProfile) => void
   onUnarchive: (profile: LeverageProfile) => void
   onDelete: (profile: LeverageProfile) => void
+  /** All tags for the assign-tags dropdown */
+  allTags?: { id: string; name: string }[]
+  onProfileUpdate?: (profileId: string, updates: Partial<Pick<LeverageProfile, 'tagIds'>>) => void
+  onRefresh?: () => void
   archiveLoading?: boolean
 }
 
@@ -26,15 +34,36 @@ export function LeverageProfileCard({
   onArchive,
   onUnarchive,
   onDelete,
+  allTags = [],
+  onProfileUpdate,
+  onRefresh,
   archiveLoading = false,
 }: LeverageProfileCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const [openTagsDropdown, setOpenTagsDropdown] = useState(false)
+  const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
+  const [updatingTags, setUpdatingTags] = useState(false)
+  const tagsDropdownRef = useRef<HTMLDivElement>(null)
   const { data: tiers, isLoading: tiersLoading } = useLeverageProfileTiers(profile.id, expanded)
   const deleteTier = useDeleteLeverageTier()
   const canEdit = useCanAccess('leverage_profiles:edit')
   const canDelete = useCanAccess('leverage_profiles:delete')
+  const canTags = useCanAccess('leverage_profiles:edit')
   const isArchived = profile.status === 'disabled'
   const displayStatus = isArchived ? 'Archived' : 'Active'
+  const tagIds = profile.tagIds ?? []
+
+  useEffect(() => {
+    if (!openTagsDropdown) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagsDropdownRef.current && !tagsDropdownRef.current.contains(e.target as Node)) {
+        setOpenTagsDropdown(false)
+        setOpenTagsAnchorRect(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [openTagsDropdown])
 
   return (
     <div className="rounded-lg border border-border bg-surface overflow-hidden">
@@ -71,6 +100,33 @@ export function LeverageProfileCard({
           )}
         </div>
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          {canTags && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-text-muted hover:text-text hover:bg-surface-2 border border-border gap-1.5"
+              disabled={updatingTags}
+              onClick={(e) => {
+                e.stopPropagation()
+                if (openTagsDropdown) {
+                  setOpenTagsDropdown(false)
+                  setOpenTagsAnchorRect(null)
+                } else {
+                  setOpenTagsDropdown(true)
+                  setOpenTagsAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect())
+                }
+              }}
+            >
+              {updatingTags && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+              <Tag className="h-4 w-4 shrink-0" />
+              <span className="max-w-[90px] truncate">
+                {tagIds.length > 0 ? `${tagIds.length} tag${tagIds.length === 1 ? '' : 's'}` : 'Assign tags'}
+              </span>
+              <ChevronDown
+                className={cn('h-4 w-4 shrink-0 transition-transform', openTagsDropdown && 'rotate-180')}
+              />
+            </Button>
+          )}
           {canEdit && (
             <>
               <Button
@@ -117,6 +173,53 @@ export function LeverageProfileCard({
           )}
         </div>
       </div>
+
+      {openTagsDropdown && openTagsAnchorRect &&
+        createPortal(
+          <div
+            ref={tagsDropdownRef}
+            className="fixed z-[100] min-w-[180px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg"
+            style={{
+              left: openTagsAnchorRect.left,
+              top: openTagsAnchorRect.bottom + 4,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {allTags.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-text-muted">No tags defined</div>
+            ) : (
+              <div className="max-h-[220px] overflow-y-auto">
+                {allTags.map((tag) => (
+                  <label
+                    key={tag.id}
+                    className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-surface-2"
+                  >
+                    <Checkbox
+                      checked={tagIds.includes(tag.id)}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        const next = checked
+                          ? [...tagIds, tag.id]
+                          : tagIds.filter((id) => id !== tag.id)
+                        setUpdatingTags(true)
+                        setLeverageProfileTags(profile.id, next)
+                          .then(() => {
+                            onProfileUpdate?.(profile.id, { tagIds: next })
+                            onRefresh?.()
+                            toast.success('Tags updated')
+                          })
+                          .catch(() => toast.error('Failed to update tags'))
+                          .finally(() => setUpdatingTags(false))
+                      }}
+                    />
+                    <span className="text-text">{tag.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
 
       {expanded && (
         <div className="border-t border-border bg-surface-2 p-4">
