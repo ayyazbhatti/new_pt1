@@ -192,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health_check))
         .merge(bulk_routes)
-        .nest("/api/auth", create_auth_router(pool.clone()))
+        .nest("/api/auth", create_auth_router(pool.clone(), redis_pool.clone()))
         .nest("/api/symbols", create_symbols_router(pool.clone())) // Public endpoint for all users
         .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))

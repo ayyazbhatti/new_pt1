@@ -1,10 +1,11 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     http::StatusCode,
     response::Json,
     routing::{get, patch, post},
     Router,
 };
+use std::sync::Arc;
 use chrono::Utc;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -634,7 +635,7 @@ async fn password_reset_confirm(
     }))
 }
 
-pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
+pub fn create_auth_router(pool: PgPool, redis: Arc<crate::redis_pool::RedisPool>) -> Router<PgPool> {
     // Public routes (no auth required)
     let public_routes = Router::new()
         .route("/register", post(register))
@@ -651,7 +652,8 @@ pub fn create_auth_router(pool: PgPool) -> Router<PgPool> {
         .route("/me/symbol-leverage", get(symbol_leverage))
         .route("/me", get(me).patch(update_me))
         .route("/users", get(list_users))
-        .layer(axum::middleware::from_fn(auth_middleware));
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(Extension(redis));
     
     // Combine both route groups
     Router::new()
@@ -1474,10 +1476,52 @@ async fn resolve_allowed_group_ids_for_list_users(
     Ok(Some(allowed))
 }
 
+/// Count open positions for a single user from Redis (order-engine source of truth). Used by account-type and margin-type update checks.
+pub async fn open_position_count_for_user(
+    redis: &crate::redis_pool::RedisPool,
+    user_id: Uuid,
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let counts = open_position_counts_from_redis(redis, std::slice::from_ref(&user_id)).await?;
+    Ok(counts.get(&user_id).copied().unwrap_or(0))
+}
+
+/// Count open positions per user from Redis (order-engine source of truth). Keys: pos:{user_id} set, pos:by_id:{id} hash with status OPEN/CLOSED.
+async fn open_position_counts_from_redis(
+    redis: &crate::redis_pool::RedisPool,
+    user_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, i32>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut conn = redis.get().await.map_err(|e| format!("redis connection: {}", e))?;
+    let mut counts = std::collections::HashMap::new();
+    for user_id in user_ids {
+        let key = format!("pos:{}", user_id);
+        let pos_ids: Vec<String> = redis::cmd("SMEMBERS")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or_default();
+        let mut open_count = 0i32;
+        for pos_id in pos_ids {
+            let status: Option<String> = redis::cmd("HGET")
+                .arg(format!("pos:by_id:{}", pos_id))
+                .arg("status")
+                .query_async(&mut conn)
+                .await
+                .ok()
+                .flatten();
+            if status.as_deref() == Some("OPEN") {
+                open_count += 1;
+            }
+        }
+        counts.insert(*user_id, open_count);
+    }
+    Ok(counts)
+}
+
 async fn list_users(
     State(pool): State<PgPool>,
-    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    Extension(claims): Extension<Claims>,
+    Extension(redis): Extension<Arc<crate::redis_pool::RedisPool>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<ListUsersResponse>, (StatusCode, Json<ErrorResponse>)> {
     let allowed_group_ids = resolve_allowed_group_ids_for_list_users(&pool, &claims).await?;
     let service = AuthService::new(pool.clone());
@@ -1551,25 +1595,31 @@ async fn list_users(
 
     {
             let user_ids: Vec<Uuid> = users.iter().map(|u| u.id).collect();
-            // Batch query: open position count per user (positions table, status = 'open')
+            // Open position count from Redis (order-engine source of truth). Fall back to PostgreSQL if Redis fails.
             let open_counts: std::collections::HashMap<Uuid, i32> = if user_ids.is_empty() {
                 std::collections::HashMap::new()
             } else {
-                #[derive(sqlx::FromRow)]
-                struct PosCountRow {
-                    user_id: Uuid,
-                    count: i64,
+                match open_position_counts_from_redis(redis.as_ref(), &user_ids).await {
+                    Ok(counts) => counts,
+                    Err(e) => {
+                        tracing::warn!("Redis open position count failed, using PostgreSQL: {}", e);
+                        #[derive(sqlx::FromRow)]
+                        struct PosCountRow {
+                            user_id: Uuid,
+                            count: i64,
+                        }
+                        let rows = sqlx::query_as::<_, PosCountRow>(
+                            "SELECT user_id, COUNT(*) AS count FROM positions WHERE status = 'open'::position_status AND user_id = ANY($1) GROUP BY user_id",
+                        )
+                        .bind(&user_ids)
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap_or_default();
+                        rows.into_iter()
+                            .map(|r| (r.user_id, r.count as i32))
+                            .collect()
+                    }
                 }
-                let rows = sqlx::query_as::<_, PosCountRow>(
-                    "SELECT user_id, COUNT(*) AS count FROM positions WHERE status = 'open'::position_status AND user_id = ANY($1) GROUP BY user_id",
-                )
-                .bind(&user_ids)
-                .fetch_all(&pool)
-                .await
-                .unwrap_or_default();
-                rows.into_iter()
-                    .map(|r| (r.user_id, r.count as i32))
-                    .collect()
             };
 
             let permission_profiles_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());

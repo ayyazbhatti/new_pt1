@@ -25,10 +25,10 @@ end
 
 -- For limit orders, verify price condition
 if order.order_type == "LIMIT" and order.limit_price then
-    if order.side == "BUY" and tonumber(fill_price) > tonumber(order.limit_price) then
+    if (order.side == "BUY" or order.side == "Buy") and tonumber(fill_price) > tonumber(order.limit_price) then
         return '{"error":"limit_price_not_met"}'
     end
-    if order.side == "SELL" and tonumber(fill_price) < tonumber(order.limit_price) then
+    if (order.side == "SELL" or order.side == "Sell") and tonumber(fill_price) < tonumber(order.limit_price) then
         return '{"error":"limit_price_not_met"}'
     end
 end
@@ -47,10 +47,13 @@ redis.call('SET', order_key, cjson.encode(order))
 local symbol = order.symbol
 redis.call('ZREM', 'orders:pending:' .. symbol, order_id)
 
--- Account type: hedging = multiple positions per symbol; netting = one net position per symbol
--- Support both snake_case and camelCase; treat missing as hedging
-local at = order.account_type or order.accountType
-local account_type = (at == "netting") and "netting" or "hedging"
+-- Account type: hedging = multiple positions per symbol (no merge); netting = one net position per symbol (merge same/opposite)
+-- Support both snake_case and camelCase; only "netting" (case-insensitive, trimmed) is netting, else hedging
+local at_raw = order.account_type or order.accountType
+local at_trimmed = (type(at_raw) == "string") and (at_raw:match("^%s*(.-)%s*$") or at_raw) or ""
+local account_type = (string.lower(at_trimmed) == "netting") and "netting" or "hedging"
+-- Normalize order side (Rust sends "BUY"/"SELL"; accept "Buy"/"Sell" for robustness)
+local order_side = (order.side == "BUY" or order.side == "Buy") and "BUY" or "SELL"
 local fill_action = nil  -- "created", "added_to", "reduced", "closed", "flipped"
 local closed_position_id = nil
 local closed_position_size = nil  -- size that was closed (for event.position.closed)
@@ -83,9 +86,12 @@ for _, pos_id in ipairs(existing_positions) do
         local pos_side = redis.call('HGET', pos_key_new, 'side')
         
         if pos_symbol == symbol and pos_status == "OPEN" then
-            -- No same-side merge: hedging and netting both get one position per order (do not add to existing).
-            if false and ((order.side == "BUY" and pos_side == "LONG") or
-               (order.side == "SELL" and pos_side == "SHORT")) then
+            local same_side = (order_side == "BUY" and pos_side == "LONG") or (order_side == "SELL" and pos_side == "SHORT")
+            if same_side and account_type == "hedging" then
+                break  -- Hedging: never merge; exit loop so we create a new position below
+            end
+            -- Netting only: same-side merge (one net position per symbol)
+            if same_side and account_type == "netting" then
                 position_id = pos_id
                 fill_action = "added_to"
                 -- Update position (Hash format)
@@ -126,8 +132,12 @@ for _, pos_id in ipairs(existing_positions) do
     if pos_json then
         local pos = cjson.decode(pos_json)
         if pos.symbol == symbol and pos.status == "OPEN" then
-            if (order.side == "BUY" and pos.side == "LONG") or
-               (order.side == "SELL" and pos.side == "SHORT") then
+            local pos_side_val = pos.side == "LONG" or pos.side == "Long"
+            local same_side_old = (order_side == "BUY" and pos_side_val) or (order_side == "SELL" and (pos.side == "SHORT" or pos.side == "Short"))
+            if same_side_old and account_type == "hedging" then
+                break  -- Hedging: never merge; exit so we create new position below
+            end
+            if same_side_old and account_type == "netting" then
                 position_id = pos_id
                 fill_action = "added_to"
                     -- Migrate to new format and update
@@ -150,7 +160,7 @@ for _, pos_id in ipairs(existing_positions) do
                         redis.call('HSET', new_pos_key, 'user_id', user_id)
                         redis.call('HSET', new_pos_key, 'symbol', symbol)
                         redis.call('HSET', new_pos_key, 'group_id', order.group_id or '')
-                        redis.call('HSET', new_pos_key, 'side', (order.side == "BUY") and "LONG" or "SHORT")
+                        redis.call('HSET', new_pos_key, 'side', (order_side == "BUY") and "LONG" or "SHORT")
                         redis.call('HSET', new_pos_key, 'size', tostring(total_size))
                         redis.call('HSET', new_pos_key, 'entry_price', tostring(new_entry_price))
                         redis.call('HSET', new_pos_key, 'avg_price', tostring(new_entry_price))
@@ -240,9 +250,12 @@ if not position_id then
             if pos_json then
                 local pos = cjson.decode(pos_json)
                 if pos.symbol == symbol and pos.status == "OPEN" then
-            -- No same-side merge: hedging and netting both get one position per order.
-            if false and ((order.side == "BUY" and pos.side == "LONG") or
-               (order.side == "SELL" and pos.side == "SHORT")) then
+            local pos_side_val = (pos.side == "LONG" or pos.side == "Long")
+            local same_side_old2 = (order_side == "BUY" and pos_side_val) or (order_side == "SELL" and (pos.side == "SHORT" or pos.side == "Short"))
+            if same_side_old2 and account_type == "hedging" then
+                break  -- Hedging: never merge
+            end
+            if same_side_old2 and account_type == "netting" then
                         fill_action = "added_to"
                         -- Migrate old position to new format using UUID
                         position_id = position_uuid
@@ -261,7 +274,7 @@ if not position_id then
                         redis.call('HSET', new_pos_key, 'user_id', user_id)
                         redis.call('HSET', new_pos_key, 'symbol', symbol)
                         redis.call('HSET', new_pos_key, 'group_id', order.group_id or '')
-                        redis.call('HSET', new_pos_key, 'side', (order.side == "BUY") and "LONG" or "SHORT")
+                        redis.call('HSET', new_pos_key, 'side', (order_side == "BUY") and "LONG" or "SHORT")
                         redis.call('HSET', new_pos_key, 'size', tostring(total_size))
                         redis.call('HSET', new_pos_key, 'entry_price', tostring(new_entry_price))
                         redis.call('HSET', new_pos_key, 'avg_price', tostring(new_entry_price))
@@ -319,7 +332,7 @@ if not position_id and account_type == "netting" then
             local pos_status = redis.call('HGET', pos_key_new, 'status')
             local pos_side = redis.call('HGET', pos_key_new, 'side')
             if pos_symbol == symbol and pos_status == "OPEN" then
-                local opposite = (order.side == "BUY" and pos_side == "SHORT") or (order.side == "SELL" and pos_side == "LONG")
+                local opposite = (order_side == "BUY" and pos_side == "SHORT") or (order_side == "SELL" and pos_side == "LONG")
                 if opposite then
                     local symbol_open_key = 'pos:open:' .. symbol
                     local pos_size = tonumber(redis.call('HGET', pos_key_new, 'size') or '0')
@@ -382,7 +395,7 @@ if not position_id and account_type == "netting" then
                         position_id = position_uuid
                         local flip_size = -new_size
                         local new_pos_key = 'pos:by_id:' .. position_id
-                        local new_side = (order.side == "BUY") and "LONG" or "SHORT"
+                        local new_side = (order_side == "BUY") and "LONG" or "SHORT"
                         local new_margin = (flip_size * fill_price_num) / pos_leverage
                         redis.call('HSET', new_pos_key, 'user_id', user_id)
                         redis.call('HSET', new_pos_key, 'symbol', symbol)
@@ -431,7 +444,7 @@ if not position_id and fill_action == nil then
     redis.call('HSET', pos_key, 'user_id', user_id)
     redis.call('HSET', pos_key, 'symbol', symbol)
     redis.call('HSET', pos_key, 'group_id', order.group_id or '')
-    redis.call('HSET', pos_key, 'side', (order.side == "BUY") and "LONG" or "SHORT")
+    redis.call('HSET', pos_key, 'side', (order_side == "BUY") and "LONG" or "SHORT")
     redis.call('HSET', pos_key, 'size', fill_size)
     redis.call('HSET', pos_key, 'entry_price', fill_price)
     redis.call('HSET', pos_key, 'avg_price', fill_price)

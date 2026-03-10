@@ -837,7 +837,8 @@ async fn update_user_group(
 
 async fn update_user_account_type(
     State(pool): State<PgPool>,
-    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserAccountTypeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
@@ -866,23 +867,30 @@ async fn update_user_account_type(
         ));
     }
 
-    let open_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM positions WHERE user_id = $1 AND status = 'open'::position_status",
-    )
-    .bind(user_id)
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "DATABASE_ERROR".to_string(),
-                    message: e.to_string(),
-                },
-            }),
-        )
-    })?;
+    // Use Redis (order-engine source of truth) for open position count; fall back to PostgreSQL if Redis fails
+    let open_count: i32 = match crate::routes::auth::open_position_count_for_user(deposits_state.redis.as_ref(), user_id).await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!("Redis open position count failed for account-type check, using PostgreSQL: {}", e);
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM positions WHERE user_id = $1 AND status = 'open'::position_status",
+            )
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })? as i32
+        }
+    };
 
     if open_count > 0 {
         return Err((
@@ -965,7 +973,8 @@ async fn update_user_account_type(
 
 async fn update_user_margin_calculation_type(
     State(pool): State<PgPool>,
-    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserMarginCalculationTypeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
@@ -994,23 +1003,30 @@ async fn update_user_margin_calculation_type(
         ));
     }
 
-    let open_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM positions WHERE user_id = $1 AND status = 'open'::position_status",
-    )
-    .bind(user_id)
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "DATABASE_ERROR".to_string(),
-                    message: e.to_string(),
-                },
-            }),
-        )
-    })?;
+    // Use Redis (order-engine source of truth) for open position count; fall back to PostgreSQL if Redis fails
+    let open_count: i32 = match crate::routes::auth::open_position_count_for_user(deposits_state.redis.as_ref(), user_id).await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!("Redis open position count failed for margin-type check, using PostgreSQL: {}", e);
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM positions WHERE user_id = $1 AND status = 'open'::position_status",
+            )
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })? as i32
+        }
+    };
 
     if open_count > 0 {
         return Err((
