@@ -8,7 +8,7 @@ interface ContentShellProps {
 
 export function ContentShell({ children, className }: ContentShellProps) {
   return (
-    <div className={cn('container mx-auto p-6', className)}>
+    <div className={cn('container mx-auto px-4 py-4 sm:px-6 sm:py-6', className)}>
       {children}
     </div>
   )

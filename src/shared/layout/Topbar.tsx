@@ -1,10 +1,11 @@
-import { Search, User, Activity, LogOut } from 'lucide-react'
+import { Search, User, Activity, LogOut, Menu } from 'lucide-react'
 import { useNavigate, Link, useLocation } from 'react-router-dom'
 import { toast } from '@/shared/components/common'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { NotificationBell } from '@/shared/components/NotificationBell'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { useUIStore } from '@/app/store'
 import { cn } from '@/shared/utils'
 
 interface TopbarProps {
@@ -18,6 +19,7 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
   const navigate = useNavigate()
   const location = useLocation()
   const logout = useAuthStore((state) => state.logout)
+  const toggleSidebar = useUIStore((state) => state.toggleSidebar)
   const isAdmin = location.pathname.startsWith('/admin')
   const profilePath = isAdmin ? '/admin/profile' : '/user/profile'
 
@@ -28,18 +30,28 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
   }
 
   return (
-    <header className="flex h-16 items-center justify-between border-b border-border bg-surface-1 px-6">
-      <div className="flex items-center gap-4 flex-1">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+    <header className="flex h-14 min-h-[3.5rem] items-center justify-between gap-2 border-b border-border bg-surface-1 px-3 sm:px-4 md:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-4">
+        {/* Mobile: hamburger to open sidebar drawer */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={toggleSidebar}
+          className="shrink-0 md:hidden"
+          aria-label="Open menu"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+        <div className="relative min-w-0 flex-1 max-w-md">
+          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted sm:left-3" />
           <Input
             type="search"
             placeholder="Search..."
-            className="pl-10"
+            className="h-9 pl-9 text-sm sm:h-10 sm:pl-10"
           />
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         {showTerminalLink && (
           <a
             href="/"
@@ -47,8 +59,8 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
             rel="noopener noreferrer"
             title="Open Trading Terminal (new tab)"
           >
-            <Button variant="ghost" size="sm" type="button">
-              <Activity className="h-5 w-5" />
+            <Button variant="ghost" size="sm" type="button" className="p-2 sm:p-2.5">
+              <Activity className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
           </a>
         )}
@@ -57,11 +69,11 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
           to={profilePath}
           title="Profile"
           className={cn(
-            'inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs',
+            'inline-flex items-center justify-center rounded-lg p-2 text-xs sm:px-3 sm:py-1.5',
             'bg-transparent text-text hover:bg-surface-2 active:bg-surface-2/80'
           )}
         >
-          <User className="h-5 w-5" />
+          <User className="h-4 w-4 sm:h-5 sm:w-5" />
         </Link>
         {showLogout && (
           <Button
@@ -70,9 +82,9 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
             type="button"
             onClick={handleLogout}
             title="Log out"
-            className="text-danger hover:text-danger hover:bg-danger/10"
+            className="p-2 text-danger hover:bg-danger/10 sm:p-2.5"
           >
-            <LogOut className="h-5 w-5" />
+            <LogOut className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
         )}
       </div>

@@ -28,15 +28,15 @@ function StatCard({
   className?: string
 }) {
   return (
-    <Card className={cn('p-5', className)}>
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-medium text-text-muted">{title}</p>
-          <p className="mt-1 text-2xl font-bold text-text">{value}</p>
+    <Card className={cn('p-4 sm:p-5', className)}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs sm:text-sm font-medium text-text-muted">{title}</p>
+          <p className="mt-1 text-xl font-bold text-text sm:text-2xl">{value}</p>
           {subtext && <p className="mt-0.5 text-xs text-text-muted">{subtext}</p>}
         </div>
-        <div className="rounded-lg bg-surface-2 p-2.5">
-          <Icon className="h-5 w-5 text-accent" />
+        <div className="shrink-0 rounded-lg bg-surface-2 p-2 sm:p-2.5">
+          <Icon className="h-4 w-4 text-accent sm:h-5 sm:w-5" />
         </div>
       </div>
     </Card>
@@ -56,15 +56,15 @@ function QuickActionCard({
 }) {
   return (
     <Link to={to}>
-      <Card className="flex items-center gap-4 p-4 transition-colors hover:bg-surface-2/80">
-        <div className="rounded-lg bg-accent/10 p-3">
-          <Icon className="h-6 w-6 text-accent" />
+      <Card className="flex items-center gap-3 p-3 transition-colors hover:bg-surface-2/80 sm:gap-4 sm:p-4">
+        <div className="shrink-0 rounded-lg bg-accent/10 p-2.5 sm:p-3">
+          <Icon className="h-5 w-5 text-accent sm:h-6 sm:w-6" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-text">{title}</p>
-          <p className="text-sm text-text-muted">{description}</p>
+          <p className="font-semibold text-text text-sm sm:text-base">{title}</p>
+          <p className="text-xs text-text-muted sm:text-sm">{description}</p>
         </div>
-        <ChevronRight className="h-5 w-5 shrink-0 text-text-muted" />
+        <ChevronRight className="h-4 w-4 shrink-0 text-text-muted sm:h-5 sm:w-5" />
       </Card>
     </Link>
   )
@@ -78,18 +78,19 @@ export function UserDashboardPage() {
       <PageHeader
         title="Dashboard"
         description="Your account overview and quick actions"
+        className="flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between"
       />
 
       {user?.email && (
-        <p className="mb-6 text-sm text-text-muted">
-          Welcome back, <span className="font-medium text-text">{user.email}</span>
+        <p className="mb-4 text-sm text-text-muted sm:mb-6">
+          Welcome back, <span className="font-medium text-text break-all">{user.email}</span>
         </p>
       )}
 
       {/* Balance overview */}
-      <section className="mb-8">
-        <h2 className="mb-4 text-lg font-semibold text-text">Account overview</h2>
-        <div className="grid gap-4 sm:grid-cols-3">
+      <section className="mb-6 sm:mb-8">
+        <h2 className="mb-3 text-base font-semibold text-text sm:mb-4 sm:text-lg">Account overview</h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
           <StatCard
             title="Balance"
             value="—"
@@ -115,9 +116,9 @@ export function UserDashboardPage() {
       </section>
 
       {/* Quick actions */}
-      <section className="mb-8">
-        <h2 className="mb-4 text-lg font-semibold text-text">Quick actions</h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="mb-6 sm:mb-8">
+        <h2 className="mb-3 text-base font-semibold text-text sm:mb-4 sm:text-lg">Quick actions</h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
           <QuickActionCard
             to="/user/deposit"
             title="Deposit"
@@ -141,10 +142,10 @@ export function UserDashboardPage() {
 
       {/* Recent activity placeholder */}
       <section>
-        <h2 className="mb-4 text-lg font-semibold text-text">Recent activity</h2>
-        <Card className="p-6">
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <Activity className="mb-3 h-10 w-10 text-text-muted/50" />
+        <h2 className="mb-3 text-base font-semibold text-text sm:mb-4 sm:text-lg">Recent activity</h2>
+        <Card className="p-4 sm:p-6">
+          <div className="flex flex-col items-center justify-center py-6 text-center sm:py-8">
+            <Activity className="mb-2 h-8 w-8 text-text-muted/50 sm:mb-3 sm:h-10 sm:w-10" />
             <p className="text-sm font-medium text-text-muted">No recent activity</p>
             <p className="mt-1 text-xs text-text-muted">
               Trades, deposits, and withdrawals will appear here once connected to the backend.

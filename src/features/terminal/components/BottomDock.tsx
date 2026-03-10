@@ -170,8 +170,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const tabs = [
     { id: 'positions', label: 'Positions' },
     { id: 'orders', label: 'Orders' },
-    { id: 'order-history', label: 'O. History' },
-    { id: 'position-history', label: 'P. History' },
+    { id: 'order-history', label: 'Order History' },
+    { id: 'position-history', label: 'Position History' },
   ]
   
   // Handler to change tab and persist to localStorage
