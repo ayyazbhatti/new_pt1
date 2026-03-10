@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 
 #[derive(Debug, Serialize)]
 pub struct ManagerResponse {
@@ -67,19 +68,16 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access managers".to_string(),
-                },
-            }),
-        ));
-    }
-    Ok(())
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
 }
 
 pub fn create_admin_managers_router(pool: PgPool) -> Router<PgPool> {
@@ -110,7 +108,9 @@ async fn list_managers(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Query(params): Query<ListManagersQuery>,
 ) -> Result<Json<Vec<ManagerResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "managers:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let search = params
         .search
@@ -237,7 +237,9 @@ async fn create_manager(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     axum::Json(payload): axum::Json<CreateManagerRequest>,
 ) -> Result<(StatusCode, Json<ManagerResponse>), (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "managers:create")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let user_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
         .bind(payload.user_id)
@@ -423,7 +425,9 @@ async fn update_manager(
     Path(id): Path<Uuid>,
     axum::Json(payload): axum::Json<UpdateManagerRequest>,
 ) -> Result<Json<ManagerResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "managers:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let manager: Option<(Uuid, Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT user_id, permission_profile_id, status, notes FROM managers WHERE id = $1",
@@ -608,7 +612,9 @@ async fn delete_manager(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "managers:delete")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let user_id: Option<Uuid> = sqlx::query_scalar("SELECT user_id FROM managers WHERE id = $1")
         .bind(id)
@@ -704,7 +710,9 @@ async fn get_manager_tags(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ManagerTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "managers:view")
+        .await
+        .map_err(permission_denied_to_response)?;
     let manager_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM managers WHERE id = $1)")
             .bind(id)
@@ -761,7 +769,9 @@ async fn put_manager_tags(
     Path(id): Path<Uuid>,
     Json(payload): Json<PutManagerTagsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "managers:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
     let manager_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM managers WHERE id = $1)")
             .bind(id)

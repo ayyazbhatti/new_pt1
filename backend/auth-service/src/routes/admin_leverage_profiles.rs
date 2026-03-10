@@ -14,6 +14,7 @@ use crate::middleware::auth_middleware;
 use crate::models::leverage_profile::{LeverageProfile, LeverageProfileTier, LeverageProfileWithCounts};
 use crate::services::admin_leverage_profiles_service::{AdminLeverageProfilesService, SymbolInfo};
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateProfileRequest {
@@ -90,19 +91,16 @@ pub fn create_admin_leverage_profiles_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
-    Ok(())
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
 }
 
 async fn list_profiles(
@@ -110,7 +108,9 @@ async fn list_profiles(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ListProfilesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     let search = params.get("search").map(|s| s.as_str());
@@ -147,7 +147,9 @@ async fn get_profile(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<LeverageProfile>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service.get_profile_by_id(id).await {
@@ -169,7 +171,9 @@ async fn create_profile(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Json(payload): Json<CreateProfileRequest>,
 ) -> Result<Json<LeverageProfile>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:create")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service
@@ -204,7 +208,9 @@ async fn update_profile(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> Result<Json<LeverageProfile>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service
@@ -238,7 +244,9 @@ async fn delete_profile(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:delete")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service.delete_profile(id).await {
@@ -269,7 +277,9 @@ async fn list_tiers(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<LeverageProfileTier>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service.list_tiers(id).await {
@@ -292,7 +302,9 @@ async fn create_tier(
     Path(id): Path<Uuid>,
     Json(payload): Json<CreateTierRequest>,
 ) -> Result<Json<LeverageProfileTier>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:create")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     // Validate numeric strings (service will parse)
     if payload.notional_from.parse::<f64>().is_err() {
@@ -384,7 +396,9 @@ async fn update_tier(
     Path((id, tier_id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<UpdateTierRequest>,
 ) -> Result<Json<LeverageProfileTier>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     // Validate numeric strings (service will parse)
     if payload.notional_from.parse::<f64>().is_err() {
@@ -476,7 +490,9 @@ async fn delete_tier(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path((_id, tier_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:delete")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service.delete_tier(tier_id).await {
@@ -498,7 +514,9 @@ async fn get_profile_symbols(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ProfileSymbolsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service.get_profile_symbols(id).await {
@@ -524,7 +542,9 @@ async fn set_profile_symbols(
     Path(id): Path<Uuid>,
     Json(payload): Json<SetProfileSymbolsRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminLeverageProfilesService::new(pool);
     match service.set_profile_symbols(id, &payload.symbol_ids).await {

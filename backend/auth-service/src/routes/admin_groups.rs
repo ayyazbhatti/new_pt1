@@ -17,6 +17,7 @@ use crate::models::user_group::UserGroup;
 use crate::services::admin_groups_service::{AdminGroupsService, GroupSymbolInput};
 use crate::services::admin_markup_service::AdminMarkupService;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateGroupRequest {
@@ -86,6 +87,18 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
+}
+
 /// Router for GET/PUT group tags only. Mount at `/api/admin/group-tags` so path is `/:id` (no conflict with groups `/:id`).
 pub fn create_admin_group_tags_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
@@ -116,18 +129,9 @@ async fn list_groups(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ListGroupsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Check admin role
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminGroupsService::new(pool);
     let search = params.get("search").map(|s| s.as_str());
@@ -228,17 +232,9 @@ async fn get_group(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<UserGroup>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminGroupsService::new(pool);
     match service.get_group_by_id(id).await {
@@ -260,17 +256,9 @@ async fn create_group(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Json(payload): Json<CreateGroupRequest>,
 ) -> Result<Json<UserGroup>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:create")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminGroupsService::new(pool);
     match service
@@ -313,17 +301,9 @@ async fn update_group(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateGroupRequest>,
 ) -> Result<Json<UserGroup>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminGroupsService::new(pool);
     match service
@@ -381,17 +361,9 @@ async fn delete_group(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:delete")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminGroupsService::new(pool);
     match service.delete_group(id).await {
@@ -422,17 +394,9 @@ async fn get_group_usage(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<UsageResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminGroupsService::new(pool);
     match service.get_group_usage(id).await {
@@ -465,17 +429,9 @@ async fn update_group_price_profile(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdatePriceProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:price_profile")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     // Parse price_profile_id
     let price_profile_id: Option<Uuid> = if let Some(profile_id_str) = payload.price_profile_id {
@@ -612,17 +568,9 @@ async fn update_group_leverage_profile(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateLeverageProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     // Parse leverage_profile_id
     let leverage_profile_id: Option<Uuid> = if let Some(profile_id_str) = payload.leverage_profile_id {
@@ -778,17 +726,9 @@ async fn get_group_symbols(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ListGroupSymbolsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:symbol_settings")
+        .await
+        .map_err(permission_denied_to_response)?;
     let service = AdminGroupsService::new(pool);
     match service.list_group_symbols(id).await {
         Ok(rows) => {
@@ -822,17 +762,9 @@ async fn update_group_symbols(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateGroupSymbolsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:symbol_settings")
+        .await
+        .map_err(permission_denied_to_response)?;
     let group_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1)")
         .bind(id)
         .fetch_one(&pool)
@@ -925,17 +857,9 @@ async fn get_group_tags(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<GroupTagsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:tags")
+        .await
+        .map_err(permission_denied_to_response)?;
     let service = AdminGroupsService::new(pool);
     let group_ids = vec![id];
     let map = service.get_tag_ids_for_groups(&group_ids).await.map_err(|e| {
@@ -959,17 +883,9 @@ async fn put_group_tags(
     Path(id): Path<Uuid>,
     Json(payload): Json<PutGroupTagsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "groups:tags")
+        .await
+        .map_err(permission_denied_to_response)?;
     let group_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1)")
         .bind(id)
         .fetch_one(&pool)

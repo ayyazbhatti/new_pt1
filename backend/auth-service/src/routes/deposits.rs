@@ -29,6 +29,7 @@ pub type PriceOverrides = HashMap<(String, String), (Decimal, Decimal)>;
 
 use crate::routes::user_preferences;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
 use crate::services::ledger_service;
 use crate::services::email_config_service::{send_email_html_sync, EmailConfigService};
@@ -2074,9 +2075,9 @@ async fn list_deposits(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListDepositsQuery>,
 ) -> Result<Json<Vec<DepositRequestResponse>>, StatusCode> {
-    if claims.role != "admin" {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    permission_check::check_permission(&pool, &claims, "finance:view")
+        .await
+        .map_err(|_| StatusCode::FORBIDDEN)?;
 
     let status = params.status.unwrap_or_else(|| "pending".to_string());
 
@@ -2200,9 +2201,9 @@ async fn approve_deposit(
     Extension(claims): Extension<Claims>,
     Path(transaction_id): Path<Uuid>,
 ) -> Result<Json<ApproveDepositResponse>, StatusCode> {
-    if claims.role != "admin" {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    permission_check::check_permission(&pool, &claims, "deposits:approve")
+        .await
+        .map_err(|_| StatusCode::FORBIDDEN)?;
 
     let admin_id = claims.sub;
 
@@ -2522,9 +2523,9 @@ async fn reject_deposit(
     Path(transaction_id): Path<Uuid>,
     Json(req): Json<RejectDepositRequest>,
 ) -> Result<Json<RejectDepositResponse>, StatusCode> {
-    if claims.role != "admin" {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    permission_check::check_permission(&pool, &claims, "deposits:reject")
+        .await
+        .map_err(|_| StatusCode::FORBIDDEN)?;
 
     let admin_id = claims.sub;
 
@@ -2758,14 +2759,12 @@ async fn get_user_positions(
     Extension(deposits_state): Extension<DepositsState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<PositionsResponse>, StatusCode> {
-    // Users can only see their own positions, admins can see any
-    // Allow if user is requesting their own positions OR if user is admin
+    // Users can only see their own positions; admins or users with trading:view can see any
     let is_own_positions = claims.sub == user_id;
-    let is_admin = claims.role == "admin";
-    
-    if !is_own_positions && !is_admin {
-        error!("Forbidden: user_id={}, claims.sub={}, claims.role={}", user_id, claims.sub, claims.role);
-        return Err(StatusCode::FORBIDDEN);
+    if !is_own_positions {
+        permission_check::check_permission(&pool, &claims, "trading:view")
+            .await
+            .map_err(|_| StatusCode::FORBIDDEN)?;
     }
 
     let mut conn = deposits_state.redis.get().await
@@ -3017,19 +3016,17 @@ pub struct UpdatePositionSltpResponse {
 }
 
 async fn update_position_sltp(
-    State(_pool): State<PgPool>,
+    State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Extension(deposits_state): Extension<DepositsState>,
     Path((user_id, position_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<UpdatePositionSltpRequest>,
 ) -> Result<Json<UpdatePositionSltpResponse>, StatusCode> {
-    // Users can only update their own positions, admins can update any
     let is_own_position = claims.sub == user_id;
-    let is_admin = claims.role == "admin";
-    
-    if !is_own_position && !is_admin {
-        error!("Forbidden: user_id={}, claims.sub={}, claims.role={}", user_id, claims.sub, claims.role);
-        return Err(StatusCode::FORBIDDEN);
+    if !is_own_position {
+        permission_check::check_permission(&pool, &claims, "trading:view")
+            .await
+            .map_err(|_| StatusCode::FORBIDDEN)?;
     }
 
     let mut conn = deposits_state.redis.get().await
@@ -3045,7 +3042,7 @@ async fn update_position_sltp(
 
     if let Some(pos_user_id_str) = pos_user_id {
         if let Ok(pos_user_id_uuid) = Uuid::parse_str(&pos_user_id_str) {
-            if pos_user_id_uuid != user_id && !is_admin {
+            if pos_user_id_uuid != user_id && is_own_position {
                 error!("Position {} does not belong to user {}", position_id, user_id);
                 return Err(StatusCode::FORBIDDEN);
             }
@@ -3172,17 +3169,15 @@ async fn close_position(
     Path((user_id, position_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<ClosePositionRequest>,
 ) -> Result<Json<ClosePositionResponse>, Response> {
-    // Users can only close their own positions, admins can close any
     let is_own_position = claims.sub == user_id;
-    let is_admin = claims.role == "admin";
-
-    if !is_own_position && !is_admin {
-        error!("Forbidden: user_id={}, claims.sub={}, claims.role={}", user_id, claims.sub, claims.role);
-        return Err(StatusCode::FORBIDDEN.into_response());
+    if !is_own_position {
+        permission_check::check_permission(&pool, &claims, "trading:close_position")
+            .await
+            .map_err(|_| StatusCode::FORBIDDEN.into_response())?;
     }
 
     // When user closes own position, enforce trading_access: disabled => cannot close
-    if is_own_position && !is_admin {
+    if is_own_position {
         let trading_access: Option<String> = sqlx::query_scalar(
             "SELECT COALESCE(trading_access, 'full') FROM users WHERE id = $1",
         )

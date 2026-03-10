@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::middleware::auth_middleware;
 use crate::services::admin_swap_service::AdminSwapService;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateSwapRuleRequest {
@@ -79,19 +80,16 @@ pub fn create_admin_swap_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Admin access required".to_string(),
-                },
-            }),
-        ));
-    }
-    Ok(())
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
 }
 
 fn rule_to_json(r: &crate::models::swap_rule::SwapRuleWithGroupName) -> serde_json::Value {
@@ -122,7 +120,9 @@ async fn list_rules(
     claims: axum::extract::Extension<Claims>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ListSwapRulesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "swap:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let group_id = params
         .get("group_id")
@@ -168,7 +168,9 @@ async fn get_rule(
     Path(id): Path<Uuid>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "swap:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminSwapService::new(pool);
     let rule = service.get_rule_by_id(id).await.map_err(|e| {
@@ -191,7 +193,9 @@ async fn create_rule(
     claims: axum::extract::Extension<Claims>,
     Json(payload): Json<CreateSwapRuleRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "swap:create")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let updated_by = Some(claims.email.as_str());
 
@@ -236,7 +240,9 @@ async fn update_rule(
     claims: axum::extract::Extension<Claims>,
     Json(payload): Json<UpdateSwapRuleRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "swap:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let updated_by = Some(claims.email.as_str());
 
@@ -284,7 +290,9 @@ async fn delete_rule(
     Path(id): Path<Uuid>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "swap:delete")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminSwapService::new(pool);
     service.delete_rule(id).await.map_err(|e| {

@@ -157,7 +157,8 @@ export const useAuthStore = create<AuthState>()(
 
       hydrateFromStorage: async () => {
         const state = get()
-        if (state.accessToken && state.refreshToken && !state.user) {
+        // Whenever we have tokens, refetch user so permissions (and other profile data) are fresh after refresh.
+        if (state.accessToken && state.refreshToken) {
           try {
             const { me } = await import('@/shared/api/auth.api')
             const user = await me()
@@ -178,13 +179,11 @@ export const useAuthStore = create<AuthState>()(
               isAuthenticated: true,
               isHydrated: true,
             })
-            // Connect WebSocket after hydration if user is authenticated
             if (typeof window !== 'undefined') {
               const { wsClient } = await import('@/shared/ws/wsClient')
               wsClient.connect()
             }
           } catch (error) {
-            // Token invalid, clear state
             set({
               accessToken: null,
               refreshToken: null,
@@ -195,11 +194,6 @@ export const useAuthStore = create<AuthState>()(
           }
         } else {
           set({ isHydrated: true })
-          // If user is already authenticated, ensure WebSocket is connected
-          if (state.accessToken && state.user && typeof window !== 'undefined') {
-            const { wsClient } = await import('@/shared/ws/wsClient')
-            wsClient.connect()
-          }
         }
       },
 

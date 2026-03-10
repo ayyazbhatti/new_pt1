@@ -15,9 +15,22 @@ use uuid::Uuid;
 
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
-use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ErrorResponse, ErrorDetail, check_admin};
+use crate::utils::permission_check;
+use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ErrorResponse, ErrorDetail};
 
 const POS_BY_ID_PREFIX: &str = "pos:by_id:";
+
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
+}
 
 async fn list_admin_positions(
     State(pool): State<PgPool>,
@@ -25,7 +38,9 @@ async fn list_admin_positions(
     Extension(admin_state): Extension<AdminTradingState>,
     Query(params): Query<ListPositionsQuery>,
 ) -> Result<Json<PaginatedResponse<AdminPosition>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "trading:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
@@ -219,13 +234,15 @@ fn format_ts_ms(ms: i64) -> String {
 }
 
 async fn close_admin_position(
-    State(_pool): State<PgPool>,
+    State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Extension(admin_state): Extension<AdminTradingState>,
     Path(position_id): Path<Uuid>,
     Json(req): Json<ClosePositionRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "trading:close_position")
+        .await
+        .map_err(permission_denied_to_response)?;
     let now = Utc::now();
     let close_event = serde_json::json!({
         "positionId": position_id.to_string(),
@@ -260,13 +277,15 @@ async fn close_admin_position(
 }
 
 async fn modify_position_sltp(
-    State(_pool): State<PgPool>,
+    State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Extension(admin_state): Extension<AdminTradingState>,
     Path(position_id): Path<Uuid>,
     Json(req): Json<ModifySltpRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "trading:view")
+        .await
+        .map_err(permission_denied_to_response)?;
     let now = Utc::now();
     let modify_event = serde_json::json!({
         "positionId": position_id.to_string(),

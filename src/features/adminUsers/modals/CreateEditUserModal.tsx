@@ -7,6 +7,7 @@ import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { useModalStore } from '@/app/store'
+import { useAuthStore } from '@/shared/store/auth.store'
 import { toast } from '@/shared/components/common'
 import { User, UserStatus } from '../types/users'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
@@ -41,6 +42,8 @@ interface CreateEditUserModalProps {
 export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const queryClient = useQueryClient()
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null)
+  const refreshUser = useAuthStore((s) => s.refreshUser)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Fetch groups and permission profiles
@@ -188,6 +191,9 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           }
         })
         await queryClient.invalidateQueries({ queryKey: ['users'] })
+        if (user.id === currentUserId) {
+          await refreshUser().catch((e) => console.error('Failed to refresh user after self-update', e))
+        }
         toast.success(`User ${data.firstName} ${data.lastName} updated`)
         closeModal(`edit-user-${user.id}`)
       } catch (error: unknown) {

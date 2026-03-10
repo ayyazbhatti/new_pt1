@@ -10,14 +10,29 @@ use sqlx::PgPool;
 
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
-use crate::routes::admin_trading::{AdminAuditLog, PaginatedResponse, ListAuditQuery, ErrorResponse, ErrorDetail, check_admin};
+use crate::utils::permission_check;
+use crate::routes::admin_trading::{AdminAuditLog, PaginatedResponse, ListAuditQuery, ErrorResponse, ErrorDetail};
+
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
+}
 
 async fn list_admin_audit(
-    State(_pool): State<PgPool>,
+    State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Query(_params): Query<ListAuditQuery>,
 ) -> Result<Json<PaginatedResponse<AdminAuditLog>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "risk:view")
+        .await
+        .map_err(permission_denied_to_response)?;
     // TODO: Implement when audit_events table is available
     Ok(Json(PaginatedResponse {
         items: vec![],

@@ -16,6 +16,7 @@ use redis::AsyncCommands;
 
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 use crate::services::ledger_service;
 use crate::routes::deposits::{compute_and_cache_account_summary, publish_wallet_balance_updated, publish_wallet_balance_updated_nats, DepositsState};
 
@@ -137,10 +138,9 @@ async fn approve_transaction(
     Extension(deposits_state): Extension<DepositsState>,
     Path(transaction_id): Path<Uuid>,
 ) -> Result<Json<ApproveTransactionResponse>, StatusCode> {
-    // Check admin role
-    if claims.role != "admin" {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    permission_check::check_permission(&pool, &claims, "deposits:approve")
+        .await
+        .map_err(|e| e.status)?;
 
     let admin_id = claims.sub;
     let now = Utc::now();
@@ -319,10 +319,9 @@ async fn reject_transaction(
     Path(transaction_id): Path<Uuid>,
     Json(req): Json<RejectTransactionRequest>,
 ) -> Result<Json<ApproveTransactionResponse>, StatusCode> {
-    // Check admin role
-    if claims.role != "admin" {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    permission_check::check_permission(&pool, &claims, "deposits:reject")
+        .await
+        .map_err(|e| e.status)?;
 
     let admin_id = claims.sub;
     let now = Utc::now();
@@ -429,7 +428,14 @@ pub fn create_finance_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
-async fn get_finance_overview(State(pool): State<PgPool>) -> Result<Json<FinanceOverviewResponse>, StatusCode> {
+async fn get_finance_overview(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<FinanceOverviewResponse>, StatusCode> {
+    permission_check::check_permission(&pool, &claims, "finance:view")
+        .await
+        .map_err(|e| e.status)?;
+
     // Total balances (sum of all available balances)
     let total_balances: Option<Decimal> = sqlx::query_scalar(
         "SELECT COALESCE(SUM(available_balance), 0) FROM wallets"
@@ -570,8 +576,13 @@ async fn get_finance_overview(State(pool): State<PgPool>) -> Result<Json<Finance
 
 async fn list_transactions(
     State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
     Query(params): Query<ListTransactionsQuery>,
 ) -> Result<Json<Vec<TransactionResponse>>, StatusCode> {
+    permission_check::check_permission(&pool, &claims, "finance:view")
+        .await
+        .map_err(|e| e.status)?;
+
     // Fetch all transactions (with a reasonable limit) and filter in memory
     // This can be optimized later with proper SQL query building
     let transactions = sqlx::query_as::<_, TransactionResponse>(
@@ -670,8 +681,13 @@ async fn list_transactions(
 
 async fn list_wallets(
     State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
     Query(params): Query<ListWalletsQuery>,
 ) -> Result<Json<Vec<WalletResponse>>, StatusCode> {
+    permission_check::check_permission(&pool, &claims, "finance:view")
+        .await
+        .map_err(|e| e.status)?;
+
     let wallets = sqlx::query_as::<_, WalletResponse>(
         r#"
         SELECT 

@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin_from_db_fast, get_price_from_redis};
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
 
 #[derive(Clone)]
@@ -806,14 +807,16 @@ async fn sync_pending_orders(
     Extension(claims): Extension<Claims>,
     Extension(orders_state): Extension<OrdersState>,
 ) -> Result<Json<SyncPendingOrdersResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": { "message": "Only admins can sync pending orders" }
-            })),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "trading:view")
+        .await
+        .map_err(|e| {
+            (
+                e.status,
+                Json(serde_json::json!({
+                    "error": { "message": e.message }
+                })),
+            )
+        })?;
 
     let pending: Vec<PendingOrderRow> = sqlx::query_as(
         r#"

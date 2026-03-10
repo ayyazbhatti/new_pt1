@@ -11,6 +11,7 @@ import { ModalShell } from '@/shared/ui/modal'
 import { Checkbox } from '@/shared/ui/Checkbox'
 import { KeyRound, Plus, Pencil, Trash2, Shield, Check } from 'lucide-react'
 import { toast } from '@/shared/components/common'
+import { useAuthStore } from '@/shared/store/auth.store'
 import { useCanAccess } from '@/shared/utils/permissions'
 import {
   listPermissionProfiles,
@@ -30,6 +31,7 @@ const DEFINITIONS_QUERY_KEY = ['permission-definitions'] as const
 
 export function PermissionsPage() {
   const queryClient = useQueryClient()
+  const refreshUser = useAuthStore((s) => s.refreshUser)
   const { data: profiles = [], isLoading, error } = useQuery({
     queryKey: QUERY_KEY,
     queryFn: listPermissionProfiles,
@@ -107,6 +109,7 @@ export function PermissionsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY })
       toast.success('Profile deleted')
+      refreshUser().catch((e) => console.error('Failed to refresh user after profile delete', e))
     },
     onError: (e: Error) => toast.error(e.message || 'Failed to delete profile'),
   })
@@ -175,18 +178,37 @@ export function PermissionsPage() {
     const permission_keys = Array.from(formPermissionIds)
     const description = formDescription.trim() || undefined
 
+    const onUpdateSuccess = (updated: PermissionProfile) => {
+      // Update cache immediately so the table reflects the edit without waiting for refetch
+      queryClient.setQueryData<PermissionProfile[]>(QUERY_KEY, (prev) =>
+        prev ? prev.map((p) => (p.id === updated.id ? updated : p)) : prev
+      )
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY })
+      refreshUser().catch((e) => console.error('Failed to refresh user after profile update', e))
+      closeDialog()
+    }
+
+    const onCreateSuccess = (created: PermissionProfile) => {
+      queryClient.setQueryData<PermissionProfile[]>(QUERY_KEY, (prev) =>
+        prev ? [...prev, created] : [created]
+      )
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY })
+      refreshUser().catch((e) => console.error('Failed to refresh user after profile update', e))
+      closeDialog()
+    }
+
     if (editingId) {
       updateMutation.mutate(
         { id: editingId, payload: { name, description: description || null, permission_keys } },
-        { onSuccess: closeDialog }
+        { onSuccess: onUpdateSuccess }
       )
     } else {
       createMutation.mutate(
         { name, description, permission_keys },
-        { onSuccess: closeDialog }
+        { onSuccess: onCreateSuccess }
       )
     }
-  }, [editingId, formName, formDescription, formPermissionIds, closeDialog, updateMutation, createMutation])
+  }, [editingId, formName, formDescription, formPermissionIds, closeDialog, updateMutation, createMutation, queryClient, refreshUser])
 
   const handleDelete = useCallback(
     (profile: PermissionProfile) => {

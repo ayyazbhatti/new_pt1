@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 
 #[derive(Debug, Serialize)]
 pub struct LayerResponse {
@@ -60,19 +61,16 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can manage affiliate layers".to_string(),
-                },
-            }),
-        ));
-    }
-    Ok(())
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -123,7 +121,9 @@ async fn list_affiliate_users(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<Vec<AffiliateUserResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "affiliate:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let rows = sqlx::query_as::<_, AffiliateUserRow>(
         r#"
@@ -175,7 +175,9 @@ async fn list_layers(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<Vec<LayerResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "affiliate:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let rows = sqlx::query_as::<_, LayerRow>(
         r#"
@@ -217,7 +219,9 @@ async fn create_layer(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     axum::Json(payload): axum::Json<CreateLayerRequest>,
 ) -> Result<(StatusCode, Json<LayerResponse>), (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "affiliate:create")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let name = payload.name.trim();
     if name.is_empty() {
@@ -362,7 +366,9 @@ async fn update_layer(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     axum::Json(payload): axum::Json<UpdateLayerRequest>,
 ) -> Result<Json<LayerResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "affiliate:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let name = payload.name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
     let commission_percent = payload.commission_percent.map(|c| c.clamp(0.0, 100.0));
@@ -459,7 +465,9 @@ async fn delete_layer(
     Path(id): Path<Uuid>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "affiliate:delete")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let result = sqlx::query("DELETE FROM affiliate_commission_layers WHERE id = $1")
         .bind(id)

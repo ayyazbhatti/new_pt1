@@ -16,6 +16,7 @@ use crate::middleware::auth_middleware;
 use crate::routes::deposits::{get_account_summary_for_user, AccountSummary, DepositsState};
 use crate::services::auth_service::AuthService;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserGroupRequest {
@@ -87,6 +88,18 @@ pub struct SendNotifyResponse {
     pub notification_id: String,
 }
 
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
+}
+
 // --- User notes (Notes & Timeline tab) ---
 
 #[derive(Debug, Serialize)]
@@ -135,17 +148,9 @@ async fn get_admin_user_account_summary(
     Extension(claims): Extension<Claims>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<AccountSummary>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can view user account summary".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:view")
+        .await
+        .map_err(permission_denied_to_response)?;
     match get_account_summary_for_user(&pool, deposits_state.redis.as_ref(), user_id).await {
         Ok(summary) => Ok(Json(summary)),
         Err(status) => Err((
@@ -167,17 +172,9 @@ async fn admin_send_notify(
     Path(user_id): Path<Uuid>,
     Json(body): Json<SendNotifyRequest>,
 ) -> Result<Json<SendNotifyResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can send notifications to users".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let title = body.title.trim();
     let message = body.message.trim();
@@ -300,17 +297,9 @@ async fn list_user_notes(
     Extension(claims): Extension<Claims>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<Vec<UserNoteResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can list user notes".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let user_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
@@ -387,17 +376,9 @@ async fn create_user_note(
     Path(user_id): Path<Uuid>,
     Json(body): Json<CreateUserNoteRequest>,
 ) -> Result<Json<UserNoteResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can create user notes".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let content = body.content.trim();
     if content.is_empty() {
@@ -513,17 +494,9 @@ async fn impersonate_user(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ImpersonateResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can impersonate users".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
     let service = AuthService::new(pool);
     let (access_token, refresh_token) = service.impersonate(user_id).await.map_err(|e| {
         (
@@ -548,17 +521,9 @@ async fn update_user_profile(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can update user profile".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let user_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
@@ -670,18 +635,9 @@ async fn update_user_group(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserGroupRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    // Check admin role
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit_group")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     // Parse group_id
     let group_id = match Uuid::parse_str(&payload.group_id) {
@@ -842,17 +798,9 @@ async fn update_user_account_type(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserAccountTypeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit_account_type")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let account_type = payload.account_type.trim().to_lowercase();
     if account_type != "hedging" && account_type != "netting" {
@@ -978,17 +926,9 @@ async fn update_user_margin_calculation_type(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserMarginCalculationTypeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit_margin")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let margin_calculation_type = payload.margin_calculation_type.trim().to_lowercase();
     if margin_calculation_type != "hedged" && margin_calculation_type != "net" {
@@ -1101,17 +1041,9 @@ async fn update_user_trading_access(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserTradingAccessRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit_trading_access")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let trading_access = payload.trading_access.trim().to_lowercase();
     if trading_access != "full" && trading_access != "close_only" && trading_access != "disabled" {
@@ -1187,17 +1119,9 @@ async fn update_user_permission_profile(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserPermissionProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Only admins can access this endpoint".to_string(),
-                },
-            }),
-        ));
-    }
+    permission_check::check_permission(&pool, &claims, "users:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     if let Some(profile_id) = payload.permission_profile_id {
         let exists: bool = sqlx::query_scalar(

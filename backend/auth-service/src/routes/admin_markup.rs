@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::middleware::auth_middleware;
 use crate::services::admin_markup_service::AdminMarkupService;
 use crate::utils::jwt::Claims;
+use crate::utils::permission_check;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateProfileRequest {
@@ -73,19 +74,16 @@ pub fn create_admin_markup_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool)
 }
 
-fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Admin access required".to_string(),
-                },
-            }),
-        ));
-    }
-    Ok(())
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
 }
 
 /// Bid/ask markup is percent-only; reject other types.
@@ -108,7 +106,9 @@ async fn list_profiles(
     State(pool): State<PgPool>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "markup:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminMarkupService::new(pool);
     let profiles = service.list_profiles().await.map_err(|e| {
@@ -149,7 +149,9 @@ async fn create_profile(
     claims: axum::extract::Extension<Claims>,
     Json(payload): Json<CreateProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "markup:create")
+        .await
+        .map_err(permission_denied_to_response)?;
     ensure_percent_markup(&payload.markup_type)?;
 
     let service = AdminMarkupService::new(pool);
@@ -193,7 +195,9 @@ async fn get_profile(
     Path(id): Path<Uuid>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "markup:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminMarkupService::new(pool);
     let profile = service.get_profile_by_id(id).await.map_err(|e| {
@@ -227,7 +231,9 @@ async fn update_profile(
     claims: axum::extract::Extension<Claims>,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "markup:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
     ensure_percent_markup(&payload.markup_type)?;
 
     let service = AdminMarkupService::new(pool);
@@ -271,7 +277,9 @@ async fn get_symbol_overrides(
     Path(profile_id): Path<Uuid>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "markup:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let service = AdminMarkupService::new(pool);
     let overrides = service.get_symbol_overrides(profile_id).await.map_err(|e| {
@@ -323,7 +331,9 @@ async fn upsert_symbol_override(
     claims: axum::extract::Extension<Claims>,
     Json(payload): Json<UpsertSymbolOverrideRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "markup:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let bid_markup = normalize_markup(payload.bid_markup.as_deref().unwrap_or(""));
     let ask_markup = normalize_markup(payload.ask_markup.as_deref().unwrap_or(""));
@@ -381,7 +391,9 @@ async fn transfer_markups(
     claims: axum::extract::Extension<Claims>,
     Json(payload): Json<TransferMarkupsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "markup:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let target_ids: Vec<Uuid> = payload
         .target_profile_ids

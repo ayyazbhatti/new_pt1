@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
+use crate::utils::permission_check;
 
 #[derive(Clone)]
 pub struct AdminTradingState {
@@ -181,19 +182,16 @@ pub struct ErrorDetail {
 // HELPER FUNCTIONS
 // ============================================================================
 
-pub fn check_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "FORBIDDEN".to_string(),
-                    message: "Admin access required".to_string(),
-                },
-            }),
-        ));
-    }
-    Ok(())
+fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.status,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.code,
+                message: e.message,
+            },
+        }),
+    )
 }
 
 // ============================================================================
@@ -205,7 +203,9 @@ async fn list_admin_orders(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListOrdersQuery>,
 ) -> Result<Json<PaginatedResponse<AdminOrder>>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "trading:view")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let limit = params.limit.unwrap_or(100).min(1000);
     let offset = params.cursor.and_then(|c| c.parse::<i64>().ok()).unwrap_or(0);
@@ -336,7 +336,9 @@ async fn create_admin_order(
     Extension(admin_state): Extension<AdminTradingState>,
     Json(req): Json<CreateOrderRequest>,
 ) -> Result<Json<AdminOrder>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "trading:create_order")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let order_id = Uuid::new_v4();
     let user_id = Uuid::parse_str(&req.user_id).map_err(|_| {
@@ -700,7 +702,9 @@ async fn cancel_admin_order(
     Extension(admin_state): Extension<AdminTradingState>,
     Path(order_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "trading:cancel_order")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let now = Utc::now();
 
@@ -821,7 +825,9 @@ async fn force_cancel_admin_order(
     Extension(admin_state): Extension<AdminTradingState>,
     Path(order_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    check_admin(&claims)?;
+    permission_check::check_permission(&pool, &claims, "trading:cancel_order")
+        .await
+        .map_err(permission_denied_to_response)?;
 
     let now = Utc::now();
 
