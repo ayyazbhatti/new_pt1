@@ -48,7 +48,9 @@ local symbol = order.symbol
 redis.call('ZREM', 'orders:pending:' .. symbol, order_id)
 
 -- Account type: hedging = multiple positions per symbol; netting = one net position per symbol
-local account_type = (order.account_type == "netting") and "netting" or "hedging"
+-- Support both snake_case and camelCase; treat missing as hedging
+local at = order.account_type or order.accountType
+local account_type = (at == "netting") and "netting" or "hedging"
 local fill_action = nil  -- "created", "added_to", "reduced", "closed", "flipped"
 local closed_position_id = nil
 local closed_position_size = nil  -- size that was closed (for event.position.closed)
@@ -413,8 +415,8 @@ if not position_id and account_type == "netting" then
     end
 end
 
--- Create new position if needed
-if not position_id then
+-- Create new position only when we did not already handle the fill (same-side add, netting reduce/close/flip)
+if not position_id and fill_action == nil then
     position_id = position_uuid
     fill_action = "created"
     

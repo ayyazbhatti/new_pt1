@@ -2,6 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
+    Extension,
 };
 use chrono::Utc;
 use contracts::{
@@ -18,6 +19,7 @@ use sqlx::Row;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use crate::auth::Claims;
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -49,11 +51,10 @@ pub async fn health() -> Json<serde_json::Value> {
 
 pub async fn place_order(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Json(req): Json<PlaceOrderRequest>,
 ) -> Result<Json<PlaceOrderResponse>, StatusCode> {
-    // TODO: Extract user_id from JWT token
-    let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let user_id = claims.sub;
 
     info!("Place order request: user={}, symbol={}, side={}", user_id, req.symbol, req.side);
 
@@ -109,7 +110,22 @@ pub async fn place_order(
     // Generate order_id before creating command
     let order_id = Uuid::new_v4();
 
-    // Create command (group_id / leverage / account_type from auth-service; core-api defaults)
+    // Load account_type from DB (netting vs hedging); default to hedging on error or invalid value
+    let account_type: String = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(account_type, 'hedging') FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "hedging".to_string());
+    let account_type = match account_type.to_lowercase().as_str() {
+        "netting" => "netting".to_string(),
+        _ => "hedging".to_string(),
+    };
+
+    // Create command (group_id / leverage from auth-service when available; core-api sets account_type from DB)
     let cmd = PlaceOrderCommand {
         order_id,
         user_id,
@@ -128,7 +144,7 @@ pub async fn place_order(
         min_leverage: None,
         max_leverage: None,
         leverage_tiers: None,
-        account_type: Some("hedging".to_string()), // auth-service sets from user when orders go through auth
+        account_type: Some(account_type),
     };
 
     // Publish to NATS
@@ -149,11 +165,10 @@ pub async fn place_order(
 
 pub async fn cancel_order(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Path(order_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // TODO: Extract user_id from JWT
-    let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let user_id = claims.sub;
 
     let cmd = CancelOrderCommand {
         user_id,
@@ -191,11 +206,10 @@ pub struct ListOrdersResponse {
 
 pub async fn list_orders(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Query(params): Query<ListOrdersQuery>,
 ) -> Result<Json<ListOrdersResponse>, StatusCode> {
-    // TODO: Extract user_id from JWT
-    let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let user_id = claims.sub;
 
     let mut conn = state.redis.get_async_connection().await
         .map_err(|e| {

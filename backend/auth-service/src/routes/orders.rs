@@ -444,7 +444,7 @@ async fn place_order(
         min_leverage: user_min_lev,
         max_leverage: user_max_lev,
         leverage_tiers: leverage_tiers,
-        account_type: account_type,
+        account_type: account_type.clone(),
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)
@@ -458,8 +458,8 @@ async fn place_order(
             PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
-    info!("📤 Publishing order command to NATS: cmd.order.place, order_id={}, user_id={}, symbol={}", 
-          order_id, user_id, req.symbol);
+    info!("📤 Publishing order command to NATS: cmd.order.place, order_id={}, user_id={}, symbol={}, account_type={:?}",
+          order_id, user_id, req.symbol, account_type);
     
     // Try JetStream first, but ALWAYS also publish to basic pub/sub
     // This ensures order-engine receives messages even if JetStream consumer fails

@@ -86,8 +86,8 @@ impl OrderHandler {
         };
         
         let correlation_id = cmd.idempotency_key.clone();
-        info!("📋 Processing order: user={}, symbol={}, side={:?}, type={:?}, idempotency_key={}",
-              cmd.user_id, cmd.symbol, cmd.side, cmd.order_type, correlation_id);
+        info!("📋 Processing order: user={}, symbol={}, side={:?}, type={:?}, account_type={:?}, idempotency_key={}",
+              cmd.user_id, cmd.symbol, cmd.side, cmd.order_type, cmd.account_type, correlation_id);
         
         // Check idempotency
         info!("🔍 Checking idempotency for key: {}", correlation_id);

@@ -50,8 +50,7 @@ pub struct Order {
     pub max_leverage: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leverage_tiers: Option<Vec<LeverageTier>>,
-    /// "hedging" or "netting"; used by fill Lua to decide add vs reduce/flip.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// "hedging" or "netting"; used by fill Lua to decide add vs reduce/flip. Always serialized so Lua sees it.
     pub account_type: Option<String>,
 }
 
