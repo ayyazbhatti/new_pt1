@@ -83,8 +83,9 @@ for _, pos_id in ipairs(existing_positions) do
         local pos_side = redis.call('HGET', pos_key_new, 'side')
         
         if pos_symbol == symbol and pos_status == "OPEN" then
-            if (order.side == "BUY" and pos_side == "LONG") or
-               (order.side == "SELL" and pos_side == "SHORT") then
+            -- No same-side merge: hedging and netting both get one position per order (do not add to existing).
+            if false and ((order.side == "BUY" and pos_side == "LONG") or
+               (order.side == "SELL" and pos_side == "SHORT")) then
                 position_id = pos_id
                 fill_action = "added_to"
                 -- Update position (Hash format)
@@ -239,8 +240,9 @@ if not position_id then
             if pos_json then
                 local pos = cjson.decode(pos_json)
                 if pos.symbol == symbol and pos.status == "OPEN" then
-                    if (order.side == "BUY" and pos.side == "LONG") or
-                       (order.side == "SELL" and pos.side == "SHORT") then
+            -- No same-side merge: hedging and netting both get one position per order.
+            if false and ((order.side == "BUY" and pos.side == "LONG") or
+               (order.side == "SELL" and pos.side == "SHORT")) then
                         fill_action = "added_to"
                         -- Migrate old position to new format using UUID
                         position_id = position_uuid
