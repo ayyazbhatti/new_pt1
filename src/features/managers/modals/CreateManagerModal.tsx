@@ -184,7 +184,7 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
             ))}
           </SelectContent>
         </Select>
-        <p className="text-xs text-text-muted mt-1">Admin: full access. Manager: admin access. Agent: limited access (e.g. leads).</p>
+        <p className="text-xs text-text-muted mt-1">Admin: full access. Manager: admin access. Agent: limited access.</p>
       </div>
       <div>
         <label className="block text-sm font-medium text-text mb-1.5">Permission profile</label>
@@ -238,7 +238,7 @@ export function CreateManagerModal({ onCreated }: CreateManagerModalProps) {
         <Input
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          placeholder="e.g. Regional lead for EU"
+          placeholder="e.g. Regional manager for EU"
           className="w-full"
         />
       </div>

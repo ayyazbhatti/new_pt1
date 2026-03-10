@@ -3,7 +3,7 @@ import { cn } from '@/shared/utils'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'outline' | 'success' | 'danger'
-  size?: 'sm' | 'default' | 'lg'
+  size?: 'sm' | 'default' | 'lg' | 'icon'
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -20,6 +20,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           variant === 'danger' && 'bg-danger text-white hover:bg-danger/90 active:bg-danger/80',
           size === 'sm' && 'px-3 py-1.5 text-xs',
           size === 'lg' && 'px-6 py-3 text-base',
+          size === 'icon' && 'p-2 shrink-0',
           className
         )}
         ref={ref}

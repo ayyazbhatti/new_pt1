@@ -13,6 +13,7 @@ import { TerminalHistoryView } from '../components/TerminalHistoryView'
 import { TerminalPositionsView } from '../components/TerminalPositionsView'
 import { TerminalMobileMenuPage } from '../components/TerminalMobileMenuPage'
 import { TerminalSymbolsPage } from '../components/TerminalSymbolsPage'
+import { TerminalMobileNav } from '../components/TerminalMobileNav'
 import { useTerminalStore } from '../store'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
@@ -240,6 +241,11 @@ export function AppShellTerminal() {
   const isDesktop = isDesktopMedia && !isNarrowViewport
   const mobileTab = useTerminalStore((s) => s.mobileTab)
 
+  // When user taps a tab in the bottom bar while quote overlay is open, close the overlay
+  useEffect(() => {
+    setMobileSymbolPanelOpen(false)
+  }, [mobileTab, setMobileSymbolPanelOpen])
+
   const mobileMain =
     mobileTab === 'quotes' ? (
       <TerminalSymbolsPage
@@ -269,16 +275,21 @@ export function AppShellTerminal() {
           />
         </div>
       )}
-      {/* Mobile: full-screen live prices page when symbol icon is clicked in Positions header */}
+      {/* Mobile: full-screen quotes page when symbol icon is clicked in Positions header; include bottom nav inside overlay */}
       {!isDesktop && mobileSymbolPanelOpen && (
         <div className="fixed inset-0 z-50 flex flex-col bg-background">
-          <TerminalSymbolsPage
-            onClose={() => setMobileSymbolPanelOpen(false)}
-            onOpenMenu={() => {
-              setMobileSymbolPanelOpen(false)
-              setMobileTab('account')
-            }}
-          />
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <TerminalSymbolsPage
+              onClose={() => setMobileSymbolPanelOpen(false)}
+              onOpenMenu={() => {
+                setMobileSymbolPanelOpen(false)
+                setMobileTab('account')
+              }}
+            />
+          </div>
+          <div className="shrink-0">
+            <TerminalMobileNav />
+          </div>
         </div>
       )}
       <TerminalLayout

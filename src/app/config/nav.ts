@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, Contact, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, CopyPlus, Megaphone } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, CopyPlus, Megaphone } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -47,12 +47,6 @@ export const userNavItems: NavItem[] = [
   { label: 'Withdraw', path: '/user/withdraw', icon: ArrowUpFromLine },
 ]
 
-/** Agent app sidebar nav (e.g. /agent/leads) */
-export const agentNavItems: NavItem[] = [
-  {
-    label: 'Leads',
-    path: '/agent/leads',
-    icon: Contact,
-  },
-]
+/** Agent app sidebar nav */
+export const agentNavItems: NavItem[] = []
 

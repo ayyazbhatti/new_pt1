@@ -60,21 +60,17 @@ echo "==> Starting core-api (port 3004)..."
 (PORT=3004 DATABASE_URL="$DATABASE_URL" REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cd "$REPO_ROOT" && cargo run -p core-api) &
 CORE_PID=$!
 
-echo "==> Starting email-worker..."
-(DATABASE_URL="$DATABASE_URL" REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cd "$REPO_ROOT" && cargo run -p email-worker) &
-EMAIL_PID=$!
-
 echo "==> Starting Vite (port 5173)..."
 npm run dev &
 VITE_PID=$!
 
 echo ""
-echo "All started. PIDs: auth=$AUTH_PID ws-gateway=$GW_PID data-provider=$DATA_PROVIDER_PID order-engine=$ORDER_ENGINE_PID core=$CORE_PID email=$EMAIL_PID vite=$VITE_PID"
+echo "All started. PIDs: auth=$AUTH_PID ws-gateway=$GW_PID data-provider=$DATA_PROVIDER_PID order-engine=$ORDER_ENGINE_PID core=$CORE_PID vite=$VITE_PID"
 echo "  App:           http://localhost:5173"
 echo "  Auth API:      http://localhost:3000"
 echo "  WS Gateway:    ws://localhost:3003/ws, health http://localhost:9002/health"
 echo "  Data Provider: ws://localhost:9003, health http://localhost:9004/health"
 echo "  Order Engine:  http://localhost:3002/health"
 echo "  Core API:      http://localhost:3004"
-echo "To stop: kill $AUTH_PID $GW_PID $DATA_PROVIDER_PID $ORDER_ENGINE_PID $CORE_PID $EMAIL_PID $VITE_PID"
+echo "To stop: kill $AUTH_PID $GW_PID $DATA_PROVIDER_PID $ORDER_ENGINE_PID $CORE_PID $VITE_PID"
 wait

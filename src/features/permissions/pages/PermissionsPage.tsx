@@ -389,7 +389,7 @@ export function PermissionsPage() {
               <Input
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
-                placeholder="e.g. Leads manager"
+                placeholder="e.g. Trading manager"
                 className="w-full"
               />
             </div>

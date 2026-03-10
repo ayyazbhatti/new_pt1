@@ -1,25 +1,7 @@
 import { useAuthStore, type User } from '@/shared/store/auth.store'
 
-export const LEAD_PERMISSIONS = {
-  VIEW_ALL: 'leads:view_all',
-  VIEW_ASSIGNED: 'leads:view_assigned',
-  CREATE: 'leads:create',
-  EDIT: 'leads:edit',
-  DELETE: 'leads:delete',
-  ASSIGN: 'leads:assign',
-  CHANGE_STAGE: 'leads:change_stage',
-  EXPORT: 'leads:export',
-  SETTINGS: 'leads:settings',
-  TEMPLATES: 'leads:templates',
-  ASSIGNMENT: 'leads:assignment',
-  IMPORT: 'leads:import',
-} as const
-
 /** All permission keys (must match backend ALL_PERMISSION_KEYS). Used for permission profile editing and nav/route guards. */
 export const ALL_PERMISSION_KEYS: readonly string[] = [
-  'leads:view_all', 'leads:view_assigned', 'leads:create', 'leads:edit', 'leads:delete',
-  'leads:assign', 'leads:change_stage', 'leads:export', 'leads:settings', 'leads:templates',
-  'leads:assignment', 'leads:import',
   'trading:view', 'trading:place_orders', 'trading:create_order', 'trading:cancel_order', 'trading:close_position', 'trading:liquidate',
   'deposits:approve', 'deposits:reject', 'finance:view', 'finance:manual_adjustment',
   'support:view', 'support:reply', 'support:new_chat',
@@ -35,40 +17,14 @@ export const ALL_PERMISSION_KEYS: readonly string[] = [
 ] as const
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
-  admin: [
-    LEAD_PERMISSIONS.VIEW_ALL,
-    LEAD_PERMISSIONS.VIEW_ASSIGNED,
-    LEAD_PERMISSIONS.CREATE,
-    LEAD_PERMISSIONS.EDIT,
-    LEAD_PERMISSIONS.DELETE,
-    LEAD_PERMISSIONS.ASSIGN,
-    LEAD_PERMISSIONS.CHANGE_STAGE,
-    LEAD_PERMISSIONS.EXPORT,
-    LEAD_PERMISSIONS.SETTINGS,
-    LEAD_PERMISSIONS.TEMPLATES,
-    LEAD_PERMISSIONS.ASSIGNMENT,
-    LEAD_PERMISSIONS.IMPORT,
-  ],
-  manager: [
-    LEAD_PERMISSIONS.VIEW_ALL,
-    LEAD_PERMISSIONS.VIEW_ASSIGNED,
-    LEAD_PERMISSIONS.CREATE,
-    LEAD_PERMISSIONS.EDIT,
-    LEAD_PERMISSIONS.ASSIGN,
-    LEAD_PERMISSIONS.CHANGE_STAGE,
-    LEAD_PERMISSIONS.EXPORT,
-    LEAD_PERMISSIONS.TEMPLATES,
-  ],
-  agent: [
-    LEAD_PERMISSIONS.VIEW_ASSIGNED,
-    LEAD_PERMISSIONS.EDIT,
-    LEAD_PERMISSIONS.CHANGE_STAGE,
-  ],
+  admin: [],
+  manager: [],
+  agent: [],
 }
 
 function getPermissionsForRole(role: string): string[] {
   const r = role?.toLowerCase() ?? ''
-  return ROLE_PERMISSIONS[r] ?? [LEAD_PERMISSIONS.VIEW_ASSIGNED]
+  return ROLE_PERMISSIONS[r] ?? []
 }
 
 /** Admin and manager both get permissions only from their assigned profile (from API). No full-access bypass. */

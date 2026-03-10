@@ -53,6 +53,14 @@ const EMAIL_TEMPLATE_META: { id: string; label: string; description: string }[] 
   { id: 'withdrawal_confirmation', label: 'Withdrawal confirmation', description: 'Sent when a withdrawal request is submitted' },
 ]
 
+type EmailTemplateRow = {
+  id: string
+  label: string
+  description: string
+  subject: string
+  body: string
+}
+
 type SettingsTabId = (typeof SETTINGS_TABS)[number]['id']
 
 export function SettingsPage() {
@@ -115,7 +123,7 @@ export function SettingsPage() {
     () => ({ ...defaultEmailTemplates, ...(templatesQuery.data ?? {}) }),
     [defaultEmailTemplates, templatesQuery.data]
   )
-  const emailTemplateRows = useMemo(
+  const emailTemplateRows = useMemo<EmailTemplateRow[]>(
     () =>
       EMAIL_TEMPLATE_META.map(({ id, label, description }) => ({
         id,
@@ -698,7 +706,7 @@ export function SettingsPage() {
                   Loading email templates…
                 </div>
               )}
-              <DataTable
+              <DataTable<EmailTemplateRow>
                 data={emailTemplateRows}
                 columns={[
                   {

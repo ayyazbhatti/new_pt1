@@ -13,7 +13,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
-use crate::routes::deposits::DepositsState;
+use crate::routes::deposits::{get_account_summary_for_user, AccountSummary, DepositsState};
 use crate::services::auth_service::AuthService;
 use crate::utils::jwt::Claims;
 
@@ -123,9 +123,41 @@ pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) ->
         .route("/:id/permission-profile", put(update_user_permission_profile))
         .route("/:id/impersonate", post(impersonate_user))
         .route("/:id/notify", post(admin_send_notify))
+        .route("/:id/account-summary", get(get_admin_user_account_summary))
         .layer(Extension(deposits_state))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+async fn get_admin_user_account_summary(
+    State(pool): State<PgPool>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<AccountSummary>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Only admins can view user account summary".to_string(),
+                },
+            }),
+        ));
+    }
+    match get_account_summary_for_user(&pool, deposits_state.redis.as_ref(), user_id).await {
+        Ok(summary) => Ok(Json(summary)),
+        Err(status) => Err((
+            status,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "ACCOUNT_SUMMARY_ERROR".to_string(),
+                    message: "Failed to load account summary".to_string(),
+                },
+            }),
+        )),
+    }
 }
 
 async fn admin_send_notify(

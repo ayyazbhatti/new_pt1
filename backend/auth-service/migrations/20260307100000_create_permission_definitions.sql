@@ -18,33 +18,20 @@ CREATE TABLE permissions (
 CREATE INDEX idx_permissions_category_id ON permissions(category_id);
 CREATE INDEX idx_permissions_key ON permissions(permission_key);
 
-COMMENT ON TABLE permission_categories IS 'Groups of permissions shown in admin UI (e.g. Leads, Trading & Finance).';
+COMMENT ON TABLE permission_categories IS 'Groups of permissions shown in admin UI (e.g. Trading & Finance).';
 COMMENT ON TABLE permissions IS 'All valid permission keys and labels; profile grants reference permission_key.';
 
 -- Seed categories (sort_order matches frontend order)
 INSERT INTO permission_categories (id, name, sort_order) VALUES
-  ('a0000001-0000-0000-0000-000000000001', 'Leads', 1),
-  ('a0000002-0000-0000-0000-000000000002', 'Trading & Finance', 2),
-  ('a0000003-0000-0000-0000-000000000003', 'Support', 3),
-  ('a0000004-0000-0000-0000-000000000004', 'Users & Groups', 4),
-  ('a0000005-0000-0000-0000-000000000005', 'Configuration', 5),
-  ('a0000006-0000-0000-0000-000000000006', 'Risk & Reports', 6),
-  ('a0000007-0000-0000-0000-000000000007', 'Other Admin', 7);
+  ('a0000002-0000-0000-0000-000000000002', 'Trading & Finance', 1),
+  ('a0000003-0000-0000-0000-000000000003', 'Support', 2),
+  ('a0000004-0000-0000-0000-000000000004', 'Users & Groups', 3),
+  ('a0000005-0000-0000-0000-000000000005', 'Configuration', 4),
+  ('a0000006-0000-0000-0000-000000000006', 'Risk & Reports', 5),
+  ('a0000007-0000-0000-0000-000000000007', 'Other Admin', 6);
 
 -- Seed permissions (category_id, permission_key, label, sort_order)
 INSERT INTO permissions (permission_key, label, category_id, sort_order) VALUES
-  ('leads:view_all', 'View all leads', 'a0000001-0000-0000-0000-000000000001', 1),
-  ('leads:view_assigned', 'View assigned leads', 'a0000001-0000-0000-0000-000000000001', 2),
-  ('leads:create', 'Create leads', 'a0000001-0000-0000-0000-000000000001', 3),
-  ('leads:edit', 'Edit leads', 'a0000001-0000-0000-0000-000000000001', 4),
-  ('leads:delete', 'Delete leads', 'a0000001-0000-0000-0000-000000000001', 5),
-  ('leads:assign', 'Assign leads', 'a0000001-0000-0000-0000-000000000001', 6),
-  ('leads:change_stage', 'Change stage', 'a0000001-0000-0000-0000-000000000001', 7),
-  ('leads:export', 'Export', 'a0000001-0000-0000-0000-000000000001', 8),
-  ('leads:settings', 'Settings', 'a0000001-0000-0000-0000-000000000001', 9),
-  ('leads:templates', 'Templates', 'a0000001-0000-0000-0000-000000000001', 10),
-  ('leads:assignment', 'Assignment rules', 'a0000001-0000-0000-0000-000000000001', 11),
-  ('leads:import', 'Import leads', 'a0000001-0000-0000-0000-000000000001', 12),
   ('trading:view', 'View trading', 'a0000002-0000-0000-0000-000000000002', 1),
   ('trading:place_orders', 'Place orders', 'a0000002-0000-0000-0000-000000000002', 2),
   ('deposits:approve', 'Approve deposits', 'a0000002-0000-0000-0000-000000000002', 3),

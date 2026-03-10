@@ -41,8 +41,6 @@ interface TerminalStore {
   setNotificationPanelOpen: (open: boolean) => void
   setPaymentPanelOpen: (open: boolean) => void
   setChatPanelOpen: (open: boolean) => void
-  setMobileMenuOpen: (open: boolean) => void
-  setMobileSymbolPanelOpen: (open: boolean) => void
   setChartShowAskPrice: (show: boolean) => void
   setChartShowPositionMarker: (show: boolean) => void
   setChartShowClosedPositionMarker: (show: boolean) => void

@@ -186,3 +186,31 @@ export async function createUserNote(
   })
   return normalizeUserNote(raw as RawUserNote)
 }
+
+// --- Admin account summaries (batch, for users table) ---
+
+export interface AdminAccountSummaryResponse {
+  balance: number
+  equity: number
+  marginUsed: number
+  freeMargin: number
+  marginLevel: string | null
+  realizedPnl: number
+  unrealizedPnl: number
+}
+
+export interface GetAccountSummariesResponse {
+  summaries: Record<string, AdminAccountSummaryResponse>
+}
+
+/** Batch-fetch account summaries for the given user IDs (admin only). POST /api/admin/users/account-summaries. */
+export async function getAccountSummaries(
+  userIds: string[]
+): Promise<Record<string, AdminAccountSummaryResponse>> {
+  if (userIds.length === 0) return {}
+  const res = await http<GetAccountSummariesResponse>('/api/admin/users/account-summaries', {
+    method: 'POST',
+    body: JSON.stringify({ userIds }),
+  })
+  return res.summaries ?? {}
+}

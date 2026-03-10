@@ -313,9 +313,6 @@ start_service "Gateway WS" "cd $GATEWAY_DIR && cargo run" $GATEWAY_WS_PORT "http
 export PORT=$CORE_API_PORT
 start_service "Core API" "cargo run -p core-api" $CORE_API_PORT "http://localhost:$CORE_API_PORT/health" || true
 
-# Start Email Worker (no port - consumes from NATS/Redis)
-start_service "Email Worker" "cd $REPO_ROOT && cargo run -p email-worker" "" "" || true
-
 echo ""
 
 # Step 3: Start Frontend
@@ -352,7 +349,6 @@ echo "    - Data Provider:   http://localhost:$DATA_PROVIDER_HTTP_PORT/health, w
 echo "    - Order Engine:    http://localhost:$ORDER_ENGINE_PORT/health"
 echo "    - Gateway WS:      ws://localhost:$GATEWAY_WS_PORT/ws, health http://localhost:${GATEWAY_HTTP_PORT:-9002}/health"
 echo "    - Core API:        http://localhost:$CORE_API_PORT/health"
-echo "    - Email Worker:    (background worker)"
 echo ""
 echo "  Frontend:"
 echo "    - Web UI:          http://localhost:$FRONTEND_PORT"

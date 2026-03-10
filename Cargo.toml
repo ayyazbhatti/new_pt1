@@ -4,7 +4,6 @@ members = [
     "apps/core-api",
     "apps/order-engine",
     "apps/data-provider",
-    "apps/email-worker",
     "crates/common",
     "crates/contracts",
     "crates/redis-model",

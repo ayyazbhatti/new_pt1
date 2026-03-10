@@ -1,0 +1,22 @@
+---
+description: Do not use polling on this platform; use real-time (WebSocket, SSE, events) or on-demand fetch instead.
+alwaysApply: true
+---
+
+# No Polling
+
+This platform **must not use polling** (periodic refetch on a timer, e.g. setInterval + fetch every N seconds).
+
+## Use instead
+
+- **Real-time updates**: WebSocket (e.g. ws-gateway for ticks, orders, positions), or Server-Sent Events (SSE) where appropriate.
+- **On-demand**: Fetch when the user navigates, opens a tab, or triggers an action (e.g. submit order → then refetch once after success).
+- **Event-driven refresh**: Refetch in response to a specific event (e.g. after placing an order, after closing a position), not on a fixed interval.
+
+## Do not add
+
+- `setInterval` / `setTimeout` loops that call APIs repeatedly.
+- React Query or similar with `refetchInterval` for this codebase.
+- Any "poll every N seconds" pattern for positions, orders, balance, or prices.
+
+If you need live data, use the existing WebSocket subscriptions or add new real-time channels; do not fall back to polling.

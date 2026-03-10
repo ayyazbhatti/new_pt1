@@ -9,9 +9,11 @@ import {
   ArrowUpDown,
   CheckSquare,
   Square,
+  RefreshCw,
 } from 'lucide-react'
 import { listUsers, UserResponse } from '@/shared/api/users.api'
 import { http } from '@/shared/api/http'
+import { toast } from '@/shared/components/common'
 
 const VISIBLE_METRICS_IDS = [
   'balance',
@@ -67,7 +69,10 @@ function defaultMetrics(): UserMetrics {
   }
 }
 
-async function fetchUserMetrics(userId: string): Promise<UserMetrics> {
+async function fetchUserMetrics(
+  userId: string,
+  onError?: (err: unknown) => void
+): Promise<UserMetrics> {
   try {
     const r = await http<Record<string, unknown>>(`/api/admin/users/${userId}/account-summary`)
     return {
@@ -80,7 +85,8 @@ async function fetchUserMetrics(userId: string): Promise<UserMetrics> {
       realizedPnl: Number(r.realizedPnl ?? r.realized_pnl ?? 0),
       unrealizedPnl: Number(r.unrealizedPnl ?? r.unrealized_pnl ?? 0),
     }
-  } catch {
+  } catch (err) {
+    onError?.(err)
     return defaultMetrics()
   }
 }
@@ -107,6 +113,7 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
   const [userSearch, setUserSearch] = useState('')
   const [users, setUsers] = useState<UserResponse[]>([])
   const [usersLoading, setUsersLoading] = useState(false)
+  const [refreshLoading, setRefreshLoading] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const loadUsers = useCallback(async () => {
@@ -178,7 +185,7 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
       )
     )
     setDropdownBoxId(null)
-    fetchUserMetrics(user.id).then((metrics) => {
+    fetchUserMetrics(user.id, () => toast.error('Failed to load account summary')).then((metrics) => {
       setBoxes((prev) =>
         prev.map((b) =>
           b.id === boxId ? { ...b, metrics, loading: false } : b
@@ -191,6 +198,52 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
     setDropdownBoxId(boxId)
     setUserSearch('')
   }, [])
+
+  const handleRefreshAll = useCallback(() => {
+    const withUser = boxes.filter((b): b is BoxState & { userId: string } => b.userId != null)
+    if (withUser.length === 0) return
+    setRefreshLoading(true)
+    setBoxes((prev) =>
+      prev.map((b) => (b.userId ? { ...b, loading: true } : b))
+    )
+    let hadError = false
+    Promise.all(
+      withUser.map((box) =>
+        fetchUserMetrics(box.userId, () => {
+          hadError = true
+        }).then((metrics) => ({ boxId: box.id, metrics }))
+      )
+    ).then((results) => {
+      setBoxes((prev) =>
+        prev.map((b) => {
+          const r = results.find((x) => x.boxId === b.id)
+          return r ? { ...b, metrics: r.metrics, loading: false } : b
+        })
+      )
+      if (hadError) toast.error('Failed to refresh some metrics')
+    }).finally(() => {
+      setRefreshLoading(false)
+      setBoxes((prev) =>
+        prev.map((b) => (b.userId ? { ...b, loading: false } : b))
+      )
+    })
+  }, [boxes])
+
+  const openOnceRef = useRef(false)
+  useEffect(() => {
+    if (!open) {
+      openOnceRef.current = false
+      return
+    }
+    if (openOnceRef.current) return
+    openOnceRef.current = true
+    const withUser = boxes.filter((b): b is BoxState & { userId: string } => b.userId != null)
+    withUser.forEach((box) => {
+      fetchUserMetrics(box.userId).then((metrics) => {
+        setBoxes((p) => p.map((b) => (b.id === box.id ? { ...b, metrics } : b)))
+      })
+    })
+  }, [open, boxes])
 
   const filteredUsers = userSearch.trim()
     ? users.filter(
@@ -345,6 +398,20 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
                 >
                   <ArrowUpDown className="w-3.5 h-3.5" />
                   <span>Auto Sort</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRefreshAll}
+                  disabled={refreshLoading || activeCount === 0}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-300 rounded-lg transition-colors text-xs"
+                  title="Refresh metrics for all boxes"
+                >
+                  {refreshLoading ? (
+                    <span className="w-3.5 h-3.5 border-2 border-slate-300 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  )}
+                  <span>Refresh</span>
                 </button>
                 <button
                   type="button"

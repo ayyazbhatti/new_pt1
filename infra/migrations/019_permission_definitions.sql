@@ -25,30 +25,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_permissions_key ON permissions(permission_
 -- Seed categories (idempotent: fixed UUIDs, skip if already present)
 INSERT INTO permission_categories (id, name, sort_order)
 VALUES
-    ('a0000001-0000-0000-0000-000000000001'::uuid, 'Leads', 1),
-    ('a0000002-0000-0000-0000-000000000001'::uuid, 'Trading & Finance', 2),
-    ('a0000003-0000-0000-0000-000000000001'::uuid, 'Support', 3),
-    ('a0000004-0000-0000-0000-000000000001'::uuid, 'Users & Groups', 4),
-    ('a0000005-0000-0000-0000-000000000001'::uuid, 'Configuration', 5),
-    ('a0000006-0000-0000-0000-000000000001'::uuid, 'Risk & Reports', 6),
-    ('a0000007-0000-0000-0000-000000000001'::uuid, 'Other Admin', 7)
+    ('a0000002-0000-0000-0000-000000000001'::uuid, 'Trading & Finance', 1),
+    ('a0000003-0000-0000-0000-000000000001'::uuid, 'Support', 2),
+    ('a0000004-0000-0000-0000-000000000001'::uuid, 'Users & Groups', 3),
+    ('a0000005-0000-0000-0000-000000000001'::uuid, 'Configuration', 4),
+    ('a0000006-0000-0000-0000-000000000001'::uuid, 'Risk & Reports', 5),
+    ('a0000007-0000-0000-0000-000000000001'::uuid, 'Other Admin', 6)
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed permissions (idempotent: skip if key already exists)
 INSERT INTO permissions (permission_key, label, category_id, sort_order)
 VALUES
-    ('leads:view_all', 'View all leads', 'a0000001-0000-0000-0000-000000000001'::uuid, 1),
-    ('leads:view_assigned', 'View assigned leads', 'a0000001-0000-0000-0000-000000000001'::uuid, 2),
-    ('leads:create', 'Create leads', 'a0000001-0000-0000-0000-000000000001'::uuid, 3),
-    ('leads:edit', 'Edit leads', 'a0000001-0000-0000-0000-000000000001'::uuid, 4),
-    ('leads:delete', 'Delete leads', 'a0000001-0000-0000-0000-000000000001'::uuid, 5),
-    ('leads:assign', 'Assign leads', 'a0000001-0000-0000-0000-000000000001'::uuid, 6),
-    ('leads:change_stage', 'Change stage', 'a0000001-0000-0000-0000-000000000001'::uuid, 7),
-    ('leads:export', 'Export', 'a0000001-0000-0000-0000-000000000001'::uuid, 8),
-    ('leads:settings', 'Settings', 'a0000001-0000-0000-0000-000000000001'::uuid, 9),
-    ('leads:templates', 'Templates', 'a0000001-0000-0000-0000-000000000001'::uuid, 10),
-    ('leads:assignment', 'Assignment rules', 'a0000001-0000-0000-0000-000000000001'::uuid, 11),
-    ('leads:import', 'Import leads', 'a0000001-0000-0000-0000-000000000001'::uuid, 12),
     ('trading:view', 'View trading', 'a0000002-0000-0000-0000-000000000001'::uuid, 1),
     ('trading:place_orders', 'Place orders', 'a0000002-0000-0000-0000-000000000001'::uuid, 2),
     ('deposits:approve', 'Approve deposits', 'a0000002-0000-0000-0000-000000000001'::uuid, 3),

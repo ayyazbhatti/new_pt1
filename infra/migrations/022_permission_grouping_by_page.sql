@@ -23,27 +23,26 @@ SELECT v.id, v.name, v.sort_order FROM (VALUES
 ) AS v(id, name, sort_order)
 WHERE NOT EXISTS (SELECT 1 FROM permission_categories c WHERE LOWER(c.name) = LOWER(v.name));
 
--- 3. Set sort_order so UI order matches: Leads, Trading, Finance, Support, Users, Groups, Tags, Managers, ...
-UPDATE permission_categories SET sort_order = 1 WHERE LOWER(name) = 'leads';
-UPDATE permission_categories SET sort_order = 2 WHERE LOWER(name) = 'trading';
-UPDATE permission_categories SET sort_order = 3 WHERE LOWER(name) = 'finance';
-UPDATE permission_categories SET sort_order = 4 WHERE LOWER(name) = 'support';
-UPDATE permission_categories SET sort_order = 5 WHERE LOWER(name) = 'users';
-UPDATE permission_categories SET sort_order = 6 WHERE LOWER(name) = 'groups';
-UPDATE permission_categories SET sort_order = 7 WHERE LOWER(name) = 'tags';
-UPDATE permission_categories SET sort_order = 8 WHERE LOWER(name) = 'managers';
-UPDATE permission_categories SET sort_order = 9 WHERE LOWER(name) = 'leverage profiles';
-UPDATE permission_categories SET sort_order = 10 WHERE LOWER(name) = 'symbols';
-UPDATE permission_categories SET sort_order = 11 WHERE LOWER(name) = 'markup';
-UPDATE permission_categories SET sort_order = 12 WHERE LOWER(name) = 'swap';
-UPDATE permission_categories SET sort_order = 13 WHERE LOWER(name) = 'affiliate';
-UPDATE permission_categories SET sort_order = 14 WHERE LOWER(name) = 'permissions';
-UPDATE permission_categories SET sort_order = 15 WHERE LOWER(name) = 'call';
-UPDATE permission_categories SET sort_order = 16 WHERE LOWER(name) = 'appointments';
-UPDATE permission_categories SET sort_order = 17 WHERE LOWER(name) = 'settings';
-UPDATE permission_categories SET sort_order = 18 WHERE LOWER(name) = 'risk & reports';
-UPDATE permission_categories SET sort_order = 19 WHERE LOWER(name) = 'configuration';
-UPDATE permission_categories SET sort_order = 20 WHERE LOWER(name) = 'other admin';
+-- 3. Set sort_order so UI order matches: Trading, Finance, Support, Users, Groups, Tags, Managers, ...
+UPDATE permission_categories SET sort_order = 1 WHERE LOWER(name) = 'trading';
+UPDATE permission_categories SET sort_order = 2 WHERE LOWER(name) = 'finance';
+UPDATE permission_categories SET sort_order = 3 WHERE LOWER(name) = 'support';
+UPDATE permission_categories SET sort_order = 4 WHERE LOWER(name) = 'users';
+UPDATE permission_categories SET sort_order = 5 WHERE LOWER(name) = 'groups';
+UPDATE permission_categories SET sort_order = 6 WHERE LOWER(name) = 'tags';
+UPDATE permission_categories SET sort_order = 7 WHERE LOWER(name) = 'managers';
+UPDATE permission_categories SET sort_order = 8 WHERE LOWER(name) = 'leverage profiles';
+UPDATE permission_categories SET sort_order = 9 WHERE LOWER(name) = 'symbols';
+UPDATE permission_categories SET sort_order = 10 WHERE LOWER(name) = 'markup';
+UPDATE permission_categories SET sort_order = 11 WHERE LOWER(name) = 'swap';
+UPDATE permission_categories SET sort_order = 12 WHERE LOWER(name) = 'affiliate';
+UPDATE permission_categories SET sort_order = 13 WHERE LOWER(name) = 'permissions';
+UPDATE permission_categories SET sort_order = 14 WHERE LOWER(name) = 'call';
+UPDATE permission_categories SET sort_order = 15 WHERE LOWER(name) = 'appointments';
+UPDATE permission_categories SET sort_order = 16 WHERE LOWER(name) = 'settings';
+UPDATE permission_categories SET sort_order = 17 WHERE LOWER(name) = 'risk & reports';
+UPDATE permission_categories SET sort_order = 18 WHERE LOWER(name) = 'configuration';
+UPDATE permission_categories SET sort_order = 19 WHERE LOWER(name) = 'other admin';
 
 -- 4. Move permissions to the correct category (by name lookup)
 -- Groups

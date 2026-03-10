@@ -49,6 +49,18 @@ export function useAccountSummary() {
         const isZeros = balance === 0 && equity === 0 && marginUsed === 0
         if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
         lastEquityRef.current = equity
+        const marginCallLevelThreshold =
+          raw.marginCallLevelThreshold != null
+            ? Number(raw.marginCallLevelThreshold)
+            : raw.margin_call_level_threshold != null
+              ? Number(raw.margin_call_level_threshold)
+              : null
+        const stopOutLevelThreshold =
+          raw.stopOutLevelThreshold != null
+            ? Number(raw.stopOutLevelThreshold)
+            : raw.stop_out_level_threshold != null
+              ? Number(raw.stop_out_level_threshold)
+              : null
         const payload: AccountSummaryResponse = {
           userId,
           balance,
@@ -56,8 +68,8 @@ export function useAccountSummary() {
           marginUsed,
           freeMargin,
           marginLevel,
-          marginCallLevelThreshold: raw.marginCallLevelThreshold ?? raw.margin_call_level_threshold ?? null,
-          stopOutLevelThreshold: raw.stopOutLevelThreshold ?? raw.stop_out_level_threshold ?? null,
+          marginCallLevelThreshold,
+          stopOutLevelThreshold,
           realizedPnl,
           unrealizedPnl,
           updatedAt,

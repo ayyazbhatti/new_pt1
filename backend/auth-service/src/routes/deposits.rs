@@ -1941,6 +1941,85 @@ async fn get_account_summary(
     }
 }
 
+/// Returns account summary for an arbitrary user (e.g. for admin). Same logic as get_account_summary
+/// but uses get_user_group_id for thresholds instead of claims. Used by GET /api/admin/users/:id/account-summary.
+pub async fn get_account_summary_for_user(
+    pool: &PgPool,
+    redis: &crate::redis_pool::RedisPool,
+    user_id: Uuid,
+) -> Result<AccountSummary, StatusCode> {
+    let key = redis_model::keys::Keys::account_summary(user_id);
+    if let Ok(mut conn) = redis.get().await {
+        let balance: Option<String> = conn.hget(&key, "balance").await.ok();
+        let equity: Option<String> = conn.hget(&key, "equity").await.ok();
+        let margin_used: Option<String> = conn.hget(&key, "margin_used").await.ok();
+        let free_margin: Option<String> = conn.hget(&key, "free_margin").await.ok();
+        let margin_level: Option<String> = conn.hget(&key, "margin_level").await.ok();
+        let margin_call_level_threshold: Option<String> = conn.hget(&key, "margin_call_level_threshold").await.ok();
+        let stop_out_level_threshold: Option<String> = conn.hget(&key, "stop_out_level_threshold").await.ok();
+        let realized_pnl: Option<String> = conn.hget(&key, "realized_pnl").await.ok();
+        let unrealized_pnl: Option<String> = conn.hget(&key, "unrealized_pnl").await.ok();
+        let updated_at: Option<String> = conn.hget(&key, "updated_at").await.ok();
+        if let (Some(bal), Some(equity), Some(margin_used), Some(free_margin), Some(margin_level), Some(realized_pnl), Some(unrealized_pnl), Some(updated_at)) =
+            (balance, equity, margin_used, free_margin, margin_level, realized_pnl, unrealized_pnl, updated_at)
+        {
+            let balance_f: f64 = bal.parse().unwrap_or(0.0);
+            let threshold = margin_call_level_threshold.and_then(|s| s.parse::<f64>().ok());
+            let threshold = if threshold.is_some() {
+                threshold
+            } else if let Some(gid) = get_user_group_id(pool, user_id).await {
+                get_margin_call_level_for_group(redis, pool, gid).await
+            } else {
+                None
+            };
+            let stop_out = stop_out_level_threshold.and_then(|s| s.parse::<f64>().ok());
+            let stop_out = if stop_out.is_some() {
+                stop_out
+            } else if let Some(gid) = get_user_group_id(pool, user_id).await {
+                get_stop_out_level_for_group(redis, pool, gid).await
+            } else {
+                None
+            };
+            return Ok(AccountSummary {
+                user_id: user_id.to_string(),
+                balance: balance_f,
+                equity: equity.parse().unwrap_or(0.0),
+                margin_used: margin_used.parse().unwrap_or(0.0),
+                free_margin: free_margin.parse().unwrap_or(0.0),
+                margin_level,
+                margin_call_level_threshold: threshold,
+                stop_out_level_threshold: stop_out,
+                realized_pnl: realized_pnl.parse().unwrap_or(0.0),
+                unrealized_pnl: unrealized_pnl.parse().unwrap_or(0.0),
+                updated_at,
+            });
+        }
+    }
+    match compute_account_summary_inner(pool, Some(redis), user_id, None).await {
+        Ok(summary) => {
+            let (threshold, stop_out) = if let Some(gid) = get_user_group_id(pool, user_id).await {
+                (
+                    get_margin_call_level_for_group(redis, pool, gid).await,
+                    get_stop_out_level_for_group(redis, pool, gid).await,
+                )
+            } else {
+                (None, None)
+            };
+            compute_and_cache_account_summary(pool, redis, user_id).await;
+            let summary_with_threshold = AccountSummary {
+                margin_call_level_threshold: threshold,
+                stop_out_level_threshold: stop_out,
+                ..summary
+            };
+            Ok(summary_with_threshold)
+        }
+        Err(e) => {
+            error!("Failed to compute account summary for user {}: {}", user_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 async fn get_wallet_balance(
     State(pool): State<PgPool>,
     Extension(_deposits_state): Extension<DepositsState>,
