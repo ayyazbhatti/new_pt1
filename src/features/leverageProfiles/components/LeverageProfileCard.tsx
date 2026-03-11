@@ -94,6 +94,11 @@ export function LeverageProfileCard({
             <span className="text-xs text-text-muted">
               Updated {formatDistanceToNow(new Date(profile.updatedAt), { addSuffix: true })}
             </span>
+            {profile.createdByEmail && (
+              <span className="text-xs text-text-muted" title="Created by">
+                Created by {profile.createdByEmail}
+              </span>
+            )}
           </div>
           {profile.description && (
             <p className="mt-1 text-sm italic text-text-muted">{profile.description}</p>

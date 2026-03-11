@@ -86,6 +86,7 @@ impl From<UserGroupRowMinimal> for UserGroup {
             stop_out_level: None,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            created_by_user_id: None,
         }
     }
 }
@@ -104,6 +105,7 @@ impl From<UserGroupRowMinimalWithProfiles> for UserGroup {
             stop_out_level: None,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            created_by_user_id: None,
         }
     }
 }
@@ -217,7 +219,7 @@ impl AdminGroupsService {
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, signup_slug, default_price_profile_id, \
-             default_leverage_profile_id, margin_call_level, stop_out_level, created_at, updated_at FROM user_groups WHERE 1=1"
+             default_leverage_profile_id, margin_call_level, stop_out_level, created_at, updated_at, created_by_user_id FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
             if !search.is_empty() {
@@ -375,6 +377,7 @@ impl AdminGroupsService {
         margin_call_level: Option<f64>,
         stop_out_level: Option<f64>,
         signup_slug: Option<&str>,
+        created_by_user_id: Option<Uuid>,
     ) -> anyhow::Result<UserGroup> {
         // Validate
         if name.len() < 2 || name.len() > 40 {
@@ -404,9 +407,9 @@ impl AdminGroupsService {
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
             INSERT INTO user_groups (
-                name, description, status, signup_slug, margin_call_level, stop_out_level
+                name, description, status, signup_slug, margin_call_level, stop_out_level, created_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             "#,
         )
@@ -416,6 +419,7 @@ impl AdminGroupsService {
         .bind(&slug)
         .bind(margin_call_level.and_then(rust_decimal::Decimal::from_f64))
         .bind(stop_out_level.and_then(rust_decimal::Decimal::from_f64))
+        .bind(created_by_user_id)
         .fetch_one(&self.pool)
         .await?;
 

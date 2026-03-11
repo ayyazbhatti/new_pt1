@@ -29,6 +29,9 @@ export type LeverageProfile = {
   updatedAt: string
   /** Tag IDs assigned to this profile (from list or GET tags) */
   tagIds?: string[]
+  /** User who created this profile (manager/admin/super_admin). */
+  createdByUserId?: string | null
+  createdByEmail?: string | null
   /** Tiers for modal/display - optional, loaded separately */
   tiers?: LeverageTier[]
 }

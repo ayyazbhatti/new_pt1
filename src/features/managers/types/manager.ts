@@ -15,6 +15,9 @@ export interface Manager {
   notes?: string
   /** Tag IDs assigned to this manager (from list API). */
   tagIds?: string[]
+  /** User who created this manager record (manager/admin/super_admin). */
+  createdByUserId?: string | null
+  createdByEmail?: string | null
 }
 
 /** User from users table that can be promoted to manager (for Create Manager dropdown) */

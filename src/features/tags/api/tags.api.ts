@@ -12,6 +12,8 @@ export interface TagDto {
   updated_at: string
   user_count: number
   manager_count: number
+  created_by_user_id?: string | null
+  created_by_email?: string | null
 }
 
 function fromDto(d: TagDto): Tag {
@@ -24,6 +26,8 @@ function fromDto(d: TagDto): Tag {
     userCount: d.user_count,
     managerCount: d.manager_count,
     createdAt: d.created_at,
+    createdByUserId: d.created_by_user_id ?? undefined,
+    createdByEmail: d.created_by_email ?? undefined,
   }
 }
 

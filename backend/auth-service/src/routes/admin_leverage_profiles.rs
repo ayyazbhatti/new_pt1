@@ -280,7 +280,7 @@ async fn create_profile(
 
     let service = AdminLeverageProfilesService::new(pool);
     match service
-        .create_profile(&payload.name, payload.description.as_deref(), &payload.status)
+        .create_profile(&payload.name, payload.description.as_deref(), &payload.status, Some(claims.sub))
         .await
     {
         Ok(profile) => Ok(Json(profile)),

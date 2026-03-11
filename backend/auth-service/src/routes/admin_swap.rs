@@ -120,6 +120,8 @@ fn rule_to_json(r: &crate::models::swap_rule::SwapRuleWithGroupName, tag_ids: &[
         "notes": r.notes,
         "updated_at": r.updated_at,
         "updated_by": r.updated_by,
+        "created_by_user_id": r.created_by_user_id,
+        "created_by_email": r.created_by_email,
         "tag_ids": tag_ids,
     })
 }
@@ -302,6 +304,7 @@ async fn create_rule(
         .map_err(permission_denied_to_response)?;
 
     let updated_by = Some(claims.email.as_str());
+    let created_by_user_id = Some(claims.sub);
 
     let service = AdminSwapService::new(pool);
     let rule = service
@@ -321,6 +324,7 @@ async fn create_rule(
             payload.max_charge,
             payload.notes.as_deref(),
             updated_by,
+            created_by_user_id,
         )
         .await
         .map_err(|e| {

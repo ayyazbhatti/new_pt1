@@ -146,9 +146,12 @@ impl AdminSwapService {
                 sr.notes,
                 sr.created_at,
                 sr.updated_at,
-                sr.updated_by
+                sr.updated_by,
+                sr.created_by_user_id,
+                creator.email AS created_by_email
             FROM swap_rules sr
             LEFT JOIN user_groups ug ON ug.id = sr.group_id
+            LEFT JOIN users creator ON creator.id = sr.created_by_user_id
             {}
             ORDER BY sr.updated_at DESC
             LIMIT {} OFFSET {}
@@ -213,9 +216,12 @@ impl AdminSwapService {
                 sr.notes,
                 sr.created_at,
                 sr.updated_at,
-                sr.updated_by
+                sr.updated_by,
+                sr.created_by_user_id,
+                creator.email AS created_by_email
             FROM swap_rules sr
             LEFT JOIN user_groups ug ON ug.id = sr.group_id
+            LEFT JOIN users creator ON creator.id = sr.created_by_user_id
             WHERE sr.id = $1
             "#,
         )
@@ -243,6 +249,7 @@ impl AdminSwapService {
         max_charge: Option<rust_decimal::Decimal>,
         notes: Option<&str>,
         updated_by: Option<&str>,
+        created_by_user_id: Option<Uuid>,
     ) -> Result<SwapRuleWithGroupName> {
         Self::validate_market(market)?;
         Self::validate_calc_mode(calc_mode)?;
@@ -266,9 +273,9 @@ impl AdminSwapService {
             INSERT INTO swap_rules (
                 group_id, symbol, market, calc_mode, unit,
                 long_rate, short_rate, rollover_time_utc, weekend_rule, status,
-                triple_day, min_charge, max_charge, notes, updated_by
+                triple_day, min_charge, max_charge, notes, updated_by, created_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING id
             "#,
         )
@@ -286,6 +293,8 @@ impl AdminSwapService {
         .bind(min_charge)
         .bind(max_charge)
         .bind(notes)
+        .bind(updated_by)
+        .bind(created_by_user_id)
         .fetch_one(&self.pool)
         .await?;
 

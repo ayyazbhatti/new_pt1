@@ -7,6 +7,8 @@ export interface PermissionProfileDto {
   permission_keys: string[]
   created_at: string
   updated_at: string
+  created_by_user_id?: string
+  created_by_email?: string
   tag_ids?: string[]
 }
 
@@ -15,6 +17,8 @@ export interface PermissionProfile {
   name: string
   description?: string
   permissionIds: string[]
+  createdByUserId?: string
+  createdByEmail?: string
   tagIds?: string[]
 }
 
@@ -24,6 +28,8 @@ function fromDto(d: PermissionProfileDto): PermissionProfile {
     name: d.name,
     description: d.description ?? undefined,
     permissionIds: d.permission_keys ?? [],
+    createdByUserId: d.created_by_user_id,
+    createdByEmail: d.created_by_email,
     tagIds: Array.isArray(d.tag_ids) ? d.tag_ids : [],
   }
 }

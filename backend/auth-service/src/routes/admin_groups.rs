@@ -59,6 +59,9 @@ pub struct GroupListItem {
     pub leverage_profile: Option<ProfileRef>,
     /// Tag IDs assigned to this group (entity_type = 'group').
     pub tag_ids: Vec<Uuid>,
+    /// Email of the user who created this group (manager/admin/super_admin).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_email: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,7 +194,7 @@ async fn list_groups(
         Some(ids)
     };
 
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     let search = params.get("search").map(|s| s.as_str());
     let status = params.get("status").map(|s| s.as_str());
     let page = params
@@ -236,6 +239,27 @@ async fn list_groups(
                 .await
                 .unwrap_or_default();
 
+            let creator_ids: Vec<Uuid> = groups
+                .iter()
+                .filter_map(|g| g.created_by_user_id)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            let creator_emails: std::collections::HashMap<Uuid, String> = if creator_ids.is_empty() {
+                std::collections::HashMap::new()
+            } else {
+                #[derive(sqlx::FromRow)]
+                struct UserEmail { id: Uuid, email: String }
+                let rows: Vec<UserEmail> = sqlx::query_as::<_, UserEmail>(
+                    "SELECT id, email FROM users WHERE id = ANY($1) AND deleted_at IS NULL",
+                )
+                .bind(&creator_ids)
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_default();
+                rows.into_iter().map(|r| (r.id, r.email)).collect()
+            };
+
             let items: Vec<GroupListItem> = groups
                 .into_iter()
                 .map(|group| {
@@ -248,11 +272,13 @@ async fn list_groups(
                         id,
                     });
                     let tag_ids = group_tag_ids.get(&group.id).cloned().unwrap_or_default();
+                    let created_by_email = group.created_by_user_id.and_then(|id| creator_emails.get(&id).cloned());
                     GroupListItem {
                         group,
                         price_profile,
                         leverage_profile,
                         tag_ids,
+                        created_by_email,
                     }
                 })
                 .collect();
@@ -294,7 +320,7 @@ async fn get_group(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     match service.get_group_by_id(id).await {
         Ok(group) => Ok(Json(group)),
         Err(e) => Err((
@@ -318,7 +344,7 @@ async fn create_group(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     match service
         .create_group(
             &payload.name,
@@ -327,6 +353,7 @@ async fn create_group(
             payload.margin_call_level,
             payload.stop_out_level,
             payload.signup_slug.as_deref(),
+            Some(claims.sub),
         )
         .await
     {
@@ -363,7 +390,7 @@ async fn update_group(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     match service
         .update_group(
             id,
@@ -423,7 +450,7 @@ async fn delete_group(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     match service.delete_group(id).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => {
@@ -456,7 +483,7 @@ async fn get_group_usage(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     match service.get_group_usage(id).await {
         Ok(count) => Ok(Json(UsageResponse { users_count: count })),
         Err(e) => Err((
@@ -787,7 +814,7 @@ async fn get_group_symbols(
     permission_check::check_permission(&pool, &claims, "groups:symbol_settings")
         .await
         .map_err(permission_denied_to_response)?;
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     match service.list_group_symbols(id).await {
         Ok(rows) => {
             let items = rows
@@ -882,7 +909,7 @@ async fn update_group_symbols(
             enabled: s.enabled,
         });
     }
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     if let Err(e) = service.upsert_group_symbols(id, &inputs).await {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -918,7 +945,7 @@ async fn get_group_tags(
     permission_check::check_permission(&pool, &claims, "groups:tags")
         .await
         .map_err(permission_denied_to_response)?;
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     let group_ids = vec![id];
     let map = service.get_tag_ids_for_groups(&group_ids).await.map_err(|e| {
         (
@@ -970,7 +997,7 @@ async fn put_group_tags(
             }),
         ));
     }
-    let service = AdminGroupsService::new(pool);
+    let service = AdminGroupsService::new(pool.clone());
     if let Err(e) = service.set_group_tags(id, &payload.tag_ids).await {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -26,6 +26,8 @@ function toCamelCaseRule(obj: any): SwapRule {
     status: obj.status === 'disabled' ? 'disabled' : 'active',
     updatedAt: obj.updated_at ?? new Date().toISOString(),
     updatedBy: String(obj.updated_by ?? ''),
+    createdByUserId: obj.created_by_user_id != null ? String(obj.created_by_user_id) : undefined,
+    createdByEmail: obj.created_by_email != null ? String(obj.created_by_email) : undefined,
     notes: obj.notes ?? undefined,
     tagIds: obj.tag_ids ?? [],
   }

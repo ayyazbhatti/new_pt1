@@ -1337,12 +1337,126 @@ async fn symbol_leverage(
     }))
 }
 
-/// Resolve allowed group IDs for list users. Returns None = no filter (see all users), Some(ids) = restrict to those groups.
-/// Admins with no manager row see all users. Admins or managers with a manager row + tags are scoped to tag-linked groups.
+/// Resolve allowed group IDs for list users. Returns None = no filter (see all users), Some(ids) = restrict to users in those groups.
+/// Super_admin: no filter (all users). Admin: groups that share a tag with the admin user. Manager: groups that share a tag with the manager.
 async fn resolve_allowed_group_ids_for_list_users(
     pool: &PgPool,
     claims: &Claims,
 ) -> Result<Option<Vec<Uuid>>, (StatusCode, Json<ErrorResponse>)> {
+    #[derive(sqlx::FromRow)]
+    struct GroupRow { entity_id: Uuid }
+
+    // Super_admin → see all users (no filter)
+    if claims.role == "super_admin" {
+        return Ok(None);
+    }
+
+    // Admin (not super_admin): scope by admin user's tags → groups that have those tags
+    if claims.role == "admin" {
+        #[derive(sqlx::FromRow)]
+        struct TagRow { tag_id: Uuid }
+        let tag_rows = sqlx::query_as::<_, TagRow>(
+            "SELECT tag_id FROM tag_assignments WHERE entity_type = 'user' AND entity_id = $1",
+        )
+        .bind(claims.sub)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+        if user_tag_ids.is_empty() {
+            return Ok(Some(vec![]));
+        }
+        let group_rows = sqlx::query_as::<_, GroupRow>(
+            "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+        )
+        .bind(&user_tag_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        let allowed: Vec<Uuid> = group_rows.into_iter().map(|r| r.entity_id).collect();
+        return Ok(Some(allowed));
+    }
+
+    // Manager path: must have users:view via permission profile
+    let profile_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
+            .bind(claims.sub)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DB_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+    let pid = match profile_id {
+        Some(p) => p,
+        None => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "FORBIDDEN".to_string(),
+                        message: "No permission profile assigned".to_string(),
+                    },
+                }),
+            ));
+        }
+    };
+    let has_view: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = 'users:view')",
+    )
+    .bind(pid)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    if !has_view {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "Missing permission: users:view".to_string(),
+                },
+            }),
+        ));
+    }
+
     let manager_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM managers WHERE user_id = $1")
         .bind(claims.sub)
         .fetch_optional(pool)
@@ -1359,80 +1473,13 @@ async fn resolve_allowed_group_ids_for_list_users(
             )
         })?;
 
-    // Admin with no manager row → no filter (see all users)
-    if (claims.role == "admin" || claims.role == "super_admin") && manager_id.is_none() {
-        return Ok(None);
-    }
-
-    // Non-admin: must have users:view via permission profile
-    if claims.role != "admin" && claims.role != "super_admin" {
-        let profile_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
-                .bind(claims.sub)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            error: ErrorDetail {
-                                code: "DB_ERROR".to_string(),
-                                message: e.to_string(),
-                            },
-                        }),
-                    )
-                })?;
-        let pid = match profile_id {
-            Some(p) => p,
-            None => {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(ErrorResponse {
-                        error: ErrorDetail {
-                            code: "FORBIDDEN".to_string(),
-                            message: "No permission profile assigned".to_string(),
-                        },
-                    }),
-                ));
-            }
-        };
-        let has_view: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM permission_profile_grants WHERE profile_id = $1 AND permission_key = 'users:view')",
-        )
-        .bind(pid)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "DB_ERROR".to_string(),
-                        message: e.to_string(),
-                    },
-                }),
-            )
-        })?;
-        if !has_view {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "FORBIDDEN".to_string(),
-                        message: "Missing permission: users:view".to_string(),
-                    },
-                }),
-            ));
-        }
-    }
-
-    // No manager row (manager path only: non-admin with no manager) → no users
+    // No manager row (manager path) → no users
     let Some(mid) = manager_id else {
         return Ok(Some(vec![]));
     };
     #[derive(sqlx::FromRow)]
-    struct TagRow { tag_id: Uuid }
-    let tag_rows = sqlx::query_as::<_, TagRow>(
+    struct ManagerTagRow { tag_id: Uuid }
+    let tag_rows = sqlx::query_as::<_, ManagerTagRow>(
         "SELECT tag_id FROM tag_assignments WHERE entity_type = 'manager' AND entity_id = $1",
     )
     .bind(mid)
@@ -1453,8 +1500,6 @@ async fn resolve_allowed_group_ids_for_list_users(
     if manager_tag_ids.is_empty() {
         return Ok(Some(vec![]));
     }
-    #[derive(sqlx::FromRow)]
-    struct GroupRow { entity_id: Uuid }
     let group_rows = sqlx::query_as::<_, GroupRow>(
         "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
     )

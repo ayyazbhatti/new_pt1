@@ -32,6 +32,11 @@ pub struct ManagerResponse {
     pub last_login_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag_ids: Option<Vec<Uuid>>,
+    /// User who created this manager record (manager/admin/super_admin).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_user_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_email: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -101,6 +106,8 @@ struct ManagerRow {
     notes: Option<String>,
     created_at: DateTime<Utc>,
     last_login_at: Option<DateTime<Utc>>,
+    created_by_user_id: Option<Uuid>,
+    created_by_email: Option<String>,
 }
 
 async fn list_managers(
@@ -129,10 +136,13 @@ async fn list_managers(
                u.email AS user_email,
                u."role" AS user_role,
                p.name AS permission_profile_name,
-               u.last_login_at AS last_login_at
+               u.last_login_at AS last_login_at,
+               m.created_by_user_id,
+               creator.email AS created_by_email
         FROM managers m
         JOIN users u ON u.id = m.user_id
         JOIN permission_profiles p ON p.id = m.permission_profile_id
+        LEFT JOIN users creator ON creator.id = m.created_by_user_id
         WHERE 1=1
     "#
     .to_string();
@@ -226,6 +236,8 @@ async fn list_managers(
                 created_at: r.created_at,
                 last_login_at: r.last_login_at,
                 tag_ids: Some(tag_ids),
+                created_by_user_id: r.created_by_user_id,
+                created_by_email: r.created_by_email,
             }
         })
         .collect();
@@ -327,14 +339,15 @@ async fn create_manager(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"
-        INSERT INTO managers (id, user_id, permission_profile_id, status, notes, created_at, updated_at)
-        VALUES ($1, $2, $3, 'active', $4, NOW(), NOW())
+        INSERT INTO managers (id, user_id, permission_profile_id, status, notes, created_at, updated_at, created_by_user_id)
+        VALUES ($1, $2, $3, 'active', $4, NOW(), NOW(), $5)
         "#,
     )
     .bind(id)
     .bind(payload.user_id)
     .bind(payload.permission_profile_id)
     .bind(payload.notes.as_deref())
+    .bind(claims.sub)
     .execute(&pool)
     .await
     .map_err(|e| {
@@ -400,6 +413,13 @@ async fn create_manager(
         )
     })?;
 
+    let creator_email: Option<String> = sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+
     Ok((
         StatusCode::CREATED,
         Json(ManagerResponse {
@@ -415,6 +435,8 @@ async fn create_manager(
             created_at: Utc::now(),
             last_login_at: user_row.2,
             tag_ids: Some(vec![]),
+            created_by_user_id: Some(claims.sub),
+            created_by_email: creator_email,
         }),
     ))
 }
@@ -575,7 +597,11 @@ async fn update_manager(
             )
         })?;
 
-    let created_at: DateTime<Utc> = sqlx::query_scalar("SELECT created_at FROM managers WHERE id = $1")
+    let (created_at, created_by_user_id, created_by_email): (DateTime<Utc>, Option<Uuid>, Option<String>) =
+        sqlx::query_as(
+            "SELECT m.created_at, m.created_by_user_id, creator.email FROM managers m \
+             LEFT JOIN users creator ON creator.id = m.created_by_user_id WHERE m.id = $1",
+        )
         .bind(id)
         .fetch_one(&pool)
         .await
@@ -604,6 +630,8 @@ async fn update_manager(
         created_at,
         last_login_at,
         tag_ids: None,
+        created_by_user_id,
+        created_by_email,
     }))
 }
 

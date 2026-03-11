@@ -46,7 +46,7 @@ Use this checklist as you implement tag-scoped access page by page.
 | `/admin/swap` | `GET /api/admin/swap/rules` | Show swap rules that share at least one tag with the current user. Super_admin: all. | **Done** |
 | `/admin/affiliate` (schemes tab) | `GET /api/admin/affiliate/layers` | Show affiliate schemes that share at least one tag with the current user. Super_admin: all. | **Done** |
 | `/admin/permissions` | `GET /api/admin/permission-profiles` | Show permission profiles that share at least one tag with the current user. Super_admin: all. Get/Update/Delete/Tags enforced for non–super_admin. | **Done** |
-| `/admin/users` | `GET /api/auth/users` (or admin users list) | TBD: e.g. users in groups that share a tag with the user. | Pending |
+| `/admin/users` | `GET /api/auth/users` | Super_admin: all users. Admin: users in groups that share at least one tag with the admin user. Manager: users in groups that share a tag with the manager. | **Done** |
 | `/admin/manager` | `GET /api/admin/managers` | TBD: e.g. managers whose groups share a tag with the user, or by manager tags. | Pending |
 | `/admin/tag` | `GET /api/admin/tags` | Already done: admin sees tags assigned to user; super_admin sees all. | **Done** (earlier) |
 | (others) | … | Same idea: resolve allowed IDs from user tags + entity type. | Pending |

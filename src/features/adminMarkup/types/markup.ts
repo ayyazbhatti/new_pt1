@@ -11,6 +11,9 @@ export interface MarkupProfile {
   updatedAt: string
   /** Tag IDs assigned to this profile */
   tagIds?: string[]
+  /** User who created this profile (manager/admin/super_admin). */
+  createdByUserId?: string | null
+  createdByEmail?: string | null
 }
 
 export interface SymbolMarkupOverride {

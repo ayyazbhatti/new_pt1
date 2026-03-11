@@ -36,9 +36,12 @@ impl AdminMarkupService {
                 psp.bid_markup::text as bid_markup,
                 psp.ask_markup::text as ask_markup,
                 psp.created_at,
-                psp.updated_at
+                psp.updated_at,
+                psp.created_by_user_id,
+                creator.email as created_by_email
             FROM price_stream_profiles psp
             LEFT JOIN user_groups ug ON psp.group_id = ug.id
+            LEFT JOIN users creator ON creator.id = psp.created_by_user_id
             "#;
         let query_without_group = r#"
             SELECT 
@@ -51,8 +54,11 @@ impl AdminMarkupService {
                 psp.bid_markup::text as bid_markup,
                 psp.ask_markup::text as ask_markup,
                 psp.created_at,
-                psp.updated_at
+                psp.updated_at,
+                psp.created_by_user_id,
+                creator.email as created_by_email
             FROM price_stream_profiles psp
+            LEFT JOIN users creator ON creator.id = psp.created_by_user_id
             "#;
 
         let run_with_group = async {
@@ -97,19 +103,20 @@ impl AdminMarkupService {
         markup_type: &str,
         bid_markup: &str,
         ask_markup: &str,
+        created_by_user_id: Option<Uuid>,
     ) -> Result<MarkupProfile> {
         let profile = sqlx::query_as::<_, MarkupProfile>(
             r#"
             INSERT INTO price_stream_profiles (
-                name, description, group_id, markup_type, bid_markup, ask_markup
+                name, description, group_id, markup_type, bid_markup, ask_markup, created_by_user_id
             )
-            VALUES ($1, $2, $3, $4::markup_type, $5::numeric, $6::numeric)
+            VALUES ($1, $2, $3, $4::markup_type, $5::numeric, $6::numeric, $7)
             RETURNING 
                 id, name, description, group_id,
                 markup_type::text as markup_type,
                 bid_markup::text as bid_markup,
                 ask_markup::text as ask_markup,
-                created_at, updated_at
+                created_at, updated_at, created_by_user_id
             "#
         )
         .bind(name)
@@ -118,6 +125,7 @@ impl AdminMarkupService {
         .bind(markup_type)
         .bind(bid_markup)
         .bind(ask_markup)
+        .bind(created_by_user_id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -132,7 +140,7 @@ impl AdminMarkupService {
                 markup_type::text as markup_type,
                 bid_markup::text as bid_markup,
                 ask_markup::text as ask_markup,
-                created_at, updated_at
+                created_at, updated_at, created_by_user_id
             FROM price_stream_profiles
             WHERE id = $1
             "#
@@ -170,7 +178,7 @@ impl AdminMarkupService {
                 markup_type::text as markup_type,
                 bid_markup::text as bid_markup,
                 ask_markup::text as ask_markup,
-                created_at, updated_at
+                created_at, updated_at, created_by_user_id
             "#
         )
         .bind(id)

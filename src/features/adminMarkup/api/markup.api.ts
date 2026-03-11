@@ -25,6 +25,8 @@ function toCamelCaseProfile(obj: any): MarkupProfile {
     createdAt: obj?.created_at ?? obj?.createdAt,
     updatedAt: obj?.updated_at ?? obj?.updatedAt,
     tagIds: obj?.tag_ids ?? [],
+    createdByUserId: obj?.created_by_user_id ?? undefined,
+    createdByEmail: obj?.created_by_email ?? undefined,
   }
 }
 

@@ -260,6 +260,15 @@ export function PermissionsPage() {
         ),
       },
       {
+        id: 'createdBy',
+        header: 'Created by',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-sm">
+            {row.original.createdByEmail ?? '—'}
+          </span>
+        ),
+      },
+      {
         id: 'rights',
         header: 'Rights',
         cell: ({ row }) => (

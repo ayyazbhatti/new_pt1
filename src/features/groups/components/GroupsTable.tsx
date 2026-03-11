@@ -276,6 +276,18 @@ export function GroupsTable({
         ]
       : []),
     {
+      id: 'createdBy',
+      header: 'Created by',
+      cell: ({ row }) => {
+        const email = row.original.createdByEmail
+        return (
+          <span className="text-sm text-text-muted whitespace-nowrap" title={email ?? undefined}>
+            {email ?? '—'}
+          </span>
+        )
+      },
+    },
+    {
       accessorKey: 'updatedAt',
       header: 'Updated',
       cell: ({ row }) => {

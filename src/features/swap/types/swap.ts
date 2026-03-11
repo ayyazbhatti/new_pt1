@@ -20,6 +20,9 @@ export interface SwapRule {
   status: 'active' | 'disabled'
   updatedAt: string
   updatedBy: string
+  /** User who created this rule (manager/admin/super_admin); email for display */
+  createdByUserId?: string
+  createdByEmail?: string
   notes?: string
   /** Tag IDs assigned to this rule */
   tagIds?: string[]

@@ -186,6 +186,14 @@ export function SwapRulesTable({ rules, isLoading, onDisable, allTags = [], onRe
         return <Badge variant={variant}>{status}</Badge>
       },
     },
+    {
+      accessorKey: 'createdByEmail',
+      header: 'Created by',
+      cell: ({ row }) => {
+        const email = row.original.createdByEmail
+        return <span className="text-muted-foreground text-sm">{email ?? '—'}</span>
+      },
+    },
     ...(canTags
       ? [
           {

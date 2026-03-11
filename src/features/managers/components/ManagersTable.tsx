@@ -185,6 +185,18 @@ export function ManagersTable({
         ]
       : []),
     {
+      id: 'createdBy',
+      header: 'Created by',
+      cell: ({ row }) => {
+        const email = row.original.createdByEmail
+        return (
+          <span className="text-sm text-text-muted whitespace-nowrap" title={email ?? undefined}>
+            {email ?? '—'}
+          </span>
+        )
+      },
+    },
+    {
       accessorKey: 'createdAt',
       header: 'Created',
       cell: ({ row }) => (

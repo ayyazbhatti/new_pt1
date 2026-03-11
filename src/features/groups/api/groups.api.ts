@@ -37,6 +37,8 @@ function toCamelCase(obj: any): UserGroup {
     stopOutLevel: obj.stop_out_level != null ? Number(obj.stop_out_level) : null,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
+    createdByUserId: obj.created_by_user_id ?? undefined,
+    createdByEmail: obj.created_by_email ?? undefined,
   }
 }
 

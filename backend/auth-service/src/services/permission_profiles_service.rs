@@ -12,6 +12,9 @@ pub struct PermissionProfile {
     pub description: Option<String>,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
+    /// User (manager/admin/super_admin) who created this profile.
+    pub created_by_user_id: Option<Uuid>,
+    pub created_by_email: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -47,7 +50,13 @@ impl PermissionProfilesService {
 
     pub async fn list(&self) -> anyhow::Result<Vec<(PermissionProfile, Vec<String>)>> {
         let profiles = sqlx::query_as::<_, PermissionProfile>(
-            "SELECT id, name, description, created_at, updated_at FROM permission_profiles ORDER BY name",
+            r#"
+            SELECT pp.id, pp.name, pp.description, pp.created_at, pp.updated_at,
+                   pp.created_by_user_id, creator.email AS created_by_email
+            FROM permission_profiles pp
+            LEFT JOIN users creator ON creator.id = pp.created_by_user_id
+            ORDER BY pp.name
+            "#,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -67,7 +76,13 @@ impl PermissionProfilesService {
 
     pub async fn get(&self, id: Uuid) -> anyhow::Result<Option<(PermissionProfile, Vec<String>)>> {
         let profile = sqlx::query_as::<_, PermissionProfile>(
-            "SELECT id, name, description, created_at, updated_at FROM permission_profiles WHERE id = $1",
+            r#"
+            SELECT pp.id, pp.name, pp.description, pp.created_at, pp.updated_at,
+                   pp.created_by_user_id, creator.email AS created_by_email
+            FROM permission_profiles pp
+            LEFT JOIN users creator ON creator.id = pp.created_by_user_id
+            WHERE pp.id = $1
+            "#,
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -91,6 +106,7 @@ impl PermissionProfilesService {
         name: &str,
         description: Option<&str>,
         permission_keys: &[String],
+        created_by_user_id: Option<Uuid>,
     ) -> anyhow::Result<PermissionProfile> {
         let name_trim = name.trim();
         if name_trim.is_empty() {
@@ -98,15 +114,16 @@ impl PermissionProfilesService {
         }
         self.validate_permission_keys(permission_keys).await?;
 
-        let profile = sqlx::query_as::<_, PermissionProfile>(
+        let id = sqlx::query_scalar::<_, Uuid>(
             r#"
-            INSERT INTO permission_profiles (name, description, created_at, updated_at)
-            VALUES ($1, $2, NOW(), NOW())
-            RETURNING id, name, description, created_at, updated_at
+            INSERT INTO permission_profiles (name, description, created_at, updated_at, created_by_user_id)
+            VALUES ($1, $2, NOW(), NOW(), $3)
+            RETURNING id
             "#,
         )
         .bind(name_trim)
         .bind(description.map(|s| s.trim()).filter(|s| !s.is_empty()))
+        .bind(created_by_user_id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -118,12 +135,24 @@ impl PermissionProfilesService {
             sqlx::query(
                 "INSERT INTO permission_profile_grants (profile_id, permission_key) VALUES ($1, $2) ON CONFLICT (profile_id, permission_key) DO NOTHING",
             )
-            .bind(profile.id)
+            .bind(id)
             .bind(k)
             .execute(&self.pool)
             .await?;
         }
 
+        let profile = sqlx::query_as::<_, PermissionProfile>(
+            r#"
+            SELECT pp.id, pp.name, pp.description, pp.created_at, pp.updated_at,
+                   pp.created_by_user_id, creator.email AS created_by_email
+            FROM permission_profiles pp
+            LEFT JOIN users creator ON creator.id = pp.created_by_user_id
+            WHERE pp.id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(profile)
     }
 
@@ -135,7 +164,13 @@ impl PermissionProfilesService {
         permission_keys: Option<&[String]>,
     ) -> anyhow::Result<Option<PermissionProfile>> {
         let existing = sqlx::query_as::<_, PermissionProfile>(
-            "SELECT id, name, description, created_at, updated_at FROM permission_profiles WHERE id = $1",
+            r#"
+            SELECT pp.id, pp.name, pp.description, pp.created_at, pp.updated_at,
+                   pp.created_by_user_id, creator.email AS created_by_email
+            FROM permission_profiles pp
+            LEFT JOIN users creator ON creator.id = pp.created_by_user_id
+            WHERE pp.id = $1
+            "#,
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -189,7 +224,13 @@ impl PermissionProfilesService {
         }
 
         let updated = sqlx::query_as::<_, PermissionProfile>(
-            "SELECT id, name, description, created_at, updated_at FROM permission_profiles WHERE id = $1",
+            r#"
+            SELECT pp.id, pp.name, pp.description, pp.created_at, pp.updated_at,
+                   pp.created_by_user_id, creator.email AS created_by_email
+            FROM permission_profiles pp
+            LEFT JOIN users creator ON creator.id = pp.created_by_user_id
+            WHERE pp.id = $1
+            "#,
         )
         .bind(id)
         .fetch_optional(&self.pool)

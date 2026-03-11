@@ -191,6 +191,9 @@ export function AdminMarkupPage() {
                   </th>
                 )}
                 <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
+                  Created by
+                </th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-text-muted">
                   Created At
                 </th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
@@ -201,7 +204,7 @@ export function AdminMarkupPage() {
             <tbody>
               {filteredProfiles.length === 0 ? (
                 <tr>
-                  <td colSpan={canTags ? 5 : 4} className="px-4 py-12 text-center text-sm text-text-muted">
+                  <td colSpan={canTags ? 6 : 5} className="px-4 py-12 text-center text-sm text-text-muted">
                     No price streams found.
                   </td>
                 </tr>
@@ -257,6 +260,9 @@ export function AdminMarkupPage() {
                         </Button>
                       </td>
                     )}
+                    <td className="px-4 py-3 text-sm text-text-muted">
+                      {profile.createdByEmail ?? '—'}
+                    </td>
                     <td className="px-4 py-3 text-sm text-text-muted">
                       {profile.createdAt
                         ? formatDistanceToNow(new Date(profile.createdAt), {

@@ -31,6 +31,9 @@ export type UserGroup = {
   marginCallLevel?: number | null
   /** Stop out level % (e.g. 20). When margin level falls below this, all positions are closed. Null = no automatic stop out. */
   stopOutLevel?: number | null
+  /** User who created this group (manager/admin/super_admin). */
+  createdByUserId?: string | null
+  createdByEmail?: string | null
 }
 
 export interface ListGroupsParams {

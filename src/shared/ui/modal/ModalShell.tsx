@@ -63,7 +63,7 @@ export function ModalShell({
             isDrawer
               ? 'flex h-[95vh] sm:h-[90vh] max-h-[95vh] sm:max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-800 p-0 shadow-2xl m-2 sm:m-4'
               : cn(
-                  'grid w-full gap-4 border border-border bg-surface p-6 shadow-xl rounded-xl',
+                  'grid w-full max-h-[90vh] gap-4 border border-border bg-surface p-6 shadow-xl rounded-xl overflow-hidden',
                   sizeClasses[size],
                   className
                 )
@@ -107,7 +107,7 @@ export function ModalShell({
                   <span className="sr-only">Close</span>
                 </button>
               </Dialog.Close>
-              <div className="flex flex-col max-h-[calc(100vh-200px)] min-h-0 overflow-hidden">{children}</div>
+              <div className="flex flex-col min-h-0 overflow-y-auto max-h-[calc(90vh-8rem)]">{children}</div>
             </>
           )}
         </Dialog.Content>

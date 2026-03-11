@@ -11,6 +11,8 @@ pub struct LeverageProfile {
     pub status: String, // 'active' or 'disabled' - stored as user_status enum in DB, cast to text in queries
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// User (manager/admin/super_admin) who created this profile.
+    pub created_by_user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -39,5 +41,7 @@ pub struct LeverageProfileWithCounts {
     pub symbols_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub created_by_user_id: Option<Uuid>,
+    pub created_by_email: Option<String>,
 }
 

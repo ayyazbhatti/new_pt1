@@ -23,6 +23,8 @@ pub struct SwapRule {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<String>,
+    /// User (manager/admin/super_admin) who created this rule.
+    pub created_by_user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -46,4 +48,6 @@ pub struct SwapRuleWithGroupName {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<String>,
+    pub created_by_user_id: Option<Uuid>,
+    pub created_by_email: Option<String>,
 }

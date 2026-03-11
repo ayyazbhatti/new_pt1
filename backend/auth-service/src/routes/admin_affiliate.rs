@@ -28,6 +28,9 @@ pub struct LayerResponse {
     pub commission_percent: Decimal,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// User (manager/admin/super_admin) who created this scheme.
+    pub created_by_user_id: Option<Uuid>,
+    pub created_by_email: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tag_ids: Vec<Uuid>,
 }
@@ -98,6 +101,8 @@ struct LayerRow {
     commission_percent: Decimal,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    created_by_user_id: Option<Uuid>,
+    created_by_email: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -314,10 +319,12 @@ async fn list_layers(
         } else {
             sqlx::query_as::<_, LayerRow>(
                 r#"
-                SELECT id, level, name, commission_percent, created_at, updated_at
-                FROM affiliate_commission_layers
-                WHERE id = ANY($1)
-                ORDER BY level ASC
+                SELECT acl.id, acl.level, acl.name, acl.commission_percent, acl.created_at, acl.updated_at,
+                       acl.created_by_user_id, creator.email AS created_by_email
+                FROM affiliate_commission_layers acl
+                LEFT JOIN users creator ON creator.id = acl.created_by_user_id
+                WHERE acl.id = ANY($1)
+                ORDER BY acl.level ASC
                 "#,
             )
             .bind(ids)
@@ -338,9 +345,11 @@ async fn list_layers(
     } else {
         sqlx::query_as::<_, LayerRow>(
             r#"
-            SELECT id, level, name, commission_percent, created_at, updated_at
-            FROM affiliate_commission_layers
-            ORDER BY level ASC
+            SELECT acl.id, acl.level, acl.name, acl.commission_percent, acl.created_at, acl.updated_at,
+                   acl.created_by_user_id, creator.email AS created_by_email
+            FROM affiliate_commission_layers acl
+            LEFT JOIN users creator ON creator.id = acl.created_by_user_id
+            ORDER BY acl.level ASC
             "#,
         )
         .fetch_all(&pool)
@@ -370,6 +379,8 @@ async fn list_layers(
             commission_percent: r.commission_percent,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            created_by_user_id: r.created_by_user_id,
+            created_by_email: r.created_by_email,
             tag_ids: tag_map.get(&r.id).cloned().unwrap_or_default(),
         })
         .collect();
@@ -467,16 +478,18 @@ async fn create_layer(
     }
 
     let id = Uuid::new_v4();
+    let created_by_user_id = claims.sub;
     sqlx::query(
         r#"
-        INSERT INTO affiliate_commission_layers (id, level, name, commission_percent, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, NOW(), NOW())
+        INSERT INTO affiliate_commission_layers (id, level, name, commission_percent, created_at, updated_at, created_by_user_id)
+        VALUES ($1, $2, $3, $4, NOW(), NOW(), $5)
         "#,
     )
     .bind(id)
     .bind(level)
     .bind(name)
     .bind(commission_decimal)
+    .bind(created_by_user_id)
     .execute(&pool)
     .await
     .map_err(|e| {
@@ -492,7 +505,13 @@ async fn create_layer(
     })?;
 
     let row: LayerRow = sqlx::query_as(
-        "SELECT id, level, name, commission_percent, created_at, updated_at FROM affiliate_commission_layers WHERE id = $1",
+        r#"
+        SELECT acl.id, acl.level, acl.name, acl.commission_percent, acl.created_at, acl.updated_at,
+               acl.created_by_user_id, creator.email AS created_by_email
+        FROM affiliate_commission_layers acl
+        LEFT JOIN users creator ON creator.id = acl.created_by_user_id
+        WHERE acl.id = $1
+        "#,
     )
     .bind(id)
     .fetch_one(&pool)
@@ -518,6 +537,8 @@ async fn create_layer(
             commission_percent: row.commission_percent,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            created_by_user_id: row.created_by_user_id,
+            created_by_email: row.created_by_email,
             tag_ids: vec![],
         }),
     ))
@@ -587,7 +608,13 @@ async fn update_layer(
     }
 
     let opt: Option<LayerRow> = sqlx::query_as(
-        "SELECT id, level, name, commission_percent, created_at, updated_at FROM affiliate_commission_layers WHERE id = $1",
+        r#"
+        SELECT acl.id, acl.level, acl.name, acl.commission_percent, acl.created_at, acl.updated_at,
+               acl.created_by_user_id, creator.email AS created_by_email
+        FROM affiliate_commission_layers acl
+        LEFT JOIN users creator ON creator.id = acl.created_by_user_id
+        WHERE acl.id = $1
+        "#,
     )
     .bind(id)
     .fetch_optional(&pool)
@@ -620,6 +647,8 @@ async fn update_layer(
         commission_percent: row.commission_percent,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        created_by_user_id: row.created_by_user_id,
+        created_by_email: row.created_by_email,
         tag_ids: vec![],
     }))
 }

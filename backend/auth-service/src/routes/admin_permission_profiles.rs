@@ -25,6 +25,9 @@ pub struct PermissionProfileResponse {
     pub permission_keys: Vec<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// User (manager/admin/super_admin) who created this profile.
+    pub created_by_user_id: Option<Uuid>,
+    pub created_by_email: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tag_ids: Vec<Uuid>,
 }
@@ -419,6 +422,8 @@ async fn list_profiles(
             permission_keys: keys,
             created_at: p.created_at,
             updated_at: p.updated_at,
+            created_by_user_id: p.created_by_user_id,
+            created_by_email: p.created_by_email.clone(),
             tag_ids: tag_map.get(&p.id).cloned().unwrap_or_default(),
         })
         .collect();
@@ -509,6 +514,8 @@ async fn get_profile(
         permission_keys: keys,
         created_at: p.created_at,
         updated_at: p.updated_at,
+        created_by_user_id: p.created_by_user_id,
+        created_by_email: p.created_by_email.clone(),
         tag_ids,
     }))
 }
@@ -521,11 +528,13 @@ async fn create_profile(
     check_permission(&pool, &claims, "permissions:edit").await?;
 
     let service = PermissionProfilesService::new(pool.clone());
+    let created_by_user_id = Some(claims.sub);
     let profile = service
         .create(
             &payload.name,
             payload.description.as_deref(),
             &payload.permission_keys,
+            created_by_user_id,
         )
         .await
         .map_err(|e| {
@@ -566,6 +575,8 @@ async fn create_profile(
             permission_keys: keys,
             created_at: profile.created_at,
             updated_at: profile.updated_at,
+            created_by_user_id: profile.created_by_user_id,
+            created_by_email: profile.created_by_email.clone(),
             tag_ids: vec![],
         }),
     ))
@@ -643,6 +654,8 @@ async fn update_profile(
         permission_keys: keys,
         created_at: p.created_at,
         updated_at: p.updated_at,
+        created_by_user_id: p.created_by_user_id,
+        created_by_email: p.created_by_email.clone(),
         tag_ids: get_permission_profile_tag_ids(&pool, &[id]).await.remove(&id).unwrap_or_default(),
     }))
 }

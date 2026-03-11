@@ -45,10 +45,13 @@ impl AdminLeverageProfilesService {
                 lp.created_at,
                 lp.updated_at,
                 COALESCE(COUNT(DISTINCT lpt.id), 0)::bigint as tiers_count,
-                COALESCE(COUNT(DISTINCT slpa.symbol_id), 0)::bigint as symbols_count
+                COALESCE(COUNT(DISTINCT slpa.symbol_id), 0)::bigint as symbols_count,
+                lp.created_by_user_id,
+                creator.email as created_by_email
             FROM leverage_profiles lp
             LEFT JOIN leverage_profile_tiers lpt ON lp.id = lpt.profile_id
             LEFT JOIN symbol_leverage_profile_assignments slpa ON lp.id = slpa.profile_id
+            LEFT JOIN users creator ON creator.id = lp.created_by_user_id
             WHERE 1=1
             "#
         );
@@ -83,7 +86,7 @@ impl AdminLeverageProfilesService {
             count_query.push(")");
         }
 
-        query.push(" GROUP BY lp.id, lp.name, lp.description, lp.status::text, lp.created_at, lp.updated_at");
+        query.push(" GROUP BY lp.id, lp.name, lp.description, lp.status::text, lp.created_at, lp.updated_at, lp.created_by_user_id, creator.email");
 
         let order_by = match sort {
             Some("name_asc") => "lp.name ASC",
@@ -113,7 +116,7 @@ impl AdminLeverageProfilesService {
 
     pub async fn get_profile_by_id(&self, id: Uuid) -> anyhow::Result<LeverageProfile> {
         let profile = sqlx::query_as::<_, LeverageProfile>(
-            "SELECT id, name, description, status::text as status, created_at, updated_at FROM leverage_profiles WHERE id = $1",
+            "SELECT id, name, description, status::text as status, created_at, updated_at, created_by_user_id FROM leverage_profiles WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -128,6 +131,7 @@ impl AdminLeverageProfilesService {
         name: &str,
         description: Option<&str>,
         status: &str,
+        created_by_user_id: Option<Uuid>,
     ) -> anyhow::Result<LeverageProfile> {
         if name.len() < 2 || name.len() > 60 {
             return Err(anyhow::anyhow!("Name must be between 2 and 60 characters"));
@@ -135,14 +139,15 @@ impl AdminLeverageProfilesService {
 
         let profile = sqlx::query_as::<_, LeverageProfile>(
             r#"
-            INSERT INTO leverage_profiles (name, description, status)
-            VALUES ($1, $2, $3::user_status)
-            RETURNING id, name, description, status::text as status, created_at, updated_at
+            INSERT INTO leverage_profiles (name, description, status, created_by_user_id)
+            VALUES ($1, $2, $3::user_status, $4)
+            RETURNING id, name, description, status::text as status, created_at, updated_at, created_by_user_id
             "#,
         )
         .bind(name)
         .bind(description)
         .bind(status)
+        .bind(created_by_user_id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -165,7 +170,7 @@ impl AdminLeverageProfilesService {
             UPDATE leverage_profiles
             SET name = $2, description = $3, status = $4::user_status, updated_at = NOW()
             WHERE id = $1
-            RETURNING id, name, description, status::text as status, created_at, updated_at
+            RETURNING id, name, description, status::text as status, created_at, updated_at, created_by_user_id
             "#,
         )
         .bind(id)

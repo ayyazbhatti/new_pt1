@@ -19,5 +19,7 @@ pub struct UserGroup {
     pub stop_out_level: Option<rust_decimal::Decimal>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// User (manager/admin/super_admin) who created this group.
+    pub created_by_user_id: Option<Uuid>,
 }
 

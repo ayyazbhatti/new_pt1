@@ -24,6 +24,8 @@ function toCamelCaseProfile(obj: any): LeverageProfile {
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
     tagIds: obj.tag_ids ?? [],
+    createdByUserId: obj.created_by_user_id ?? undefined,
+    createdByEmail: obj.created_by_email ?? undefined,
   }
 }
 

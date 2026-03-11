@@ -191,6 +191,15 @@ export function AffiliatePage() {
           </span>
         ),
       },
+      {
+        id: 'createdBy',
+        header: 'Created by',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-sm">
+            {row.original.createdByEmail ?? '—'}
+          </span>
+        ),
+      },
       ...(canTags
         ? [
             {

@@ -15,6 +15,8 @@ export interface ManagerDto {
   created_at: string
   last_login_at: string | null
   tag_ids?: string[]
+  created_by_user_id?: string | null
+  created_by_email?: string | null
 }
 
 function fromDto(d: ManagerDto): Manager {
@@ -33,6 +35,8 @@ function fromDto(d: ManagerDto): Manager {
     lastLoginAt: d.last_login_at ?? undefined,
     notes: d.notes ?? undefined,
     tagIds: Array.isArray(d.tag_ids) ? d.tag_ids : undefined,
+    createdByUserId: d.created_by_user_id ?? undefined,
+    createdByEmail: d.created_by_email ?? undefined,
   }
 }
 

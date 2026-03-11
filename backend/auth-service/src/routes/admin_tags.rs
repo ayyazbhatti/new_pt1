@@ -29,6 +29,11 @@ pub struct TagResponse {
     pub updated_at: DateTime<Utc>,
     pub user_count: i32,
     pub manager_count: i32,
+    /// User who created this tag (manager/admin/super_admin)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_user_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_email: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -167,6 +172,8 @@ struct TagRow {
     updated_at: DateTime<Utc>,
     user_count: i32,
     manager_count: i32,
+    created_by_user_id: Option<Uuid>,
+    created_by_email: Option<String>,
 }
 
 async fn list_tags(
@@ -192,8 +199,10 @@ async fn list_tags(
                 r#"
                 SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
                        COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
-                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
+                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count,
+                       t.created_by_user_id, u.email AS created_by_email
                 FROM tags t
+                LEFT JOIN users u ON u.id = t.created_by_user_id
                 WHERE LOWER(t.name) LIKE $1 OR LOWER(t.slug) LIKE $1
                 ORDER BY t.created_at DESC
                 "#,
@@ -206,8 +215,10 @@ async fn list_tags(
                 r#"
                 SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
                        COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
-                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
+                       COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count,
+                       t.created_by_user_id, u.email AS created_by_email
                 FROM tags t
+                LEFT JOIN users u ON u.id = t.created_by_user_id
                 ORDER BY t.created_at DESC
                 "#,
             )
@@ -219,8 +230,10 @@ async fn list_tags(
             r#"
             SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
                    COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
-                   COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
+                   COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count,
+                   t.created_by_user_id, u.email AS created_by_email
             FROM tags t
+            LEFT JOIN users u ON u.id = t.created_by_user_id
             WHERE EXISTS (SELECT 1 FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user' AND a.entity_id = $1)
               AND (LOWER(t.name) LIKE $2 OR LOWER(t.slug) LIKE $2)
             ORDER BY t.created_at DESC
@@ -235,8 +248,10 @@ async fn list_tags(
             r#"
             SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
                    COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
-                   COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
+                   COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count,
+                   t.created_by_user_id, u.email AS created_by_email
             FROM tags t
+            LEFT JOIN users u ON u.id = t.created_by_user_id
             WHERE EXISTS (SELECT 1 FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user' AND a.entity_id = $1)
             ORDER BY t.created_at DESC
             "#,
@@ -270,6 +285,8 @@ async fn list_tags(
             updated_at: r.updated_at,
             user_count: r.user_count,
             manager_count: r.manager_count,
+            created_by_user_id: r.created_by_user_id,
+            created_by_email: r.created_by_email,
         })
         .collect();
     Ok(Json(list))
@@ -360,8 +377,8 @@ async fn create_tag(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"
-        INSERT INTO tags (id, name, slug, color, description, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        INSERT INTO tags (id, name, slug, color, description, created_at, updated_at, created_by_user_id)
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), $6)
         "#,
     )
     .bind(id)
@@ -369,6 +386,7 @@ async fn create_tag(
     .bind(&slug)
     .bind(&color)
     .bind(description.as_deref())
+    .bind(claims.sub)
     .execute(&pool)
     .await
     .map_err(|e| {
@@ -405,8 +423,11 @@ async fn create_tag(
     let row: TagRow = sqlx::query_as(
         r#"
         SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
-               0::int AS user_count, 0::int AS manager_count
-        FROM tags t WHERE t.id = $1
+               0::int AS user_count, 0::int AS manager_count,
+               t.created_by_user_id, u.email AS created_by_email
+        FROM tags t
+        LEFT JOIN users u ON u.id = t.created_by_user_id
+        WHERE t.id = $1
         "#,
     )
     .bind(id)
@@ -436,6 +457,8 @@ async fn create_tag(
             updated_at: row.updated_at,
             user_count: row.user_count,
             manager_count: row.manager_count,
+            created_by_user_id: row.created_by_user_id,
+            created_by_email: row.created_by_email,
         }),
     ))
 }
@@ -612,8 +635,11 @@ async fn update_tag(
         r#"
         SELECT t.id, t.name, t.slug, t.color, t.description, t.created_at, t.updated_at,
                COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'user'), 0) AS user_count,
-               COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count
-        FROM tags t WHERE t.id = $1
+               COALESCE((SELECT COUNT(*)::int FROM tag_assignments a WHERE a.tag_id = t.id AND a.entity_type = 'manager'), 0) AS manager_count,
+               t.created_by_user_id, u.email AS created_by_email
+        FROM tags t
+        LEFT JOIN users u ON u.id = t.created_by_user_id
+        WHERE t.id = $1
         "#,
     )
     .bind(id)
@@ -641,6 +667,8 @@ async fn update_tag(
         updated_at: row.updated_at,
         user_count: row.user_count,
         manager_count: row.manager_count,
+        created_by_user_id: row.created_by_user_id,
+        created_by_email: row.created_by_email,
     }))
 }
 

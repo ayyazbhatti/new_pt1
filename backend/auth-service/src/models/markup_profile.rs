@@ -14,6 +14,8 @@ pub struct MarkupProfile {
     pub ask_markup: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// User (manager/admin/super_admin) who created this profile.
+    pub created_by_user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -28,6 +30,8 @@ pub struct MarkupProfileWithGroup {
     pub ask_markup: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub created_by_user_id: Option<Uuid>,
+    pub created_by_email: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

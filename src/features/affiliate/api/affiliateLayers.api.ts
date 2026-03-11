@@ -8,6 +8,8 @@ export interface AffiliateLayerDto {
   commission_percent: number
   created_at: string
   updated_at: string
+  created_by_user_id?: string
+  created_by_email?: string
   tag_ids?: string[]
 }
 
@@ -18,6 +20,8 @@ export interface AffiliateLayer {
   commissionPercent: number
   createdAt: string
   updatedAt: string
+  createdByUserId?: string
+  createdByEmail?: string
   tagIds?: string[]
 }
 
@@ -29,6 +33,8 @@ function fromDto(d: AffiliateLayerDto): AffiliateLayer {
     commissionPercent: d.commission_percent,
     createdAt: d.created_at,
     updatedAt: d.updated_at,
+    createdByUserId: d.created_by_user_id,
+    createdByEmail: d.created_by_email,
     tagIds: d.tag_ids ?? [],
   }
 }

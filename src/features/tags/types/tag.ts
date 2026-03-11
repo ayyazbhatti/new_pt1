@@ -4,9 +4,10 @@ export interface Tag {
   slug: string
   color: string
   description?: string
-  /** Placeholder: number of users assigned (backend later) */
   userCount?: number
-  /** Placeholder: number of managers assigned (backend later) */
   managerCount?: number
   createdAt: string
+  /** User who created this tag (manager/admin/super_admin) */
+  createdByUserId?: string
+  createdByEmail?: string
 }

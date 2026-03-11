@@ -227,6 +227,8 @@ async fn list_profiles(
                 "created_at": p.created_at,
                 "updated_at": p.updated_at,
                 "tag_ids": tag_ids,
+                "created_by_user_id": p.created_by_user_id,
+                "created_by_email": p.created_by_email,
             })
         })
         .collect();
@@ -244,15 +246,16 @@ async fn create_profile(
         .map_err(permission_denied_to_response)?;
     ensure_percent_markup(&payload.markup_type)?;
 
-    let service = AdminMarkupService::new(pool);
+    let service = AdminMarkupService::new(pool.clone());
     let profile = service
         .create_profile(
             &payload.name,
             payload.description.as_deref(),
-            None,
+            payload.group_id.as_ref().and_then(|s| Uuid::parse_str(s).ok()),
             "percent",
             &payload.bid_markup,
             &payload.ask_markup,
+            Some(claims.sub),
         )
         .await
         .map_err(|e| {
@@ -267,6 +270,13 @@ async fn create_profile(
             )
         })?;
 
+    let creator_email: Option<String> = sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1")
+        .bind(profile.created_by_user_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+
     Ok(Json(serde_json::json!({
         "id": profile.id,
         "name": profile.name,
@@ -277,6 +287,8 @@ async fn create_profile(
         "ask_markup": profile.ask_markup,
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
+        "created_by_user_id": profile.created_by_user_id,
+        "created_by_email": creator_email,
     })))
 }
 
@@ -289,7 +301,7 @@ async fn get_profile(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let service = AdminMarkupService::new(pool);
+    let service = AdminMarkupService::new(pool.clone());
     let profile = service.get_profile_by_id(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
@@ -302,6 +314,13 @@ async fn get_profile(
         )
     })?;
 
+    let creator_email: Option<String> = sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1")
+        .bind(profile.created_by_user_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+
     Ok(Json(serde_json::json!({
         "id": profile.id,
         "name": profile.name,
@@ -312,6 +331,8 @@ async fn get_profile(
         "ask_markup": profile.ask_markup,
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
+        "created_by_user_id": profile.created_by_user_id,
+        "created_by_email": creator_email,
     })))
 }
 
