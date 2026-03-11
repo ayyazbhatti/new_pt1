@@ -18,6 +18,7 @@ use crate::middleware::auth_middleware;
 use crate::utils::permission_check;
 use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ErrorResponse, ErrorDetail};
 use crate::routes::scoped_access;
+use redis_model::keys::Keys;
 
 const POS_BY_ID_PREFIX: &str = "pos:by_id:";
 
@@ -248,16 +249,111 @@ fn format_ts_ms(ms: i64) -> String {
 }
 
 async fn close_admin_position(
-    State(pool): State<PgPool>,
+    State(_pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Extension(admin_state): Extension<AdminTradingState>,
     Path(position_id): Path<Uuid>,
     Json(req): Json<ClosePositionRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    permission_check::check_permission(&pool, &claims, "trading:close_position")
+    permission_check::check_permission(&_pool, &claims, "trading:close_position")
         .await
         .map_err(permission_denied_to_response)?;
+
+    let mut conn = admin_state.redis.get().await.map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Cache unavailable".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let pos_key = Keys::position_by_id(position_id);
+    let pos_data: HashMap<String, String> = conn.hgetall(&pos_key).await.map_err(|e| {
+        error!("Admin close position: Redis HGETALL failed for {}: {}", position_id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Failed to read position".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if pos_data.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Position not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_POSITION".to_string(),
+                    message: "Position missing user_id".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let status = pos_data.get("status").map(|s| s.as_str()).unwrap_or("");
+    if !status.eq_ignore_ascii_case("OPEN") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "POSITION_NOT_OPEN".to_string(),
+                    message: format!("Position is not open (status: {})", status),
+                },
+            }),
+        ));
+    }
+
     let now = Utc::now();
+    let correlation_id = Uuid::new_v4().to_string();
+    let close_size_str = req.size.map(|s| s.to_string());
+    let cmd = serde_json::json!({
+        "position_id": position_id.to_string(),
+        "user_id": user_id_str,
+        "size": close_size_str,
+        "correlation_id": correlation_id,
+        "ts": now.to_rfc3339(),
+    });
+
+    if let Err(e) = admin_state
+        .nats
+        .publish("cmd.position.close".to_string(), cmd.to_string().into())
+        .await
+    {
+        error!("Admin close position: failed to publish cmd.position.close: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NATS_ERROR".to_string(),
+                    message: "Failed to send close command".to_string(),
+                },
+            }),
+        ));
+    }
+    info!(
+        "Admin close position: published cmd.position.close position_id={}, user_id={}, size={:?}",
+        position_id, user_id_str, req.size
+    );
+
     let close_event = serde_json::json!({
         "positionId": position_id.to_string(),
         "closedSize": req.size.unwrap_or(0.0),
@@ -287,7 +383,7 @@ async fn close_admin_position(
         )
     })?;
     admin_state.nats.publish("admin.position.closed".to_string(), payload.into()).await.ok();
-    Ok(StatusCode::OK)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn modify_position_sltp(

@@ -10,7 +10,8 @@ import { toast } from '@/shared/components/common'
 import { Loader2 } from 'lucide-react'
 
 export function ClosePositionModal() {
-  const { openModal, setOpenModal, selectedPositionId, positions } = useAdminTradingStore()
+  const { openModal, setOpenModal, selectedPositionId, positions, removePosition } =
+    useAdminTradingStore()
   const position = selectedPositionId ? positions.get(selectedPositionId) : null
   const [closeType, setCloseType] = useState<'full' | 'partial'>('full')
   const [partialSize, setPartialSize] = useState('')
@@ -37,6 +38,9 @@ export function ClosePositionModal() {
         await closeAdminPosition(position.id)
       }
       toast.success(`Position ${closeType === 'full' ? 'closed' : 'partially closed'} successfully`)
+      if (closeType === 'full') {
+        removePosition(position.id)
+      }
       setOpenModal(null)
       setCloseType('full')
       setPartialSize('')

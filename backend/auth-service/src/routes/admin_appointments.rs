@@ -13,19 +13,20 @@ use uuid::Uuid;
 
 use tracing::error;
 use crate::middleware::auth_middleware;
+use crate::routes::scoped_access;
 use crate::services::appointment_service::{
     self, CancelPayload, CompletePayload, CreateAppointmentPayload, ListAppointmentsParams,
     ReschedulePayload, SendReminderPayload, UpdateAppointmentPayload,
 };
 use crate::utils::jwt::Claims;
 
-/// Allow if role is admin or user has the given permission from their permission profile.
+/// Allow if role is admin/super_admin or user has the given permission from their permission profile.
 async fn check_appointments_permission(
     pool: &PgPool,
     claims: &Claims,
     permission: &str,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role == "admin" {
+    if claims.role == "admin" || claims.role == "super_admin" {
         return Ok(());
     }
     let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
@@ -107,6 +108,9 @@ async fn list_appointments(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:view").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
     let params = ListAppointmentsParams {
         limit: q.limit,
         offset: q.offset,
@@ -118,7 +122,7 @@ async fn list_appointments(
         start_date: q.start_date,
         end_date: q.end_date,
     };
-    let (appointments, total) = appointment_service::list_admin(&pool, &params)
+    let (appointments, total) = appointment_service::list_admin(&pool, &params, allowed_user_ids.as_deref())
         .await
         .map_err(|e| {
             (
@@ -141,7 +145,10 @@ async fn get_stats(
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:view").await?;
-    let stats = appointment_service::get_stats(&pool)
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    let stats = appointment_service::get_stats(&pool, allowed_user_ids.as_deref())
         .await
         .map_err(|e| {
             (
@@ -158,7 +165,10 @@ async fn search_users(
     Query(q): Query<SearchUsersQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:view").await?;
-    let users = appointment_service::search_users(&pool, &q.q, q.limit)
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    let users = appointment_service::search_users(&pool, &q.q, q.limit, allowed_user_ids.as_deref())
         .await
         .map_err(|e| {
             (
@@ -175,6 +185,9 @@ async fn get_appointment(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:view").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
     let row = appointment_service::get_by_id(&pool, id)
         .await
         .map_err(|e| {
@@ -183,13 +196,21 @@ async fn get_appointment(
                 Json(serde_json::json!({ "error": e.to_string() })),
             )
         })?;
-    let Some(row) = row else {
+    let Some(ref row) = row else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Appointment not found" })),
         ));
     };
-    Ok(Json(serde_json::to_value(&row).unwrap()))
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&row.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this appointment" } })),
+            ));
+        }
+    }
+    Ok(Json(serde_json::to_value(row).unwrap()))
 }
 
 async fn create_appointment(
@@ -198,6 +219,17 @@ async fn create_appointment(
     axum::Json(payload): axum::Json<CreateAppointmentPayload>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:create").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&payload.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to create appointment for this user" } })),
+            ));
+        }
+    }
     let admin_id = claims.sub;
     let row = appointment_service::create(&pool, admin_id, &payload)
         .await
@@ -220,6 +252,23 @@ async fn update_appointment(
     axum::Json(payload): axum::Json<UpdateAppointmentPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:edit").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    if let Some(ref ids) = allowed_user_ids {
+        let existing = appointment_service::get_by_id(&pool, id).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+        })?;
+        let Some(ref row) = existing else {
+            return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Appointment not found" }))));
+        };
+        if !ids.contains(&row.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this appointment" } })),
+            ));
+        }
+    }
     let row = appointment_service::update(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -243,6 +292,23 @@ async fn delete_appointment(
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:delete").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    if let Some(ref ids) = allowed_user_ids {
+        let existing = appointment_service::get_by_id(&pool, id).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+        })?;
+        let Some(ref row) = existing else {
+            return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Appointment not found" }))));
+        };
+        if !ids.contains(&row.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this appointment" } })),
+            ));
+        }
+    }
     let deleted = appointment_service::delete_by_id(&pool, id)
         .await
         .map_err(|e| {
@@ -270,6 +336,23 @@ async fn send_reminder(
     axum::Json(payload): axum::Json<SendReminderPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:send_reminder").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    if let Some(ref ids) = allowed_user_ids {
+        let existing = appointment_service::get_by_id(&pool, id).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+        })?;
+        let Some(ref row) = existing else {
+            return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Appointment not found" }))));
+        };
+        if !ids.contains(&row.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this appointment" } })),
+            ));
+        }
+    }
     appointment_service::send_reminder(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -288,6 +371,23 @@ async fn reschedule_appointment(
     axum::Json(payload): axum::Json<ReschedulePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:reschedule").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    if let Some(ref ids) = allowed_user_ids {
+        let existing = appointment_service::get_by_id(&pool, id).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+        })?;
+        let Some(ref row) = existing else {
+            return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Appointment not found" }))));
+        };
+        if !ids.contains(&row.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this appointment" } })),
+            ));
+        }
+    }
     let row = appointment_service::reschedule(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -312,6 +412,23 @@ async fn cancel_appointment(
     axum::Json(payload): axum::Json<CancelPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:cancel").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    if let Some(ref ids) = allowed_user_ids {
+        let existing = appointment_service::get_by_id(&pool, id).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+        })?;
+        let Some(ref row) = existing else {
+            return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Appointment not found" }))));
+        };
+        if !ids.contains(&row.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this appointment" } })),
+            ));
+        }
+    }
     let row = appointment_service::cancel(&pool, id, &payload)
         .await
         .map_err(|e| {
@@ -336,6 +453,23 @@ async fn complete_appointment(
     axum::Json(payload): axum::Json<CompletePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_appointments_permission(&pool, &claims, "appointments:complete").await?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| (status, Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } }))))?;
+    if let Some(ref ids) = allowed_user_ids {
+        let existing = appointment_service::get_by_id(&pool, id).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+        })?;
+        let Some(ref row) = existing else {
+            return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Appointment not found" }))));
+        };
+        if !ids.contains(&row.user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this appointment" } })),
+            ));
+        }
+    }
     let row = appointment_service::complete(&pool, id, &payload)
         .await
         .map_err(|e| {

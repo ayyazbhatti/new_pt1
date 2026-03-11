@@ -22,13 +22,15 @@ export async function closeAdminPosition(
   positionId: string,
   request?: ClosePositionRequest
 ): Promise<void> {
-  const endpoint = request?.size 
+  const endpoint = request?.size
     ? `/api/admin/positions/${positionId}/close-partial`
     : `/api/admin/positions/${positionId}/close`
-  
+
+  // Backend expects a JSON body; send {} for full close so Json extractor does not 400
+  const body = request?.size != null ? JSON.stringify({ size: request.size }) : '{}'
   return http(endpoint, {
     method: 'POST',
-    body: request?.size ? JSON.stringify({ size: request.size }) : undefined,
+    body,
   })
 }
 

@@ -14,6 +14,7 @@ export function useAdminWebSocket() {
     setWsLastMessageAt,
     upsertOrder,
     upsertPosition,
+    removePosition,
     appendAuditLog,
   } = useAdminTradingStore()
   const updateBufferRef = useRef<Map<string, AdminPosition>>(new Map())
@@ -149,15 +150,7 @@ export function useAdminWebSocket() {
 
         case 'admin.position.closed': {
           const { positionId } = event.payload
-          const currentState = useAdminTradingStore.getState()
-          const existingPosition = currentState.positions.get(positionId)
-          if (existingPosition) {
-            upsertPosition({
-              ...existingPosition,
-              status: 'CLOSED',
-              closedAt: event.payload.timestamp,
-            })
-          }
+          removePosition(positionId)
           toast.success(`Position closed: ${positionId.slice(0, 8)}...`, {
             duration: 3000,
           })

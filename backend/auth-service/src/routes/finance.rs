@@ -15,6 +15,7 @@ use tracing::{error, info, warn};
 use redis::AsyncCommands;
 
 use crate::middleware::auth_middleware;
+use crate::routes::scoped_access;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::services::ledger_service;
@@ -436,140 +437,292 @@ async fn get_finance_overview(
         .await
         .map_err(|e| e.status)?;
 
-    // Total balances (sum of all available balances)
-    let total_balances: Option<Decimal> = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(available_balance), 0) FROM wallets"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get total balances: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| status)?;
 
-    // Pending deposits
-    let pending_deposits: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'pending'::transaction_status"
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get pending deposits: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    // Admin/manager with no allowed users → return zeros
+    if let Some(ref ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(Json(FinanceOverviewResponse {
+                total_balances: Decimal::ZERO,
+                pending_deposits: 0,
+                pending_withdrawals: 0,
+                net_fees_today: Decimal::ZERO,
+                deposits_today: DepositWithdrawalStats { count: 0, amount: Decimal::ZERO },
+                withdrawals_today: DepositWithdrawalStats { count: 0, amount: Decimal::ZERO },
+            }));
+        }
+    }
 
-    // Pending withdrawals
-    let pending_withdrawals: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'pending'::transaction_status"
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get pending withdrawals: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // Net fees today (fees - rebates)
-    let net_fees_today: Option<Decimal> = sqlx::query_scalar(
-        r#"
-        SELECT COALESCE(
-            SUM(CASE 
-                WHEN type = 'fee'::transaction_type THEN -net_amount
-                WHEN type = 'rebate'::transaction_type THEN net_amount
-                ELSE 0
-            END), 0
-        )
-        FROM transactions
-        WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type)
-        AND status = 'completed'::transaction_status
-        AND DATE(created_at) = CURRENT_DATE
-        "#
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get net fees today: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // Deposits today
-    let deposits_count: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(*)::bigint
-        FROM transactions
-        WHERE type = 'deposit'::transaction_type
-        AND status = 'completed'::transaction_status
-        AND DATE(created_at) = CURRENT_DATE
-        "#
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get deposits count today: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let deposits_amount: Option<Decimal> = sqlx::query_scalar(
-        r#"
-        SELECT COALESCE(SUM(net_amount), 0)
-        FROM transactions
-        WHERE type = 'deposit'::transaction_type
-        AND status = 'completed'::transaction_status
-        AND DATE(created_at) = CURRENT_DATE
-        "#
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get deposits amount today: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // Withdrawals today
-    let withdrawals_count: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(*)::bigint
-        FROM transactions
-        WHERE type = 'withdrawal'::transaction_type
-        AND status = 'completed'::transaction_status
-        AND DATE(created_at) = CURRENT_DATE
-        "#
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get withdrawals count today: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let withdrawals_amount: Option<Decimal> = sqlx::query_scalar(
-        r#"
-        SELECT COALESCE(SUM(net_amount), 0)
-        FROM transactions
-        WHERE type = 'withdrawal'::transaction_type
-        AND status = 'completed'::transaction_status
-        AND DATE(created_at) = CURRENT_DATE
-        "#
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get withdrawals amount today: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let (total_balances, pending_deposits, pending_withdrawals, net_fees_today, deposits_count, deposits_amount, withdrawals_count, withdrawals_amount) = match &allowed_user_ids {
+        None => {
+            let total_balances: Option<Decimal> = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(available_balance), 0) FROM wallets"
+            )
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get total balances: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let pending_deposits: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'pending'::transaction_status"
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get pending deposits: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let pending_withdrawals: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'pending'::transaction_status"
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get pending withdrawals: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let net_fees_today: Option<Decimal> = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(
+                    SUM(CASE 
+                        WHEN type = 'fee'::transaction_type THEN -net_amount
+                        WHEN type = 'rebate'::transaction_type THEN net_amount
+                        ELSE 0
+                    END), 0
+                )
+                FROM transactions
+                WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type)
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                "#
+            )
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get net fees today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let deposits_count: i64 = sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*)::bigint
+                FROM transactions
+                WHERE type = 'deposit'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                "#
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get deposits count today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let deposits_amount: Option<Decimal> = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(SUM(net_amount), 0)
+                FROM transactions
+                WHERE type = 'deposit'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                "#
+            )
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get deposits amount today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let withdrawals_count: i64 = sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*)::bigint
+                FROM transactions
+                WHERE type = 'withdrawal'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                "#
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get withdrawals count today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let withdrawals_amount: Option<Decimal> = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(SUM(net_amount), 0)
+                FROM transactions
+                WHERE type = 'withdrawal'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                "#
+            )
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get withdrawals amount today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            (
+                total_balances.unwrap_or(Decimal::ZERO),
+                pending_deposits,
+                pending_withdrawals,
+                net_fees_today.unwrap_or(Decimal::ZERO),
+                deposits_count,
+                deposits_amount.unwrap_or(Decimal::ZERO),
+                withdrawals_count,
+                withdrawals_amount.unwrap_or(Decimal::ZERO),
+            )
+        }
+        Some(ids) => {
+            let total_balances: Option<Decimal> = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(available_balance), 0) FROM wallets WHERE user_id = ANY($1)"
+            )
+            .bind(ids)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get total balances: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let pending_deposits: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'pending'::transaction_status AND user_id = ANY($1)"
+            )
+            .bind(ids)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get pending deposits: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let pending_withdrawals: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'pending'::transaction_status AND user_id = ANY($1)"
+            )
+            .bind(ids)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get pending withdrawals: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let net_fees_today: Option<Decimal> = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(
+                    SUM(CASE 
+                        WHEN type = 'fee'::transaction_type THEN -net_amount
+                        WHEN type = 'rebate'::transaction_type THEN net_amount
+                        ELSE 0
+                    END), 0
+                )
+                FROM transactions
+                WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type)
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                AND user_id = ANY($1)
+                "#
+            )
+            .bind(ids)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get net fees today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let deposits_count: i64 = sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*)::bigint
+                FROM transactions
+                WHERE type = 'deposit'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                AND user_id = ANY($1)
+                "#
+            )
+            .bind(ids)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get deposits count today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let deposits_amount: Option<Decimal> = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(SUM(net_amount), 0)
+                FROM transactions
+                WHERE type = 'deposit'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                AND user_id = ANY($1)
+                "#
+            )
+            .bind(ids)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get deposits amount today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let withdrawals_count: i64 = sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*)::bigint
+                FROM transactions
+                WHERE type = 'withdrawal'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                AND user_id = ANY($1)
+                "#
+            )
+            .bind(ids)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get withdrawals count today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let withdrawals_amount: Option<Decimal> = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(SUM(net_amount), 0)
+                FROM transactions
+                WHERE type = 'withdrawal'::transaction_type
+                AND status = 'completed'::transaction_status
+                AND DATE(created_at) = CURRENT_DATE
+                AND user_id = ANY($1)
+                "#
+            )
+            .bind(ids)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to get withdrawals amount today: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            (
+                total_balances.unwrap_or(Decimal::ZERO),
+                pending_deposits,
+                pending_withdrawals,
+                net_fees_today.unwrap_or(Decimal::ZERO),
+                deposits_count,
+                deposits_amount.unwrap_or(Decimal::ZERO),
+                withdrawals_count,
+                withdrawals_amount.unwrap_or(Decimal::ZERO),
+            )
+        }
+    };
 
     Ok(Json(FinanceOverviewResponse {
-        total_balances: total_balances.unwrap_or(Decimal::ZERO),
+        total_balances,
         pending_deposits,
         pending_withdrawals,
-        net_fees_today: net_fees_today.unwrap_or(Decimal::ZERO),
+        net_fees_today,
         deposits_today: DepositWithdrawalStats {
             count: deposits_count,
-            amount: deposits_amount.unwrap_or(Decimal::ZERO),
+            amount: deposits_amount,
         },
         withdrawals_today: DepositWithdrawalStats {
             count: withdrawals_count,
-            amount: withdrawals_amount.unwrap_or(Decimal::ZERO),
+            amount: withdrawals_amount,
         },
     }))
 }
@@ -583,36 +736,81 @@ async fn list_transactions(
         .await
         .map_err(|e| e.status)?;
 
-    // Fetch all transactions (with a reasonable limit) and filter in memory
-    // This can be optimized later with proper SQL query building
-    let transactions = sqlx::query_as::<_, TransactionResponse>(
-        r#"
-        SELECT 
-            t.id,
-            t.user_id,
-            u.email as user_email,
-            u.first_name as user_first_name,
-            u.last_name as user_last_name,
-            t.type::text as type,
-            t.amount,
-            t.currency,
-            t.fee,
-            t.net_amount,
-            t.method::text as method,
-            t.status::text as status,
-            t.reference,
-            t.method_details,
-            t.admin_notes,
-            t.rejection_reason,
-            t.created_at,
-            t.updated_at,
-            t.completed_at
-        FROM transactions t
-        JOIN users u ON t.user_id = u.id
-        ORDER BY t.created_at DESC
-        LIMIT 1000
-        "#
-    )
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| status)?;
+
+    // Admin/manager with no allowed users → empty list
+    if let Some(ref ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(Json(vec![]));
+        }
+    }
+
+    let transactions = match &allowed_user_ids {
+        None => {
+            sqlx::query_as::<_, TransactionResponse>(
+                r#"
+                SELECT 
+                    t.id,
+                    t.user_id,
+                    u.email as user_email,
+                    u.first_name as user_first_name,
+                    u.last_name as user_last_name,
+                    t.type::text as type,
+                    t.amount,
+                    t.currency,
+                    t.fee,
+                    t.net_amount,
+                    t.method::text as method,
+                    t.status::text as status,
+                    t.reference,
+                    t.method_details,
+                    t.admin_notes,
+                    t.rejection_reason,
+                    t.created_at,
+                    t.updated_at,
+                    t.completed_at
+                FROM transactions t
+                JOIN users u ON t.user_id = u.id
+                ORDER BY t.created_at DESC
+                LIMIT 1000
+                "#
+            )
+        }
+        Some(ids) => {
+            sqlx::query_as::<_, TransactionResponse>(
+                r#"
+                SELECT 
+                    t.id,
+                    t.user_id,
+                    u.email as user_email,
+                    u.first_name as user_first_name,
+                    u.last_name as user_last_name,
+                    t.type::text as type,
+                    t.amount,
+                    t.currency,
+                    t.fee,
+                    t.net_amount,
+                    t.method::text as method,
+                    t.status::text as status,
+                    t.reference,
+                    t.method_details,
+                    t.admin_notes,
+                    t.rejection_reason,
+                    t.created_at,
+                    t.updated_at,
+                    t.completed_at
+                FROM transactions t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.user_id = ANY($1)
+                ORDER BY t.created_at DESC
+                LIMIT 1000
+                "#
+            )
+            .bind(ids)
+        }
+    }
     .fetch_all(&pool)
     .await
     .map_err(|e| {
@@ -688,25 +886,62 @@ async fn list_wallets(
         .await
         .map_err(|e| e.status)?;
 
-    let wallets = sqlx::query_as::<_, WalletResponse>(
-        r#"
-        SELECT 
-            w.id,
-            w.user_id,
-            u.email as user_email,
-            u.first_name as user_first_name,
-            u.last_name as user_last_name,
-            w.wallet_type::text as wallet_type,
-            w.currency,
-            w.available_balance as available_balance,
-            w.locked_balance as locked_balance,
-            (w.available_balance + w.locked_balance) as equity,
-            w.updated_at
-        FROM wallets w
-        JOIN users u ON w.user_id = u.id
-        ORDER BY w.updated_at DESC
-        "#
-    )
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| status)?;
+
+    if let Some(ref ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(Json(vec![]));
+        }
+    }
+
+    let wallets = match &allowed_user_ids {
+        None => {
+            sqlx::query_as::<_, WalletResponse>(
+                r#"
+                SELECT 
+                    w.id,
+                    w.user_id,
+                    u.email as user_email,
+                    u.first_name as user_first_name,
+                    u.last_name as user_last_name,
+                    w.wallet_type::text as wallet_type,
+                    w.currency,
+                    w.available_balance as available_balance,
+                    w.locked_balance as locked_balance,
+                    (w.available_balance + w.locked_balance) as equity,
+                    w.updated_at
+                FROM wallets w
+                JOIN users u ON w.user_id = u.id
+                ORDER BY w.updated_at DESC
+                "#
+            )
+        }
+        Some(ids) => {
+            sqlx::query_as::<_, WalletResponse>(
+                r#"
+                SELECT 
+                    w.id,
+                    w.user_id,
+                    u.email as user_email,
+                    u.first_name as user_first_name,
+                    u.last_name as user_last_name,
+                    w.wallet_type::text as wallet_type,
+                    w.currency,
+                    w.available_balance as available_balance,
+                    w.locked_balance as locked_balance,
+                    (w.available_balance + w.locked_balance) as equity,
+                    w.updated_at
+                FROM wallets w
+                JOIN users u ON w.user_id = u.id
+                WHERE w.user_id = ANY($1)
+                ORDER BY w.updated_at DESC
+                "#
+            )
+            .bind(ids)
+        }
+    }
     .fetch_all(&pool)
     .await
     .map_err(|e| {

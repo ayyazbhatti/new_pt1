@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::routes::deposits::DepositsState;
+use crate::routes::scoped_access;
 use crate::utils::jwt::Claims;
 
 // ---------- User: my chat ----------
@@ -180,13 +181,13 @@ pub struct PostAdminChatRequest {
     pub message: String,
 }
 
-/// Allow if role is admin or user has the given permission from their permission profile.
+/// Allow if role is admin/super_admin or user has the given permission from their permission profile.
 async fn check_support_permission(
     pool: &PgPool,
     claims: &Claims,
     permission: &str,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role == "admin" {
+    if claims.role == "admin" || claims.role == "super_admin" {
         return Ok(());
     }
     let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
@@ -236,6 +237,21 @@ async fn get_admin_conversations(
 ) -> Result<Json<Vec<ConversationSummary>>, (StatusCode, Json<serde_json::Value>)> {
     check_support_permission(&pool, &claims, "support:view").await?;
 
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| {
+            (
+                status,
+                Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } })),
+            )
+        })?;
+
+    if let Some(ref ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(Json(vec![]));
+        }
+    }
+
     #[derive(sqlx::FromRow)]
     struct Row {
         user_id: Uuid,
@@ -246,18 +262,38 @@ async fn get_admin_conversations(
         last_created_at: DateTime<Utc>,
     }
 
-    let rows = sqlx::query_as::<_, Row>(
-        r#"
-        SELECT u.id AS user_id, u.first_name, u.last_name, u.email, sm.body AS last_body, sm.created_at AS last_created_at
-        FROM (
-            SELECT DISTINCT ON (user_id) user_id, body, created_at
-            FROM support_messages
-            ORDER BY user_id, created_at DESC
-        ) sm
-        JOIN users u ON u.id = sm.user_id
-        ORDER BY sm.created_at DESC
-        "#,
-    )
+    let rows = match &allowed_user_ids {
+        None => {
+            sqlx::query_as::<_, Row>(
+                r#"
+                SELECT u.id AS user_id, u.first_name, u.last_name, u.email, sm.body AS last_body, sm.created_at AS last_created_at
+                FROM (
+                    SELECT DISTINCT ON (user_id) user_id, body, created_at
+                    FROM support_messages
+                    ORDER BY user_id, created_at DESC
+                ) sm
+                JOIN users u ON u.id = sm.user_id
+                ORDER BY sm.created_at DESC
+                "#,
+            )
+        }
+        Some(ids) => {
+            sqlx::query_as::<_, Row>(
+                r#"
+                SELECT u.id AS user_id, u.first_name, u.last_name, u.email, sm.body AS last_body, sm.created_at AS last_created_at
+                FROM (
+                    SELECT DISTINCT ON (user_id) user_id, body, created_at
+                    FROM support_messages
+                    WHERE user_id = ANY($1)
+                    ORDER BY user_id, created_at DESC
+                ) sm
+                JOIN users u ON u.id = sm.user_id
+                ORDER BY sm.created_at DESC
+                "#,
+            )
+            .bind(ids)
+        }
+    }
     .fetch_all(&pool)
     .await
     .map_err(|e| {
@@ -288,6 +324,23 @@ async fn get_admin_conversation_messages(
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<Vec<ChatMessageRow>>, (StatusCode, Json<serde_json::Value>)> {
     check_support_permission(&pool, &claims, "support:view").await?;
+
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| {
+            (
+                status,
+                Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } })),
+            )
+        })?;
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this conversation" } })),
+            ));
+        }
+    }
 
     let rows = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, String, DateTime<Utc>)>(
         r#"
@@ -330,6 +383,24 @@ async fn post_admin_message(
     Json(body): Json<PostAdminChatRequest>,
 ) -> Result<Json<ChatMessageRow>, (StatusCode, Json<serde_json::Value>)> {
     check_support_permission(&pool, &claims, "support:reply").await?;
+
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| {
+            (
+                status,
+                Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } })),
+            )
+        })?;
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&user_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "Access denied to this conversation" } })),
+            ));
+        }
+    }
+
     let sender_id = claims.sub;
     let message = body.message.trim();
     if message.is_empty() {

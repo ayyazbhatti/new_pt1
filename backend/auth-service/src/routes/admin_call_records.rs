@@ -14,14 +14,15 @@ use uuid::Uuid;
 
 use tracing::error;
 use crate::middleware::auth_middleware;
+use crate::routes::scoped_access;
 use crate::utils::jwt::Claims;
 
-/// Allow if role is admin or user has call:view from their permission profile.
+/// Allow if role is admin/super_admin or user has call:view from their permission profile.
 async fn check_call_permission(
     pool: &PgPool,
     claims: &Claims,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role == "admin" {
+    if claims.role == "admin" || claims.role == "super_admin" {
         return Ok(());
     }
     let profile_id: Option<Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
@@ -110,6 +111,26 @@ async fn list_call_records(
 ) -> Result<Json<ListCallRecordsResponse>, (StatusCode, Json<serde_json::Value>)> {
     check_call_permission(&pool, &claims).await?;
 
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, _)| {
+            (
+                status,
+                Json(serde_json::json!({ "error": { "code": "SCOPE_FAILED", "message": "Failed to resolve scope" } })),
+            )
+        })?;
+
+    if let Some(ref ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(Json(ListCallRecordsResponse {
+                records: vec![],
+                total: 0,
+                limit: q.limit.unwrap_or(50).clamp(1, 100),
+                offset: q.offset.unwrap_or(0).max(0),
+            }));
+        }
+    }
+
     let limit = q.limit.unwrap_or(50).clamp(1, 100);
     let offset = q.offset.unwrap_or(0).max(0);
 
@@ -125,8 +146,7 @@ async fn list_call_records(
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
         .map(|d| Utc.from_utc_datetime(&d.and_hms_opt(23, 59, 59).unwrap()));
 
-    // List with optional filters
-    let rows = sqlx::query_as::<_, (
+    type Row = (
         Uuid,
         Uuid,
         Uuid,
@@ -143,64 +163,134 @@ async fn list_call_records(
         Option<String>,
         Option<String>,
         Option<String>,
-    )>(
-        r#"
-        SELECT r.id, r.call_id, r.admin_user_id, r.user_id, r.status,
-               r.initiated_at, r.answered_at, r.ended_at, r.duration_seconds, r.ended_by,
-               r.admin_display_name, r.created_at, r.updated_at,
-               a.email AS admin_email, u.email AS user_email,
-               COALESCE(TRIM(u.first_name || ' ' || u.last_name), u.email) AS user_display_name
-        FROM admin_call_records r
-        LEFT JOIN users a ON a.id = r.admin_user_id
-        LEFT JOIN users u ON u.id = r.user_id
-        WHERE ($1::uuid IS NULL OR r.admin_user_id = $1)
-          AND ($2::uuid IS NULL OR r.user_id = $2)
-          AND ($3::text IS NULL OR r.status = $3)
-          AND ($4::timestamptz IS NULL OR r.initiated_at >= $4)
-          AND ($5::timestamptz IS NULL OR r.initiated_at <= $5)
-        ORDER BY r.initiated_at DESC
-        LIMIT $6 OFFSET $7
-        "#,
-    )
-    .bind(q.admin_user_id)
-    .bind(q.user_id)
-    .bind(q.status.as_deref())
-    .bind(from_ts)
-    .bind(to_ts)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
+    );
 
-    let total_count: (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(*) FROM admin_call_records r
-        WHERE ($1::uuid IS NULL OR r.admin_user_id = $1)
-          AND ($2::uuid IS NULL OR r.user_id = $2)
-          AND ($3::text IS NULL OR r.status = $3)
-          AND ($4::timestamptz IS NULL OR r.initiated_at >= $4)
-          AND ($5::timestamptz IS NULL OR r.initiated_at <= $5)
-        "#,
-    )
-    .bind(q.admin_user_id)
-    .bind(q.user_id)
-    .bind(q.status.as_deref())
-    .bind(from_ts)
-    .bind(to_ts)
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
+    let (rows, total_count) = match &allowed_user_ids {
+        None => {
+            let rows = sqlx::query_as::<_, Row>(
+                r#"
+                SELECT r.id, r.call_id, r.admin_user_id, r.user_id, r.status,
+                       r.initiated_at, r.answered_at, r.ended_at, r.duration_seconds, r.ended_by,
+                       r.admin_display_name, r.created_at, r.updated_at,
+                       a.email AS admin_email, u.email AS user_email,
+                       COALESCE(TRIM(u.first_name || ' ' || u.last_name), u.email) AS user_display_name
+                FROM admin_call_records r
+                LEFT JOIN users a ON a.id = r.admin_user_id
+                LEFT JOIN users u ON u.id = r.user_id
+                WHERE ($1::uuid IS NULL OR r.admin_user_id = $1)
+                  AND ($2::uuid IS NULL OR r.user_id = $2)
+                  AND ($3::text IS NULL OR r.status = $3)
+                  AND ($4::timestamptz IS NULL OR r.initiated_at >= $4)
+                  AND ($5::timestamptz IS NULL OR r.initiated_at <= $5)
+                ORDER BY r.initiated_at DESC
+                LIMIT $6 OFFSET $7
+                "#,
+            )
+            .bind(q.admin_user_id)
+            .bind(q.user_id)
+            .bind(q.status.as_deref())
+            .bind(from_ts)
+            .bind(to_ts)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+            })?;
+            let total_count: (i64,) = sqlx::query_as(
+                r#"
+                SELECT COUNT(*) FROM admin_call_records r
+                WHERE ($1::uuid IS NULL OR r.admin_user_id = $1)
+                  AND ($2::uuid IS NULL OR r.user_id = $2)
+                  AND ($3::text IS NULL OR r.status = $3)
+                  AND ($4::timestamptz IS NULL OR r.initiated_at >= $4)
+                  AND ($5::timestamptz IS NULL OR r.initiated_at <= $5)
+                "#,
+            )
+            .bind(q.admin_user_id)
+            .bind(q.user_id)
+            .bind(q.status.as_deref())
+            .bind(from_ts)
+            .bind(to_ts)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+            })?;
+            (rows, total_count.0)
+        }
+        Some(ids) => {
+            let rows = sqlx::query_as::<_, Row>(
+                r#"
+                SELECT r.id, r.call_id, r.admin_user_id, r.user_id, r.status,
+                       r.initiated_at, r.answered_at, r.ended_at, r.duration_seconds, r.ended_by,
+                       r.admin_display_name, r.created_at, r.updated_at,
+                       a.email AS admin_email, u.email AS user_email,
+                       COALESCE(TRIM(u.first_name || ' ' || u.last_name), u.email) AS user_display_name
+                FROM admin_call_records r
+                LEFT JOIN users a ON a.id = r.admin_user_id
+                LEFT JOIN users u ON u.id = r.user_id
+                WHERE ($1::uuid IS NULL OR r.admin_user_id = $1)
+                  AND ($2::uuid IS NULL OR r.user_id = $2)
+                  AND ($3::text IS NULL OR r.status = $3)
+                  AND ($4::timestamptz IS NULL OR r.initiated_at >= $4)
+                  AND ($5::timestamptz IS NULL OR r.initiated_at <= $5)
+                  AND r.user_id = ANY($6)
+                ORDER BY r.initiated_at DESC
+                LIMIT $7 OFFSET $8
+                "#,
+            )
+            .bind(q.admin_user_id)
+            .bind(q.user_id)
+            .bind(q.status.as_deref())
+            .bind(from_ts)
+            .bind(to_ts)
+            .bind(ids)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+            })?;
+            let total_count: (i64,) = sqlx::query_as(
+                r#"
+                SELECT COUNT(*) FROM admin_call_records r
+                WHERE ($1::uuid IS NULL OR r.admin_user_id = $1)
+                  AND ($2::uuid IS NULL OR r.user_id = $2)
+                  AND ($3::text IS NULL OR r.status = $3)
+                  AND ($4::timestamptz IS NULL OR r.initiated_at >= $4)
+                  AND ($5::timestamptz IS NULL OR r.initiated_at <= $5)
+                  AND r.user_id = ANY($6)
+                "#,
+            )
+            .bind(q.admin_user_id)
+            .bind(q.user_id)
+            .bind(q.status.as_deref())
+            .bind(from_ts)
+            .bind(to_ts)
+            .bind(ids)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+            })?;
+            (rows, total_count.0)
+        }
+    };
 
     let records: Vec<CallRecordRow> = rows
         .into_iter()
@@ -245,7 +335,7 @@ async fn list_call_records(
 
     Ok(Json(ListCallRecordsResponse {
         records,
-        total: total_count.0,
+        total: total_count,
         limit,
         offset,
     }))

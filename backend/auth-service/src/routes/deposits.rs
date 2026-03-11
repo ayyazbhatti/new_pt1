@@ -28,6 +28,7 @@ use tokio::sync::Mutex;
 pub type PriceOverrides = HashMap<(String, String), (Decimal, Decimal)>;
 
 use crate::routes::user_preferences;
+use crate::routes::scoped_access;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
@@ -2695,25 +2696,79 @@ pub struct ListNotificationsResponse {
 
 async fn get_notifications(
     State(pool): State<PgPool>,
-    Extension(deposits_state): Extension<DepositsState>,
+    Extension(_deposits_state): Extension<DepositsState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<ListNotificationsResponse>, StatusCode> {
     let user_id = claims.sub;
 
-    let rows = match sqlx::query(
-        r#"
-        SELECT id, kind, title, message, read, created_at, meta
-        FROM notifications
-        WHERE user_id = $1
-        ORDER BY created_at DESC
-        LIMIT 100
-        "#,
-    )
-    .bind(user_id)
-    .fetch_all(&pool)
-    .await
-    {
-        Ok(rows) => rows,
+    let allowed_user_ids = match scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims).await {
+        Ok(ids) => ids,
+        Err(_) => {
+            warn!("Notifications: failed to resolve scope, returning empty list");
+            return Ok(Json(ListNotificationsResponse {
+                items: vec![],
+                unread_count: 0,
+            }));
+        }
+    };
+
+    let rows = match &allowed_user_ids {
+        None => {
+            // Super admin: all notifications addressed to me
+            sqlx::query(
+                r#"
+                SELECT id, kind, title, message, read, created_at, meta
+                FROM notifications
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT 100
+                "#,
+            )
+            .bind(user_id)
+            .fetch_all(&pool)
+            .await
+        }
+        Some(ids) if ids.is_empty() => {
+            // Scoped admin with no users: only notifications that don't reference a specific user
+            sqlx::query(
+                r#"
+                SELECT id, kind, title, message, read, created_at, meta
+                FROM notifications
+                WHERE user_id = $1
+                  AND (meta->>'targetUserId' IS NULL AND meta->>'userId' IS NULL)
+                ORDER BY created_at DESC
+                LIMIT 100
+                "#,
+            )
+            .bind(user_id)
+            .fetch_all(&pool)
+            .await
+        }
+        Some(ids) => {
+            // Scoped admin: notifications about my users or without a subject user
+            sqlx::query(
+                r#"
+                SELECT id, kind, title, message, read, created_at, meta
+                FROM notifications
+                WHERE user_id = $1
+                  AND (
+                    (meta->>'targetUserId' IS NULL AND meta->>'userId' IS NULL)
+                    OR (meta->>'targetUserId' IS NOT NULL AND (meta->>'targetUserId')::uuid = ANY($2))
+                    OR (meta->>'userId' IS NOT NULL AND (meta->>'userId')::uuid = ANY($2))
+                  )
+                ORDER BY created_at DESC
+                LIMIT 100
+                "#,
+            )
+            .bind(user_id)
+            .bind(ids)
+            .fetch_all(&pool)
+            .await
+        }
+    };
+
+    let rows = match rows {
+        Ok(r) => r,
         Err(e) => {
             warn!("Notifications fetch failed (table may not exist): {}, returning empty list", e);
             vec![]

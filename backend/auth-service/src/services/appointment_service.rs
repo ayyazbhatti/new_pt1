@@ -246,10 +246,18 @@ pub async fn list_for_user(
 }
 
 /// Admin list with optional search, filters, pagination.
+/// When allowed_user_ids is Some(empty), returns (vec![], 0). When Some(ids), only appointments for those users.
 pub async fn list_admin(
     pool: &sqlx::PgPool,
     params: &ListAppointmentsParams,
+    allowed_user_ids: Option<&[Uuid]>,
 ) -> Result<(Vec<AppointmentRow>, i64), sqlx::Error> {
+    if let Some(ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok((vec![], 0));
+        }
+    }
+
     let limit = clamp_limit(params.limit);
     let offset = clamp_offset(params.offset);
 
@@ -268,6 +276,10 @@ pub async fn list_admin(
     "#
     .to_string();
     let mut bind_pos: u32 = 1;
+    if allowed_user_ids.is_some() {
+        q_str.push_str(&format!(" AND a.user_id = ANY(${})", bind_pos));
+        bind_pos += 1;
+    }
     if params.search.as_deref().is_some_and(|s| !s.is_empty()) {
         let pattern = format!("%{}%", params.search.as_ref().unwrap().to_lowercase());
         q_str.push_str(&format!(
@@ -306,11 +318,14 @@ pub async fn list_admin(
     let count_str = r#"SELECT COUNT(*) FROM appointments a
         JOIN users u ON u.id = a.user_id
         WHERE 1=1"#.to_string();
-    // Build count with same filters (simplified: we'll do a separate count query with same WHERE)
     let mut count_parts = vec![
         "SELECT COUNT(*) FROM appointments a JOIN users u ON u.id = a.user_id WHERE 1=1".to_string(),
     ];
     let mut cpos = 1u32;
+    if allowed_user_ids.is_some() {
+        count_parts.push(format!(" AND a.user_id = ANY(${})", cpos));
+        cpos += 1;
+    }
     if params.search.as_deref().is_some_and(|s| !s.is_empty()) {
         count_parts.push(format!(
             " AND (LOWER(a.title) LIKE ${} OR LOWER(u.email) LIKE ${} OR LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ${})",
@@ -343,6 +358,9 @@ pub async fn list_admin(
     }
     let count_sql = count_parts.join(" ");
     let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+    if let Some(ids) = allowed_user_ids {
+        count_q = count_q.bind(ids);
+    }
     if let Some(s) = &params.search {
         if !s.is_empty() {
             let p = format!("%{}%", s.to_lowercase());
@@ -378,6 +396,9 @@ pub async fn list_admin(
     let total: i64 = count_q.fetch_one(pool).await?;
 
     let mut q = sqlx::query_as::<_, AppointmentRow>(&q_str);
+    if let Some(ids) = allowed_user_ids {
+        q = q.bind(ids);
+    }
     if let Some(s) = &params.search {
         if !s.is_empty() {
             let p = format!("%{}%", s.to_lowercase());
@@ -436,54 +457,122 @@ pub async fn get_by_id(pool: &sqlx::PgPool, id: Uuid) -> Result<Option<Appointme
 }
 
 /// Single aggregated query for admin stats.
-pub async fn get_stats(pool: &sqlx::PgPool) -> Result<AppointmentStatsRow, sqlx::Error> {
+/// When allowed_user_ids is Some(empty), returns zeroed stats. When Some(ids), only counts those users' appointments.
+pub async fn get_stats(
+    pool: &sqlx::PgPool,
+    allowed_user_ids: Option<&[Uuid]>,
+) -> Result<AppointmentStatsRow, sqlx::Error> {
     let now = Utc::now();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
     let today_end = today_start + chrono::Duration::days(1);
     let week_end = today_end + chrono::Duration::days(7);
 
-    let row = sqlx::query_as::<_, AppointmentStatsRow>(r#"
-        SELECT
-            COUNT(*)::bigint AS total_appointments,
-            COUNT(*) FILTER (WHERE status = 'scheduled')::bigint AS scheduled_appointments,
-            COUNT(*) FILTER (WHERE status = 'confirmed')::bigint AS confirmed_appointments,
-            COUNT(*) FILTER (WHERE status = 'completed')::bigint AS completed_appointments,
-            COUNT(*) FILTER (WHERE status = 'cancelled')::bigint AS cancelled_appointments,
-            COUNT(*) FILTER (WHERE status = 'rescheduled')::bigint AS rescheduled_appointments,
-            COUNT(*) FILTER (WHERE scheduled_at >= $1 AND scheduled_at < $2)::bigint AS today_appointments,
-            COUNT(*) FILTER (WHERE scheduled_at >= $2 AND scheduled_at < $3)::bigint AS upcoming_7_days,
-            COUNT(*) FILTER (WHERE scheduled_at < $1 AND status NOT IN ('completed','cancelled'))::bigint AS overdue_appointments
-        FROM appointments
-    "#)
-        .bind(today_start)
-        .bind(today_end)
-        .bind(week_end)
-        .fetch_one(pool)
-        .await?;
+    if let Some(ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(AppointmentStatsRow {
+                total_appointments: 0,
+                scheduled_appointments: 0,
+                confirmed_appointments: 0,
+                completed_appointments: 0,
+                cancelled_appointments: 0,
+                rescheduled_appointments: 0,
+                today_appointments: 0,
+                upcoming_7_days: 0,
+                overdue_appointments: 0,
+            });
+        }
+    }
+
+    let row = if let Some(ids) = allowed_user_ids {
+        sqlx::query_as::<_, AppointmentStatsRow>(r#"
+            SELECT
+                COUNT(*)::bigint AS total_appointments,
+                COUNT(*) FILTER (WHERE status = 'scheduled')::bigint AS scheduled_appointments,
+                COUNT(*) FILTER (WHERE status = 'confirmed')::bigint AS confirmed_appointments,
+                COUNT(*) FILTER (WHERE status = 'completed')::bigint AS completed_appointments,
+                COUNT(*) FILTER (WHERE status = 'cancelled')::bigint AS cancelled_appointments,
+                COUNT(*) FILTER (WHERE status = 'rescheduled')::bigint AS rescheduled_appointments,
+                COUNT(*) FILTER (WHERE scheduled_at >= $1 AND scheduled_at < $2)::bigint AS today_appointments,
+                COUNT(*) FILTER (WHERE scheduled_at >= $2 AND scheduled_at < $3)::bigint AS upcoming_7_days,
+                COUNT(*) FILTER (WHERE scheduled_at < $1 AND status NOT IN ('completed','cancelled'))::bigint AS overdue_appointments
+            FROM appointments
+            WHERE user_id = ANY($4)
+        "#)
+            .bind(today_start)
+            .bind(today_end)
+            .bind(week_end)
+            .bind(ids)
+            .fetch_one(pool)
+            .await?
+    } else {
+        sqlx::query_as::<_, AppointmentStatsRow>(r#"
+            SELECT
+                COUNT(*)::bigint AS total_appointments,
+                COUNT(*) FILTER (WHERE status = 'scheduled')::bigint AS scheduled_appointments,
+                COUNT(*) FILTER (WHERE status = 'confirmed')::bigint AS confirmed_appointments,
+                COUNT(*) FILTER (WHERE status = 'completed')::bigint AS completed_appointments,
+                COUNT(*) FILTER (WHERE status = 'cancelled')::bigint AS cancelled_appointments,
+                COUNT(*) FILTER (WHERE status = 'rescheduled')::bigint AS rescheduled_appointments,
+                COUNT(*) FILTER (WHERE scheduled_at >= $1 AND scheduled_at < $2)::bigint AS today_appointments,
+                COUNT(*) FILTER (WHERE scheduled_at >= $2 AND scheduled_at < $3)::bigint AS upcoming_7_days,
+                COUNT(*) FILTER (WHERE scheduled_at < $1 AND status NOT IN ('completed','cancelled'))::bigint AS overdue_appointments
+            FROM appointments
+        "#)
+            .bind(today_start)
+            .bind(today_end)
+            .bind(week_end)
+            .fetch_one(pool)
+            .await?
+    };
     Ok(row)
 }
 
 /// Search users by email/name for admin create-appointment typeahead.
+/// When allowed_user_ids is Some(empty), returns []. When Some(ids), only returns users in that set.
 pub async fn search_users(
     pool: &sqlx::PgPool,
     q: &str,
     limit: Option<i64>,
+    allowed_user_ids: Option<&[Uuid]>,
 ) -> Result<Vec<UserSearchRow>, sqlx::Error> {
+    if let Some(ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+    }
     let limit = limit.unwrap_or(SEARCH_USERS_LIMIT).min(SEARCH_USERS_LIMIT).max(1);
     let pattern = format!("%{}%", q.to_lowercase());
-    let rows = sqlx::query_as::<_, UserSearchRow>(r#"
-        SELECT id, email, first_name, last_name,
-               TRIM(CONCAT(COALESCE(first_name,''), ' ', COALESCE(last_name,''))) AS full_name
-        FROM users
-        WHERE LOWER(email) LIKE $1 OR LOWER(COALESCE(first_name,'')) LIKE $2 OR LOWER(COALESCE(last_name,'')) LIKE $2
-        ORDER BY email
-        LIMIT $3
-    "#)
-        .bind(&pattern)
-        .bind(&pattern)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
+    let rows = if let Some(ids) = allowed_user_ids {
+        sqlx::query_as::<_, UserSearchRow>(r#"
+            SELECT id, email, first_name, last_name,
+                   TRIM(CONCAT(COALESCE(first_name,''), ' ', COALESCE(last_name,''))) AS full_name
+            FROM users
+            WHERE (LOWER(email) LIKE $1 OR LOWER(COALESCE(first_name,'')) LIKE $2 OR LOWER(COALESCE(last_name,'')) LIKE $2)
+              AND id = ANY($4)
+            ORDER BY email
+            LIMIT $3
+        "#)
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(limit)
+            .bind(ids)
+            .fetch_all(pool)
+            .await?
+    } else {
+        sqlx::query_as::<_, UserSearchRow>(r#"
+            SELECT id, email, first_name, last_name,
+                   TRIM(CONCAT(COALESCE(first_name,''), ' ', COALESCE(last_name,''))) AS full_name
+            FROM users
+            WHERE LOWER(email) LIKE $1 OR LOWER(COALESCE(first_name,'')) LIKE $2 OR LOWER(COALESCE(last_name,'')) LIKE $2
+            ORDER BY email
+            LIMIT $3
+        "#)
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+    };
     Ok(rows)
 }
 
