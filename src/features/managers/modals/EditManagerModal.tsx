@@ -6,7 +6,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useModalStore } from '@/app/store'
 import { useQuery } from '@tanstack/react-query'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
-import { updateUserRole } from '@/features/adminUsers/api/users.api'
 import type { Manager } from '../types/manager'
 import type { UpdateManagerPayload } from '../api/managers.api'
 import { toast } from '@/shared/components/common'
@@ -58,20 +57,16 @@ export function EditManagerModal({ manager, onSave }: EditManagerModalProps) {
     }
     setIsSubmitting(true)
     try {
-      if (showSuperAdminToggle) {
-        const newRole = isSuperAdmin ? 'super_admin' : 'admin'
-        if (newRole !== manager.role) {
-          await updateUserRole(manager.userId, { role: newRole })
-        }
-      }
+      const newRole = showSuperAdminToggle ? (isSuperAdmin ? 'super_admin' : 'admin') : undefined
       const payload: UpdateManagerPayload = {
         permission_profile_id: profile.id,
         notes: notes.trim() || null,
+        ...(newRole !== undefined && { role: newRole }),
       }
       await onSave?.(payload)
       // Parent closes modal on success
-    } catch {
-      // Error toast handled by parent
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error?.message ?? err?.message ?? 'Failed to save changes')
     } finally {
       setIsSubmitting(false)
     }

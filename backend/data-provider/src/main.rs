@@ -81,6 +81,48 @@ async fn main() -> anyhow::Result<()> {
         *g = ids.into_iter().collect();
         info!("✅ Loaded {} price groups from Redis", g.len());
     }
+    // If no groups at startup (e.g. auth-service not ready yet), retry with backoff so we pick up bootstrap
+    let price_groups_startup = price_groups.clone();
+    let redis_startup = redis.clone();
+    tokio::spawn(async move {
+        let mut delay_secs = 2u64;
+        for _ in 0..5 {
+            let n = price_groups_startup.read().await.len();
+            if n > 0 {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
+            if let Ok(ids) = redis_startup.smembers_price_groups().await {
+                let mut g = price_groups_startup.write().await;
+                *g = ids.into_iter().collect();
+                if !g.is_empty() {
+                    tracing::info!("✅ Loaded {} price groups from Redis (startup retry)", g.len());
+                    break;
+                }
+            }
+            delay_secs = (delay_secs + 3).min(15);
+        }
+    });
+    // Periodic refresh: ensure we always have latest price:groups (survives Redis restart, auth bootstrap order)
+    const PRICE_GROUPS_REFRESH_INTERVAL_SECS: u64 = 30;
+    let price_groups_periodic = price_groups.clone();
+    let redis_periodic = redis.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(PRICE_GROUPS_REFRESH_INTERVAL_SECS));
+        interval.tick().await; // first tick completes immediately, skip so we don't double-read at startup
+        loop {
+            interval.tick().await;
+            if let Ok(ids) = redis_periodic.smembers_price_groups().await {
+                let mut g = price_groups_periodic.write().await;
+                let new_set: HashSet<String> = ids.into_iter().collect();
+                let changed = *g != new_set;
+                *g = new_set;
+                if changed {
+                    tracing::debug!("Refreshed price groups from Redis: {} groups", g.len());
+                }
+            }
+        }
+    });
     let price_groups_for_markup = price_groups.clone();
     let redis_for_markup = redis.clone();
     tokio::spawn(async move {
@@ -94,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
                     if let Ok(ids) = redis_for_markup.smembers_price_groups().await {
                         let mut g = price_groups_for_markup.write().await;
                         *g = ids.into_iter().collect();
-                        tracing::debug!("Refreshed price groups from Redis: {} groups", g.len());
+                        tracing::debug!("Refreshed price groups from Redis (markup:update): {} groups", g.len());
                     }
                 }
             }

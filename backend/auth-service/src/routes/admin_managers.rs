@@ -60,6 +60,8 @@ pub struct UpdateManagerRequest {
     pub permission_profile_id: Option<Uuid>,
     pub notes: Option<Option<String>>,
     pub status: Option<String>,
+    /// When provided and target user is already admin or super_admin: set user role to this ("admin" or "super_admin").
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -650,18 +652,52 @@ async fn update_manager(
         )
     })?;
 
-    // When active: set role to 'manager' and permission_profile_id so they can access admin panel (never overwrite 'admin').
-    // When disabled: set role to 'user' and clear permission_profile_id (never overwrite 'admin').
-    let (role_sql, user_profile_value) = if new_status == "active" {
-        ("CASE WHEN role IN ('admin', 'super_admin') THEN role ELSE 'manager' END", Some(new_profile_id))
+    let current_user_role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    let is_admin_or_super = current_user_role == "admin" || current_user_role == "super_admin";
+    let new_role: String = if let Some(ref r) = payload.role {
+        let r = r.trim().to_lowercase();
+        if (r == "admin" || r == "super_admin") && is_admin_or_super {
+            r
+        } else {
+            current_user_role.clone()
+        }
+    } else if new_status == "active" {
+        if is_admin_or_super {
+            current_user_role
+        } else {
+            "manager".to_string()
+        }
     } else {
-        ("CASE WHEN role IN ('admin', 'super_admin') THEN role ELSE 'user' END", None)
+        if is_admin_or_super {
+            current_user_role
+        } else {
+            "user".to_string()
+        }
     };
-    let update_sql = format!(
-        "UPDATE users SET role = {}, permission_profile_id = $1, updated_at = NOW() WHERE id = $2",
-        role_sql
-    );
-    sqlx::query(&update_sql)
+
+    let user_profile_value = if new_status == "active" {
+        Some(new_profile_id)
+    } else {
+        None
+    };
+
+    sqlx::query("UPDATE users SET role = $1, permission_profile_id = $2, updated_at = NOW() WHERE id = $3")
+        .bind(&new_role)
         .bind(user_profile_value)
         .bind(user_id)
         .execute(&pool)

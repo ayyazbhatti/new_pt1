@@ -328,15 +328,27 @@ impl AdminMarkupService {
     }
 
     /// Bootstrap Redis for per-group price stream: populate price:groups and symbol:markup:* from DB.
-    /// Writes profile default bid/ask for every symbol; symbol_markup_overrides override per-symbol.
+    /// All user_groups are added to price:groups so every group receives ticks (place_order can resolve price).
+    /// Groups with default_price_profile_id get symbol:markup:*; others get raw prices from data-provider.
     /// Call once at auth-service startup.
     pub async fn bootstrap_price_groups_redis(&self, redis_url: &str) -> Result<()> {
+        // All groups: ensure every group is in price:groups so data-provider publishes ticks for them
+        #[derive(sqlx::FromRow)]
+        struct GroupRow {
+            group_id: Uuid,
+        }
+        let all_groups: Vec<GroupRow> = sqlx::query_as::<_, GroupRow>(
+            "SELECT id as group_id FROM user_groups",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
         #[derive(sqlx::FromRow)]
         struct Row {
             group_id: Uuid,
             profile_id: Uuid,
         }
-        let groups: Vec<Row> = sqlx::query_as::<_, Row>(
+        let groups_with_profile: Vec<Row> = sqlx::query_as::<_, Row>(
             r#"
             SELECT id as group_id, default_price_profile_id as profile_id
             FROM user_groups
@@ -350,11 +362,14 @@ impl AdminMarkupService {
         let client = redis::Client::open(redis_url)?;
         let mut conn = client.get_connection()?;
 
-        for row in &groups {
+        for row in &all_groups {
             let _: Result<(), _> = redis::cmd("SADD")
                 .arg("price:groups")
                 .arg(row.group_id.to_string())
                 .query(&mut conn);
+        }
+
+        for row in &groups_with_profile {
 
             let profile = self.get_profile_by_id(row.profile_id).await.ok();
             let (default_bid, default_ask) = profile
@@ -402,6 +417,44 @@ impl AdminMarkupService {
             .arg("bootstrap")
             .query(&mut conn);
 
+        Ok(())
+    }
+
+    /// Sync price:groups set in Redis from DB. Includes all user_groups so every group receives ticks.
+    /// Call periodically so that after Redis restart, groups are repopulated without restarting auth-service.
+    pub async fn sync_price_groups_set(&self, redis_url: &str) -> Result<()> {
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            group_id: Uuid,
+        }
+        let groups: Vec<Row> = sqlx::query_as::<_, Row>(
+            "SELECT id as group_id FROM user_groups",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let db_ids: std::collections::HashSet<String> = groups.iter().map(|r| r.group_id.to_string()).collect();
+        if db_ids.is_empty() {
+            return Ok(());
+        }
+
+        let client = redis::Client::open(redis_url)?;
+        let mut conn = client.get_connection()?;
+        let redis_ids: Vec<String> = redis::cmd("SMEMBERS").arg("price:groups").query(&mut conn)?;
+        let redis_set: std::collections::HashSet<String> = redis_ids.into_iter().collect();
+        let missing: Vec<&String> = db_ids.iter().filter(|id| !redis_set.contains(*id)).collect();
+        let n = missing.len();
+        if n == 0 {
+            return Ok(());
+        }
+        for id in &missing {
+            let _: Result<(), _> = redis::cmd("SADD").arg("price:groups").arg(*id).query(&mut conn);
+        }
+        let _: Result<(), _> = redis::cmd("PUBLISH")
+            .arg("markup:update")
+            .arg("sync")
+            .query(&mut conn);
+        tracing::debug!("Synced {} group(s) to price:groups", n);
         Ok(())
     }
 

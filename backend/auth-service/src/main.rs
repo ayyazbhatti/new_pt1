@@ -89,6 +89,20 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::info!("Redis markup bootstrap completed");
     }
+    // Periodic sync of price:groups from DB so Redis restarts are recovered without restarting auth-service
+    let pool_sync = pool.clone();
+    let redis_url_sync = redis_url.clone();
+    tokio::spawn(async move {
+        let service = services::admin_markup_service::AdminMarkupService::new(pool_sync);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await; // skip immediate first tick
+        loop {
+            interval.tick().await;
+            if let Err(e) = service.sync_price_groups_set(&redis_url_sync).await {
+                tracing::warn!("price:groups sync failed: {}", e);
+            }
+        }
+    });
 
     // Connect to NATS (try to connect, but don't fail if unavailable in dev)
     tracing::info!("Connecting to NATS at {}", nats_url);

@@ -78,6 +78,8 @@ export interface UpdateManagerPayload {
   permission_profile_id?: string
   notes?: string | null
   status?: 'active' | 'disabled'
+  /** When editing admin/super_admin: set to 'admin' or 'super_admin' to toggle. */
+  role?: 'admin' | 'super_admin'
 }
 
 export async function updateManager(id: string, payload: UpdateManagerPayload): Promise<Manager> {

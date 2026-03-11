@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::utils::permission_check;
+use crate::routes::scoped_access;
 
 #[derive(Clone)]
 pub struct AdminTradingState {
@@ -207,10 +208,14 @@ async fn list_admin_orders(
         .await
         .map_err(permission_denied_to_response)?;
 
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, Json(se))| (status, Json(ErrorResponse { error: ErrorDetail { code: se.error.code, message: se.error.message } })))?;
+
     let limit = params.limit.unwrap_or(100).min(1000);
     let offset = params.cursor.and_then(|c| c.parse::<i64>().ok()).unwrap_or(0);
 
-    // Use a single query with COALESCE for optional filters
+    // Use a single query with COALESCE for optional filters. When allowed_user_ids is Some(ids), restrict to those users.
     let rows = sqlx::query(
         r#"
         SELECT 
@@ -248,6 +253,7 @@ async fn list_admin_orders(
                 u.first_name ILIKE $5 OR 
                 u.last_name ILIKE $5
             ))
+            AND ($8::uuid[] IS NULL OR o.user_id = ANY($8))
         ORDER BY o.created_at DESC
         LIMIT $6 OFFSET $7
         "#
@@ -259,6 +265,7 @@ async fn list_admin_orders(
     .bind(params.search.as_ref().map(|s| format!("%{}%", s)))
     .bind(limit)
     .bind(offset)
+    .bind(allowed_user_ids.as_deref())
     .fetch_all(&pool)
     .await
         .map_err(|e| {

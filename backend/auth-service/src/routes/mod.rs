@@ -25,4 +25,5 @@ pub mod appointments;
 pub mod user_preferences;
 pub mod admin_appointments;
 pub mod promotions;
+pub mod scoped_access;
 

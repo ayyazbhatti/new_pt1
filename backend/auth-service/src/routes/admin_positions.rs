@@ -17,6 +17,7 @@ use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::utils::permission_check;
 use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ErrorResponse, ErrorDetail};
+use crate::routes::scoped_access;
 
 const POS_BY_ID_PREFIX: &str = "pos:by_id:";
 
@@ -41,6 +42,10 @@ async fn list_admin_positions(
     permission_check::check_permission(&pool, &claims, "trading:view")
         .await
         .map_err(permission_denied_to_response)?;
+
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
+        .await
+        .map_err(|(status, Json(se))| (status, Json(ErrorResponse { error: ErrorDetail { code: se.error.code, message: se.error.message } })))?;
 
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
@@ -90,6 +95,15 @@ async fn list_admin_positions(
         }
         if let Some(ref uid) = params.user_id {
             if pos_data.get("user_id").map(|s| s.as_str()) != Some(uid.as_str()) {
+                continue;
+            }
+        }
+        if let Some(ref allowed) = allowed_user_ids {
+            let pos_user_id = match pos_data.get("user_id").and_then(|s| Uuid::parse_str(s).ok()) {
+                Some(u) => u,
+                None => continue,
+            };
+            if !allowed.contains(&pos_user_id) {
                 continue;
             }
         }
