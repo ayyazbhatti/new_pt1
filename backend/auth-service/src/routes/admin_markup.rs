@@ -120,11 +120,17 @@ fn ensure_percent_markup(markup_type: &str) -> Result<(), (StatusCode, Json<Erro
     Ok(())
 }
 
-/// Resolve markup profile IDs that share at least one tag with the given user (for tag-scoped admin list).
+/// Resolve markup profile IDs the user is allowed to see: profiles that share a tag with the user, plus profiles the user created.
+/// Super_admin should not use this (pass None to list_profiles).
 async fn resolve_allowed_markup_profile_ids_for_user(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    use std::collections::HashSet;
+
+    let mut allowed: HashSet<Uuid> = HashSet::new();
+
+    // 1) Profiles that share at least one tag with the user
     #[derive(sqlx::FromRow)]
     struct TagRow {
         tag_id: Uuid,
@@ -147,17 +153,42 @@ async fn resolve_allowed_markup_profile_ids_for_user(
         )
     })?;
     let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
-    if user_tag_ids.is_empty() {
-        return Ok(vec![]);
+    if !user_tag_ids.is_empty() {
+        #[derive(sqlx::FromRow)]
+        struct ProfileRow {
+            entity_id: Uuid,
+        }
+        let profile_rows = sqlx::query_as::<_, ProfileRow>(
+            "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'markup_profile' AND tag_id = ANY($1)",
+        )
+        .bind(&user_tag_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        for r in profile_rows {
+            allowed.insert(r.entity_id);
+        }
     }
+
+    // 2) Profiles created by this user (admin sees their own created markup profiles even without tag match)
     #[derive(sqlx::FromRow)]
-    struct ProfileRow {
-        entity_id: Uuid,
+    struct IdRow {
+        id: Uuid,
     }
-    let profile_rows = sqlx::query_as::<_, ProfileRow>(
-        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'markup_profile' AND tag_id = ANY($1)",
+    let created_rows = sqlx::query_as::<_, IdRow>(
+        "SELECT id FROM price_stream_profiles WHERE created_by_user_id = $1",
     )
-    .bind(&user_tag_ids)
+    .bind(user_id)
     .fetch_all(pool)
     .await
     .map_err(|e| {
@@ -171,7 +202,11 @@ async fn resolve_allowed_markup_profile_ids_for_user(
             }),
         )
     })?;
-    Ok(profile_rows.into_iter().map(|r| r.entity_id).collect())
+    for r in created_rows {
+        allowed.insert(r.id);
+    }
+
+    Ok(allowed.into_iter().collect())
 }
 
 async fn list_profiles(
@@ -259,13 +294,26 @@ async fn create_profile(
         )
         .await
         .map_err(|e| {
+            let msg = e.to_string();
+            let (status, code, message) = if msg.contains("price_stream_profiles_name_key")
+                || (msg.contains("duplicate key") && msg.contains("name"))
+            {
+                (
+                    StatusCode::CONFLICT,
+                    "PROFILE_NAME_EXISTS".to_string(),
+                    "A markup profile with this name already exists. Please choose a different name.".to_string(),
+                )
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "CREATE_PROFILE_FAILED".to_string(),
+                    msg,
+                )
+            };
             (
-                StatusCode::BAD_REQUEST,
+                status,
                 Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "CREATE_PROFILE_FAILED".to_string(),
-                        message: e.to_string(),
-                    },
+                    error: ErrorDetail { code, message },
                 }),
             )
         })?;

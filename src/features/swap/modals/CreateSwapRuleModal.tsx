@@ -10,7 +10,7 @@ import { useState, useMemo } from 'react'
 import { SwapCalcMode, SwapUnit, WeekendRule } from '../types/swap'
 import { useCreateSwapRule } from '../hooks/useSwapRules'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
-import { useAdminSymbolsList } from '@/features/symbols/hooks/useSymbols'
+import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import type { SwapRule } from '../types/swap'
 
 function assetClassToMarket(
@@ -82,7 +82,10 @@ export function CreateSwapRuleModal() {
 
   const createRule = useCreateSwapRule()
   const { data: groupsData } = useGroupsList()
-  const { data: symbolsData } = useAdminSymbolsList()
+  // Use public /api/symbols (no symbols:view required) and request enough for dropdown
+  const { data: symbolsData, isLoading: symbolsLoading, isError: symbolsError } = useSymbolsList({
+    page_size: 2000,
+  })
   const groups = groupsData?.items ?? []
   const filteredSymbols = useMemo(() => {
     const items = symbolsData?.items ?? []
@@ -160,9 +163,23 @@ export function CreateSwapRuleModal() {
       </div>
       <div>
         <label className="text-sm font-medium text-text mb-2 block">Symbol *</label>
-        <Select value={symbol} onValueChange={(value) => setValue('symbol', value)}>
+        <Select
+          value={symbol}
+          onValueChange={(value) => setValue('symbol', value)}
+          disabled={symbolsLoading || symbolsError}
+        >
           <SelectTrigger>
-            <SelectValue placeholder="Select symbol" />
+            <SelectValue
+              placeholder={
+                symbolsLoading
+                  ? 'Loading symbols...'
+                  : symbolsError
+                    ? 'Failed to load symbols'
+                    : filteredSymbols.length === 0
+                      ? 'No symbols for this market'
+                      : 'Select symbol'
+              }
+            />
           </SelectTrigger>
           <SelectContent>
             {filteredSymbols.map((s) => (

@@ -244,11 +244,17 @@ async fn list_affiliate_users(
     Ok(Json(list))
 }
 
-/// Resolve affiliate scheme (layer) IDs that share at least one tag with the given user (for tag-scoped admin list).
+/// Resolve affiliate scheme (layer) IDs the user is allowed to see: schemes that share a tag with the user, plus schemes the user created.
+/// Super_admin should not use this (pass None to list_layers).
 async fn resolve_allowed_affiliate_scheme_ids_for_user(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    use std::collections::HashSet;
+
+    let mut allowed: HashSet<Uuid> = HashSet::new();
+
+    // 1) Schemes that share at least one tag with the user
     #[derive(sqlx::FromRow)]
     struct TagRow {
         tag_id: Uuid,
@@ -271,17 +277,42 @@ async fn resolve_allowed_affiliate_scheme_ids_for_user(
         )
     })?;
     let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
-    if user_tag_ids.is_empty() {
-        return Ok(vec![]);
+    if !user_tag_ids.is_empty() {
+        #[derive(sqlx::FromRow)]
+        struct SchemeRow {
+            entity_id: Uuid,
+        }
+        let scheme_rows = sqlx::query_as::<_, SchemeRow>(
+            "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'affiliate_scheme' AND tag_id = ANY($1)",
+        )
+        .bind(&user_tag_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        for r in scheme_rows {
+            allowed.insert(r.entity_id);
+        }
     }
+
+    // 2) Schemes created by this user (admin sees their own created affiliate schemes even without tag match)
     #[derive(sqlx::FromRow)]
-    struct SchemeRow {
-        entity_id: Uuid,
+    struct IdRow {
+        id: Uuid,
     }
-    let scheme_rows = sqlx::query_as::<_, SchemeRow>(
-        "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'affiliate_scheme' AND tag_id = ANY($1)",
+    let created_rows = sqlx::query_as::<_, IdRow>(
+        "SELECT id FROM affiliate_commission_layers WHERE created_by_user_id = $1",
     )
-    .bind(&user_tag_ids)
+    .bind(user_id)
     .fetch_all(pool)
     .await
     .map_err(|e| {
@@ -295,7 +326,11 @@ async fn resolve_allowed_affiliate_scheme_ids_for_user(
             }),
         )
     })?;
-    Ok(scheme_rows.into_iter().map(|r| r.entity_id).collect())
+    for r in created_rows {
+        allowed.insert(r.id);
+    }
+
+    Ok(allowed.into_iter().collect())
 }
 
 async fn list_layers(

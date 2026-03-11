@@ -85,6 +85,95 @@ fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (Stat
     )
 }
 
+/// Resolve manager IDs the user is allowed to see: managers that share a tag with the user, plus managers the user created.
+/// Super_admin should not use this (show all).
+async fn resolve_allowed_manager_ids_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    use std::collections::HashSet;
+
+    let mut allowed: HashSet<Uuid> = HashSet::new();
+
+    // 1) Managers that share at least one tag with the user
+    #[derive(sqlx::FromRow)]
+    struct TagRow {
+        tag_id: Uuid,
+    }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'user' AND entity_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let user_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+    if !user_tag_ids.is_empty() {
+        #[derive(sqlx::FromRow)]
+        struct ManagerIdRow {
+            entity_id: Uuid,
+        }
+        let manager_rows = sqlx::query_as::<_, ManagerIdRow>(
+            "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'manager' AND tag_id = ANY($1)",
+        )
+        .bind(&user_tag_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        for r in manager_rows {
+            allowed.insert(r.entity_id);
+        }
+    }
+
+    // 2) Managers created by this user (admin/manager sees their own created managers even without tag match)
+    #[derive(sqlx::FromRow)]
+    struct IdRow {
+        id: Uuid,
+    }
+    let created_rows = sqlx::query_as::<_, IdRow>(
+        "SELECT id FROM managers WHERE created_by_user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    for r in created_rows {
+        allowed.insert(r.id);
+    }
+
+    Ok(allowed.into_iter().collect())
+}
+
 pub fn create_admin_managers_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_managers).post(create_manager))
@@ -119,6 +208,16 @@ async fn list_managers(
         .await
         .map_err(permission_denied_to_response)?;
 
+    let allowed_manager_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_manager_ids_for_user(&pool, claims.sub).await?;
+        if ids.is_empty() {
+            return Ok(Json(vec![]));
+        }
+        Some(ids)
+    };
+
     let search = params
         .search
         .as_deref()
@@ -147,6 +246,10 @@ async fn list_managers(
     "#
     .to_string();
     let mut bind_pos = 1u32;
+    if allowed_manager_ids.is_some() {
+        q_str.push_str(&format!(" AND m.id = ANY(${})", bind_pos));
+        bind_pos += 1;
+    }
     if status.is_some() {
         q_str.push_str(&format!(" AND m.status = ${}", bind_pos));
         bind_pos += 1;
@@ -166,6 +269,9 @@ async fn list_managers(
     q_str.push_str(" ORDER BY m.created_at DESC");
 
     let mut q = sqlx::query_as::<_, ManagerRow>(&q_str);
+    if let Some(ref ids) = allowed_manager_ids {
+        q = q.bind(ids);
+    }
     if let Some(s) = status {
         q = q.bind(s);
     }
