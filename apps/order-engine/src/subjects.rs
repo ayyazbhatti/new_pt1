@@ -7,6 +7,7 @@ pub mod subjects {
     pub const CMD_POSITION_CLOSE_ALL: &str = "cmd.position.close_all";
     pub const CMD_POSITION_REOPEN: &str = "cmd.position.reopen";
     pub const CMD_POSITION_REOPEN_WITH_PARAMS: &str = "cmd.position.reopen_with_params";
+    pub const CMD_POSITION_UPDATE_PARAMS: &str = "cmd.position.update_params";
 
     // Incoming ticks (wildcard: ticks.*)
     pub const TICKS_PREFIX: &str = "ticks.";

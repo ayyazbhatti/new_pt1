@@ -417,6 +417,71 @@ impl PositionHandler {
         Ok(())
     }
 
+    /// Handle cmd.position.update_params: update an OPEN position's size, entry_price, sl, tp.
+    #[instrument(skip(self, msg))]
+    pub async fn handle_update_position_params(&self, msg: Message) -> Result<()> {
+        let bytes = msg.payload.to_vec();
+        let cmd_json: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let position_id = cmd_json
+            .get("position_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .context("Invalid position_id in update_params")?;
+        let _user_id = cmd_json
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+        let size_override = cmd_json.get("size").and_then(|v| v.as_f64()).map(|f| f.to_string());
+        let entry_override = cmd_json.get("entry_price").and_then(|v| v.as_f64()).map(|f| f.to_string());
+        let sl_override = cmd_json.get("stop_loss").and_then(|v| v.as_f64()).map(|f| f.to_string());
+        let tp_override = cmd_json.get("take_profit").and_then(|v| v.as_f64()).map(|f| f.to_string());
+
+        info!(
+            "Received update_position_params: position_id={}, size={:?}, entry={:?}",
+            position_id, size_override, entry_override
+        );
+
+        let mut conn = self.redis.get_connection().await;
+        match self
+            .lua
+            .atomic_update_position_params(
+                &mut conn,
+                &position_id,
+                size_override.as_deref(),
+                entry_override.as_deref(),
+                sl_override.as_deref(),
+                tp_override.as_deref(),
+            )
+            .await
+        {
+            Ok(result) => {
+                if result.get("error").is_some() {
+                    let err_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    error!("Update position params {} failed: {}", position_id, err_msg);
+                    return Ok(());
+                }
+                if let Err(e) = crate::engine::position_events::publish_position_updated(
+                    self.nats.as_ref(),
+                    &mut conn,
+                    position_id,
+                    None,
+                )
+                .await
+                {
+                    error!(
+                        "Failed to publish evt.position.updated after update_params {}: {}",
+                        position_id, e
+                    );
+                }
+                info!("Position {} params updated", position_id);
+            }
+            Err(e) => {
+                error!("Error updating position {} params: {}", position_id, e);
+            }
+        }
+        Ok(())
+    }
+
     /// Handle cmd.position.close_all: close all OPEN positions for the user. Processes sequentially.
     #[instrument(skip(self, msg))]
     pub async fn handle_close_all_positions(&self, msg: async_nats::Message) -> Result<()> {

@@ -13,6 +13,7 @@ pub struct LuaScripts {
     close_position_script: Script,
     reopen_position_script: Script,
     reopen_position_with_params_script: Script,
+    update_position_params_script: Script,
     check_sltp_triggers_script: Script,
 }
 
@@ -23,6 +24,7 @@ impl LuaScripts {
         let close_position_script = Script::new(include_str!("../../lua/atomic_close_position.lua"));
         let reopen_position_script = Script::new(include_str!("../../lua/atomic_reopen_position.lua"));
         let reopen_position_with_params_script = Script::new(include_str!("../../lua/atomic_reopen_position_with_params.lua"));
+        let update_position_params_script = Script::new(include_str!("../../lua/atomic_update_position_params.lua"));
         let check_sltp_triggers_script = Script::new(include_str!("../../lua/check_sltp_triggers.lua"));
         
         Ok(Self {
@@ -31,6 +33,7 @@ impl LuaScripts {
             close_position_script,
             reopen_position_script,
             reopen_position_with_params_script,
+            update_position_params_script,
             check_sltp_triggers_script,
         })
     }
@@ -158,6 +161,36 @@ impl LuaScripts {
         let json: serde_json::Value = serde_json::from_str(&result)
             .context("Failed to parse reopen_with_params result")?;
         debug!("Atomic reopen with params result: {}", json);
+        Ok(json)
+    }
+
+    /// Update an OPEN position's size, entry_price, sl, tp in Redis.
+    pub async fn atomic_update_position_params(
+        &self,
+        conn: &mut ConnectionManager,
+        position_id: &Uuid,
+        size_override: Option<&str>,
+        entry_override: Option<&str>,
+        sl_override: Option<&str>,
+        tp_override: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let size_s = size_override.unwrap_or("");
+        let entry_s = entry_override.unwrap_or("");
+        let sl_s = sl_override.unwrap_or("");
+        let tp_s = tp_override.unwrap_or("");
+        let result: String = self.update_position_params_script
+            .arg(position_id.to_string())
+            .arg(Utc::now().timestamp_millis().to_string())
+            .arg(size_s)
+            .arg(entry_s)
+            .arg(sl_s)
+            .arg(tp_s)
+            .invoke_async(conn)
+            .await
+            .context("Failed to execute atomic_update_position_params Lua script")?;
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .context("Failed to parse update_position_params result")?;
+        debug!("Atomic update position params result: {}", json);
         Ok(json)
     }
     

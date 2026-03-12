@@ -80,3 +80,25 @@ export async function reopenAdminPositionWithParams(
   })
 }
 
+export interface UpdatePositionParamsRequest {
+  size?: number
+  entryPrice?: number
+  stopLoss?: number
+  takeProfit?: number
+}
+
+export async function updateAdminPositionParams(
+  positionId: string,
+  request: UpdatePositionParamsRequest
+): Promise<void> {
+  return http(`/api/admin/positions/${positionId}/update-params`, {
+    method: 'POST',
+    body: JSON.stringify({
+      size: request.size,
+      entryPrice: request.entryPrice,
+      stopLoss: request.stopLoss,
+      takeProfit: request.takeProfit,
+    }),
+  })
+}
+

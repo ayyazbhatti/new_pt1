@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::utils::permission_check;
-use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ReopenWithParamsRequest, ErrorResponse, ErrorDetail};
+use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ReopenWithParamsRequest, UpdatePositionParamsRequest, ErrorResponse, ErrorDetail};
 use crate::routes::scoped_access;
 use redis_model::keys::Keys;
 
@@ -717,6 +717,137 @@ async fn reopen_admin_position_with_params(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Update an open position's size, entry_price, stop_loss, take_profit (Redis via order-engine).
+async fn update_admin_position_params(
+    State(_pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Extension(admin_state): Extension<AdminTradingState>,
+    Path(position_id): Path<Uuid>,
+    Json(req): Json<UpdatePositionParamsRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&_pool, &claims, "trading:close_position")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let mut conn = admin_state.redis.get().await.map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Cache unavailable".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let pos_key = Keys::position_by_id(position_id);
+    let pos_data: HashMap<String, String> = conn.hgetall(&pos_key).await.map_err(|e| {
+        error!("Admin update_params: Redis HGETALL failed for {}: {}", position_id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Failed to read position".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if pos_data.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Position not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let status = pos_data.get("status").map(|s| s.as_str()).unwrap_or("");
+    if !status.eq_ignore_ascii_case("OPEN") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "POSITION_NOT_OPEN".to_string(),
+                    message: format!("Position is not open (status: {}). Only open positions can be updated.", status),
+                },
+            }),
+        ));
+    }
+
+    let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_POSITION".to_string(),
+                    message: "Position missing user_id".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if req.size.map(|s| s <= 0.0).unwrap_or(false) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_SIZE".to_string(),
+                    message: "size must be greater than 0".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let cmd = serde_json::json!({
+        "position_id": position_id.to_string(),
+        "user_id": user_id_str,
+        "size": req.size,
+        "entry_price": req.entry_price,
+        "stop_loss": req.stop_loss,
+        "take_profit": req.take_profit,
+    });
+    let payload = serde_json::to_vec(&cmd).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: "Failed to serialize update_params command".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    admin_state
+        .nats
+        .publish("cmd.position.update_params".to_string(), payload.into())
+        .await
+        .map_err(|e| {
+            error!("Admin update_params: NATS publish failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NATS_ERROR".to_string(),
+                        message: "Failed to send update_params command".to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    info!(
+        "Update position params: published cmd.position.update_params, position_id={}, user_id={}",
+        position_id, user_id_str
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn create_admin_positions_router(
     pool: PgPool,
     admin_state: AdminTradingState,
@@ -729,6 +860,7 @@ pub fn create_admin_positions_router(
         .route("/:id/liquidate", post(close_admin_position))
         .route("/:id/reopen", post(reopen_admin_position))
         .route("/:id/reopen-with-params", post(reopen_admin_position_with_params))
+        .route("/:id/update-params", post(update_admin_position_params))
         .layer(axum::middleware::from_fn_with_state(
             pool.clone(),
             auth_middleware,

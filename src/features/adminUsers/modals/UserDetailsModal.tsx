@@ -69,7 +69,7 @@ import { CompleteAppointmentModal } from '@/features/appointments/modals/Complet
 import { SendReminderModal } from '@/features/appointments/modals/SendReminderModal'
 import { createAdminOrder } from '@/features/adminTrading/api/orders'
 import { reopenAdminPositionWithParams } from '@/features/adminTrading/api/positions'
-import { closeAdminPosition, reopenAdminPosition } from '@/features/adminTrading/api/positions'
+import { closeAdminPosition, reopenAdminPosition, updateAdminPositionParams } from '@/features/adminTrading/api/positions'
 import type { CreateOrderRequest } from '@/features/adminTrading/types'
 import { fetchAdminSymbols } from '@/features/adminTrading/api/lookups'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -230,6 +230,16 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   })
   const [modifyOpenSubmitting, setModifyOpenSubmitting] = useState(false)
 
+  const [modifyPositionDialogOpen, setModifyPositionDialogOpen] = useState(false)
+  const [modifyPosition, setModifyPosition] = useState<Position | null>(null)
+  const [modifyPositionForm, setModifyPositionForm] = useState<{ size: number; entryPrice: number; stopLoss: number | undefined; takeProfit: number | undefined }>({
+    size: 0,
+    entryPrice: 0,
+    stopLoss: undefined,
+    takeProfit: undefined,
+  })
+  const [modifyPositionSubmitting, setModifyPositionSubmitting] = useState(false)
+
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatLoading, setChatLoading] = useState(false)
   const [chatSending, setChatSending] = useState(false)
@@ -317,6 +327,16 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   useEffect(() => {
     if (!modifyOpenDialogOpen) lastModifyOpenPositionIdRef.current = null
   }, [modifyOpenDialogOpen])
+
+  useEffect(() => {
+    if (!modifyPositionDialogOpen || !modifyPosition) return
+    const pos = modifyPosition
+    const size = parseFloat(pos.size || '0') || 0
+    const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0') || 0
+    const sl = pos.sl != null && !Number.isNaN(parseFloat(pos.sl)) ? parseFloat(pos.sl) : undefined
+    const tp = pos.tp != null && !Number.isNaN(parseFloat(pos.tp)) ? parseFloat(pos.tp) : undefined
+    setModifyPositionForm({ size, entryPrice, stopLoss: sl, takeProfit: tp })
+  }, [modifyPositionDialogOpen, modifyPosition])
 
   const createOrderSymbolsFiltered = useMemo(() => {
     if (!createOrderSymbolSearch.trim()) return createOrderSymbols
@@ -1387,27 +1407,50 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                               </td>
                               <td className="px-4 py-3 font-mono text-slate-400">{slNum != null ? `$${slNum.toFixed(2)}` : '—'}</td>
                               <td className="px-4 py-3 font-mono text-slate-400">{tpNum != null ? `$${tpNum.toFixed(2)}` : '—'}</td>
-                              {canClosePosition && (
+                              {(canClosePosition) && (
                                 <td className="px-4 py-3 text-right">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setClosePositionId(pos.id)
-                                      setClosePositionSymbol(pos.symbol)
-                                      setClosePositionDialogOpen(true)
-                                    }}
-                                    disabled={closingPositionId === pos.id}
-                                    className={cn(
-                                      'rounded px-2 py-1.5 text-xs font-medium transition-colors',
-                                      'bg-red-600/80 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed'
-                                    )}
-                                  >
-                                    {closingPositionId === pos.id ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin inline" />
-                                    ) : (
-                                      'Close'
-                                    )}
-                                  </button>
+                                  <div className="flex items-center justify-end gap-1">
+                                    <div className="relative group inline-flex">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setModifyPosition(pos)
+                                          setModifyPositionDialogOpen(true)
+                                        }}
+                                        title="Modify entry, size, SL/TP"
+                                        className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </button>
+                                      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                                        Modify
+                                      </span>
+                                    </div>
+                                    <div className="relative group inline-flex">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setClosePositionId(pos.id)
+                                          setClosePositionSymbol(pos.symbol)
+                                          setClosePositionDialogOpen(true)
+                                        }}
+                                        disabled={closingPositionId === pos.id}
+                                        title="Close position"
+                                        className={cn(
+                                          'rounded p-1.5 text-slate-400 hover:bg-red-600/80 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                                        )}
+                                      >
+                                        {closingPositionId === pos.id ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                          <X className="h-4 w-4" />
+                                        )}
+                                      </button>
+                                      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                                        Close
+                                      </span>
+                                    </div>
+                                  </div>
                                 </td>
                               )}
                             </tr>
@@ -1478,7 +1521,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                             ${parseFloat(pos.realized_pnl || '0').toFixed(2)}
                           </td>
                           {(canClosePosition || canCreateOrder) && (
-                            <td className="px-4 py-3 text-right">
+                            <td className="px-4 py-3 text-right !overflow-visible">
                               <div className="flex items-center justify-end gap-1">
                                 {canCreateOrder && (
                                   <div className="relative group inline-flex">
@@ -1493,7 +1536,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                                     >
                                       <Pencil className="h-4 w-4" />
                                     </button>
-                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[100]">
                                       Modify & open
                                     </span>
                                   </div>
@@ -1519,7 +1562,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                                         <RotateCcw className="h-4 w-4" />
                                       )}
                                     </button>
-                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[100]">
                                       Re-open
                                     </span>
                                   </div>
@@ -1758,6 +1801,140 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                 Close position
               </button>
             </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Modify open position (admin): edit size, entry price, SL, TP */}
+      <Dialog.Root
+        open={modifyPositionDialogOpen}
+        onOpenChange={(open) => {
+          setModifyPositionDialogOpen(open)
+          if (!open) setModifyPosition(null)
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[100]" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-800 border border-slate-600 rounded-lg p-6 z-[100] w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+            <Dialog.Title className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+              <Pencil className="h-5 w-5 text-blue-400" />
+              Modify position
+            </Dialog.Title>
+            <Dialog.Description className="text-sm text-slate-400 mb-4">
+              Update size, entry price, stop loss, or take profit for this open position.
+            </Dialog.Description>
+            {modifyPosition && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  if (modifyPositionForm.size <= 0) {
+                    toast.error('Size must be greater than 0')
+                    return
+                  }
+                  if (modifyPositionForm.entryPrice <= 0) {
+                    toast.error('Entry price must be greater than 0')
+                    return
+                  }
+                  setModifyPositionSubmitting(true)
+                  try {
+                    await updateAdminPositionParams(modifyPosition.id, {
+                      size: modifyPositionForm.size,
+                      entryPrice: modifyPositionForm.entryPrice,
+                      stopLoss: modifyPositionForm.stopLoss,
+                      takeProfit: modifyPositionForm.takeProfit,
+                    })
+                    toast.success('Position updated.')
+                    setModifyPositionDialogOpen(false)
+                    setModifyPosition(null)
+                    queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                    setTimeout(() => {
+                      queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                    }, 1500)
+                  } catch (err: unknown) {
+                    const e = err as { response?: { data?: { error?: { message?: string } }; message?: string } }
+                    toast.error(e?.response?.data?.error?.message ?? e?.message ?? 'Failed to update position')
+                  } finally {
+                    setModifyPositionSubmitting(false)
+                  }
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <Label className="text-slate-400 text-xs">Symbol</Label>
+                  <div className="mt-1 rounded-lg border border-slate-600 bg-slate-700/50 px-3 py-2 text-sm font-mono text-white h-9 flex items-center">
+                    {modifyPosition.symbol}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-slate-400 text-xs">Size *</Label>
+                    <Input
+                      type="number"
+                      step="0.000001"
+                      min={0}
+                      value={modifyPositionForm.size || ''}
+                      onChange={(e) => setModifyPositionForm((f) => ({ ...f, size: parseFloat(e.target.value) || 0 }))}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-slate-400 text-xs">Entry price *</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min={0}
+                      value={modifyPositionForm.entryPrice || ''}
+                      onChange={(e) => setModifyPositionForm((f) => ({ ...f, entryPrice: parseFloat(e.target.value) || 0 }))}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-slate-400 text-xs">Stop loss (opt)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="Price"
+                      value={modifyPositionForm.stopLoss ?? ''}
+                      onChange={(e) => setModifyPositionForm((f) => ({ ...f, stopLoss: parseFloat(e.target.value) || undefined }))}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-slate-400 text-xs">Take profit (opt)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="Price"
+                      value={modifyPositionForm.takeProfit ?? ''}
+                      onChange={(e) => setModifyPositionForm((f) => ({ ...f, takeProfit: parseFloat(e.target.value) || undefined }))}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModifyPositionDialogOpen(false)
+                      setModifyPosition(null)
+                    }}
+                    className="px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={modifyPositionSubmitting}
+                    className="px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-500 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {modifyPositionSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Save
+                  </button>
+                </div>
+              </form>
+            )}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
