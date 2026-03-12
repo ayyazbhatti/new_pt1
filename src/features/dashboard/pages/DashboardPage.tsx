@@ -1,7 +1,16 @@
 import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Card } from '@/shared/ui/card'
 import { RevenueChart } from '../components/RevenueChart'
+import {
+  fetchDashboardUsers,
+  fetchDashboardFinance,
+  fetchDashboardRecentTransactions,
+  fetchDashboardPositions,
+  DASHBOARD_QUERY_KEYS,
+} from '../api/dashboard.api'
+import { formatCurrency } from '@/features/adminFinance/utils/formatters'
 import {
   Users,
   Activity,
@@ -15,42 +24,31 @@ import {
   TrendingUp,
   Bell,
   UserCheck,
+  Loader2,
 } from 'lucide-react'
 
-const STAT_CARDS = [
-  {
-    key: 'users',
-    label: 'Total Users',
-    value: '1,234',
-    change: '+12%',
-    icon: Users,
-    iconClassName: 'text-slate-400',
-  },
-  {
-    key: 'trades',
-    label: 'Active Trades',
-    value: '567',
-    change: '+5%',
-    icon: Activity,
-    iconClassName: 'text-emerald-500',
-  },
-  {
-    key: 'revenue',
-    label: 'Revenue',
-    value: '$45,678',
-    change: '+8%',
-    icon: DollarSign,
-    iconClassName: 'text-blue-500',
-  },
-  {
-    key: 'risk',
-    label: 'Risk Exposure',
-    value: '$123,456',
-    change: '-2%',
-    icon: AlertTriangle,
-    iconClassName: 'text-amber-500',
-  },
-]
+function formatRelativeTime(dateString: string | null | undefined): string {
+  if (!dateString) return '—'
+  const date = new Date(dateString)
+  if (isNaN(date.getTime())) return '—'
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+  if (diffMins < 1) return 'Just now'
+  if (diffMins < 60) return `${diffMins} min ago`
+  if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`
+  if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`
+  return date.toLocaleDateString()
+}
+
+const STAT_CARD_KEYS = [
+  { key: 'users', label: 'Total Users', icon: Users, iconClassName: 'text-slate-400' },
+  { key: 'trades', label: 'Active Trades', icon: Activity, iconClassName: 'text-emerald-500' },
+  { key: 'revenue', label: 'Revenue', icon: DollarSign, iconClassName: 'text-blue-500' },
+  { key: 'risk', label: 'Pending Requests', icon: AlertTriangle, iconClassName: 'text-amber-500' },
+] as const
 
 const QUICK_ACTIONS = [
   { label: 'Users', path: '/admin/users', icon: Users },
@@ -61,22 +59,6 @@ const QUICK_ACTIONS = [
   { label: 'Support', path: '/admin/support', icon: Headphones },
 ]
 
-const RECENT_ACTIVITY_PLACEHOLDER = [
-  { time: '2 min ago', action: 'New user registered', user: 'john@example.com', id: 1 },
-  { time: '15 min ago', action: 'Deposit approved', user: 'jane@example.com', id: 2 },
-  { time: '1 hour ago', action: 'Withdrawal requested', user: 'alex@example.com', id: 3 },
-  { time: '2 hours ago', action: 'KYC submitted', user: 'sam@example.com', id: 4 },
-  { time: '3 hours ago', action: 'Position closed', user: 'mike@example.com', id: 5 },
-]
-
-const RECENT_REGISTRATIONS_PLACEHOLDER = [
-  { email: 'newuser1@example.com', date: 'Today, 10:32', source: 'Website' },
-  { email: 'newuser2@example.com', date: 'Today, 09:15', source: 'Referral' },
-  { email: 'newuser3@example.com', date: 'Yesterday', source: 'Landing page' },
-  { email: 'newuser4@example.com', date: 'Yesterday', source: 'Website' },
-  { email: 'newuser5@example.com', date: '2 days ago', source: 'Google Ad' },
-]
-
 const PLATFORM_ALERTS_PLACEHOLDER = [
   { id: 1, text: '3 pending KYC reviews', variant: 'warning' as const },
   { id: 2, text: 'Scheduled maintenance tonight 02:00–04:00 UTC', variant: 'info' as const },
@@ -84,6 +66,48 @@ const PLATFORM_ALERTS_PLACEHOLDER = [
 ]
 
 export function DashboardPage() {
+  const { data: usersData, isLoading: usersLoading } = useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.users,
+    queryFn: fetchDashboardUsers,
+  })
+  const { data: financeData, isLoading: financeLoading } = useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.finance,
+    queryFn: fetchDashboardFinance,
+  })
+  const { data: transactionsData, isLoading: transactionsLoading } = useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.transactions,
+    queryFn: fetchDashboardRecentTransactions,
+  })
+  const { data: positionsData, isLoading: positionsLoading } = useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.positions,
+    queryFn: fetchDashboardPositions,
+  })
+
+  const statsLoading = usersLoading || financeLoading || positionsLoading
+  const totalUsers = usersData?.total ?? 0
+  const openPositionsCount = positionsData?.total ?? positionsData?.items?.length ?? 0
+  const revenue = financeData?.totalBalances ?? 0
+  const pendingCount = (financeData?.pendingDeposits ?? 0) + (financeData?.pendingWithdrawals ?? 0)
+
+  const statValues: Record<string, { value: string; change: string | null }> = {
+    users: { value: totalUsers.toLocaleString(), change: null },
+    trades: { value: String(openPositionsCount), change: null },
+    revenue: { value: formatCurrency(revenue, 'USD'), change: null },
+    risk: { value: String(pendingCount), change: null },
+  }
+
+  const recentActivity = (transactionsData ?? []).map((tx) => ({
+    id: tx.id,
+    time: formatRelativeTime(tx.createdAt),
+    action: `${tx.type} ${tx.status}`,
+    user: tx.userEmail,
+  }))
+  const recentRegistrations = (usersData?.items ?? []).map((u) => ({
+    email: u.email,
+    date: u.created_at ? new Date(u.created_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—',
+    source: '—',
+  }))
+
   return (
     <ContentShell>
       <PageHeader
@@ -93,25 +117,32 @@ export function DashboardPage() {
 
       {/* Stats row */}
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {STAT_CARDS.map((card) => {
+        {STAT_CARD_KEYS.map((card) => {
           const Icon = card.icon
-          const isPositive = card.change.startsWith('+')
-          const isNegative = card.change.startsWith('-')
+          const { value, change } = statValues[card.key] ?? { value: '—', change: null }
+          const isPositive = change?.startsWith('+')
+          const isNegative = change?.startsWith('-')
           return (
             <Card key={card.key} className="flex items-start gap-3 p-4">
               <div className={`rounded-lg bg-surface-2 p-2 shrink-0 ${card.iconClassName}`}>
-                <Icon className="h-5 w-5" aria-hidden />
+                {statsLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+                ) : (
+                  <Icon className="h-5 w-5" aria-hidden />
+                )}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-text-muted">{card.label}</p>
-                <p className="mt-1 text-xl font-bold text-text">{card.value}</p>
-                <p
-                  className={`mt-1 text-xs ${
-                    isPositive ? 'text-success' : isNegative ? 'text-danger' : 'text-text-muted'
-                  }`}
-                >
-                  {card.change} from last month
-                </p>
+                <p className="mt-1 text-xl font-bold text-text">{statsLoading ? '—' : value}</p>
+                {change && (
+                  <p
+                    className={`mt-1 text-xs ${
+                      isPositive ? 'text-success' : isNegative ? 'text-danger' : 'text-text-muted'
+                    }`}
+                  >
+                    {change} from last month
+                  </p>
+                )}
               </div>
             </Card>
           )
@@ -146,7 +177,7 @@ export function DashboardPage() {
         <Card className="overflow-hidden">
           <div className="border-b border-border bg-surface-2 px-4 py-3">
             <h2 className="text-sm font-semibold text-text">Recent activity</h2>
-            <p className="text-xs text-text-muted mt-0.5">Latest platform events</p>
+            <p className="text-xs text-text-muted mt-0.5">Latest transactions</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -158,13 +189,26 @@ export function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {RECENT_ACTIVITY_PLACEHOLDER.map((row) => (
-                  <tr key={row.id} className="border-b border-border/50 hover:bg-surface-2/30">
-                    <td className="px-4 py-3 text-text-muted">{row.time}</td>
-                    <td className="px-4 py-3 text-text">{row.action}</td>
-                    <td className="px-4 py-3 text-text-muted">{row.user}</td>
+                {transactionsLoading ? (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-8 text-center text-text-muted">
+                      <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                      Loading…
+                    </td>
                   </tr>
-                ))}
+                ) : recentActivity.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-8 text-center text-text-muted">No recent activity</td>
+                  </tr>
+                ) : (
+                  recentActivity.map((row) => (
+                    <tr key={row.id} className="border-b border-border/50 hover:bg-surface-2/30">
+                      <td className="px-4 py-3 text-text-muted">{row.time}</td>
+                      <td className="px-4 py-3 text-text">{row.action}</td>
+                      <td className="px-4 py-3 text-text-muted">{row.user}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -186,13 +230,26 @@ export function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {RECENT_REGISTRATIONS_PLACEHOLDER.map((row, i) => (
-                  <tr key={i} className="border-b border-border/50 hover:bg-surface-2/30">
-                    <td className="px-4 py-3 text-text">{row.email}</td>
-                    <td className="px-4 py-3 text-text-muted">{row.date}</td>
-                    <td className="px-4 py-3 text-text-muted">{row.source}</td>
+                {usersLoading ? (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-8 text-center text-text-muted">
+                      <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                      Loading…
+                    </td>
                   </tr>
-                ))}
+                ) : recentRegistrations.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-8 text-center text-text-muted">No recent registrations</td>
+                  </tr>
+                ) : (
+                  recentRegistrations.map((row, i) => (
+                    <tr key={i} className="border-b border-border/50 hover:bg-surface-2/30">
+                      <td className="px-4 py-3 text-text">{row.email}</td>
+                      <td className="px-4 py-3 text-text-muted">{row.date}</td>
+                      <td className="px-4 py-3 text-text-muted">{row.source}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
