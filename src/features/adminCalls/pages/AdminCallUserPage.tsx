@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useLocation } from 'react-router-dom'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui'
@@ -18,7 +19,10 @@ type CallStatus = 'idle' | 'ringing' | 'connected' | 'declined' | 'error'
 const SEARCH_DEBOUNCE_MS = 300
 const STUN_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
 
+type CallUserLocationState = { userId?: string; userName?: string; userEmail?: string } | null
+
 export function AdminCallUserPage() {
+  const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<UserSearchResult[]>([])
@@ -42,6 +46,18 @@ export function AdminCallUserPage() {
   const localStreamRef = useRef<MediaStream | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const remoteAudioRef = useRef<HTMLAudioElement>(null)
+
+  // Pre-select user when navigated from Support page (Link state: { userId, userName, userEmail })
+  useEffect(() => {
+    const state = location.state as CallUserLocationState
+    if (state?.userId) {
+      setSelectedUser({
+        id: state.userId,
+        email: state.userEmail ?? '',
+        full_name: state.userName,
+      })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- only on mount from Support
 
   const cleanupWebRTC = useCallback(() => {
     cleanupRef.current?.()

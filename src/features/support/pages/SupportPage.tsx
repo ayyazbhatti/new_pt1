@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Input, Button, ModalShell } from '@/shared/ui'
-import { MessageCircle, Send, User, UserPlus, Search, Loader2 } from 'lucide-react'
+import { MessageCircle, Send, User, UserPlus, Search, Loader2, Phone } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import {
   getAdminConversations,
@@ -54,6 +54,7 @@ function dtoToMessage(dto: {
 export function SupportPage() {
   const canReply = useCanAccess('support:reply')
   const canNewChat = useCanAccess('support:new_chat')
+  const canCall = useCanAccess('call:view')
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedUserId = searchParams.get('userId')
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
@@ -331,9 +332,24 @@ export function SupportPage() {
           {selectedUserId ? (
             <>
               <div className="shrink-0 px-4 py-3 border-b border-border flex items-center gap-2">
-                <MessageCircle className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-text">{selected?.userName ?? 'User'}</h2>
-                <span className="text-xs text-text-muted">({selected?.userEmail ?? selectedUserId})</span>
+                <MessageCircle className="h-4 w-4 text-accent shrink-0" />
+                <h2 className="text-sm font-semibold text-text truncate">{selected?.userName ?? 'User'}</h2>
+                <span className="text-xs text-text-muted truncate min-w-0">({selected?.userEmail ?? selectedUserId})</span>
+                {canCall && (
+                  <Link
+                    to="/admin/call-user"
+                    state={{
+                      userId: selectedUserId,
+                      userName: selected?.userName ?? 'User',
+                      userEmail: selected?.userEmail ?? '',
+                    }}
+                    className="ml-auto shrink-0 p-2 rounded-lg text-text-muted hover:bg-surface-2 hover:text-text transition-colors"
+                    title="Call this user"
+                    aria-label="Call this user"
+                  >
+                    <Phone className="h-4 w-4" />
+                  </Link>
+                )}
               </div>
               <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
                 {loadingMessages ? (

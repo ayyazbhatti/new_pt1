@@ -234,6 +234,69 @@ struct LeadRow {
     converted_at: Option<DateTime<Utc>>,
 }
 
+/// Super admin sees all leads; admin/manager see only leads they created or are assigned to.
+fn lead_scope_user_id(claims: &Claims) -> Option<Uuid> {
+    if claims.role == "super_admin" {
+        None
+    } else {
+        Some(claims.sub)
+    }
+}
+
+/// Returns Ok(()) if the user can access the lead (super_admin or created_by/owner), Err(404) otherwise.
+async fn ensure_lead_visible(
+    pool: &PgPool,
+    claims: &Claims,
+    lead_id: Uuid,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if lead_scope_user_id(claims).is_none() {
+        return Ok(());
+    }
+    let row: Option<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT created_by_id, owner_id FROM leads WHERE id = $1",
+    )
+    .bind(lead_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let (created_by, owner_id) = row.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Lead not found".to_string(),
+                },
+            }),
+        )
+    })?;
+    let uid = claims.sub;
+    let can_access = created_by == Some(uid) || owner_id == Some(uid);
+    if can_access {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Lead not found".to_string(),
+                },
+            }),
+        ))
+    }
+}
+
 async fn list_leads(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
@@ -244,6 +307,8 @@ async fn list_leads(
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).min(100).max(1);
     let offset = (page - 1) * page_size;
+
+    let scope_user = lead_scope_user_id(&claims);
 
     let search = q
         .search
@@ -261,7 +326,7 @@ async fn list_leads(
         .as_deref()
         .filter(|s| *s != "all" && valid_source(s));
 
-    // Build count and list SQL with consecutive $1..$N for optional filters, then LIMIT/OFFSET.
+    // Build count and list SQL: optional scope (admin sees only own/assigned), then filters, then LIMIT/OFFSET.
     let mut count_sql = String::from("SELECT COUNT(*)::bigint FROM leads l WHERE 1=1");
     let mut list_sql = String::from(
         "SELECT l.id, l.name, l.email, l.phone, l.company, l.source, l.campaign, l.status,
@@ -272,6 +337,11 @@ async fn list_leads(
         WHERE 1=1",
     );
     let mut param_idx = 0i32;
+    if scope_user.is_some() {
+        param_idx += 1;
+        count_sql.push_str(&format!(" AND (l.created_by_id = ${} OR l.owner_id = ${})", param_idx, param_idx));
+        list_sql.push_str(&format!(" AND (l.created_by_id = ${} OR l.owner_id = ${})", param_idx, param_idx));
+    }
     if search.is_some() {
         param_idx += 1;
         let placeholder = param_idx;
@@ -306,23 +376,11 @@ async fn list_leads(
         limit_param, offset_param
     ));
 
-    let total: i64 = if param_idx == 0 {
-        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM leads")
-            .fetch_one(&pool)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: ErrorDetail {
-                            code: "DB_ERROR".to_string(),
-                            message: e.to_string(),
-                        },
-                    }),
-                )
-            })?
-    } else {
+    let total: i64 = {
         let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+        if let Some(uid) = scope_user {
+            count_query = count_query.bind(uid);
+        }
         if let Some(ref s) = search {
             count_query = count_query.bind(s);
         }
@@ -352,6 +410,9 @@ async fn list_leads(
     };
 
     let mut list_query = sqlx::query_as::<_, LeadRow>(&list_sql);
+    if let Some(uid) = scope_user {
+        list_query = list_query.bind(uid);
+    }
     if let Some(ref s) = search {
         list_query = list_query.bind(s);
     }
@@ -450,6 +511,39 @@ async fn get_lead(
         )
     })?;
 
+    // Admin/manager: only allow if they created the lead or are assigned as owner
+    if let Some(uid) = lead_scope_user_id(&claims) {
+        let scope: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+            "SELECT created_by_id, owner_id FROM leads WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        let can_access = scope.0 == Some(uid) || scope.1 == Some(uid);
+        if !can_access {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NOT_FOUND".to_string(),
+                        message: "Lead not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
     Ok(Json(LeadResponse {
         id: r.id,
         name: r.name,
@@ -508,8 +602,8 @@ async fn create_lead(
 
     let row: LeadRow = sqlx::query_as(
         r#"
-        INSERT INTO leads (name, email, phone, company, source, campaign, status, owner_id, score, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+        INSERT INTO leads (name, email, phone, company, source, campaign, status, owner_id, score, created_by_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
         RETURNING id, name, email, phone, company, source, campaign, status, owner_id, NULL::text AS owner_name, score, created_at, updated_at, last_activity_at, converted_user_id, converted_at
         "#,
     )
@@ -522,6 +616,7 @@ async fn create_lead(
     .bind(status)
     .bind(payload.owner_id)
     .bind(payload.score)
+    .bind(claims.sub)
     .bind(now)
     .fetch_one(&pool)
     .await
@@ -609,6 +704,7 @@ async fn update_lead(
     axum::Json(payload): axum::Json<UpdateLeadRequest>,
 ) -> Result<Json<LeadResponse>, (StatusCode, Json<ErrorResponse>)> {
     check_leads_permission(&pool, &claims, "leads:edit").await?;
+    ensure_lead_visible(&pool, &claims, id).await?;
 
     let existing: Option<(String,)> = sqlx::query_as("SELECT id::text FROM leads WHERE id = $1")
         .bind(id)
@@ -888,6 +984,7 @@ async fn delete_lead(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     check_leads_permission(&pool, &claims, "leads:delete").await?;
+    ensure_lead_visible(&pool, &claims, id).await?;
 
     let result = sqlx::query("DELETE FROM leads WHERE id = $1")
         .bind(id)
@@ -935,6 +1032,7 @@ async fn list_activities(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     check_leads_permission(&pool, &claims, "leads:view").await?;
+    ensure_lead_visible(&pool, &claims, id).await?;
 
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM leads WHERE id = $1)")
         .bind(id)
@@ -1004,6 +1102,7 @@ async fn add_activity(
     axum::Json(payload): axum::Json<AddActivityRequest>,
 ) -> Result<(StatusCode, Json<LeadActivityResponse>), (StatusCode, Json<ErrorResponse>)> {
     check_leads_permission(&pool, &claims, "leads:edit").await?;
+    ensure_lead_visible(&pool, &claims, id).await?;
 
     let content = payload.content.trim();
     if content.is_empty() {
@@ -1104,6 +1203,7 @@ async fn convert_lead(
     axum::Json(payload): axum::Json<ConvertLeadRequest>,
 ) -> Result<Json<LeadResponse>, (StatusCode, Json<ErrorResponse>)> {
     check_leads_permission(&pool, &claims, "leads:convert").await?;
+    ensure_lead_visible(&pool, &claims, id).await?;
 
     let now = Utc::now();
     let result = sqlx::query(
