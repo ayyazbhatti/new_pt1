@@ -50,3 +50,33 @@ export async function liquidatePosition(positionId: string): Promise<void> {
   })
 }
 
+export async function reopenAdminPosition(positionId: string): Promise<void> {
+  return http(`/api/admin/positions/${positionId}/reopen`, {
+    method: 'POST',
+  })
+}
+
+export interface ReopenWithParamsRequest {
+  size: number
+  entryPrice?: number
+  side?: string
+  stopLoss?: number
+  takeProfit?: number
+}
+
+export async function reopenAdminPositionWithParams(
+  positionId: string,
+  request: ReopenWithParamsRequest
+): Promise<void> {
+  return http(`/api/admin/positions/${positionId}/reopen-with-params`, {
+    method: 'POST',
+    body: JSON.stringify({
+      size: request.size,
+      entryPrice: request.entryPrice,
+      side: request.side,
+      stopLoss: request.stopLoss,
+      takeProfit: request.takeProfit,
+    }),
+  })
+}
+

@@ -11,6 +11,8 @@ pub struct LuaScripts {
     fill_order_script: Script,
     cancel_order_script: Script,
     close_position_script: Script,
+    reopen_position_script: Script,
+    reopen_position_with_params_script: Script,
     check_sltp_triggers_script: Script,
 }
 
@@ -19,12 +21,16 @@ impl LuaScripts {
         let fill_order_script = Script::new(include_str!("../../lua/atomic_fill_order.lua"));
         let cancel_order_script = Script::new(include_str!("../../lua/atomic_cancel_order.lua"));
         let close_position_script = Script::new(include_str!("../../lua/atomic_close_position.lua"));
+        let reopen_position_script = Script::new(include_str!("../../lua/atomic_reopen_position.lua"));
+        let reopen_position_with_params_script = Script::new(include_str!("../../lua/atomic_reopen_position_with_params.lua"));
         let check_sltp_triggers_script = Script::new(include_str!("../../lua/check_sltp_triggers.lua"));
         
         Ok(Self {
             fill_order_script,
             cancel_order_script,
             close_position_script,
+            reopen_position_script,
+            reopen_position_with_params_script,
             check_sltp_triggers_script,
         })
     }
@@ -101,6 +107,57 @@ impl LuaScripts {
             .context("Failed to parse close result")?;
         
         debug!("Atomic close result: {}", json);
+        Ok(json)
+    }
+    
+    pub async fn atomic_reopen_position(
+        &self,
+        conn: &mut ConnectionManager,
+        position_id: &Uuid,
+    ) -> Result<serde_json::Value> {
+        let result: String = self.reopen_position_script
+            .arg(position_id.to_string())
+            .arg(Utc::now().timestamp_millis().to_string())
+            .invoke_async(conn)
+            .await
+            .context("Failed to execute atomic_reopen_position Lua script")?;
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .context("Failed to parse reopen result")?;
+        debug!("Atomic reopen result: {}", json);
+        Ok(json)
+    }
+
+    /// Reopen the same position with optional overrides (size, entry_price, side, sl, tp).
+    /// Empty string for an arg means "keep existing" (for size/entry) or "clear" (for sl/tp).
+    pub async fn atomic_reopen_position_with_params(
+        &self,
+        conn: &mut ConnectionManager,
+        position_id: &Uuid,
+        size_override: Option<&str>,
+        entry_override: Option<&str>,
+        side_override: Option<&str>,
+        sl_override: Option<&str>,
+        tp_override: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let size_s = size_override.unwrap_or("");
+        let entry_s = entry_override.unwrap_or("");
+        let side_s = side_override.unwrap_or("");
+        let sl_s = sl_override.unwrap_or("");
+        let tp_s = tp_override.unwrap_or("");
+        let result: String = self.reopen_position_with_params_script
+            .arg(position_id.to_string())
+            .arg(Utc::now().timestamp_millis().to_string())
+            .arg(size_s)
+            .arg(entry_s)
+            .arg(side_s)
+            .arg(sl_s)
+            .arg(tp_s)
+            .invoke_async(conn)
+            .await
+            .context("Failed to execute atomic_reopen_position_with_params Lua script")?;
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .context("Failed to parse reopen_with_params result")?;
+        debug!("Atomic reopen with params result: {}", json);
         Ok(json)
     }
     

@@ -160,12 +160,11 @@ export async function http<T>(
         throw new Error('Empty response')
       }
     } catch {
-      error = {
-        error: {
-          code: response.status === 401 ? 'UNAUTHORIZED' : response.status === 400 ? 'BAD_REQUEST' : response.status === 404 ? 'NOT_FOUND' : 'UNKNOWN_ERROR',
-          message: `HTTP ${response.status}: ${response.statusText}`,
-        },
-      }
+      const code = response.status === 401 ? 'UNAUTHORIZED' : response.status === 400 ? 'BAD_REQUEST' : response.status === 404 ? 'NOT_FOUND' : 'UNKNOWN_ERROR'
+      const message = response.status === 500
+        ? 'Server error. If this persists, ensure auth-service is running and DATABASE_URL is set (check server logs).'
+        : `HTTP ${response.status}: ${response.statusText}`
+      error = { error: { code, message } }
     }
     
     // Create error object with response data for better error handling
@@ -174,12 +173,16 @@ export async function http<T>(
     throw errorObj
   }
 
-  // Handle 204 No Content (logout endpoint)
+  // Handle 204 No Content (logout, reopen position, etc.)
   if (response.status === 204) {
     return null as T
   }
 
-  // Return JSON response
-  return response.json()
+  // Parse JSON; treat empty body as null (e.g. 200 with no content)
+  const text = await response.text()
+  if (!text || text.trim() === '') {
+    return null as T
+  }
+  return JSON.parse(text) as T
 }
 

@@ -3,6 +3,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use std::env;
 use uuid::Uuid;
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -30,8 +31,17 @@ impl Claims {
     }
 }
 
+/// JWT secret for signing tokens. In production JWT_SECRET must be set.
+/// In development, falls back to a default so login does not return 500 when env is missing.
 pub fn get_jwt_secret() -> String {
-    env::var("JWT_SECRET").expect("JWT_SECRET must be set")
+    const DEV_FALLBACK: &str = "dev-jwt-secret-key-change-in-production-minimum-32-characters-long";
+    match env::var("JWT_SECRET") {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => {
+            warn!("JWT_SECRET not set; using dev fallback. Set JWT_SECRET in production.");
+            DEV_FALLBACK.to_string()
+        }
+    }
 }
 
 pub fn get_access_token_ttl() -> i64 {

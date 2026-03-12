@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::utils::permission_check;
-use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ErrorResponse, ErrorDetail};
+use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ReopenWithParamsRequest, ErrorResponse, ErrorDetail};
 use crate::routes::scoped_access;
 use redis_model::keys::Keys;
 
@@ -430,6 +430,293 @@ async fn modify_position_sltp(
     Ok(StatusCode::OK)
 }
 
+/// Re-open a closed position by restoring the same position record to OPEN (no new order).
+/// Order-engine handles cmd.position.reopen and runs atomic_reopen_position Lua.
+async fn reopen_admin_position(
+    State(_pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Extension(admin_state): Extension<AdminTradingState>,
+    Path(position_id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&_pool, &claims, "trading:close_position")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let mut conn = admin_state.redis.get().await.map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Cache unavailable".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let pos_key = Keys::position_by_id(position_id);
+    let pos_data: HashMap<String, String> = conn.hgetall(&pos_key).await.map_err(|e| {
+        error!("Admin reopen position: Redis HGETALL failed for {}: {}", position_id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Failed to read position".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if pos_data.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Position not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let status = pos_data.get("status").map(|s| s.as_str()).unwrap_or("");
+    if !status.eq_ignore_ascii_case("CLOSED") && !status.eq_ignore_ascii_case("LIQUIDATED") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "POSITION_NOT_CLOSED".to_string(),
+                    message: format!("Position is not closed (status: {}). Only closed or liquidated positions can be re-opened.", status),
+                },
+            }),
+        ));
+    }
+
+    let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_POSITION".to_string(),
+                    message: "Position missing user_id".to_string(),
+                },
+            }),
+        )
+    })?;
+    let _user_id = Uuid::parse_str(&user_id_str).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_POSITION".to_string(),
+                    message: "Invalid user_id on position".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let original_size = pos_data
+        .get("original_size")
+        .or_else(|| pos_data.get("size"))
+        .cloned()
+        .unwrap_or_default();
+    if original_size.parse::<f64>().unwrap_or(0.0) <= 0.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "CANNOT_REOPEN".to_string(),
+                    message: "Cannot re-open: original size unknown or zero.".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let cmd = serde_json::json!({
+        "position_id": position_id.to_string(),
+        "user_id": user_id_str,
+    });
+    let payload = serde_json::to_vec(&cmd).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: "Failed to serialize reopen command".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    admin_state
+        .nats
+        .publish("cmd.position.reopen".to_string(), payload.into())
+        .await
+        .map_err(|e| {
+            error!("Admin reopen: NATS publish failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NATS_ERROR".to_string(),
+                        message: "Failed to send reopen command".to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    info!(
+        "Re-open position: published cmd.position.reopen, position_id={}, user_id={} (same record restore)",
+        position_id, user_id_str
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Re-open the same closed position with edited fields (size, entry_price, side, sl, tp). No new order/position.
+async fn reopen_admin_position_with_params(
+    State(_pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Extension(admin_state): Extension<AdminTradingState>,
+    Path(position_id): Path<Uuid>,
+    Json(req): Json<ReopenWithParamsRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&_pool, &claims, "trading:create_order")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    if req.size <= 0.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_SIZE".to_string(),
+                    message: "size must be greater than 0".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let mut conn = admin_state.redis.get().await.map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Cache unavailable".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let pos_key = Keys::position_by_id(position_id);
+    let pos_data: HashMap<String, String> = conn.hgetall(&pos_key).await.map_err(|e| {
+        error!("Admin reopen_with_params: Redis HGETALL failed for {}: {}", position_id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "REDIS_ERROR".to_string(),
+                    message: "Failed to read position".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    if pos_data.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Position not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    let status = pos_data.get("status").map(|s| s.as_str()).unwrap_or("");
+    if !status.eq_ignore_ascii_case("CLOSED") && !status.eq_ignore_ascii_case("LIQUIDATED") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "POSITION_NOT_CLOSED".to_string(),
+                    message: format!("Position is not closed (status: {}). Only closed or liquidated positions can be re-opened with params.", status),
+                },
+            }),
+        ));
+    }
+
+    let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INVALID_POSITION".to_string(),
+                    message: "Position missing user_id".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let side_value = req
+        .side
+        .as_ref()
+        .map(|s| {
+            let u = s.to_uppercase();
+            if u == "SELL" || u == "SHORT" {
+                "SHORT"
+            } else {
+                "LONG"
+            }
+        });
+
+    let cmd = serde_json::json!({
+        "position_id": position_id.to_string(),
+        "user_id": user_id_str,
+        "size": req.size,
+        "entry_price": req.entry_price,
+        "side": side_value,
+        "stop_loss": req.stop_loss,
+        "take_profit": req.take_profit,
+    });
+    let payload = serde_json::to_vec(&cmd).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: "Failed to serialize reopen_with_params command".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    admin_state
+        .nats
+        .publish("cmd.position.reopen_with_params".to_string(), payload.into())
+        .await
+        .map_err(|e| {
+            error!("Admin reopen_with_params: NATS publish failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NATS_ERROR".to_string(),
+                        message: "Failed to send reopen_with_params command".to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    info!(
+        "Re-open with params: published cmd.position.reopen_with_params, position_id={}, user_id={}",
+        position_id, user_id_str
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn create_admin_positions_router(
     pool: PgPool,
     admin_state: AdminTradingState,
@@ -440,6 +727,8 @@ pub fn create_admin_positions_router(
         .route("/:id/close-partial", post(close_admin_position))
         .route("/:id/modify-sltp", post(modify_position_sltp))
         .route("/:id/liquidate", post(close_admin_position))
+        .route("/:id/reopen", post(reopen_admin_position))
+        .route("/:id/reopen-with-params", post(reopen_admin_position_with_params))
         .layer(axum::middleware::from_fn_with_state(
             pool.clone(),
             auth_middleware,

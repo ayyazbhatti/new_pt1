@@ -8,13 +8,24 @@ interface PaginatedResponse<T> {
   total?: number
 }
 
-export async function fetchAdminSymbols(): Promise<LookupSymbol[]> {
-  const response = await http<PaginatedResponse<LookupSymbol> | LookupSymbol[]>('/api/admin/symbols')
-  // Handle both paginated and direct array responses
-  if (Array.isArray(response)) {
-    return response
+/** Normalize API symbol item (backend may send symbol_code, asset_class) to LookupSymbol */
+function normalizeSymbolItem(item: Record<string, unknown>): LookupSymbol {
+  const code = (item.symbol_code ?? item.code ?? '') as string
+  return {
+    id: (item.id ?? '') as string,
+    code,
+    name: (item.name ?? item.symbol_code ?? item.code ?? '') as string,
+    assetClass: (item.asset_class ?? item.assetClass ?? '') as string,
   }
-  return response.items || []
+}
+
+export async function fetchAdminSymbols(): Promise<LookupSymbol[]> {
+  const response = await http<PaginatedResponse<Record<string, unknown>> | Record<string, unknown>[]>(
+    '/api/admin/symbols?page=1&page_size=500'
+  )
+  const rawItems = Array.isArray(response) ? response : response?.items ?? []
+  const normalized = rawItems.map((item) => normalizeSymbolItem(item as Record<string, unknown>))
+  return normalized.filter((s) => s.id && s.code)
 }
 
 export async function searchAdminUsers(search: string): Promise<LookupUser[]> {

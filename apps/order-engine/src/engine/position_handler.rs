@@ -304,6 +304,119 @@ impl PositionHandler {
         Ok(())
     }
 
+    /// Handle cmd.position.reopen: restore the same position record to OPEN (no new order).
+    #[instrument(skip(self, msg))]
+    pub async fn handle_reopen_position(&self, msg: Message) -> Result<()> {
+        let bytes = msg.payload.to_vec();
+        let cmd_json: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let position_id = cmd_json
+            .get("position_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .context("Invalid position_id in reopen")?;
+        let user_id = cmd_json
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .context("Invalid user_id in reopen")?;
+
+        info!("Received reopen position: position_id={}, user_id={}", position_id, user_id);
+
+        let mut conn = self.redis.get_connection().await;
+        match self.lua.atomic_reopen_position(&mut conn, &position_id).await {
+            Ok(result) => {
+                if result.get("error").is_some() {
+                    let err_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    error!("Reopen position {} failed: {}", position_id, err_msg);
+                    return Ok(());
+                }
+                if let Err(e) = crate::engine::position_events::publish_position_updated(
+                    self.nats.as_ref(),
+                    &mut conn,
+                    position_id,
+                    Some(contracts::enums::PositionStatus::Open),
+                )
+                .await
+                {
+                    error!("Failed to publish evt.position.updated after reopen {}: {}", position_id, e);
+                }
+                info!("Position {} re-opened (same record restored)", position_id);
+            }
+            Err(e) => {
+                error!("Error reopening position {}: {}", position_id, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle cmd.position.reopen_with_params: restore the same position with optional size, entry_price, side, sl, tp.
+    #[instrument(skip(self, msg))]
+    pub async fn handle_reopen_position_with_params(&self, msg: Message) -> Result<()> {
+        let bytes = msg.payload.to_vec();
+        let cmd_json: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let position_id = cmd_json
+            .get("position_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .context("Invalid position_id in reopen_with_params")?;
+        let user_id = cmd_json
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .context("Invalid user_id in reopen_with_params")?;
+        let size_override = cmd_json.get("size").and_then(|v| v.as_f64()).map(|f| f.to_string());
+        let entry_override = cmd_json.get("entry_price").and_then(|v| v.as_f64()).map(|f| f.to_string());
+        let side_override = cmd_json.get("side").and_then(|v| v.as_str()).map(|s| s.to_uppercase());
+        let sl_override = cmd_json.get("stop_loss").and_then(|v| v.as_f64()).map(|f| f.to_string());
+        let tp_override = cmd_json.get("take_profit").and_then(|v| v.as_f64()).map(|f| f.to_string());
+
+        info!(
+            "Received reopen_with_params: position_id={}, user_id={}, size={:?}, entry={:?}, side={:?}",
+            position_id, user_id, size_override, entry_override, side_override
+        );
+
+        let mut conn = self.redis.get_connection().await;
+        match self
+            .lua
+            .atomic_reopen_position_with_params(
+                &mut conn,
+                &position_id,
+                size_override.as_deref(),
+                entry_override.as_deref(),
+                side_override.as_deref(),
+                sl_override.as_deref(),
+                tp_override.as_deref(),
+            )
+            .await
+        {
+            Ok(result) => {
+                if result.get("error").is_some() {
+                    let err_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    error!("Reopen with params position {} failed: {}", position_id, err_msg);
+                    return Ok(());
+                }
+                if let Err(e) = crate::engine::position_events::publish_position_updated(
+                    self.nats.as_ref(),
+                    &mut conn,
+                    position_id,
+                    Some(contracts::enums::PositionStatus::Open),
+                )
+                .await
+                {
+                    error!(
+                        "Failed to publish evt.position.updated after reopen_with_params {}: {}",
+                        position_id, e
+                    );
+                }
+                info!("Position {} re-opened with params (same record restored)", position_id);
+            }
+            Err(e) => {
+                error!("Error reopening position {} with params: {}", position_id, e);
+            }
+        }
+        Ok(())
+    }
+
     /// Handle cmd.position.close_all: close all OPEN positions for the user. Processes sequentially.
     #[instrument(skip(self, msg))]
     pub async fn handle_close_all_positions(&self, msg: async_nats::Message) -> Result<()> {

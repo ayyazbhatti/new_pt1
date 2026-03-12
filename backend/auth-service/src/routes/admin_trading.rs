@@ -157,6 +157,17 @@ pub struct ModifySltpRequest {
     pub take_profit: Option<f64>,
 }
 
+/// Body for POST /api/admin/positions/:id/reopen-with-params (restore same position with edited fields).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReopenWithParamsRequest {
+    pub size: f64,
+    pub entry_price: Option<f64>,
+    pub side: Option<String>,
+    pub stop_loss: Option<f64>,
+    pub take_profit: Option<f64>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaginatedResponse<T> {

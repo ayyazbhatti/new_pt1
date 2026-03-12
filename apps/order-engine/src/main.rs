@@ -157,6 +157,12 @@ async fn main() -> Result<()> {
     
     let mut close_all_sub = nats_client.subscribe(nats_subjects::CMD_POSITION_CLOSE_ALL.to_string()).await?;
     info!("✅ Subscribed to {}", nats_subjects::CMD_POSITION_CLOSE_ALL);
+
+    let mut reopen_sub = nats_client.subscribe(nats_subjects::CMD_POSITION_REOPEN.to_string()).await?;
+    info!("✅ Subscribed to {}", nats_subjects::CMD_POSITION_REOPEN);
+
+    let mut reopen_with_params_sub = nats_client.subscribe(nats_subjects::CMD_POSITION_REOPEN_WITH_PARAMS.to_string()).await?;
+    info!("✅ Subscribed to {}", nats_subjects::CMD_POSITION_REOPEN_WITH_PARAMS);
     
     // Create subscription health monitor
     let subscription_health = Arc::new(nats::SubscriptionHealth::new());
@@ -374,6 +380,28 @@ async fn main() -> Result<()> {
             }
         }
         error!("Close position subscription stream ended");
+    });
+
+    let position_handler_reopen_clone = position_handler.clone();
+    tokio::spawn(async move {
+        info!("🔄 Reopen position handler started");
+        while let Some(msg) = reopen_sub.next().await {
+            if let Err(e) = position_handler_reopen_clone.handle_reopen_position(msg).await {
+                error!("Error handling reopen position: {}", e);
+            }
+        }
+        error!("Reopen position subscription stream ended");
+    });
+
+    let position_handler_reopen_with_params_clone = position_handler.clone();
+    tokio::spawn(async move {
+        info!("🔄 Reopen with params position handler started");
+        while let Some(msg) = reopen_with_params_sub.next().await {
+            if let Err(e) = position_handler_reopen_with_params_clone.handle_reopen_position_with_params(msg).await {
+                error!("Error handling reopen with params position: {}", e);
+            }
+        }
+        error!("Reopen with params position subscription stream ended");
     });
     
     let position_handler_close_all = position_handler.clone();

@@ -28,10 +28,14 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   Plus,
+  Search,
+  ChevronDown,
+  Check,
+  AlertCircle,
 } from 'lucide-react'
 import { fetchTransactions } from '@/features/adminFinance/api/finance.api'
 import { fetchUserNotes, createUserNote, type UserNote } from '../api/users.api'
-import { getPositionsByUserId } from '@/features/terminal/api/positions.api'
+import { getPositionsByUserId, type Position } from '@/features/terminal/api/positions.api'
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { Input } from '@/shared/ui'
 import { cn } from '@/shared/utils'
@@ -63,9 +67,29 @@ import { RescheduleModal } from '@/features/appointments/modals/RescheduleModal'
 import { CancelAppointmentModal } from '@/features/appointments/modals/CancelAppointmentModal'
 import { CompleteAppointmentModal } from '@/features/appointments/modals/CompleteAppointmentModal'
 import { SendReminderModal } from '@/features/appointments/modals/SendReminderModal'
+import { createAdminOrder } from '@/features/adminTrading/api/orders'
+import { reopenAdminPositionWithParams } from '@/features/adminTrading/api/positions'
+import { closeAdminPosition, reopenAdminPosition } from '@/features/adminTrading/api/positions'
+import type { CreateOrderRequest } from '@/features/adminTrading/types'
+import { fetchAdminSymbols } from '@/features/adminTrading/api/lookups'
+import * as Dialog from '@radix-ui/react-dialog'
+import type { LookupSymbol } from '@/features/adminTrading/types'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
+import { Label } from '@/shared/ui/label'
+import { Loader2, RotateCcw, Pencil } from 'lucide-react'
 
 const USER_DETAILS_TAB_STORAGE_KEY = 'admin-user-details-modal-tab'
+const ORDERS_POSITIONS_SUBTAB_STORAGE_KEY = 'admin-user-details-orders-positions-subtab'
 const TAB_VALUES = ['overview', 'funding', 'appointments', 'orders-positions', 'notes', 'chat'] as const
+const ORDERS_POSITIONS_SUBTAB_VALUES = ['positions', 'orders', 'pending', 'closed'] as const
+
+function getStoredOrdersPositionsSubTab(): (typeof ORDERS_POSITIONS_SUBTAB_VALUES)[number] {
+  if (typeof sessionStorage === 'undefined') return 'positions'
+  const stored = sessionStorage.getItem(ORDERS_POSITIONS_SUBTAB_STORAGE_KEY)
+  return ORDERS_POSITIONS_SUBTAB_VALUES.includes(stored as (typeof ORDERS_POSITIONS_SUBTAB_VALUES)[number])
+    ? (stored as (typeof ORDERS_POSITIONS_SUBTAB_VALUES)[number])
+    : 'positions'
+}
 
 type ChatMessage = { id: string; sender: 'support' | 'user'; name: string; text: string; time: string }
 
@@ -164,7 +188,47 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const [noteDraft, setNoteDraft] = useState('')
   const [isEditMode, setIsEditMode] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [ordersPositionsSubTab, setOrdersPositionsSubTab] = useState<'orders' | 'positions' | 'pending' | 'closed'>('positions')
+  const [ordersPositionsSubTab, setOrdersPositionsSubTab] = useState<'orders' | 'positions' | 'pending' | 'closed'>(getStoredOrdersPositionsSubTab)
+  const [showCreateOrderForm, setShowCreateOrderForm] = useState(false)
+  const [createOrderSymbols, setCreateOrderSymbols] = useState<LookupSymbol[]>([])
+  const [createOrderSymbolsLoading, setCreateOrderSymbolsLoading] = useState(false)
+  const [createOrderSubmitting, setCreateOrderSubmitting] = useState(false)
+  const [createOrderForm, setCreateOrderForm] = useState<Omit<CreateOrderRequest, 'userId'>>({
+    symbolId: '',
+    side: 'BUY',
+    orderType: 'MARKET',
+    size: 0,
+    price: undefined,
+    stopPrice: undefined,
+    timeInForce: 'GTC',
+    stopLoss: undefined,
+    takeProfit: undefined,
+  })
+  const [createOrderSymbolDropdownOpen, setCreateOrderSymbolDropdownOpen] = useState(false)
+  const [createOrderSymbolSearch, setCreateOrderSymbolSearch] = useState('')
+  const createOrderSymbolDropdownRef = useRef<HTMLDivElement>(null)
+  const [closePositionDialogOpen, setClosePositionDialogOpen] = useState(false)
+  const [closePositionId, setClosePositionId] = useState<string | null>(null)
+  const [reopenPositionDialogOpen, setReopenPositionDialogOpen] = useState(false)
+  const [reopenPositionId, setReopenPositionId] = useState<string | null>(null)
+  const [reopenPositionSymbol, setReopenPositionSymbol] = useState('')
+  const [closePositionSymbol, setClosePositionSymbol] = useState<string>('')
+  const [closingPositionId, setClosingPositionId] = useState<string | null>(null)
+  const [reopeningPositionId, setReopeningPositionId] = useState<string | null>(null)
+  const [modifyOpenDialogOpen, setModifyOpenDialogOpen] = useState(false)
+  const [modifyOpenPosition, setModifyOpenPosition] = useState<Position | null>(null)
+  const [modifyOpenForm, setModifyOpenForm] = useState<Omit<CreateOrderRequest, 'userId'>>({
+    symbolId: '',
+    side: 'BUY',
+    orderType: 'MARKET',
+    size: 0,
+    price: undefined,
+    stopPrice: undefined,
+    timeInForce: 'GTC',
+    stopLoss: undefined,
+    takeProfit: undefined,
+  })
+  const [modifyOpenSubmitting, setModifyOpenSubmitting] = useState(false)
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatLoading, setChatLoading] = useState(false)
@@ -178,6 +242,8 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const userRef = useRef(user.id)
   userRef.current = user.id
 
+  const canCreateOrder = useCanAccess('trading:create_order')
+  const canClosePosition = useCanAccess('trading:close_position')
   const canEditApt = useCanAccess('appointments:edit')
   const canRescheduleApt = useCanAccess('appointments:reschedule')
   const canCancelApt = useCanAccess('appointments:cancel')
@@ -209,6 +275,71 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
     () => Array.from(new Set(openPositions.map((p) => p.symbol.toUpperCase().trim()))),
     [openPositions]
   )
+
+  // Load symbols when create-order form is shown or when Modify & open modal opens
+  useEffect(() => {
+    if ((showCreateOrderForm || (modifyOpenDialogOpen && modifyOpenPosition != null)) && createOrderSymbols.length === 0) {
+      setCreateOrderSymbolsLoading(true)
+      fetchAdminSymbols()
+        .then(setCreateOrderSymbols)
+        .catch(() => toast.error('Failed to load symbols'))
+        .finally(() => setCreateOrderSymbolsLoading(false))
+    }
+  }, [showCreateOrderForm, modifyOpenDialogOpen, modifyOpenPosition, createOrderSymbols.length])
+  // Prefill Modify & open form once when modal opens with a position and symbols are ready
+  const lastModifyOpenPositionIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!modifyOpenDialogOpen || !modifyOpenPosition || createOrderSymbols.length === 0) return
+    const pos = modifyOpenPosition
+    if (lastModifyOpenPositionIdRef.current === pos.id) return
+    lastModifyOpenPositionIdRef.current = pos.id
+    const symbolCode = (pos.symbol || '').toUpperCase().trim()
+    const lookup = createOrderSymbols.find((s) => s.code.toUpperCase() === symbolCode)
+    const symbolId = lookup?.id ?? ''
+    const size = parseFloat(pos.original_size || pos.size || '0') || 0
+    const side = pos.side === 'LONG' ? 'BUY' : 'SELL'
+    const sl = pos.sl != null && !Number.isNaN(parseFloat(pos.sl)) ? parseFloat(pos.sl) : undefined
+    const tp = pos.tp != null && !Number.isNaN(parseFloat(pos.tp)) ? parseFloat(pos.tp) : undefined
+    const entryPrice = pos.entry_price ?? pos.avg_price
+    const price = entryPrice != null && !Number.isNaN(parseFloat(entryPrice)) ? parseFloat(entryPrice) : undefined
+    setModifyOpenForm({
+      symbolId,
+      side,
+      orderType: price != null && price > 0 ? 'LIMIT' : 'MARKET',
+      size,
+      price,
+      stopPrice: undefined,
+      timeInForce: 'GTC',
+      stopLoss: sl,
+      takeProfit: tp,
+    })
+  }, [modifyOpenDialogOpen, modifyOpenPosition, createOrderSymbols])
+  useEffect(() => {
+    if (!modifyOpenDialogOpen) lastModifyOpenPositionIdRef.current = null
+  }, [modifyOpenDialogOpen])
+
+  const createOrderSymbolsFiltered = useMemo(() => {
+    if (!createOrderSymbolSearch.trim()) return createOrderSymbols
+    const q = createOrderSymbolSearch.toLowerCase().trim()
+    return createOrderSymbols.filter(
+      (s) => s.code.toLowerCase().includes(q) || (s.name && s.name.toLowerCase().includes(q))
+    )
+  }, [createOrderSymbols, createOrderSymbolSearch])
+
+  useEffect(() => {
+    if (!createOrderSymbolDropdownOpen) return
+    const handleClick = (e: MouseEvent) => {
+      if (createOrderSymbolDropdownRef.current && !createOrderSymbolDropdownRef.current.contains(e.target as Node)) {
+        setCreateOrderSymbolDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('touchstart', handleClick, { passive: true })
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('touchstart', handleClick)
+    }
+  }, [createOrderSymbolDropdownOpen])
   const { prices: livePrices } = usePriceStream(positionSymbols)
 
   const { data: notes = [], isLoading: notesLoading } = useQuery({
@@ -917,21 +1048,285 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
 
         <TabsContent value="orders-positions" className="flex-1 min-h-0 overflow-auto mt-3 data-[state=inactive]:hidden">
           <div className="min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
-            <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-700 pb-2 sm:gap-2">
-              {(['positions', 'orders', 'pending', 'closed'] as const).map((sub) => (
+            <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-700 pb-2">
+              <div className="flex flex-wrap gap-1 sm:gap-2">
+                {(['positions', 'orders', 'pending', 'closed'] as const).map((sub) => (
+                  <button
+                    key={sub}
+                    type="button"
+                    onClick={() => {
+                      setOrdersPositionsSubTab(sub)
+                      try {
+                        sessionStorage.setItem(ORDERS_POSITIONS_SUBTAB_STORAGE_KEY, sub)
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    className={cn(
+                      'rounded-lg px-2 py-1.5 text-xs font-medium sm:px-3 sm:py-2 sm:text-sm',
+                      ordersPositionsSubTab === sub ? 'bg-blue-500 text-white' : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+                    )}
+                  >
+                    {sub === 'positions' ? 'Positions' : sub === 'orders' ? 'Orders' : sub === 'pending' ? 'Pending Orders' : 'Closed Positions'}
+                  </button>
+                ))}
+              </div>
+              {canCreateOrder && (
                 <button
-                  key={sub}
                   type="button"
-                  onClick={() => setOrdersPositionsSubTab(sub)}
+                  onClick={() => setShowCreateOrderForm((prev) => !prev)}
                   className={cn(
-                    'rounded-lg px-2 py-1.5 text-xs font-medium sm:px-3 sm:py-2 sm:text-sm',
-                    ordersPositionsSubTab === sub ? 'bg-blue-500 text-white' : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+                    'ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium sm:px-3 sm:py-2 sm:text-sm',
+                    showCreateOrderForm ? 'bg-slate-600 text-white hover:bg-slate-500' : 'bg-emerald-600 text-white hover:bg-emerald-500'
                   )}
                 >
-                  {sub === 'positions' ? 'Positions' : sub === 'orders' ? 'Orders' : sub === 'pending' ? 'Pending Orders' : 'Closed Positions'}
+                  <Plus className="h-4 w-4" />
+                  {showCreateOrderForm ? 'Hide form' : 'Create order'}
                 </button>
-              ))}
+              )}
             </div>
+
+            {showCreateOrderForm && canCreateOrder && (
+              <div className="mb-4 rounded-lg border border-slate-700 bg-slate-800/50 p-4">
+                <h3 className="text-sm font-semibold text-slate-200 mb-3">Create order for this user</h3>
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault()
+                    if (!createOrderForm.symbolId || createOrderForm.size <= 0) {
+                      toast.error('Please fill in Symbol and Size')
+                      return
+                    }
+                    if ((createOrderForm.orderType === 'LIMIT' || createOrderForm.orderType === 'STOP_LIMIT') && (createOrderForm.price == null || createOrderForm.price <= 0)) {
+                      toast.error('Please enter a limit price')
+                      return
+                    }
+                    setCreateOrderSubmitting(true)
+                    try {
+                      await createAdminOrder({ ...createOrderForm, userId: user.id })
+                      toast.success('Order created successfully')
+                      setCreateOrderForm({
+                        symbolId: '',
+                        side: 'BUY',
+                        orderType: 'MARKET',
+                        size: 0,
+                        price: undefined,
+                        stopPrice: undefined,
+                        timeInForce: 'GTC',
+                        stopLoss: undefined,
+                        takeProfit: undefined,
+                      })
+                      queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                      queryClient.invalidateQueries({ queryKey: ['admin', 'orders'] })
+                    } catch (err: unknown) {
+                      const e = err as { response?: { data?: { error?: { message?: string }; message?: string } } }
+                      toast.error(e?.response?.data?.error?.message ?? e?.response?.data?.message ?? 'Failed to create order')
+                    } finally {
+                      setCreateOrderSubmitting(false)
+                    }
+                  }}
+                  className="space-y-3"
+                >
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="relative" ref={createOrderSymbolDropdownRef}>
+                      <Label className="text-slate-400 text-xs">Symbol *</Label>
+                      <button
+                        type="button"
+                        onClick={() => !createOrderSymbolsLoading && setCreateOrderSymbolDropdownOpen((o) => !o)}
+                        disabled={createOrderSymbolsLoading}
+                        className={cn(
+                          'w-full rounded-lg border px-3 py-2 h-9 text-sm text-left flex items-center justify-between gap-2',
+                          'bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400',
+                          'focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-slate-500',
+                          createOrderSymbolDropdownOpen && 'ring-2 ring-blue-500/50 border-slate-500',
+                          createOrderSymbolsLoading && 'opacity-60 cursor-not-allowed'
+                        )}
+                      >
+                        <span className="truncate">
+                          {createOrderSymbolsLoading
+                            ? 'Loading…'
+                            : createOrderForm.symbolId
+                              ? createOrderSymbols.find((s) => s.id === createOrderForm.symbolId)?.code ?? 'Select'
+                              : 'Select'}
+                        </span>
+                        <ChevronDown
+                          className={cn('h-4 w-4 shrink-0 text-slate-400 transition-transform', createOrderSymbolDropdownOpen && 'rotate-180')}
+                        />
+                      </button>
+                      {createOrderSymbolDropdownOpen && (
+                        <div
+                          className="absolute left-0 right-0 top-full mt-1 z-50 rounded-lg bg-slate-800 border border-slate-600 shadow-xl overflow-hidden flex flex-col"
+                          style={{ maxHeight: 'min(50vh, 280px)' }}
+                        >
+                          <div className="shrink-0 p-2 border-b border-slate-700">
+                            <div className="relative">
+                              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                              <Input
+                                placeholder="Search symbols..."
+                                value={createOrderSymbolSearch}
+                                onChange={(e) => setCreateOrderSymbolSearch(e.target.value)}
+                                className="pl-8 h-9 text-sm bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500/50"
+                                autoFocus
+                              />
+                            </div>
+                          </div>
+                          <div className="flex-1 min-h-0 overflow-y-auto">
+                            {createOrderSymbolsFiltered.length === 0 ? (
+                              <div className="px-3 py-4 text-center text-slate-400 text-sm">No symbols match</div>
+                            ) : (
+                              createOrderSymbolsFiltered.map((s) => (
+                                <button
+                                  key={s.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setCreateOrderForm((f) => ({ ...f, symbolId: s.id }))
+                                    setCreateOrderSymbolDropdownOpen(false)
+                                    setCreateOrderSymbolSearch('')
+                                  }}
+                                  className={cn(
+                                    'w-full px-3 py-2.5 text-left text-sm font-medium flex items-center justify-between gap-2 transition-colors',
+                                    createOrderForm.symbolId === s.id
+                                      ? 'bg-blue-600/20 text-blue-300'
+                                      : 'text-slate-200 hover:bg-slate-700/80'
+                                  )}
+                                >
+                                  <span className="truncate">{s.code}</span>
+                                  {createOrderForm.symbolId === s.id ? <Check className="h-4 w-4 shrink-0 text-blue-400" /> : null}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <Label className="text-slate-400 text-xs">Side *</Label>
+                      <Select
+                        value={createOrderForm.side}
+                        onValueChange={(v) => setCreateOrderForm((f) => ({ ...f, side: v as 'BUY' | 'SELL' }))}
+                      >
+                        <SelectTrigger className="h-9 bg-slate-700/50 border-slate-600 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="BUY">BUY</SelectItem>
+                          <SelectItem value="SELL">SELL</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-slate-400 text-xs">Type *</Label>
+                      <Select
+                        value={createOrderForm.orderType}
+                        onValueChange={(v) => setCreateOrderForm((f) => ({ ...f, orderType: v as CreateOrderRequest['orderType'] }))}
+                      >
+                        <SelectTrigger className="h-9 bg-slate-700/50 border-slate-600 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="MARKET">MARKET</SelectItem>
+                          <SelectItem value="LIMIT">LIMIT</SelectItem>
+                          <SelectItem value="STOP">STOP</SelectItem>
+                          <SelectItem value="STOP_LIMIT">STOP_LIMIT</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-slate-400 text-xs">Size *</Label>
+                      <Input
+                        type="number"
+                        step="0.000001"
+                        min={0}
+                        value={createOrderForm.size || ''}
+                        onChange={(e) => setCreateOrderForm((f) => ({ ...f, size: parseFloat(e.target.value) || 0 }))}
+                        className="h-9 bg-slate-700/50 border-slate-600 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {(createOrderForm.orderType === 'LIMIT' || createOrderForm.orderType === 'STOP_LIMIT') && (
+                      <div>
+                        <Label className="text-slate-400 text-xs">Price *</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          value={createOrderForm.price ?? ''}
+                          onChange={(e) => setCreateOrderForm((f) => ({ ...f, price: parseFloat(e.target.value) || undefined }))}
+                          className="h-9 bg-slate-700/50 border-slate-600 text-sm"
+                        />
+                      </div>
+                    )}
+                    {(createOrderForm.orderType === 'STOP' || createOrderForm.orderType === 'STOP_LIMIT') && (
+                      <div>
+                        <Label className="text-slate-400 text-xs">Stop price *</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          value={createOrderForm.stopPrice ?? ''}
+                          onChange={(e) => setCreateOrderForm((f) => ({ ...f, stopPrice: parseFloat(e.target.value) || undefined }))}
+                          className="h-9 bg-slate-700/50 border-slate-600 text-sm"
+                        />
+                      </div>
+                    )}
+                    <div>
+                      <Label className="text-slate-400 text-xs">Time in force</Label>
+                      <Select
+                        value={createOrderForm.timeInForce ?? 'GTC'}
+                        onValueChange={(v) => setCreateOrderForm((f) => ({ ...f, timeInForce: (v || 'GTC') as 'GTC' | 'IOC' | 'FOK' }))}
+                      >
+                        <SelectTrigger className="h-9 bg-slate-700/50 border-slate-600 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="GTC">GTC</SelectItem>
+                          <SelectItem value="IOC">IOC</SelectItem>
+                          <SelectItem value="FOK">FOK</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-slate-400 text-xs">Stop loss (opt)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={createOrderForm.stopLoss ?? ''}
+                        onChange={(e) => setCreateOrderForm((f) => ({ ...f, stopLoss: parseFloat(e.target.value) || undefined }))}
+                        className="h-9 bg-slate-700/50 border-slate-600 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-400 text-xs">Take profit (opt)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={createOrderForm.takeProfit ?? ''}
+                        onChange={(e) => setCreateOrderForm((f) => ({ ...f, takeProfit: parseFloat(e.target.value) || undefined }))}
+                        className="h-9 bg-slate-700/50 border-slate-600 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="submit"
+                      disabled={createOrderSubmitting}
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-70 flex items-center gap-1.5"
+                    >
+                      {createOrderSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Create order
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateOrderForm(false)}
+                      className="rounded-lg bg-slate-600 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-500"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
             {ordersPositionsSubTab === 'positions' && (
               <>
                 {positionsLoading ? (
@@ -956,6 +1351,9 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                           <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">P&L</th>
                           <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">S/L</th>
                           <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">T/P</th>
+                          {canClosePosition && (
+                            <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-400">Action</th>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-700">
@@ -989,6 +1387,29 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                               </td>
                               <td className="px-4 py-3 font-mono text-slate-400">{slNum != null ? `$${slNum.toFixed(2)}` : '—'}</td>
                               <td className="px-4 py-3 font-mono text-slate-400">{tpNum != null ? `$${tpNum.toFixed(2)}` : '—'}</td>
+                              {canClosePosition && (
+                                <td className="px-4 py-3 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setClosePositionId(pos.id)
+                                      setClosePositionSymbol(pos.symbol)
+                                      setClosePositionDialogOpen(true)
+                                    }}
+                                    disabled={closingPositionId === pos.id}
+                                    className={cn(
+                                      'rounded px-2 py-1.5 text-xs font-medium transition-colors',
+                                      'bg-red-600/80 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed'
+                                    )}
+                                  >
+                                    {closingPositionId === pos.id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin inline" />
+                                    ) : (
+                                      'Close'
+                                    )}
+                                  </button>
+                                </td>
+                              )}
                             </tr>
                           )
                         })}
@@ -1012,28 +1433,93 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
             )}
             {ordersPositionsSubTab === 'closed' && (
               <div className="overflow-x-auto rounded-lg border border-slate-700">
-                <table className="w-full min-w-[600px] text-sm">
+                <table className="w-full min-w-[900px] table-fixed text-sm [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap [&_th]:overflow-hidden [&_td]:overflow-hidden [&_th]:text-ellipsis [&_td]:text-ellipsis">
                   <thead className="border-b border-slate-700">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Symbol</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Side</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Closed</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">P&L</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[72px]">Symbol</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[56px]">Side</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[72px]">Size</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[64px]">Entry</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[64px]">Exit</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[56px]">Leverage</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[64px]">Margin</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[100px]">Opened</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[100px]">Closed</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 w-[64px]">P&L</th>
+                      {(canClosePosition || canCreateOrder) && (
+                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-400 w-[80px]">Action</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700">
-                    {positions.filter((p) => p.status === 'CLOSED').slice(0, 20).map((pos) => (
-                      <tr key={pos.id}>
-                        <td className="px-4 py-3 font-mono text-white">{pos.symbol}</td>
-                        <td className="px-4 py-3">
-                          <span className={cn('rounded px-2 py-0.5 text-xs', pos.side === 'LONG' ? 'text-green-400' : 'text-red-400')}>{pos.side}</span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-400">{pos.closed_at ? formatDateTime(new Date(pos.closed_at).toISOString()) : '—'}</td>
-                        <td className={cn('px-4 py-3 font-mono', parseFloat(pos.realized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400')}>
-                          ${parseFloat(pos.realized_pnl || '0').toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
+                    {positions.filter((p) => p.status === 'CLOSED').slice(0, 20).map((pos) => {
+                      const closedAtMs = pos.closed_at != null ? (pos.closed_at < 1e12 ? pos.closed_at * 1000 : pos.closed_at) : null
+                      const openedAtMs = pos.opened_at != null ? (pos.opened_at < 1e12 ? pos.opened_at * 1000 : pos.opened_at) : null
+                      return (
+                        <tr key={pos.id}>
+                          <td className="px-4 py-3 font-mono text-white" title={pos.symbol}>{pos.symbol}</td>
+                          <td className="px-4 py-3">
+                            <span className={cn('inline-block rounded px-2 py-0.5 text-xs', pos.side === 'LONG' ? 'text-green-400' : 'text-red-400')}>{pos.side}</span>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-slate-300" title={parseFloat(pos.original_size || pos.size || '0').toLocaleString(undefined, { maximumFractionDigits: 6 })}>
+                            {parseFloat(pos.original_size || pos.size || '0').toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-slate-400">${parseFloat(pos.entry_price || pos.avg_price || '0').toFixed(2)}</td>
+                          <td className="px-4 py-3 font-mono text-slate-400">{pos.exit_price != null ? `$${parseFloat(pos.exit_price).toFixed(2)}` : '—'}</td>
+                          <td className="px-4 py-3 font-mono text-slate-400">{pos.leverage ? `${pos.leverage}×` : '—'}</td>
+                          <td className="px-4 py-3 font-mono text-slate-400">{pos.margin != null ? `$${parseFloat(pos.margin).toFixed(2)}` : '—'}</td>
+                          <td className="px-4 py-3 text-slate-400" title={openedAtMs != null ? formatDateTime(new Date(openedAtMs).toISOString()) : undefined}>
+                            {openedAtMs != null ? formatDateTime(new Date(openedAtMs).toISOString()) : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-slate-400" title={closedAtMs != null ? formatDateTime(new Date(closedAtMs).toISOString()) : undefined}>
+                            {closedAtMs != null ? formatDateTime(new Date(closedAtMs).toISOString()) : '—'}
+                          </td>
+                          <td className={cn('px-4 py-3 font-mono', parseFloat(pos.realized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400')}>
+                            ${parseFloat(pos.realized_pnl || '0').toFixed(2)}
+                          </td>
+                          {(canClosePosition || canCreateOrder) && (
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                {canCreateOrder && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setModifyOpenPosition(pos)
+                                      setModifyOpenDialogOpen(true)
+                                    }}
+                                    title="Modify & open (change size, SL/TP then open)"
+                                    className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </button>
+                                )}
+                                {canClosePosition && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReopenPositionId(pos.id)
+                                      setReopenPositionSymbol(pos.symbol)
+                                      setReopenPositionDialogOpen(true)
+                                    }}
+                                    disabled={reopeningPositionId === pos.id}
+                                    title="Re-open position (same parameters)"
+                                    className={cn(
+                                      'rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                                    )}
+                                  >
+                                    {reopeningPositionId === pos.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <RotateCcw className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
                 {positions.filter((p) => p.status === 'CLOSED').length === 0 && (
@@ -1211,6 +1697,283 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         </TabsContent>
       </Tabs>
 
+      {/* Close position confirmation (admin) */}
+      <Dialog.Root open={closePositionDialogOpen} onOpenChange={setClosePositionDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[100]" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-800 border border-slate-600 rounded-lg p-6 z-[100] w-full max-w-md shadow-xl">
+            <Dialog.Title className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-red-400" />
+              Close position
+            </Dialog.Title>
+            <Dialog.Description className="text-sm text-slate-400 mb-6">
+              Close position {closePositionSymbol} ({closePositionId?.slice(0, 8)}…)? This action cannot be undone.
+            </Dialog.Description>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setClosePositionDialogOpen(false)
+                  setClosePositionId(null)
+                  setClosePositionSymbol('')
+                }}
+                className="px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!closePositionId) return
+                  const idToClose = closePositionId
+                  setClosingPositionId(idToClose)
+                  try {
+                    await closeAdminPosition(idToClose)
+                    toast.success(`Position ${closePositionSymbol} closed successfully`)
+                    setClosePositionDialogOpen(false)
+                    setClosePositionId(null)
+                    setClosePositionSymbol('')
+                    queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                    queryClient.invalidateQueries({ queryKey: ['admin', 'orders'] })
+                  } catch (err: unknown) {
+                    const e = err as { response?: { data?: { error?: { message?: string } }; status?: number }; message?: string }
+                    const msg = e?.response?.data?.error?.message ?? e?.message ?? 'Failed to close position'
+                    toast.error(msg)
+                  } finally {
+                    setClosingPositionId(null)
+                  }
+                }}
+                className="px-4 py-2 text-sm bg-red-600 text-white hover:bg-red-500 rounded-lg transition-colors"
+              >
+                Close position
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Re-open position confirmation (admin) */}
+      <Dialog.Root open={reopenPositionDialogOpen} onOpenChange={setReopenPositionDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[100]" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-800 border border-slate-600 rounded-lg p-6 z-[100] w-full max-w-md shadow-xl">
+            <Dialog.Title className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+              <RotateCcw className="h-5 w-5 text-blue-400" />
+              Re-open position
+            </Dialog.Title>
+            <Dialog.Description className="text-sm text-slate-400 mb-6">
+              Re-open closed position {reopenPositionSymbol} ({reopenPositionId?.slice(0, 8)}…)? The position will be restored with the same parameters.
+            </Dialog.Description>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setReopenPositionDialogOpen(false)
+                  setReopenPositionId(null)
+                  setReopenPositionSymbol('')
+                }}
+                className="px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!reopenPositionId) return
+                  const idToReopen = reopenPositionId
+                  const symbolToReopen = reopenPositionSymbol
+                  setReopeningPositionId(idToReopen)
+                    try {
+                    await reopenAdminPosition(idToReopen)
+                    toast.success('Reopen sent. Position will restore shortly.')
+                    setReopenPositionDialogOpen(false)
+                    setReopenPositionId(null)
+                    setReopenPositionSymbol('')
+                    queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                    queryClient.invalidateQueries({ queryKey: ['admin', 'orders'] })
+                    // Refetch once after a short delay so UI updates when order-engine has processed
+                    setTimeout(() => {
+                      queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                    }, 2500)
+                  } catch (err: unknown) {
+                    const e = err as { response?: { data?: { error?: { message?: string } }; status?: number }; message?: string }
+                    const msg = e?.response?.data?.error?.message ?? e?.message ?? 'Failed to re-open position'
+                    toast.error(msg)
+                  } finally {
+                    setReopeningPositionId(null)
+                  }
+                }}
+                disabled={!!reopeningPositionId}
+                className="px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-500 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {reopeningPositionId ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin inline mr-2" />
+                    Re-opening…
+                  </>
+                ) : (
+                  'Re-open position'
+                )}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Modify & open position (admin): edit size/SL/TP then place market order */}
+      <Dialog.Root
+        open={modifyOpenDialogOpen}
+        onOpenChange={(open) => {
+          setModifyOpenDialogOpen(open)
+          if (!open) setModifyOpenPosition(null)
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[100]" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-800 border border-slate-600 rounded-lg p-6 z-[100] w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+            <Dialog.Title className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+              <Pencil className="h-5 w-5 text-blue-400" />
+              Modify & open position
+            </Dialog.Title>
+            <Dialog.Description className="text-sm text-slate-400 mb-4">
+              Restore this closed position with your edits (same position ID). Change size, entry price, side, stop loss, or take profit.
+            </Dialog.Description>
+            {modifyOpenPosition && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  if (!modifyOpenPosition || modifyOpenForm.size <= 0) {
+                    toast.error('Size is required')
+                    return
+                  }
+                  const sideForApi = modifyOpenForm.side === 'SELL' ? 'SHORT' : 'LONG'
+                  setModifyOpenSubmitting(true)
+                  try {
+                    await reopenAdminPositionWithParams(modifyOpenPosition.id, {
+                      size: modifyOpenForm.size,
+                      entryPrice: modifyOpenForm.price != null && modifyOpenForm.price > 0 ? modifyOpenForm.price : undefined,
+                      side: sideForApi,
+                      stopLoss: modifyOpenForm.stopLoss,
+                      takeProfit: modifyOpenForm.takeProfit,
+                    })
+                    toast.success('Position re-opened with your changes.')
+                    setModifyOpenDialogOpen(false)
+                    setModifyOpenPosition(null)
+                    queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                    queryClient.invalidateQueries({ queryKey: ['admin', 'orders'] })
+                    setTimeout(() => {
+                      queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
+                    }, 2500)
+                  } catch (err: unknown) {
+                    const e = err as { response?: { data?: { error?: { message?: string } }; message?: string } }
+                    toast.error(e?.response?.data?.error?.message ?? e?.response?.data?.message ?? 'Failed to re-open position')
+                  } finally {
+                    setModifyOpenSubmitting(false)
+                  }
+                }}
+                className="space-y-4"
+              >
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-slate-400 text-xs">Symbol</Label>
+                    <div className="mt-1 rounded-lg border border-slate-600 bg-slate-700/50 px-3 py-2 text-sm font-mono text-white h-9 flex items-center">
+                      {modifyOpenPosition.symbol}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-slate-400 text-xs">Side *</Label>
+                    <Select
+                      value={modifyOpenForm.side}
+                      onValueChange={(v) => setModifyOpenForm((f) => ({ ...f, side: v as 'BUY' | 'SELL' }))}
+                    >
+                      <SelectTrigger className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="BUY">BUY (LONG)</SelectItem>
+                        <SelectItem value="SELL">SELL (SHORT)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-slate-400 text-xs">Size *</Label>
+                    <Input
+                      type="number"
+                      step="0.000001"
+                      min={0}
+                      value={modifyOpenForm.size || ''}
+                      onChange={(e) => setModifyOpenForm((f) => ({ ...f, size: parseFloat(e.target.value) || 0 }))}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-slate-400 text-xs">Entry price (opt)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min={0}
+                      placeholder="Empty = market"
+                      value={modifyOpenForm.price ?? ''}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value)
+                        setModifyOpenForm((f) => ({ ...f, price: Number.isFinite(v) && v > 0 ? v : undefined }))
+                      }}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-slate-400 text-xs">Stop loss (opt)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="Price"
+                      value={modifyOpenForm.stopLoss ?? ''}
+                      onChange={(e) => setModifyOpenForm((f) => ({ ...f, stopLoss: parseFloat(e.target.value) || undefined }))}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-slate-400 text-xs">Take profit (opt)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="Price"
+                      value={modifyOpenForm.takeProfit ?? ''}
+                      onChange={(e) => setModifyOpenForm((f) => ({ ...f, takeProfit: parseFloat(e.target.value) || undefined }))}
+                      className="mt-1 h-9 bg-slate-700/50 border-slate-600 text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModifyOpenDialogOpen(false)
+                      setModifyOpenPosition(null)
+                    }}
+                    className="px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={modifyOpenSubmitting || (modifyOpenForm.size ?? 0) <= 0}
+                    className="px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-500 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {modifyOpenSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Open with changes
+                  </button>
+                </div>
+              </form>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
       {/* Overview tab footer: Edit Profile & Reset Password */}
       {activeTab === 'overview' && (
         <div className="flex-shrink-0 border-t border-slate-700 px-3 py-3 sm:px-4 sm:py-4 bg-slate-800/80 flex flex-wrap items-center gap-3">
@@ -1269,6 +2032,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           )}
         </div>
       )}
+
     </>
   )
 }
