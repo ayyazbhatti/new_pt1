@@ -7,4 +7,5 @@ export {
   UserPositionsPage,
   UserOrdersPage,
   UserSupportPage,
+  UserFundedProgramsPage,
 } from './pages'
