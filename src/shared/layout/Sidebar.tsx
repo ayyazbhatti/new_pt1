@@ -81,7 +81,7 @@ export function Sidebar({ navItems, title }: SidebarProps) {
         </div>
 
         {/* Scrollable Menu */}
-        <nav className="flex-1 overflow-y-auto py-3 sm:py-4">
+        <nav className="flex-1 overflow-y-auto scrollbar-sidebar py-3 sm:py-4">
           <div className="space-y-0.5 px-2 sm:space-y-1">
             {visibleItems.map((item) => {
               const Icon = item.icon

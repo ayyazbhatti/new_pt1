@@ -91,8 +91,8 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 3px;
+    height: 3px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-track {
@@ -118,6 +118,30 @@
   /* Show scrollbar when focused (for keyboard navigation) */
   .scrollbar-thin:focus-within::-webkit-scrollbar-thumb {
     @apply bg-border;
+  }
+
+  /* Sidebar / admin nav: thin, dark scrollbar (always visible, no white default) */
+  .scrollbar-sidebar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .scrollbar-sidebar::-webkit-scrollbar {
+    width: 2px;
+    height: 2px;
+  }
+
+  .scrollbar-sidebar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  .scrollbar-sidebar::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.35);
+    @apply rounded-full;
+  }
+
+  .scrollbar-sidebar::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(148, 163, 184, 0.5);
   }
 
   .scrollbar-hide::-webkit-scrollbar {
