@@ -51,7 +51,7 @@ export function PermissionsPage() {
     queryFn: () => listTags(),
   })
   const allTags = useMemo(() => tagsList.map((t) => ({ id: t.id, name: t.name })), [tagsList])
-  /** Categories with Users, Tags, Groups, Managers, Trading, Leverage Profiles, Symbols, Markup, Swap, Finance, Affiliate, Permissions, Support, Call, Appointments, Settings, then rest in the Create/Edit profile modal */
+  /** Categories with Users, Tags, Groups, Managers, Trading, Leverage Profiles, Symbols, Markup, Swap, Finance, Leads, Affiliate, Permissions, Support, Call, Appointments, Settings, then rest in the Create/Edit profile modal */
   const permissionCategoriesSorted = useMemo(() => {
     const users = permissionCategories.filter((c) => c.name === 'Users')
     const tags = permissionCategories.filter((c) => c.name === 'Tags')
@@ -63,6 +63,7 @@ export function PermissionsPage() {
     const markup = permissionCategories.filter((c) => c.name === 'Markup')
     const swap = permissionCategories.filter((c) => c.name === 'Swap')
     const finance = permissionCategories.filter((c) => c.name === 'Finance')
+    const leads = permissionCategories.filter((c) => c.name === 'Leads')
     const affiliate = permissionCategories.filter((c) => c.name === 'Affiliate')
     const permissions = permissionCategories.filter((c) => c.name === 'Permissions')
     const support = permissionCategories.filter((c) => c.name === 'Support')
@@ -81,6 +82,7 @@ export function PermissionsPage() {
         c.name !== 'Markup' &&
         c.name !== 'Swap' &&
         c.name !== 'Finance' &&
+        c.name !== 'Leads' &&
         c.name !== 'Affiliate' &&
         c.name !== 'Permissions' &&
         c.name !== 'Support' &&
@@ -90,7 +92,7 @@ export function PermissionsPage() {
         c.name !== 'Configuration' &&
         c.name !== 'Risk & Reports'
     )
-    return [...users, ...tags, ...groups, ...managers, ...trading, ...leverageProfiles, ...symbols, ...markup, ...swap, ...finance, ...affiliate, ...permissions, ...support, ...call, ...appointments, ...settings, ...rest]
+    return [...users, ...tags, ...groups, ...managers, ...trading, ...leverageProfiles, ...symbols, ...markup, ...swap, ...finance, ...leads, ...affiliate, ...permissions, ...support, ...call, ...appointments, ...settings, ...rest]
   }, [permissionCategories])
   const createMutation = useMutation({
     mutationFn: (payload: { name: string; description?: string; permission_keys: string[] }) =>

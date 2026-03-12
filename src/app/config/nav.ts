@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, CopyPlus, Megaphone, Trophy } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, CopyPlus, Megaphone, Trophy, UserPlus } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -30,6 +30,7 @@ export const adminNavItems: NavItem[] = [
   { label: 'Support', path: '/admin/support', icon: Headphones, permission: 'support:view' },
   { label: 'Call user', path: '/admin/call-user', icon: Phone, permission: 'call:view' },
   { label: 'Appointments', path: '/admin/appointments', icon: CalendarDays, permission: 'appointments:view' },
+  { label: 'Leads', path: '/admin/leads', icon: UserPlus, permission: 'leads:view' },
   { label: 'System', path: '/admin/system', icon: Settings, permission: 'system:view' },
   { label: 'Settings', path: '/admin/settings', icon: Settings, permission: 'settings:view' },
   { label: 'Reports', path: '/admin/reports', icon: FileText, permission: 'reports:view' },

@@ -10,6 +10,7 @@ pub mod admin_managers;
 pub mod admin_permission_profiles;
 pub mod admin_affiliate;
 pub mod admin_tags;
+pub mod admin_leads;
 pub mod deposits;
 pub mod withdrawals;
 pub mod orders;
