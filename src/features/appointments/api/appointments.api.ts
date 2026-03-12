@@ -49,6 +49,7 @@ export async function getAppointments(
   if (params?.type) searchParams.set('type', params.type)
   if (params?.user_id) searchParams.set('user_id', params.user_id)
   if (params?.admin_id) searchParams.set('admin_id', params.admin_id)
+  if (params?.lead_id) searchParams.set('lead_id', params.lead_id)
   if (params?.start_date) searchParams.set('start_date', params.start_date)
   if (params?.end_date) searchParams.set('end_date', params.end_date)
   const q = searchParams.toString()

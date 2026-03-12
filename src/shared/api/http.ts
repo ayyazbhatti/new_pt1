@@ -7,6 +7,21 @@ export interface ApiError {
   }
 }
 
+/** Extract a string message from an API error (thrown by http()). Use for toasts / UI. */
+export function getApiErrorMessage(err: unknown): string {
+  const data = (err as { response?: { data?: unknown } })?.response?.data
+  if (data != null && typeof data === 'object') {
+    const inner = (data as { error?: unknown }).error
+    if (inner != null && typeof inner === 'object' && typeof (inner as { message?: string }).message === 'string') {
+      return (inner as { message: string }).message
+    }
+    if (typeof inner === 'string') return inner
+    const topLevel = (data as { message?: string }).message
+    if (typeof topLevel === 'string') return topLevel
+  }
+  return err instanceof Error ? err.message : 'Request failed'
+}
+
 // In dev: same-origin so Vite's custom api-proxy middleware forwards /api and /v1 to auth-service.
 // Set VITE_API_URL=http://localhost:3000 to bypass and call auth-service directly (CORS must allow your origin).
 const API_BASE_URL =

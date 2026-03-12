@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
-import { Link, useParams, useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Card } from '@/shared/ui/card'
 import { Button } from '@/shared/ui/button'
@@ -28,8 +28,15 @@ import {
   StickyNote,
   PhoneCall,
   Mail as MailIcon,
+  Calendar,
 } from 'lucide-react'
 import type { Lead, LeadActivity } from '../types/leads'
+import { getAppointments } from '@/features/appointments/api/appointments.api'
+import { CreateAppointmentModal } from '@/features/appointments/modals/CreateAppointmentModal'
+import { createAppointment } from '@/features/appointments/api/appointments.api'
+import { toast } from '@/shared/components/common'
+import { getApiErrorMessage } from '@/shared/api/http'
+import type { Appointment } from '@/features/appointments/types'
 
 function formatDate(iso: string): string {
   try {
@@ -49,11 +56,35 @@ function ActivityIcon({ type }: { type: LeadActivity['type'] }) {
   return <StickyNote className="h-4 w-4 text-text-muted" />
 }
 
+const LEAD_DETAIL_TABS = ['overview', 'activity', 'meetings'] as const
+type LeadDetailTab = (typeof LEAD_DETAIL_TABS)[number]
+
+function isValidLeadTab(tab: string | null): tab is LeadDetailTab {
+  return tab != null && LEAD_DETAIL_TABS.includes(tab as LeadDetailTab)
+}
+
 export function AdminLeadDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const openModal = useModalStore((state) => state.openModal)
   const queryClient = useQueryClient()
+
+  const tabParam = searchParams.get('tab')
+  const activeTab: LeadDetailTab = isValidLeadTab(tabParam) ? tabParam : 'overview'
+
+  const setActiveTab = useCallback(
+    (tab: string) => {
+      if (isValidLeadTab(tab)) {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('tab', tab)
+          return next
+        })
+      }
+    },
+    [setSearchParams]
+  )
 
   const {
     data: lead,
@@ -80,12 +111,34 @@ export function AdminLeadDetailPage() {
   const canConvert = useCanAccess('leads:convert')
   const canAssign = useCanAccess('leads:assign')
   const canDelete = useCanAccess('leads:delete')
+  const canCreateAppointment = useCanAccess('appointments:create')
+
+  const { data: appointmentsData } = useQuery({
+    queryKey: ['admin', 'appointments', { lead_id: id }],
+    queryFn: () => getAppointments({ lead_id: id!, limit: 50 }),
+    enabled: !!id && canView,
+  })
+  const leadAppointments: Appointment[] = appointmentsData?.appointments ?? []
+
+  const createAppointmentMutation = useMutation({
+    mutationFn: createAppointment,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'appointments'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'appointments', { lead_id: id }] })
+      toast.success('Meeting scheduled.')
+      useModalStore.getState().closeModal('lead-schedule-meeting')
+    },
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err))
+    },
+  })
 
   const invalidateDetail = useCallback(() => {
     if (id) {
       queryClient.invalidateQueries({ queryKey: ['leads'] })
       queryClient.invalidateQueries({ queryKey: ['leads', id] })
       queryClient.invalidateQueries({ queryKey: ['leads', id, 'activities'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'appointments', { lead_id: id }] })
     }
   }, [queryClient, id])
 
@@ -156,6 +209,20 @@ export function AdminLeadDetailPage() {
       { title: 'Delete lead', size: 'sm' }
     )
   }, [lead, openModal, navigate, invalidateDetail])
+
+  const handleScheduleMeeting = useCallback(() => {
+    if (!lead) return
+    openModal(
+      'lead-schedule-meeting',
+      <CreateAppointmentModal
+        initialLead={{ id: lead.id, name: lead.name || lead.email, email: lead.email }}
+        onSearchUsers={async () => []}
+        onSubmit={(payload) => createAppointmentMutation.mutate(payload)}
+        submitting={createAppointmentMutation.isPending}
+      />,
+      { title: 'Schedule meeting', size: 'md' }
+    )
+  }, [lead, openModal, createAppointmentMutation])
 
   if (!canView) {
     return (
@@ -277,10 +344,11 @@ export function AdminLeadDetailPage() {
         }
       />
 
-      <Tabs defaultValue="overview" className="mt-6">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="meetings">Meetings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -432,6 +500,53 @@ export function AdminLeadDetailPage() {
                         {activity.createdBy} · {formatDate(activity.createdAt)}
                       </p>
                     </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="meetings" className="mt-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-medium text-text">Meetings</h3>
+            {canCreateAppointment && (
+              <Button size="sm" onClick={handleScheduleMeeting}>
+                <Calendar className="h-4 w-4 mr-2" />
+                Schedule meeting
+              </Button>
+            )}
+          </div>
+          {leadAppointments.length === 0 ? (
+            <Card className="rounded-lg border border-border bg-surface-2 p-8 text-center">
+              <p className="text-text-muted">No meetings scheduled for this lead.</p>
+              {canCreateAppointment && (
+                <Button className="mt-3" onClick={handleScheduleMeeting}>
+                  <Calendar className="h-4 w-4 mr-2" />
+                  Schedule meeting
+                </Button>
+              )}
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {leadAppointments.map((apt) => (
+                <Card
+                  key={apt.id}
+                  className="rounded-lg border border-border bg-surface-2 p-4"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-text">{apt.title}</p>
+                      <p className="text-xs text-text-muted mt-1">
+                        {formatDate(apt.scheduled_at)} · {apt.duration_minutes} min · {apt.status}
+                      </p>
+                      {apt.description && (
+                        <p className="text-sm text-text-muted mt-2">{apt.description}</p>
+                      )}
+                    </div>
+                    <Button variant="outline" size="sm" asChild>
+                      <Link to={`/admin/appointments?highlight=${apt.id}`}>View in calendar</Link>
+                    </Button>
                   </div>
                 </Card>
               ))}

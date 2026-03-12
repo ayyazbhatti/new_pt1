@@ -49,7 +49,7 @@ export function AdminAppointmentsTable({
       <table className="w-full min-w-[800px]">
         <thead className="border-b border-slate-700 bg-slate-800">
           <tr>
-            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">User</th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">User / Lead</th>
             <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Title</th>
             <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Scheduled</th>
             <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 whitespace-nowrap">Duration</th>
@@ -76,10 +76,17 @@ export function AdminAppointmentsTable({
                 <td className="px-4 py-3 align-middle">
                   <div className="flex min-w-0 max-w-[180px] items-center gap-2">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-600 text-sm font-medium text-slate-300">
-                      {(apt.user_name ?? apt.user_email ?? '?')[0].toUpperCase()}
+                      {(apt.lead_name
+                        ? apt.lead_name[0]
+                        : (apt.user_name ?? apt.user_email ?? '?')[0]
+                      ).toUpperCase()}
                     </div>
-                    <span className="min-w-0 truncate text-sm font-medium text-white" title={`${apt.user_name ?? '—'} ${apt.user_email ?? ''}`}>
-                      {apt.user_name ?? apt.user_email ?? '—'}
+                    <span className="min-w-0 truncate text-sm font-medium text-white" title={apt.lead_id ? `Lead: ${apt.lead_name ?? '—'}` : `${apt.user_name ?? '—'} ${apt.user_email ?? ''}`}>
+                      {apt.lead_id ? (
+                        <span className="text-primary">Lead: {apt.lead_name ?? '—'}</span>
+                      ) : (
+                        apt.user_name ?? apt.user_email ?? '—'
+                      )}
                     </span>
                   </div>
                 </td>

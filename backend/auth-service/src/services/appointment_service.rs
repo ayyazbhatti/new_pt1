@@ -13,7 +13,7 @@ const SEARCH_USERS_LIMIT: i64 = 20;
 #[serde(rename_all = "snake_case")]
 pub struct AppointmentRow {
     pub id: Uuid,
-    pub user_id: Uuid,
+    pub user_id: Option<Uuid>,
     pub admin_id: Uuid,
     pub title: String,
     pub description: Option<String>,
@@ -35,6 +35,8 @@ pub struct AppointmentRow {
     pub user_email: Option<String>,
     pub user_name: Option<String>,
     pub admin_email: Option<String>,
+    pub lead_id: Option<Uuid>,
+    pub lead_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -70,13 +72,15 @@ pub struct ListAppointmentsParams {
     pub r#type: Option<String>,
     pub user_id: Option<Uuid>,
     pub admin_id: Option<Uuid>,
+    pub lead_id: Option<Uuid>,
     pub start_date: Option<String>,
     pub end_date: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
 pub struct CreateAppointmentPayload {
-    pub user_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub lead_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub scheduled_at: String,
@@ -153,10 +157,13 @@ pub async fn list_for_user(
                a.created_at, a.updated_at,
                u.email AS user_email,
                CONCAT(u.first_name, ' ', u.last_name) AS user_name,
-               adm.email AS admin_email
+               adm.email AS admin_email,
+               a.lead_id,
+               l.name AS lead_name
         FROM appointments a
-        JOIN users u ON u.id = a.user_id
+        LEFT JOIN users u ON u.id = a.user_id
         JOIN users adm ON adm.id = a.admin_id
+        LEFT JOIN leads l ON l.id = a.lead_id
         WHERE a.user_id = $1
     "#
     .to_string();
@@ -246,16 +253,19 @@ pub async fn list_for_user(
 }
 
 /// Admin list with optional search, filters, pagination.
-/// When allowed_user_ids is Some(empty), returns (vec![], 0). When Some(ids), only appointments for those users.
+/// allowed_user_ids: scope for user appointments (None = all users for super_admin).
+/// allowed_lead_ids: scope for lead appointments (None = all leads for super_admin).
+/// Show appointments where (user_id IN allowed_user_ids) OR (lead_id IN allowed_lead_ids). When both are Some(empty), returns (vec![], 0).
 pub async fn list_admin(
     pool: &sqlx::PgPool,
     params: &ListAppointmentsParams,
     allowed_user_ids: Option<&[Uuid]>,
+    allowed_lead_ids: Option<&[Uuid]>,
 ) -> Result<(Vec<AppointmentRow>, i64), sqlx::Error> {
-    if let Some(ids) = allowed_user_ids {
-        if ids.is_empty() {
-            return Ok((vec![], 0));
-        }
+    let user_scope_empty = allowed_user_ids.map(|v| v.is_empty()).unwrap_or(false);
+    let lead_scope_empty = allowed_lead_ids.map(|v| v.is_empty()).unwrap_or(false);
+    if user_scope_empty && lead_scope_empty {
+        return Ok((vec![], 0));
     }
 
     let limit = clamp_limit(params.limit);
@@ -268,25 +278,29 @@ pub async fn list_admin(
                a.created_at, a.updated_at,
                u.email AS user_email,
                CONCAT(u.first_name, ' ', u.last_name) AS user_name,
-               adm.email AS admin_email
+               adm.email AS admin_email,
+               a.lead_id,
+               l.name AS lead_name
         FROM appointments a
-        JOIN users u ON u.id = a.user_id
+        LEFT JOIN users u ON u.id = a.user_id
         JOIN users adm ON adm.id = a.admin_id
+        LEFT JOIN leads l ON l.id = a.lead_id
         WHERE 1=1
     "#
     .to_string();
     let mut bind_pos: u32 = 1;
-    if allowed_user_ids.is_some() {
-        q_str.push_str(&format!(" AND a.user_id = ANY(${})", bind_pos));
-        bind_pos += 1;
+    // Scope: super_admin has (None, None) = no filter. Admin has (Some(user_ids), Some(lead_ids)) = (user_id IN user_ids OR lead_id IN lead_ids).
+    if let (Some(uid), Some(lid)) = (allowed_user_ids, allowed_lead_ids) {
+        q_str.push_str(&format!(" AND (a.user_id = ANY(${}) OR a.lead_id = ANY(${}))", bind_pos, bind_pos + 1));
+        bind_pos += 2;
     }
     if params.search.as_deref().is_some_and(|s| !s.is_empty()) {
         let pattern = format!("%{}%", params.search.as_ref().unwrap().to_lowercase());
         q_str.push_str(&format!(
-            " AND (LOWER(a.title) LIKE ${} OR LOWER(u.email) LIKE ${} OR LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ${})",
-            bind_pos, bind_pos + 1, bind_pos + 2
+            " AND (LOWER(a.title) LIKE ${} OR LOWER(COALESCE(u.email,'')) LIKE ${} OR LOWER(COALESCE(CONCAT(u.first_name, ' ', u.last_name),'')) LIKE ${} OR LOWER(COALESCE(l.name,'')) LIKE ${})",
+            bind_pos, bind_pos + 1, bind_pos + 2, bind_pos + 3
         ));
-        bind_pos += 3;
+        bind_pos += 4;
     }
     if params.status.as_deref().is_some_and(|s| !s.is_empty()) {
         q_str.push_str(&format!(" AND a.status = ${}", bind_pos));
@@ -298,6 +312,10 @@ pub async fn list_admin(
     }
     if params.user_id.is_some() {
         q_str.push_str(&format!(" AND a.user_id = ${}", bind_pos));
+        bind_pos += 1;
+    }
+    if params.lead_id.is_some() {
+        q_str.push_str(&format!(" AND a.lead_id = ${}", bind_pos));
         bind_pos += 1;
     }
     if params.admin_id.is_some() {
@@ -315,56 +333,54 @@ pub async fn list_admin(
     q_str.push_str(" ORDER BY a.scheduled_at DESC");
     q_str.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
 
-    let count_str = r#"SELECT COUNT(*) FROM appointments a
-        JOIN users u ON u.id = a.user_id
-        WHERE 1=1"#.to_string();
-    let mut count_parts = vec![
-        "SELECT COUNT(*) FROM appointments a JOIN users u ON u.id = a.user_id WHERE 1=1".to_string(),
-    ];
+    let mut count_sql = "SELECT COUNT(*) FROM appointments a LEFT JOIN users u ON u.id = a.user_id LEFT JOIN leads l ON l.id = a.lead_id WHERE 1=1".to_string();
     let mut cpos = 1u32;
-    if allowed_user_ids.is_some() {
-        count_parts.push(format!(" AND a.user_id = ANY(${})", cpos));
-        cpos += 1;
+    if let (Some(_), Some(_)) = (allowed_user_ids, allowed_lead_ids) {
+        count_sql.push_str(&format!(" AND (a.user_id = ANY(${}) OR a.lead_id = ANY(${}))", cpos, cpos + 1));
+        cpos += 2;
     }
     if params.search.as_deref().is_some_and(|s| !s.is_empty()) {
-        count_parts.push(format!(
-            " AND (LOWER(a.title) LIKE ${} OR LOWER(u.email) LIKE ${} OR LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ${})",
-            cpos, cpos+1, cpos+2
+        count_sql.push_str(&format!(
+            " AND (LOWER(a.title) LIKE ${} OR LOWER(COALESCE(u.email,'')) LIKE ${} OR LOWER(COALESCE(CONCAT(u.first_name, ' ', u.last_name),'')) LIKE ${} OR LOWER(COALESCE(l.name,'')) LIKE ${})",
+            cpos, cpos + 1, cpos + 2, cpos + 3
         ));
-        cpos += 3;
+        cpos += 4;
     }
     if params.status.as_deref().is_some_and(|s| !s.is_empty()) {
-        count_parts.push(format!(" AND a.status = ${}", cpos));
+        count_sql.push_str(&format!(" AND a.status = ${}", cpos));
         cpos += 1;
     }
     if params.r#type.as_deref().is_some_and(|t| !t.is_empty()) {
-        count_parts.push(format!(" AND a.type = ${}", cpos));
+        count_sql.push_str(&format!(" AND a.type = ${}", cpos));
         cpos += 1;
     }
     if params.user_id.is_some() {
-        count_parts.push(format!(" AND a.user_id = ${}", cpos));
+        count_sql.push_str(&format!(" AND a.user_id = ${}", cpos));
+        cpos += 1;
+    }
+    if params.lead_id.is_some() {
+        count_sql.push_str(&format!(" AND a.lead_id = ${}", cpos));
         cpos += 1;
     }
     if params.admin_id.is_some() {
-        count_parts.push(format!(" AND a.admin_id = ${}", cpos));
+        count_sql.push_str(&format!(" AND a.admin_id = ${}", cpos));
         cpos += 1;
     }
     if params.start_date.as_deref().is_some_and(|s| !s.is_empty()) {
-        count_parts.push(format!(" AND a.scheduled_at >= ${}::timestamptz", cpos));
+        count_sql.push_str(&format!(" AND a.scheduled_at >= ${}::timestamptz", cpos));
         cpos += 1;
     }
     if params.end_date.as_deref().is_some_and(|s| !s.is_empty()) {
-        count_parts.push(format!(" AND a.scheduled_at <= ${}::timestamptz", cpos));
+        count_sql.push_str(&format!(" AND a.scheduled_at <= ${}::timestamptz", cpos));
     }
-    let count_sql = count_parts.join(" ");
     let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
-    if let Some(ids) = allowed_user_ids {
-        count_q = count_q.bind(ids);
+    if let (Some(uid), Some(lid)) = (allowed_user_ids, allowed_lead_ids) {
+        count_q = count_q.bind(uid).bind(lid);
     }
     if let Some(s) = &params.search {
         if !s.is_empty() {
             let p = format!("%{}%", s.to_lowercase());
-            count_q = count_q.bind(p.clone()).bind(p.clone()).bind(p);
+            count_q = count_q.bind(p.clone()).bind(p.clone()).bind(p.clone()).bind(p);
         }
     }
     if let Some(st) = &params.status {
@@ -379,6 +395,9 @@ pub async fn list_admin(
     }
     if let Some(uid) = &params.user_id {
         count_q = count_q.bind(uid);
+    }
+    if let Some(lid) = &params.lead_id {
+        count_q = count_q.bind(lid);
     }
     if let Some(aid) = &params.admin_id {
         count_q = count_q.bind(aid);
@@ -396,13 +415,13 @@ pub async fn list_admin(
     let total: i64 = count_q.fetch_one(pool).await?;
 
     let mut q = sqlx::query_as::<_, AppointmentRow>(&q_str);
-    if let Some(ids) = allowed_user_ids {
-        q = q.bind(ids);
+    if let (Some(uid), Some(lid)) = (allowed_user_ids, allowed_lead_ids) {
+        q = q.bind(uid).bind(lid);
     }
     if let Some(s) = &params.search {
         if !s.is_empty() {
             let p = format!("%{}%", s.to_lowercase());
-            q = q.bind(p.clone()).bind(p.clone()).bind(p);
+            q = q.bind(p.clone()).bind(p.clone()).bind(p.clone()).bind(p);
         }
     }
     if let Some(st) = &params.status {
@@ -417,6 +436,9 @@ pub async fn list_admin(
     }
     if let Some(uid) = &params.user_id {
         q = q.bind(uid);
+    }
+    if let Some(lid) = &params.lead_id {
+        q = q.bind(lid);
     }
     if let Some(aid) = &params.admin_id {
         q = q.bind(aid);
@@ -444,10 +466,13 @@ pub async fn get_by_id(pool: &sqlx::PgPool, id: Uuid) -> Result<Option<Appointme
                a.created_at, a.updated_at,
                u.email AS user_email,
                CONCAT(u.first_name, ' ', u.last_name) AS user_name,
-               adm.email AS admin_email
+               adm.email AS admin_email,
+               a.lead_id,
+               l.name AS lead_name
         FROM appointments a
-        JOIN users u ON u.id = a.user_id
+        LEFT JOIN users u ON u.id = a.user_id
         JOIN users adm ON adm.id = a.admin_id
+        LEFT JOIN leads l ON l.id = a.lead_id
         WHERE a.id = $1
     "#)
         .bind(id)
@@ -457,18 +482,20 @@ pub async fn get_by_id(pool: &sqlx::PgPool, id: Uuid) -> Result<Option<Appointme
 }
 
 /// Single aggregated query for admin stats.
-/// When allowed_user_ids is Some(empty), returns zeroed stats. When Some(ids), only counts those users' appointments.
+/// When (allowed_user_ids, allowed_lead_ids) is (Some(empty), Some(empty)), returns zeroed stats.
+/// When both Some(non-empty), counts appointments where user_id IN uid OR lead_id IN lid. When (None, None), all.
 pub async fn get_stats(
     pool: &sqlx::PgPool,
     allowed_user_ids: Option<&[Uuid]>,
+    allowed_lead_ids: Option<&[Uuid]>,
 ) -> Result<AppointmentStatsRow, sqlx::Error> {
     let now = Utc::now();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
     let today_end = today_start + chrono::Duration::days(1);
     let week_end = today_end + chrono::Duration::days(7);
 
-    if let Some(ids) = allowed_user_ids {
-        if ids.is_empty() {
+    if let (Some(uid), Some(lid)) = (allowed_user_ids, allowed_lead_ids) {
+        if uid.is_empty() && lid.is_empty() {
             return Ok(AppointmentStatsRow {
                 total_appointments: 0,
                 scheduled_appointments: 0,
@@ -483,7 +510,7 @@ pub async fn get_stats(
         }
     }
 
-    let row = if let Some(ids) = allowed_user_ids {
+    let row = if let (Some(uid), Some(lid)) = (allowed_user_ids, allowed_lead_ids) {
         sqlx::query_as::<_, AppointmentStatsRow>(r#"
             SELECT
                 COUNT(*)::bigint AS total_appointments,
@@ -496,12 +523,13 @@ pub async fn get_stats(
                 COUNT(*) FILTER (WHERE scheduled_at >= $2 AND scheduled_at < $3)::bigint AS upcoming_7_days,
                 COUNT(*) FILTER (WHERE scheduled_at < $1 AND status NOT IN ('completed','cancelled'))::bigint AS overdue_appointments
             FROM appointments
-            WHERE user_id = ANY($4)
+            WHERE user_id = ANY($4) OR lead_id = ANY($5)
         "#)
             .bind(today_start)
             .bind(today_end)
             .bind(week_end)
-            .bind(ids)
+            .bind(uid)
+            .bind(lid)
             .fetch_one(pool)
             .await?
     } else {
@@ -576,7 +604,7 @@ pub async fn search_users(
     Ok(rows)
 }
 
-/// Create appointment; returns created row with joins.
+/// Create appointment; returns created row with joins. At least one of user_id or lead_id must be set.
 pub async fn create(
     pool: &sqlx::PgPool,
     admin_id: Uuid,
@@ -586,11 +614,12 @@ pub async fn create(
     let status = "scheduled";
     let id = Uuid::new_v4();
     sqlx::query(r#"
-        INSERT INTO appointments (id, user_id, admin_id, title, description, scheduled_at, duration_minutes, status, type, meeting_link, location, notes, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+        INSERT INTO appointments (id, user_id, lead_id, admin_id, title, description, scheduled_at, duration_minutes, status, type, meeting_link, location, notes, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $10, $11, $12, $13, NOW(), NOW())
     "#)
         .bind(id)
         .bind(payload.user_id)
+        .bind(payload.lead_id)
         .bind(admin_id)
         .bind(&payload.title)
         .bind(&payload.description)

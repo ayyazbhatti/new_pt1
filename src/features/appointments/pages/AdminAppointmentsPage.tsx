@@ -32,10 +32,11 @@ import {
   completeAppointment,
   sendAppointmentReminder,
 } from '../api/appointments.api'
-import { Calendar, List, Plus, X } from 'lucide-react'
+import { Calendar, CalendarCheck, CalendarClock, CalendarDays, AlertCircle, List, Plus, X } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
+import { getApiErrorMessage } from '@/shared/api/http'
 
 const STORAGE_SEARCH_KEY = 'admin-appointments-search'
 const PAGE_SIZES = [10, 20, 50, 100, 200]
@@ -107,8 +108,8 @@ export function AdminAppointmentsPage() {
       toast.success('Appointment created.')
       useModalStore.getState().closeModal('create-apt')
     },
-    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
-      toast.error(err?.response?.data?.error ?? err.message)
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err))
     },
   })
 
@@ -120,8 +121,8 @@ export function AdminAppointmentsPage() {
       toast.success('Appointment updated.')
       useModalStore.getState().closeModal('edit-apt')
     },
-    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
-      toast.error(err?.response?.data?.error ?? err.message)
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err))
     },
   })
 
@@ -133,8 +134,8 @@ export function AdminAppointmentsPage() {
       toast.success('Appointment rescheduled.')
       useModalStore.getState().closeModal('reschedule-apt')
     },
-    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
-      toast.error(err?.response?.data?.error ?? err.message)
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err))
     },
   })
 
@@ -146,8 +147,8 @@ export function AdminAppointmentsPage() {
       toast.success('Appointment cancelled.')
       useModalStore.getState().closeModal('cancel-apt')
     },
-    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
-      toast.error(err?.response?.data?.error ?? err.message)
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err))
     },
   })
 
@@ -159,8 +160,8 @@ export function AdminAppointmentsPage() {
       toast.success('Appointment marked complete.')
       useModalStore.getState().closeModal('complete-apt')
     },
-    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
-      toast.error(err?.response?.data?.error ?? err.message)
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err))
     },
   })
 
@@ -170,8 +171,8 @@ export function AdminAppointmentsPage() {
       toast.success('Reminder sent.')
       useModalStore.getState().closeModal('reminder-apt')
     },
-    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
-      toast.error(err?.response?.data?.error ?? err.message)
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err))
     },
   })
 
@@ -184,12 +185,13 @@ export function AdminAppointmentsPage() {
   const userOptions = useMemo(() => {
     const seen = new Set<string>()
     return appointments
+      .filter((a) => a.user_id != null)
       .filter((a) => {
-        if (seen.has(a.user_id)) return false
-        seen.add(a.user_id)
+        if (seen.has(a.user_id!)) return false
+        seen.add(a.user_id!)
         return true
       })
-      .map((a) => ({ id: a.user_id, name: a.user_name ?? a.user_email ?? 'Unknown' }))
+      .map((a) => ({ id: a.user_id!, name: a.user_name ?? a.user_email ?? 'Unknown' }))
   }, [appointments])
 
   const handleView = (apt: Appointment) => {
@@ -322,16 +324,24 @@ export function AdminAppointmentsPage() {
       {/* Stats row */}
       <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[
-          { label: 'Total Appointments', value: stats?.total_appointments ?? 0 },
-          { label: "Today's Appointments", value: stats?.today_appointments ?? 0 },
-          { label: 'Upcoming (7 days)', value: stats?.upcoming_7_days ?? 0 },
-          { label: 'Overdue', value: stats?.overdue_appointments ?? 0 },
-        ].map((card) => (
-          <div key={card.label} className="rounded-lg border border-slate-700 bg-slate-800 p-4">
-            <p className="text-sm text-slate-400">{card.label}</p>
-            <p className="mt-1 text-xl font-bold text-white">{card.value}</p>
-          </div>
-        ))}
+          { label: 'Total Appointments', value: stats?.total_appointments ?? 0, icon: CalendarCheck, iconClassName: 'text-slate-400' },
+          { label: "Today's Appointments", value: stats?.today_appointments ?? 0, icon: CalendarDays, iconClassName: 'text-blue-400' },
+          { label: 'Upcoming (7 days)', value: stats?.upcoming_7_days ?? 0, icon: CalendarClock, iconClassName: 'text-emerald-400' },
+          { label: 'Overdue', value: stats?.overdue_appointments ?? 0, icon: AlertCircle, iconClassName: 'text-amber-400' },
+        ].map((card) => {
+          const Icon = card.icon
+          return (
+            <div key={card.label} className="rounded-lg border border-slate-700 bg-slate-800 p-4 flex items-start gap-3">
+              <div className={`rounded-lg bg-slate-700/80 p-2 ${card.iconClassName}`}>
+                <Icon className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-slate-400">{card.label}</p>
+                <p className="mt-1 text-xl font-bold text-white">{card.value}</p>
+              </div>
+            </div>
+          )
+        })}
       </div>
 
       {/* Filters */}

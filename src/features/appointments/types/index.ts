@@ -18,7 +18,7 @@ export type ReminderType = '24h' | '2h' | '1h' | '15m' | 'custom'
 
 export interface Appointment {
   id: string
-  user_id: string
+  user_id: string | null
   admin_id: string
   title: string
   description?: string
@@ -40,6 +40,8 @@ export interface Appointment {
   user_email?: string
   user_name?: string
   admin_email?: string
+  lead_id?: string | null
+  lead_name?: string | null
 }
 
 export interface AppointmentStats {
@@ -63,6 +65,7 @@ export interface AppointmentQueryParams {
   type?: AppointmentType
   user_id?: string
   admin_id?: string
+  lead_id?: string
   start_date?: string
   end_date?: string
 }
@@ -83,7 +86,8 @@ export interface UserSearchResult {
 }
 
 export interface CreateAppointmentRequest {
-  user_id: string
+  user_id?: string
+  lead_id?: string
   title: string
   description?: string
   scheduled_at: string

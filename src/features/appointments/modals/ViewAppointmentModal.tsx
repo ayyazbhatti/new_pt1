@@ -20,9 +20,11 @@ export function ViewAppointmentModal({ appointment }: ViewAppointmentModalProps)
       </div>
       <dl className="grid gap-3 text-sm">
         <div>
-          <dt className="text-slate-400">User</dt>
+          <dt className="text-slate-400">{appointment.lead_id ? 'Lead' : 'User'}</dt>
           <dd className="font-medium text-slate-300">
-            {appointment.user_name ?? '—'} ({appointment.user_email ?? '—'})
+            {appointment.lead_id
+              ? (appointment.lead_name ?? '—')
+              : `${appointment.user_name ?? '—'} (${appointment.user_email ?? '—'})`}
           </dd>
         </div>
         <div>

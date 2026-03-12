@@ -391,3 +391,36 @@ pub async fn resolve_allowed_user_ids_for_trading(
     })?;
     Ok(Some(user_ids))
 }
+
+/// Resolve allowed lead IDs for the current caller (lead visibility).
+/// - `Ok(None)` = super_admin → no filter (see all leads).
+/// - `Ok(Some(vec![]))` = admin/manager with no visible leads → see no lead appointments.
+/// - `Ok(Some(ids))` = admin/manager scoped to leads they created or are assigned to.
+pub async fn resolve_allowed_lead_ids(
+    pool: &PgPool,
+    claims: &Claims,
+) -> Result<Option<Vec<Uuid>>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role == "super_admin" {
+        return Ok(None);
+    }
+    let uid = claims.sub;
+    let lead_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM leads WHERE created_by_id = $1 OR owner_id = $1",
+    )
+    .bind(uid)
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DB_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    Ok(Some(lead_ids))
+}

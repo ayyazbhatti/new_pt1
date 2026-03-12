@@ -47,6 +47,7 @@ async fn list_appointments(
         r#type: q.r#type,
         user_id: None,
         admin_id: None,
+        lead_id: None,
         start_date: q.start_date,
         end_date: q.end_date,
     };
@@ -88,7 +89,7 @@ async fn get_appointment(
             Json(serde_json::json!({ "error": "Appointment not found" })),
         ));
     };
-    if row.user_id != user_id {
+    if row.user_id.as_ref() != Some(&user_id) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": "Not allowed to view this appointment" })),

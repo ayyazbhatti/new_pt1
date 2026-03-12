@@ -1,5 +1,6 @@
 import { Card } from '@/shared/ui/card'
 import { Badge } from '@/shared/ui/badge'
+import { Users, Activity, FileCheck, ShieldAlert } from 'lucide-react'
 import { User } from '../types/users'
 
 interface UserKPICardsProps {
@@ -8,36 +9,63 @@ interface UserKPICardsProps {
   totalFromServer?: number
 }
 
-export function UserKPICards({ users, totalFromServer }: UserKPICardsProps) {
-  const totalUsers = totalFromServer ?? users.length
-  const activeTraders = users.filter((u) => u.openPositions > 0).length
-  const kycPending = users.filter((u) => u.kycStatus === 'pending').length
-  const restrictedAccounts = users.filter(
-    (u) => u.status === 'suspended' || u.status === 'disabled'
-  ).length
+const STAT_CARDS = [
+  {
+    key: 'total',
+    label: 'Total Users',
+    getValue: (users: User[], totalFromServer?: number) => totalFromServer ?? users.length,
+    icon: Users,
+    iconClassName: 'text-text-muted',
+    badge: { label: 'All accounts', variant: 'neutral' as const },
+  },
+  {
+    key: 'active',
+    label: 'Active Traders',
+    getValue: (users: User[]) => users.filter((u) => u.openPositions > 0).length,
+    icon: Activity,
+    iconClassName: 'text-emerald-500',
+    badge: { label: 'With open positions', variant: 'success' as const },
+  },
+  {
+    key: 'kyc',
+    label: 'KYC Pending',
+    getValue: (users: User[]) => users.filter((u) => u.kycStatus === 'pending').length,
+    icon: FileCheck,
+    iconClassName: 'text-amber-500',
+    badge: { label: 'Requires review', variant: 'warning' as const },
+  },
+  {
+    key: 'restricted',
+    label: 'Restricted Accounts',
+    getValue: (users: User[]) =>
+      users.filter((u) => u.status === 'suspended' || u.status === 'disabled').length,
+    icon: ShieldAlert,
+    iconClassName: 'text-red-500',
+    badge: { label: 'Suspended/Disabled/High Risk', variant: 'danger' as const },
+  },
+]
 
+export function UserKPICards({ users, totalFromServer }: UserKPICardsProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      <Card className="p-4 bg-surface-2">
-        <div className="text-sm text-text-muted mb-1">Total Users</div>
-        <div className="text-2xl font-bold text-text mb-2">{totalUsers}</div>
-        <Badge variant="neutral" className="text-xs">All accounts</Badge>
-      </Card>
-      <Card className="p-4 bg-surface-2">
-        <div className="text-sm text-text-muted mb-1">Active Traders</div>
-        <div className="text-2xl font-bold text-text mb-2">{activeTraders}</div>
-        <Badge variant="success" className="text-xs">With open positions</Badge>
-      </Card>
-      <Card className="p-4 bg-surface-2">
-        <div className="text-sm text-text-muted mb-1">KYC Pending</div>
-        <div className="text-2xl font-bold text-text mb-2">{kycPending}</div>
-        <Badge variant="warning" className="text-xs">Requires review</Badge>
-      </Card>
-      <Card className="p-4 bg-surface-2">
-        <div className="text-sm text-text-muted mb-1">Restricted Accounts</div>
-        <div className="text-2xl font-bold text-text mb-2">{restrictedAccounts}</div>
-        <Badge variant="danger" className="text-xs">Suspended/Disabled/High Risk</Badge>
-      </Card>
+      {STAT_CARDS.map((card) => {
+        const Icon = card.icon
+        const value = card.key === 'total' ? card.getValue(users, totalFromServer) : card.getValue(users)
+        return (
+          <Card key={card.key} className="p-4 bg-surface-2 flex items-start gap-3">
+            <div className={`rounded-lg bg-surface-1 p-2 shrink-0 ${card.iconClassName}`}>
+              <Icon className="h-5 w-5" aria-hidden />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm text-text-muted mb-1">{card.label}</div>
+              <div className="text-2xl font-bold text-text mb-2">{value}</div>
+              <Badge variant={card.badge.variant} className="text-xs">
+                {card.badge.label}
+              </Badge>
+            </div>
+          </Card>
+        )
+      })}
     </div>
   )
 }

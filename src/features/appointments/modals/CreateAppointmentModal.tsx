@@ -16,12 +16,20 @@ import { cn } from '@/shared/utils'
 const TYPES: AppointmentType[] = ['consultation', 'support', 'onboarding', 'review', 'other']
 const DURATIONS = [15, 30, 45, 60]
 
+export interface LeadOption {
+  id: string
+  name: string
+  email?: string
+}
+
 interface CreateAppointmentModalProps {
   onSearchUsers: (q: string, limit?: number) => UserSearchResult[] | Promise<UserSearchResult[]>
   onSubmit: (payload: CreateAppointmentRequest) => void
   submitting?: boolean
   /** When set, user is pre-selected and read-only (e.g. when opening from User Details drawer). */
   initialUser?: UserSearchResult | null
+  /** When set, appointment is for this lead; user picker is hidden and payload will include lead_id. */
+  initialLead?: LeadOption | null
 }
 
 export function CreateAppointmentModal({
@@ -29,6 +37,7 @@ export function CreateAppointmentModal({
   onSubmit,
   submitting = false,
   initialUser = null,
+  initialLead = null,
 }: CreateAppointmentModalProps) {
   const closeModal = useModalStore((s) => s.closeModal)
   const [userQuery, setUserQuery] = useState('')
@@ -36,6 +45,7 @@ export function CreateAppointmentModal({
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(initialUser ?? null)
   const isUserLocked = initialUser != null
+  const isForLead = initialLead != null
 
   useEffect(() => {
     if (initialUser) setSelectedUser(initialUser)
@@ -51,7 +61,7 @@ export function CreateAppointmentModal({
   const [notes, setNotes] = useState('')
 
   useEffect(() => {
-    if (isUserLocked || userQuery.trim().length < 2) {
+    if (isForLead || isUserLocked || userQuery.trim().length < 2) {
       setUserResults([])
       return
     }
@@ -65,7 +75,7 @@ export function CreateAppointmentModal({
     return () => {
       cancelled = true
     }
-  }, [isUserLocked, userQuery, onSearchUsers])
+  }, [isForLead, isUserLocked, userQuery, onSearchUsers])
 
   const handleSelectUser = (u: UserSearchResult) => {
     setSelectedUser(u)
@@ -76,12 +86,12 @@ export function CreateAppointmentModal({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedUser) return
+    if (!isForLead && !selectedUser) return
+    if (isForLead && !initialLead) return
     const [y, m, d] = scheduledDate.split('-').map(Number)
     const [hour, min] = scheduledTime.split(':').map(Number)
     const scheduled_at = new Date(y, m - 1, d, hour, min, 0).toISOString()
-    onSubmit({
-      user_id: selectedUser.id,
+    const payload: CreateAppointmentRequest = {
       title: title.trim(),
       description: description.trim() || undefined,
       scheduled_at,
@@ -90,15 +100,25 @@ export function CreateAppointmentModal({
       meeting_link: meeting_link.trim() || undefined,
       location: location.trim() || undefined,
       notes: notes.trim() || undefined,
-    })
-    // Modal closed by parent on mutation success
+    }
+    if (isForLead && initialLead) {
+      payload.lead_id = initialLead.id
+    } else if (selectedUser) {
+      payload.user_id = selectedUser.id
+    }
+    onSubmit(payload)
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="relative">
-        <label className="mb-1 block text-sm font-medium text-slate-300">User *</label>
-        {selectedUser ? (
+        <label className="mb-1 block text-sm font-medium text-slate-300">{isForLead ? 'Lead' : 'User'} *</label>
+        {isForLead && initialLead ? (
+          <div className="flex items-center justify-between rounded-lg border border-slate-600 bg-slate-700 p-2 opacity-90">
+            <span className="text-slate-200">{initialLead.name}</span>
+            {initialLead.email && <span className="text-slate-400 text-sm">{initialLead.email}</span>}
+          </div>
+        ) : selectedUser ? (
           <div className={cn('flex items-center justify-between rounded-lg border border-slate-600 bg-slate-700 p-2', isUserLocked && 'opacity-90')}>
             <span className="text-slate-200">
               {(selectedUser.full_name ?? `${(selectedUser.first_name ?? '')} ${(selectedUser.last_name ?? '')}`.trim()) || selectedUser.email}
@@ -247,7 +267,7 @@ export function CreateAppointmentModal({
         <Button type="button" variant="outline" onClick={() => closeModal('create-apt')} className="border-slate-600 bg-slate-700 text-slate-300 hover:bg-slate-600">
           Cancel
         </Button>
-        <Button type="submit" disabled={submitting || !selectedUser || !title.trim() || !scheduledDate || !scheduledTime} className="bg-blue-600 hover:bg-blue-700">
+        <Button type="submit" disabled={submitting || (!isForLead && !selectedUser) || (isForLead && !initialLead) || !title.trim() || !scheduledDate || !scheduledTime} className="bg-blue-600 hover:bg-blue-700">
           {submitting ? 'Creating...' : 'Create appointment'}
         </Button>
       </div>
