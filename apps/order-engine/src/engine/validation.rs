@@ -3,6 +3,7 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use uuid::Uuid;
 use redis::aio::ConnectionManager;
+use crate::engine::cache::normalize_symbol;
 use crate::models::OrderCommand;
 use tracing::{warn, debug};
 
@@ -14,9 +15,9 @@ impl Validator {
         conn: &mut ConnectionManager,
         cmd: &OrderCommand,
     ) -> Result<()> {
-        // Validate symbol is enabled
-        // Check symbol status (format: symbol:status:SYMBOL)
-        let symbol_status_key = format!("symbol:status:{}", cmd.symbol);
+        // Validate symbol is enabled (normalize so lookup matches regardless of case)
+        let symbol = normalize_symbol(&cmd.symbol);
+        let symbol_status_key = format!("symbol:status:{}", symbol);
         let symbol_status: Option<String> = {
             use redis::AsyncCommands;
             conn.get(&symbol_status_key).await?
@@ -25,11 +26,11 @@ impl Validator {
         // If status key exists, check if it's enabled
         if let Some(status) = symbol_status {
             if status != "enabled" {
-                return Err(anyhow::anyhow!("Symbol {} is not enabled", cmd.symbol));
+                return Err(anyhow::anyhow!("Symbol {} is not enabled", symbol));
             }
         } else {
             // Also check legacy format: symbol:SYMBOL (for backward compatibility)
-            let symbol_key = format!("symbol:{}", cmd.symbol);
+            let symbol_key = format!("symbol:{}", symbol);
             let symbol_json: Option<String> = {
                 use redis::AsyncCommands;
                 conn.get(&symbol_key).await?
@@ -38,11 +39,11 @@ impl Validator {
             if symbol_json.is_none() {
                 // Default to enabled if no status found (for backward compatibility)
                 // In production, you might want to reject instead
-                warn!("Symbol {} status not found in Redis, defaulting to enabled", cmd.symbol);
+                warn!("Symbol {} status not found in Redis, defaulting to enabled", symbol);
             } else {
                 let symbol_data: serde_json::Value = serde_json::from_str(&symbol_json.unwrap())?;
                 if !symbol_data.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true) {
-                    return Err(anyhow::anyhow!("Symbol {} is not enabled", cmd.symbol));
+                    return Err(anyhow::anyhow!("Symbol {} is not enabled", symbol));
                 }
             }
         }

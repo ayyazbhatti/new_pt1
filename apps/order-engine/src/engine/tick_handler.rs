@@ -10,6 +10,7 @@ use tracing::{debug, error, info, warn, instrument};
 use uuid::Uuid;
 use rust_decimal::Decimal;
 
+use crate::engine::cache::normalize_symbol;
 use crate::engine::{OrderCache, LuaScripts, SltpHandler, position_events};
 use crate::models::{Tick, Order};
 use crate::nats::NatsClient;
@@ -49,13 +50,13 @@ impl TickHandler {
     pub async fn handle_tick(&self, msg: Message) -> Result<()> {
         self.metrics.inc_ticks_processed();
 
-        // Per-group subject: ticks.SYMBOL.GROUP_ID
+        // Per-group subject: ticks.SYMBOL.GROUP_ID (normalize symbol so orders match regardless of case)
         let (symbol, group_id) = match nats_subjects::parse_tick_subject_per_group(&msg.subject) {
-            Some((s, g)) => (s, Some(g)),
+            Some((s, g)) => (normalize_symbol(&s), Some(g)),
             None => {
-                let symbol = nats_subjects::parse_symbol_from_tick_subject(&msg.subject)
+                let s = nats_subjects::parse_symbol_from_tick_subject(&msg.subject)
                     .ok_or_else(|| anyhow::anyhow!("Invalid tick subject: {}", msg.subject))?;
-                (symbol, None)
+                (normalize_symbol(&s), None)
             }
         };
 
@@ -118,11 +119,13 @@ impl TickHandler {
                     if order.status != contracts::enums::OrderStatus::Pending {
                         continue;
                     }
-                    // When tick has no group_id (ticks.SYMBOL from data-provider), treat as global - fill any order for symbol
-                    // When tick has group_id (ticks.SYMBOL.GROUP_ID), only fill orders matching that group
+                    // When tick has no group_id (ticks.SYMBOL), treat as global - fill any order for symbol.
+                    // When tick has group_id (ticks.SYMBOL.GROUP_ID): fill orders with same group, or orders with no group (global).
                     if let Some(tick_group) = group_id {
-                        if order.group_id.as_deref() != Some(tick_group) {
-                            continue;
+                        if let Some(ref order_group) = order.group_id {
+                            if order_group.as_str() != tick_group {
+                                continue;
+                            }
                         }
                     }
 

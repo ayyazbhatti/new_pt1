@@ -1,11 +1,12 @@
 import { useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Card } from '@/shared/ui/card'
 import { Button } from '@/shared/ui/button'
 import { useModalStore } from '@/app/store'
 import { CreatePlanWizard } from '../components/CreatePlanWizard'
 import { GuideModal } from '../modals/GuideModal'
-import { Flag, Plus, Pencil, Trash2, Info, ChevronRight } from 'lucide-react'
+import { Flag, Plus, Pencil, Trash2, Info, ChevronRight, Users, Trophy, XCircle, Activity, Percent } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import type { FundedPlan } from '../types/plan'
 import {
@@ -14,6 +15,24 @@ import {
   DEFAULT_ADDONS,
   DEFAULT_CHALLENGE_KEEPER,
 } from '../types/plan'
+
+/** Plan-level stats: participants, won, lost, in progress. Replace with API later. */
+export type PlanStats = {
+  totalParticipants: number
+  won: number
+  lost: number
+  inProgress: number
+  passRatePercent: number
+}
+
+// Placeholder stats until API is connected
+const PLACEHOLDER_STATS: PlanStats = {
+  totalParticipants: 0,
+  won: 0,
+  lost: 0,
+  inProgress: 0,
+  passRatePercent: 0,
+}
 
 const DEMO_PLAN: FundedPlan = {
   id: 'plan-1',
@@ -33,8 +52,18 @@ const DEMO_PLAN: FundedPlan = {
 }
 
 export function AdminFundedProgramsPage() {
+  const navigate = useNavigate()
   const openModal = useModalStore((state) => state.openModal)
   const [plans, setPlans] = useState<FundedPlan[]>([DEMO_PLAN])
+  // TODO: Replace with API e.g. getFundedProgramStats()
+  const [stats] = useState<PlanStats>(PLACEHOLDER_STATS)
+
+  const handleViewPlanDetail = useCallback(
+    (plan: FundedPlan) => {
+      navigate(`/admin/funded-programs/${plan.id}`, { state: { plan, planStats: stats } })
+    },
+    [navigate, stats]
+  )
 
   const handleOpenGuide = useCallback(() => {
     openModal('funded-guide', <GuideModal />, {
@@ -122,6 +151,65 @@ export function AdminFundedProgramsPage() {
         }
       />
 
+      {/* Plan statistics: participants, win, loss, etc. */}
+      <section className="mb-6">
+        <h2 className="text-sm font-semibold text-text-muted mb-3">Plan statistics</h2>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          <Card className="p-4 flex flex-col gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Users className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-text-muted">Participants</div>
+              <div className="text-2xl font-bold text-text">{stats.totalParticipants}</div>
+              <p className="text-xs text-text-muted mt-0.5">Users who started a challenge</p>
+            </div>
+          </Card>
+          <Card className="p-4 flex flex-col gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-success/10 text-success">
+              <Trophy className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-text-muted">Won</div>
+              <div className="text-2xl font-bold text-text">{stats.won}</div>
+              <p className="text-xs text-text-muted mt-0.5">Passed & funded</p>
+            </div>
+          </Card>
+          <Card className="p-4 flex flex-col gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-danger/10 text-danger">
+              <XCircle className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-text-muted">Lost</div>
+              <div className="text-2xl font-bold text-text">{stats.lost}</div>
+              <p className="text-xs text-text-muted mt-0.5">Failed challenge</p>
+            </div>
+          </Card>
+          <Card className="p-4 flex flex-col gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500">
+              <Activity className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-text-muted">In progress</div>
+              <div className="text-2xl font-bold text-text">{stats.inProgress}</div>
+              <p className="text-xs text-text-muted mt-0.5">Active evaluations</p>
+            </div>
+          </Card>
+          <Card className="p-4 flex flex-col gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-1 text-text-muted border border-border">
+              <Percent className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-text-muted">Pass rate</div>
+              <div className="text-2xl font-bold text-text">
+                {stats.totalParticipants > 0 ? `${stats.passRatePercent}%` : '—'}
+              </div>
+              <p className="text-xs text-text-muted mt-0.5">Won / (Won + Lost)</p>
+            </div>
+          </Card>
+        </div>
+      </section>
+
       {/* Plans list */}
       <section>
         {plans.length === 0 ? (
@@ -174,7 +262,15 @@ export function AdminFundedProgramsPage() {
                     <Button variant="ghost" size="icon" className="text-danger hover:text-danger" aria-label="Delete" onClick={() => handleDeletePlan(plan)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
-                    <ChevronRight className="h-4 w-4 text-text-muted" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="View plan details"
+                      onClick={() => handleViewPlanDetail(plan)}
+                      className="text-text-muted hover:text-text"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
               </Card>

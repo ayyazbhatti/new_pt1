@@ -7,10 +7,17 @@ use crate::models::Order;
 use crate::models::Tick;
 use tracing::{debug, info};
 
+/// Normalize symbol for consistent lookup (orders and ticks may use different casing).
+#[inline]
+pub fn normalize_symbol(s: &str) -> String {
+    s.trim().to_uppercase()
+}
+
 fn tick_key(symbol: &str, group_id: Option<&str>) -> String {
+    let sym = normalize_symbol(symbol);
     match group_id {
-        Some(g) if !g.is_empty() => format!("{}:{}", symbol, g),
-        _ => format!("{}:", symbol),
+        Some(g) if !g.is_empty() => format!("{}:{}", sym, g),
+        _ => format!("{}:", sym),
     }
 }
 
@@ -39,25 +46,28 @@ impl OrderCache {
     }
     
     pub fn add_pending_order(&self, symbol: &str, order_id: Uuid, order: Order) {
+        let key = normalize_symbol(symbol);
         self.pending_orders
-            .entry(symbol.to_string())
+            .entry(key.clone())
             .or_insert_with(HashSet::new)
             .insert(order_id);
         self.orders.insert(order_id, order);
-        debug!("Added pending order {} for symbol {}", order_id, symbol);
+        debug!("Added pending order {} for symbol {}", order_id, key);
     }
     
     pub fn remove_pending_order(&self, symbol: &str, order_id: Uuid) {
-        if let Some(mut set) = self.pending_orders.get_mut(symbol) {
+        let key = normalize_symbol(symbol);
+        if let Some(mut set) = self.pending_orders.get_mut(&key) {
             set.remove(&order_id);
         }
         self.orders.remove(&order_id);
-        debug!("Removed pending order {} for symbol {}", order_id, symbol);
+        debug!("Removed pending order {} for symbol {}", order_id, key);
     }
     
     pub fn get_pending_orders(&self, symbol: &str) -> Vec<Uuid> {
+        let key = normalize_symbol(symbol);
         self.pending_orders
-            .get(symbol)
+            .get(&key)
             .map(|set| set.iter().copied().collect())
             .unwrap_or_default()
     }

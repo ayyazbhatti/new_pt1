@@ -1,13 +1,12 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use async_nats::Message;
-use redis::aio::ConnectionManager;
-use redis::AsyncCommands;
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
+use crate::engine::cache::normalize_symbol;
 use crate::engine::{OrderCache, LuaScripts};
-use crate::models::{ClosePositionCommand, PositionClosedEvent, BalanceUpdatedEvent};
+use crate::models::{PositionClosedEvent, BalanceUpdatedEvent};
 use crate::nats::NatsClient;
 use crate::observability::Metrics;
 use crate::subjects::subjects as nats_subjects;
@@ -139,17 +138,53 @@ impl PositionHandler {
             (symbol, side, group_id)
         };
 
-        // Ticks from data-provider are published as "ticks.SYMBOL" (no group), so they are cached under key "SYMBOL:".
-        // Positions can have a group_id, so lookup "SYMBOL:group_id" finds nothing. Fall back to symbol-level tick.
-        let tick = self.cache.get_last_tick(&symbol, group_id.as_deref())
+        // Get exit price: prefer in-memory tick cache, then Redis (same keys tick_handler writes: prices:SYMBOL: or prices:SYMBOL:GROUP_ID)
+        let sym_norm = normalize_symbol(&symbol);
+        let cache_price = self.cache
+            .get_last_tick(&symbol, group_id.as_deref())
             .or_else(|| self.cache.get_last_tick(&symbol, None))
-            .context("No tick data available for symbol")?;
-        
+            .map(|t| (t.bid, t.ask));
+        let (bid, ask) = match cache_price {
+            Some((b, a)) => (b, a),
+            None => {
+                // Fallback: read from Redis so close works when cache is cold
+                let price_key_global = format!("prices:{}:", sym_norm);
+                let mut price_json: Option<String> = redis::cmd("GET")
+                    .arg(&price_key_global)
+                    .query_async(&mut conn)
+                    .await
+                    .ok()
+                    .flatten();
+                if price_json.is_none() {
+                    if let Some(g) = &group_id {
+                        let key = format!("prices:{}:{}", sym_norm, g);
+                        price_json = redis::cmd("GET")
+                            .arg(&key)
+                            .query_async(&mut conn)
+                            .await
+                            .ok()
+                            .flatten();
+                    }
+                }
+                let (b, a) = price_json
+                    .as_ref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .and_then(|v| {
+                        let bid_s = v.get("bid")?.as_str()?;
+                        let ask_s = v.get("ask")?.as_str()?;
+                        let bid = Decimal::from_str_exact(bid_s).ok()?;
+                        let ask = Decimal::from_str_exact(ask_s).ok()?;
+                        Some((bid, ask))
+                    })
+                    .context("No tick data available for symbol (cache and Redis both empty)")?;
+                (b, a)
+            }
+        };
         // Determine exit price (BID/ASK model)
         let exit_price = if side == "LONG" {
-            tick.bid  // Long closes at BID
+            bid  // Long closes at BID
         } else {
-            tick.ask  // Short closes at ASK
+            ask  // Short closes at ASK
         };
         
         // Execute atomic close

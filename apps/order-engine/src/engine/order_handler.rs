@@ -11,6 +11,7 @@ use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 use rust_decimal::Decimal;
 
+use crate::engine::cache::normalize_symbol;
 use crate::engine::{OrderCache, LuaScripts, Validator, position_events};
 use crate::models::{Order, OrderCommand, OrderAcceptedEvent, OrderRejectedEvent, OrderFilledEvent};
 use crate::nats::NatsClient;
@@ -147,10 +148,11 @@ impl OrderHandler {
                         max_leverage: t.max_leverage,
                     }).collect()
                 });
+                let symbol_normalized = normalize_symbol(&cmd.symbol);
                 let order = Order {
                     id: order_id,
                     user_id: cmd.user_id,
-                    symbol: cmd.symbol.clone(),
+                    symbol: symbol_normalized.clone(),
                     group_id: cmd.group_id.clone(),
                     side: cmd.side,
                     order_type: cmd.order_type,
@@ -184,8 +186,8 @@ impl OrderHandler {
                     .query_async(&mut conn)
                     .await?;
                 
-                // Add to pending zset
-                let pending_key = format!("orders:pending:{}", cmd.symbol);
+                // Add to pending zset (use normalized symbol so ticks match regardless of case)
+                let pending_key = format!("orders:pending:{}", symbol_normalized);
                 let _: () = redis::cmd("ZADD")
                     .arg(&pending_key)
                     .arg(now().timestamp_millis())
@@ -194,13 +196,13 @@ impl OrderHandler {
                     .await?;
                 
                 // Update cache
-                self.cache.add_pending_order(&cmd.symbol, order_id, order.clone());
+                self.cache.add_pending_order(&order.symbol, order_id, order.clone());
                 
                 // Publish accepted event
                 let accepted_event = OrderAcceptedEvent {
                     order_id,
                     user_id: cmd.user_id,
-                    symbol: cmd.symbol.clone(),
+                    symbol: order.symbol.clone(),
                     side: cmd.side,
                     order_type: cmd.order_type,
                     size: cmd.size,

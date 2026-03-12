@@ -22,7 +22,7 @@ import { AdminProfilePage } from '@/features/adminProfile'
 import { AdminCallUserPage } from '@/features/adminCalls/pages/AdminCallUserPage'
 import { AdminBulkOperationsPage } from '@/features/adminBulkOperations'
 import { AdminPromotionsPage } from '@/features/adminPromotions'
-import { AdminFundedProgramsPage } from '@/features/adminFundedPrograms'
+import { AdminFundedProgramsPage, AdminFundedPlanDetailPage } from '@/features/adminFundedPrograms'
 import { AdminLeadsPage, AdminLeadDetailPage } from '@/features/adminLeads'
 
 export const adminRoutes: RouteObject[] = [
@@ -69,6 +69,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/funded-programs',
     element: <AdminFundedProgramsPage />,
+  },
+  {
+    path: '/admin/funded-programs/:planId',
+    element: <AdminFundedPlanDetailPage />,
   },
   {
     path: '/admin/swap',
