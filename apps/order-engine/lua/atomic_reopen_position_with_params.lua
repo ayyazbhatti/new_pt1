@@ -49,10 +49,11 @@ end
 local side_existing = redis.call('HGET', pos_key, 'side') or "LONG"
 local restore_side = (side_override == "SHORT" or side_override == "LONG") and side_override or side_existing
 
--- Restore position to OPEN (same record)
+-- Restore position to OPEN (same record); keep entry_price and avg_price in sync
 redis.call('HSET', pos_key, 'status', 'OPEN')
 redis.call('HSET', pos_key, 'size', restore_size)
 redis.call('HSET', pos_key, 'entry_price', restore_entry)
+redis.call('HSET', pos_key, 'avg_price', restore_entry)
 redis.call('HSET', pos_key, 'side', restore_side)
 redis.call('HSET', pos_key, 'updated_at', timestamp_ms)
 redis.call('HDEL', pos_key, 'exit_price')

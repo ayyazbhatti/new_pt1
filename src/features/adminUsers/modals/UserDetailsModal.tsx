@@ -1481,38 +1481,48 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                             <td className="px-4 py-3 text-right">
                               <div className="flex items-center justify-end gap-1">
                                 {canCreateOrder && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setModifyOpenPosition(pos)
-                                      setModifyOpenDialogOpen(true)
-                                    }}
-                                    title="Modify & open (change size, SL/TP then open)"
-                                    className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
-                                  >
-                                    <Pencil className="h-4 w-4" />
-                                  </button>
+                                  <div className="relative group inline-flex">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setModifyOpenPosition(pos)
+                                        setModifyOpenDialogOpen(true)
+                                      }}
+                                      title="Modify & open (change size, SL/TP then open)"
+                                      className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </button>
+                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                                      Modify & open
+                                    </span>
+                                  </div>
                                 )}
                                 {canClosePosition && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setReopenPositionId(pos.id)
-                                      setReopenPositionSymbol(pos.symbol)
-                                      setReopenPositionDialogOpen(true)
-                                    }}
-                                    disabled={reopeningPositionId === pos.id}
-                                    title="Re-open position (same parameters)"
-                                    className={cn(
-                                      'rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
-                                    )}
-                                  >
-                                    {reopeningPositionId === pos.id ? (
-                                      <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <RotateCcw className="h-4 w-4" />
-                                    )}
-                                  </button>
+                                  <div className="relative group inline-flex">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setReopenPositionId(pos.id)
+                                        setReopenPositionSymbol(pos.symbol)
+                                        setReopenPositionDialogOpen(true)
+                                      }}
+                                      disabled={reopeningPositionId === pos.id}
+                                      title="Re-open position (same parameters)"
+                                      className={cn(
+                                        'rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                                      )}
+                                    >
+                                      {reopeningPositionId === pos.id ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <RotateCcw className="h-4 w-4" />
+                                      )}
+                                    </button>
+                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                                      Re-open
+                                    </span>
+                                  </div>
                                 )}
                               </div>
                             </td>

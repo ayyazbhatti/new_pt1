@@ -30,9 +30,10 @@ if not symbol or not user_id then
     return '{"error":"invalid_position","message":"missing symbol or user_id"}'
 end
 
--- Restore position to OPEN (same record)
+-- Restore position to OPEN (same record); keep avg_price in sync with entry_price
 redis.call('HSET', pos_key, 'status', 'OPEN')
 redis.call('HSET', pos_key, 'size', restore_size)
+redis.call('HSET', pos_key, 'avg_price', entry_price)
 redis.call('HSET', pos_key, 'updated_at', timestamp_ms)
 -- Clear closed-only fields so position is treated as open
 redis.call('HDEL', pos_key, 'exit_price')
