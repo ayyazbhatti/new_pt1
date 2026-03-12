@@ -34,7 +34,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { fetchTransactions } from '@/features/adminFinance/api/finance.api'
-import { fetchUserNotes, createUserNote, type UserNote } from '../api/users.api'
+import { fetchUserNotes, createUserNote, getAccountSummary, type UserNote } from '../api/users.api'
 import { getPositionsByUserId, type Position } from '@/features/terminal/api/positions.api'
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { Input } from '@/shared/ui'
@@ -183,6 +183,31 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
   const [userState, setUserState] = useState(user)
+
+  // Fetch account summary when modal opens so Balance/metrics show server data (not 0)
+  const { data: accountSummary } = useQuery({
+    queryKey: ['admin', 'user-account-summary', user.id],
+    queryFn: () => getAccountSummary(user.id),
+    enabled: !!user.id,
+  })
+  useEffect(() => {
+    if (accountSummary == null) return
+    const marginLevel =
+      accountSummary.marginLevel != null && accountSummary.marginLevel !== 'inf' && accountSummary.marginLevel !== 'Infinity'
+        ? parseFloat(accountSummary.marginLevel) || 0
+        : 0
+    setUserState((prev) => ({ ...prev, balance: accountSummary.balance, marginLevel }))
+  }, [accountSummary])
+
+  // Sync balance/marginLevel from parent when table summaries load after modal opened
+  useEffect(() => {
+    setUserState((prev) => {
+      if (prev.id !== user.id) return prev
+      if (prev.balance === user.balance && prev.marginLevel === user.marginLevel) return prev
+      return { ...prev, balance: user.balance, marginLevel: user.marginLevel }
+    })
+  }, [user.id, user.balance, user.marginLevel])
+
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<typeof TAB_VALUES[number]>(getStoredUserDetailsTab)
   const [noteDraft, setNoteDraft] = useState('')

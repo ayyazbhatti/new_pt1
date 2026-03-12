@@ -229,3 +229,10 @@ export async function getAccountSummaries(
   })
   return res.summaries ?? {}
 }
+
+/** Fetch account summary for a single user (admin only). GET /api/admin/users/:id/account-summary. */
+export async function getAccountSummary(
+  userId: string
+): Promise<AdminAccountSummaryResponse> {
+  return http<AdminAccountSummaryResponse>(`/api/admin/users/${userId}/account-summary`)
+}

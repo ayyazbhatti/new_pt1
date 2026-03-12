@@ -11,6 +11,7 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { listUsers, UserResponse } from '@/shared/api/users.api'
 import { useDebouncedValue } from '@/shared/hooks/useDebounce'
 import { User } from '../types/users'
+import { useAdminAccountSummaries } from '../hooks/useAdminAccountSummaries'
 
 // Map backend user to frontend User type
 function mapUserResponse(user: UserResponse): User {
@@ -26,8 +27,8 @@ function mapUserResponse(user: UserResponse): User {
     marginCalculationType: (user.margin_calculation_type === 'net' ? 'net' : 'hedged') as 'hedged' | 'net',
     tradingAccess: (user.trading_access === 'close_only' ? 'close_only' : user.trading_access === 'disabled' ? 'disabled' : 'full') as 'full' | 'close_only' | 'disabled',
     openPositionsCount: user.open_positions_count ?? 0,
-    balance: 0, // TODO: Calculate from wallets table
-    marginLevel: 0, // TODO: Calculate from positions
+    balance: 0, // Filled from account summaries when available
+    marginLevel: 0, // Filled from account summaries when available
     status: user.status as 'active' | 'disabled' | 'suspended',
     kycStatus: 'none', // TODO: Get from KYC table
     riskFlag: 'normal', // TODO: Get from risk table
@@ -109,7 +110,22 @@ export function AdminUsersPage() {
   useEffect(() => {
     if (users.length > 0) setUsersState(users)
   }, [users])
-  const displayUsers = usersState.length > 0 ? usersState : users
+
+  const userIds = useMemo(() => users.map((u) => u.id), [users])
+  const { summaries } = useAdminAccountSummaries(userIds)
+
+  const displayUsers = useMemo(() => {
+    const base = usersState.length > 0 ? usersState : users
+    return base.map((u) => {
+      const s = summaries[u.id]
+      const balance = s?.balance ?? u.balance
+      const marginLevel =
+        s?.marginLevel != null
+          ? (s.marginLevel === 'inf' || s.marginLevel === 'Infinity' ? 0 : parseFloat(s.marginLevel)) || 0
+          : u.marginLevel
+      return { ...u, balance, marginLevel }
+    })
+  }, [users, usersState, summaries])
 
   const handleUserUpdate = (userId: string, updates: Partial<User>) => {
     setUsersState((prev) =>
