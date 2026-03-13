@@ -739,8 +739,8 @@ async fn register(
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
     let service = AuthService::new(pool.clone());
 
-    // Resolve ?ref=slug to group_id (takes precedence over group_id)
-    let group_id = if let Some(ref slug) = payload.signup_ref {
+    // Resolve ?ref=slug to group_id (takes precedence over group_id). Group signup link: ref = group's signup_slug.
+    let mut group_id = if let Some(ref slug) = payload.signup_ref {
         let slug = slug.trim();
         if slug.is_empty() {
             payload.group_id
@@ -758,6 +758,32 @@ async fn register(
     } else {
         payload.group_id
     };
+
+    // Referral link: if no group was resolved by slug, use referrer's group so referred user inherits parent's group.
+    if group_id.is_none() {
+        if let Some(code) = payload.referral_code.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let referrer_group_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT group_id FROM users WHERE referral_code = $1 AND deleted_at IS NULL",
+            )
+            .bind(code)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some(gid) = referrer_group_id {
+                let valid = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1 AND status = 'active')",
+                )
+                .bind(gid)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(false);
+                if valid {
+                    group_id = Some(gid);
+                }
+            }
+        }
+    }
 
     match service
         .register(

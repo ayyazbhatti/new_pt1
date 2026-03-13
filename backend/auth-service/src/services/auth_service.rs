@@ -67,16 +67,19 @@ impl AuthService {
         }
 
         // Find referrer if referral code provided
-        let referred_by_user_id: Option<Uuid> = if let Some(code) = referral_code {
+        let (referred_by_user_id, referrer_group_id): (Option<Uuid>, Option<Uuid>) = if let Some(code) = referral_code {
             let referrer = sqlx::query_as::<_, User>(
                 "SELECT * FROM users WHERE referral_code = $1 AND deleted_at IS NULL",
             )
             .bind(code)
             .fetch_optional(&self.pool)
             .await?;
-            referrer.map(|u| u.id)
+            match referrer {
+                Some(u) => (Some(u.id), u.group_id),
+                None => (None, None),
+            }
         } else {
-            None
+            (None, None)
         };
 
         // Hash password
@@ -85,7 +88,7 @@ impl AuthService {
         // Generate referral code for new user
         let user_referral_code = format!("REF{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
 
-        // Resolve group: use provided group_id if valid and active, else default
+        // Resolve group: use provided group_id if valid and active; else if came via referral use referrer's group; else default
         let default_group_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
             .map_err(|_| anyhow::anyhow!("Invalid default group ID"))?;
 
@@ -98,6 +101,19 @@ impl AuthService {
             .await?;
             if valid {
                 gid
+            } else {
+                default_group_id
+            }
+        } else if let Some(ref_gid) = referrer_group_id {
+            // Referral signup: inherit referrer's group when route did not resolve a group (e.g. ref = user's referral_code)
+            let valid = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1 AND status = 'active')",
+            )
+            .bind(ref_gid)
+            .fetch_one(&self.pool)
+            .await?;
+            if valid {
+                ref_gid
             } else {
                 default_group_id
             }

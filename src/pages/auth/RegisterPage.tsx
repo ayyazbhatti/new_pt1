@@ -78,7 +78,8 @@ export function RegisterPage() {
         ...(refFromLink ? { groupRef: refFromLink } : {}),
         // Legacy ?group=<uuid>; optional manual referral code for affiliate
         ...(groupIdFromLink ? { groupId: groupIdFromLink } : {}),
-        referralCode: data.referralCode || undefined,
+        // Use form value if non-empty; otherwise keep ref from URL so affiliate link still attributes (backend uses referral_code for referrer lookup)
+        referralCode: (data.referralCode?.trim() || refFromLink) || undefined,
       })
       toast.success('Account created successfully!')
       navigate('/')
