@@ -1,9 +1,10 @@
-import { Search, User, Activity, LogOut, Menu } from 'lucide-react'
+import { useState } from 'react'
+import { User, Activity, LogOut, Menu } from 'lucide-react'
 import { useNavigate, Link, useLocation } from 'react-router-dom'
 import { toast } from '@/shared/components/common'
-import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { NotificationBell } from '@/shared/components/NotificationBell'
+import { CommandPalette } from '@/shared/components/CommandPalette'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useUIStore } from '@/app/store'
 import { cn } from '@/shared/utils'
@@ -20,6 +21,7 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
   const location = useLocation()
   const logout = useAuthStore((state) => state.logout)
   const toggleSidebar = useUIStore((state) => state.toggleSidebar)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const isAdmin = location.pathname.startsWith('/admin')
   const profilePath = isAdmin ? '/admin/profile' : '/user/profile'
 
@@ -42,14 +44,15 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <div className="relative min-w-0 flex-1 max-w-md">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted sm:left-3" />
-          <Input
-            type="search"
-            placeholder="Search..."
-            className="h-9 pl-9 text-sm sm:h-10 sm:pl-10"
-          />
-        </div>
+        {isAdmin && (
+          <div className="min-w-0 flex-1 max-w-2xl min-w-[280px]">
+            <CommandPalette
+              open={commandPaletteOpen}
+              onOpenChange={setCommandPaletteOpen}
+              showTrigger
+            />
+          </div>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         {showTerminalLink && (

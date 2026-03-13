@@ -37,7 +37,10 @@ const TAGS_QUERY_KEY = ['admin', 'tags'] as const
 
 export function PermissionsPage() {
   const queryClient = useQueryClient()
+  const user = useAuthStore((s) => s.user)
   const refreshUser = useAuthStore((s) => s.refreshUser)
+  /** Permissions the current user has; checkboxes for other permissions are disabled so they cannot grant more than they have. */
+  const userPermissionSet = useMemo(() => new Set(user?.permissions ?? []), [user?.permissions])
   const { data: profiles = [], isLoading, error } = useQuery({
     queryKey: QUERY_KEY,
     queryFn: listPermissionProfiles,
@@ -195,11 +198,11 @@ export function PermissionsPage() {
     const keys = category.permissions.map((p) => p.key)
     setFormPermissionIds((prev) => {
       const next = new Set(prev)
-      if (selectAll) keys.forEach((k) => next.add(k))
-      else keys.forEach((k) => next.delete(k))
+      if (selectAll) keys.filter((k) => userPermissionSet.has(k)).forEach((k) => next.add(k))
+      else keys.filter((k) => userPermissionSet.has(k)).forEach((k) => next.delete(k))
       return next
     })
-  }, [])
+  }, [userPermissionSet])
 
   const handleSave = useCallback(() => {
     const name = formName.trim()
@@ -568,7 +571,7 @@ export function PermissionsPage() {
                 variant="ghost"
                 size="sm"
                 className="text-xs h-8"
-                onClick={() => setFormPermissionIds(new Set(permissionCategories.flatMap((c) => c.permissions.map((p) => p.key))))}
+                onClick={() => setFormPermissionIds(new Set(permissionCategories.flatMap((c) => c.permissions.map((p) => p.key)).filter((k) => userPermissionSet.has(k))))}
               >
                 Select all
               </Button>
@@ -583,7 +586,9 @@ export function PermissionsPage() {
               </Button>
             </div>
           </div>
-          <p className="text-xs text-text-muted mb-3 flex-shrink-0">Select the permissions included in this profile.</p>
+          <p className="text-xs text-text-muted mb-3 flex-shrink-0">
+            Select the permissions included in this profile. You can only assign permissions you have; others are disabled.
+          </p>
           {/* Scrollable: permission list only (from DB); Users & Groups first */}
           <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-border bg-surface-2/30 p-4 pr-2">
             {definitionsLoading ? (
@@ -594,35 +599,45 @@ export function PermissionsPage() {
             <div className="space-y-4">
               {permissionCategoriesSorted.map((category: PermissionCategoryDto) => {
                 const categoryKeys = category.permissions.map((p) => p.key)
-                const selectedInCategory = categoryKeys.filter((k) => formPermissionIds.has(k)).length
-                const allSelected = category.permissions.length > 0 && selectedInCategory === category.permissions.length
-                const someSelected = selectedInCategory > 0
+                const userKeysInCategory = categoryKeys.filter((k) => userPermissionSet.has(k))
+                const selectedUserInCategory = userKeysInCategory.filter((k) => formPermissionIds.has(k)).length
+                const allSelected = userKeysInCategory.length > 0 && selectedUserInCategory === userKeysInCategory.length
+                const someSelected = selectedUserInCategory > 0
                 const sectionIndeterminate = someSelected && !allSelected
+                const categoryDisabled = userKeysInCategory.length === 0
                 return (
                   <div key={category.id}>
                     <div className="flex items-center gap-2 mb-2">
-                      <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-text hover:opacity-90">
+                      <label className={cn('flex items-center gap-2 text-sm font-medium text-text', !categoryDisabled && 'cursor-pointer hover:opacity-90')}>
                         <Checkbox
                           checked={allSelected}
                           indeterminate={sectionIndeterminate}
                           onChange={() => toggleCategory(category, !allSelected)}
+                          disabled={categoryDisabled}
                         />
                         <span>{category.name}</span>
                       </label>
                     </div>
                     <div className="flex flex-wrap gap-x-6 gap-y-2 pl-6">
-                      {category.permissions.map((perm) => (
-                        <label
-                          key={perm.id}
-                          className="flex items-center gap-2 cursor-pointer text-sm text-text-muted hover:text-text"
-                        >
-                          <Checkbox
-                            checked={formPermissionIds.has(perm.key)}
-                            onChange={() => togglePermission(perm.key)}
-                          />
-                          <span>{perm.label}</span>
-                        </label>
-                      ))}
+                      {category.permissions.map((perm) => {
+                        const userHasPerm = userPermissionSet.has(perm.key)
+                        return (
+                          <label
+                            key={perm.id}
+                            className={cn(
+                              'flex items-center gap-2 text-sm text-text-muted',
+                              userHasPerm ? 'cursor-pointer hover:text-text' : 'cursor-not-allowed opacity-60'
+                            )}
+                          >
+                            <Checkbox
+                              checked={formPermissionIds.has(perm.key)}
+                              onChange={() => togglePermission(perm.key)}
+                              disabled={!userHasPerm}
+                            />
+                            <span>{perm.label}</span>
+                          </label>
+                        )
+                      })}
                     </div>
                   </div>
                 )
