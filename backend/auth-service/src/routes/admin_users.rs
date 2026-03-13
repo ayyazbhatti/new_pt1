@@ -55,6 +55,26 @@ pub struct UpdateUserRoleRequest {
     pub role: String,
 }
 
+/// Request body for POST /api/admin/users (create single user, e.g. when converting a lead).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CreateUserRequest {
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub password: String,
+    pub group_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CreateUserResponse {
+    pub id: Uuid,
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserProfileRequest {
     pub first_name: Option<String>,
@@ -149,6 +169,7 @@ pub fn create_admin_user_notes_router(pool: PgPool) -> Router<PgPool> {
 
 pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) -> Router<PgPool> {
     Router::new()
+        .route("/", post(create_user))
         .route("/account-summaries", post(get_admin_account_summaries_batch))
         .route("/:id/profile", put(update_user_profile))
         .route("/:id/group", put(update_user_group))
@@ -163,6 +184,64 @@ pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) ->
         .layer(Extension(deposits_state))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+async fn create_user(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<CreateUserRequest>,
+) -> Result<Json<CreateUserResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "users:create")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let email = body.email.trim();
+    let first_name = body.first_name.trim();
+    let last_name = body.last_name.trim();
+    if email.is_empty() || first_name.is_empty() || last_name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "VALIDATION".to_string(),
+                    message: "email, first_name, and last_name are required".to_string(),
+                },
+            }),
+        ));
+    }
+    let service = AuthService::new(pool);
+    match service
+        .create_user_by_admin(
+            email,
+            first_name,
+            last_name,
+            &body.password,
+            body.group_id,
+        )
+        .await
+    {
+        Ok(user) => Ok(Json(CreateUserResponse {
+            id: user.id,
+            email: user.email,
+            first_name: user.first_name,
+            last_name: user.last_name,
+        })),
+        Err(e) => {
+            let msg = e.to_string();
+            let code = if msg.contains("already registered") {
+                "EMAIL_EXISTS"
+            } else if msg.contains("Password") {
+                "INVALID_PASSWORD"
+            } else {
+                "CREATE_FAILED"
+            };
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail { code: code.to_string(), message: msg },
+                }),
+            ))
+        }
+    }
 }
 
 async fn get_admin_user_account_summary(

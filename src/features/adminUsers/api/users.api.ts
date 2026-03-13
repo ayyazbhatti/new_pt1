@@ -1,5 +1,35 @@
 import { http } from '@/shared/api/http'
 
+export interface CreateUserPayload {
+  email: string
+  first_name: string
+  last_name: string
+  password: string
+  group_id?: string | null
+}
+
+export interface CreateUserResponse {
+  id: string
+  email: string
+  first_name: string
+  last_name: string
+}
+
+/** Create a single user (admin only). Requires users:create. Used e.g. when converting a lead to customer. */
+export async function createUser(payload: CreateUserPayload): Promise<CreateUserResponse> {
+  const body: Record<string, unknown> = {
+    email: payload.email.trim(),
+    first_name: payload.first_name.trim(),
+    last_name: payload.last_name.trim(),
+    password: payload.password,
+  }
+  if (payload.group_id != null && payload.group_id !== '') body.group_id = payload.group_id
+  return http<CreateUserResponse>('/api/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 export interface UpdateUserProfilePayload {
   first_name: string
   last_name: string

@@ -175,6 +175,88 @@ impl AuthService {
         Ok((user, access_token, refresh_token))
     }
 
+    /// Create a single user (admin only). Used e.g. when converting a lead to customer. No session created.
+    pub async fn create_user_by_admin(
+        &self,
+        email: &str,
+        first_name: &str,
+        last_name: &str,
+        password: &str,
+        group_id: Option<Uuid>,
+    ) -> anyhow::Result<User> {
+        if password.len() < 8 {
+            return Err(anyhow::anyhow!("Password must be at least 8 characters"));
+        }
+        if !password.chars().any(|c| c.is_ascii_digit()) {
+            return Err(anyhow::anyhow!("Password must contain at least one number"));
+        }
+        let email_lower = email.to_lowercase();
+        let existing = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL",
+        )
+        .bind(&email_lower)
+        .fetch_optional(&self.pool)
+        .await?;
+        if existing.is_some() {
+            return Err(anyhow::anyhow!("Email already registered"));
+        }
+        let password_hash = hash_password(password)?;
+        let user_referral_code = format!("REF{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
+        let default_group_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
+            .map_err(|_| anyhow::anyhow!("Invalid default group ID"))?;
+        let assigned_group_id: Uuid = if let Some(gid) = group_id {
+            let valid = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM user_groups WHERE id = $1 AND status = 'active')",
+            )
+            .bind(gid)
+            .fetch_one(&self.pool)
+            .await?;
+            if valid {
+                gid
+            } else {
+                default_group_id
+            }
+        } else {
+            default_group_id
+        };
+        sqlx::query!(
+            r#"
+            INSERT INTO user_groups (id, name, description)
+            VALUES ($1, 'Default', 'Default user group')
+            ON CONFLICT (id) DO NOTHING
+            "#,
+            default_group_id
+        )
+        .execute(&self.pool)
+        .await?;
+        const DEFAULT_MIN_LEVERAGE: i32 = 1;
+        const DEFAULT_MAX_LEVERAGE: i32 = 500;
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            INSERT INTO users (
+                email, password_hash, first_name, last_name, country,
+                role, status, email_verified, referral_code, referred_by_user_id, group_id,
+                min_leverage, max_leverage
+            )
+            VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, NULL, $8, $9, $10)
+            RETURNING *
+            "#,
+        )
+        .bind(&email_lower)
+        .bind(&password_hash)
+        .bind(first_name)
+        .bind(last_name)
+        .bind::<Option<String>>(None)
+        .bind(UserStatus::Active)
+        .bind(&user_referral_code)
+        .bind(assigned_group_id)
+        .bind(DEFAULT_MIN_LEVERAGE)
+        .bind(DEFAULT_MAX_LEVERAGE)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(user)
+    }
+
     pub async fn login(
         &self,
         email: &str,
