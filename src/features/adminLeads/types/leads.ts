@@ -65,6 +65,8 @@ export interface Lead {
   status: LeadStatus
   ownerId?: string
   ownerName?: string
+  createdByUserId?: string
+  createdByEmail?: string
   score?: number
   createdAt: string
   updatedAt: string

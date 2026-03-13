@@ -27,6 +27,8 @@ pub struct LeadResponse {
     pub status: String,
     pub owner_id: Option<Uuid>,
     pub owner_name: Option<String>,
+    pub created_by_id: Option<Uuid>,
+    pub created_by_email: Option<String>,
     pub score: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -226,6 +228,8 @@ struct LeadRow {
     status: String,
     owner_id: Option<Uuid>,
     owner_name: Option<String>,
+    created_by_id: Option<Uuid>,
+    created_by_email: Option<String>,
     score: Option<i32>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -330,10 +334,11 @@ async fn list_leads(
     let mut count_sql = String::from("SELECT COUNT(*)::bigint FROM leads l WHERE 1=1");
     let mut list_sql = String::from(
         "SELECT l.id, l.name, l.email, l.phone, l.company, l.source, l.campaign, l.status,
-               l.owner_id, u.email AS owner_name, l.score,
+               l.owner_id, u.email AS owner_name, l.created_by_id, creator.email AS created_by_email, l.score,
                l.created_at, l.updated_at, l.last_activity_at, l.converted_user_id, l.converted_at
         FROM leads l
         LEFT JOIN users u ON u.id = l.owner_id
+        LEFT JOIN users creator ON creator.id = l.created_by_id
         WHERE 1=1",
     );
     let mut param_idx = 0i32;
@@ -455,6 +460,8 @@ async fn list_leads(
             status: r.status,
             owner_id: r.owner_id,
             owner_name: r.owner_name,
+            created_by_id: r.created_by_id,
+            created_by_email: r.created_by_email,
             score: r.score,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -477,10 +484,11 @@ async fn get_lead(
     let row: Option<LeadRow> = sqlx::query_as(
         r#"
         SELECT l.id, l.name, l.email, l.phone, l.company, l.source, l.campaign, l.status,
-               l.owner_id, u.email AS owner_name, l.score,
+               l.owner_id, u.email AS owner_name, l.created_by_id, creator.email AS created_by_email, l.score,
                l.created_at, l.updated_at, l.last_activity_at, l.converted_user_id, l.converted_at
         FROM leads l
         LEFT JOIN users u ON u.id = l.owner_id
+        LEFT JOIN users creator ON creator.id = l.created_by_id
         WHERE l.id = $1
         "#,
     )
@@ -555,6 +563,8 @@ async fn get_lead(
         status: r.status,
         owner_id: r.owner_id,
         owner_name: r.owner_name,
+        created_by_id: r.created_by_id,
+        created_by_email: r.created_by_email,
         score: r.score,
         created_at: r.created_at,
         updated_at: r.updated_at,
@@ -604,7 +614,7 @@ async fn create_lead(
         r#"
         INSERT INTO leads (name, email, phone, company, source, campaign, status, owner_id, score, created_by_id, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
-        RETURNING id, name, email, phone, company, source, campaign, status, owner_id, NULL::text AS owner_name, score, created_at, updated_at, last_activity_at, converted_user_id, converted_at
+        RETURNING id, name, email, phone, company, source, campaign, status, owner_id, NULL::text AS owner_name, created_by_id, NULL::text AS created_by_email, score, created_at, updated_at, last_activity_at, converted_user_id, converted_at
         "#,
     )
     .bind(&name)
@@ -649,14 +659,15 @@ async fn create_lead(
             .await;
     }
 
-    // Fetch full row with owner_name (join users) for response
+    // Fetch full row with owner_name and created_by_email (join users) for response
     let full: LeadRow = sqlx::query_as(
         r#"
         SELECT l.id, l.name, l.email, l.phone, l.company, l.source, l.campaign, l.status,
-               l.owner_id, u.email AS owner_name, l.score,
+               l.owner_id, u.email AS owner_name, l.created_by_id, creator.email AS created_by_email, l.score,
                l.created_at, l.updated_at, l.last_activity_at, l.converted_user_id, l.converted_at
         FROM leads l
         LEFT JOIN users u ON u.id = l.owner_id
+        LEFT JOIN users creator ON creator.id = l.created_by_id
         WHERE l.id = $1
         "#,
     )
@@ -687,6 +698,8 @@ async fn create_lead(
             status: full.status,
             owner_id: full.owner_id,
             owner_name: full.owner_name,
+            created_by_id: full.created_by_id,
+            created_by_email: full.created_by_email,
             score: full.score,
             created_at: full.created_at,
             updated_at: full.updated_at,
@@ -936,10 +949,11 @@ async fn update_lead(
     let row: LeadRow = sqlx::query_as(
         r#"
         SELECT l.id, l.name, l.email, l.phone, l.company, l.source, l.campaign, l.status,
-               l.owner_id, u.email AS owner_name, l.score,
+               l.owner_id, u.email AS owner_name, l.created_by_id, creator.email AS created_by_email, l.score,
                l.created_at, l.updated_at, l.last_activity_at, l.converted_user_id, l.converted_at
         FROM leads l
         LEFT JOIN users u ON u.id = l.owner_id
+        LEFT JOIN users creator ON creator.id = l.created_by_id
         WHERE l.id = $1
         "#,
     )
@@ -969,6 +983,8 @@ async fn update_lead(
         status: row.status,
         owner_id: row.owner_id,
         owner_name: row.owner_name,
+        created_by_id: row.created_by_id,
+        created_by_email: row.created_by_email,
         score: row.score,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -1249,10 +1265,11 @@ async fn convert_lead(
     let row: LeadRow = sqlx::query_as(
         r#"
         SELECT l.id, l.name, l.email, l.phone, l.company, l.source, l.campaign, l.status,
-               l.owner_id, u.email AS owner_name, l.score,
+               l.owner_id, u.email AS owner_name, l.created_by_id, creator.email AS created_by_email, l.score,
                l.created_at, l.updated_at, l.last_activity_at, l.converted_user_id, l.converted_at
         FROM leads l
         LEFT JOIN users u ON u.id = l.owner_id
+        LEFT JOIN users creator ON creator.id = l.created_by_id
         WHERE l.id = $1
         "#,
     )
@@ -1282,6 +1299,8 @@ async fn convert_lead(
         status: row.status,
         owner_id: row.owner_id,
         owner_name: row.owner_name,
+        created_by_id: row.created_by_id,
+        created_by_email: row.created_by_email,
         score: row.score,
         created_at: row.created_at,
         updated_at: row.updated_at,

@@ -422,6 +422,10 @@ export function AdminLeadDetailPage() {
                 <span className="text-text-muted w-24">Created</span>
                 <span className="text-text">{formatDate(lead.createdAt)}</span>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-text-muted w-24">Created by</span>
+                <span className="text-text">{lead.createdByEmail ?? '—'}</span>
+              </div>
               {lead.lastActivityAt && (
                 <div className="flex items-center gap-2">
                   <span className="text-text-muted w-24">Last activity</span>

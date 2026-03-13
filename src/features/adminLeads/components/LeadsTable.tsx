@@ -172,6 +172,18 @@ export function LeadsTable({ leads, pagination, onMutationSuccess }: LeadsTableP
       ),
     },
     {
+      id: 'createdBy',
+      header: 'Created by',
+      cell: ({ row }) => {
+        const email = row.original.createdByEmail
+        return (
+          <span className="text-sm text-text-muted whitespace-nowrap" title={email ?? undefined}>
+            {email ?? '—'}
+          </span>
+        )
+      },
+    },
+    {
       accessorKey: 'score',
       header: 'Score',
       cell: ({ row }) => (

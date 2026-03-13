@@ -25,6 +25,8 @@ interface LeadApiResponse {
   status: string
   owner_id?: string | null
   owner_name?: string | null
+  created_by_id?: string | null
+  created_by_email?: string | null
   score?: number | null
   created_at: string
   updated_at: string
@@ -55,6 +57,8 @@ function mapLeadFromApi(r: LeadApiResponse): Lead {
     status: r.status as Lead['status'],
     ownerId: r.owner_id ?? undefined,
     ownerName: r.owner_name ?? undefined,
+    createdByUserId: r.created_by_id ?? undefined,
+    createdByEmail: r.created_by_email ?? undefined,
     score: r.score ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
