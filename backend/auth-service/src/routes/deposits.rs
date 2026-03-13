@@ -2187,6 +2187,194 @@ async fn list_deposits(
 }
 
 // ============================================================================
+// DIRECT DEPOSIT (ADMIN) - Create an approved deposit for a user in one step
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectDepositRequest {
+    pub user_id: Uuid,
+    pub amount: f64,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectDepositResponse {
+    pub transaction_id: String,
+    pub status: String,
+    pub message: String,
+}
+
+async fn create_direct_deposit(
+    State(pool): State<PgPool>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Json(req): axum::extract::Json<DirectDepositRequest>,
+) -> Result<Json<DirectDepositResponse>, StatusCode> {
+    permission_check::check_permission(&pool, &claims, "deposits:approve")
+        .await
+        .map_err(|_| StatusCode::FORBIDDEN)?;
+
+    let admin_id = claims.sub;
+    let user_id = req.user_id;
+
+    let amount = Decimal::from_str(&req.amount.to_string())
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if amount <= Decimal::ZERO || amount > Decimal::from(1_000_000) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let transaction_id = Uuid::new_v4();
+    let now = Utc::now();
+    let reference = format!("DEP-DIRECT-{}", transaction_id.to_string().replace("-", "").chars().take(12).collect::<String>());
+
+    // Insert without created_by/completed_at so we don't require admin_users.id (created_by FK references admin_users).
+    // Then optionally set them if the current user exists in admin_users.
+    sqlx::query(
+        r#"
+        INSERT INTO transactions (id, user_id, type, amount, currency, fee, net_amount, method, status, reference, method_details, created_at, updated_at)
+        VALUES ($1, $2, $3::transaction_type, $4, $5, $6, $7, $8::transaction_method, $9::transaction_status, $10, $11, $12, $13)
+        "#,
+    )
+    .bind(transaction_id)
+    .bind(user_id)
+    .bind("deposit")
+    .bind(amount)
+    .bind("USD")
+    .bind(Decimal::ZERO)
+    .bind(amount)
+    .bind("manual")
+    .bind("approved")
+    .bind(&reference)
+    .bind(serde_json::json!({ "note": req.note.unwrap_or_default() }))
+    .bind(now)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to create direct deposit transaction: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Set created_by and completed_at only if current user exists in admin_users (avoids FK violation when JWT sub is users.id).
+    let admin_exists = sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS(SELECT 1 FROM admin_users WHERE id = $1)"#,
+    )
+    .bind(admin_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
+    if admin_exists {
+        let _ = sqlx::query(
+            r#"
+            UPDATE transactions SET created_by = $1, completed_at = $2, updated_at = $3 WHERE id = $4
+            "#,
+        )
+        .bind(admin_id)
+        .bind(now)
+        .bind(now)
+        .bind(transaction_id)
+        .execute(&pool)
+        .await;
+    }
+
+    let transaction_ref = reference.clone();
+    let wallet_id = ledger_service::get_or_create_wallet(&pool, user_id, "USD", "spot")
+        .await
+        .map_err(|e| {
+            error!("Failed to get or create wallet: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let description = format!("Direct deposit {}", transaction_id);
+    ledger_service::create_ledger_entry(
+        &pool,
+        wallet_id,
+        "deposit",
+        amount,
+        &transaction_ref,
+        Some(&description),
+    )
+    .await
+    .map_err(|e| {
+        error!("Failed to create ledger entry: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let total_deposits: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(net_amount), 0) FROM transactions
+        WHERE user_id = $1 AND type = 'deposit'::transaction_type AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status) AND currency = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind("USD")
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate total deposits: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let total_withdrawals: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(net_amount), 0) FROM transactions
+        WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND currency = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind("USD")
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate total withdrawals: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let total_realized_pnl: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(pnl), 0) FROM positions
+        WHERE user_id = $1 AND status = 'closed'::position_status
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to calculate realized PnL: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let main_balance = total_deposits - total_withdrawals + total_realized_pnl;
+
+    let approved_event = serde_json::json!({
+        "transactionId": transaction_id.to_string(),
+        "userId": user_id.to_string(),
+        "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
+        "currency": "USD",
+        "approvedAt": now.to_rfc3339(),
+        "newBalance": main_balance.to_string().parse::<f64>().unwrap_or(0.0),
+        "adminId": admin_id.to_string(),
+    });
+
+    let mut redis_conn = deposits_state.redis.get().await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _: Result<(), _> = redis_conn.publish("deposits:approved", serde_json::to_string(&approved_event).unwrap_or_default()).await;
+
+    publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), user_id).await;
+    compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), user_id).await;
+
+    info!("Direct deposit created: transaction_id={}, user_id={}, amount={}", transaction_id, user_id, amount);
+
+    Ok(Json(DirectDepositResponse {
+        transaction_id: transaction_id.to_string(),
+        status: "approved".to_string(),
+        message: format!("Direct deposit of ${:.2} applied.", amount),
+    }))
+}
+
+// ============================================================================
 // APPROVE DEPOSIT (ADMIN)
 // ============================================================================
 
@@ -2932,6 +3120,7 @@ pub fn create_deposits_router(
 ) -> Router<PgPool> {
     Router::new()
         .route("/request", post(create_deposit_request))
+        .route("/direct", post(create_direct_deposit))
         .route("/", get(list_deposits))
         .route("/:id/approve", post(approve_deposit))
         .route("/:id/reject", post(reject_deposit))

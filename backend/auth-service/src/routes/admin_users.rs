@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Json as JsonExt, Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post, put},
     Router,
     Extension,
 };
+use std::collections::HashMap;
 use chrono::Utc;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,20 @@ pub struct ImpersonateResponse {
     pub refresh_token: String,
 }
 
+/// Request body for POST /account-summaries (batch).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSummariesRequest {
+    pub user_ids: Vec<Uuid>,
+}
+
+/// Response for POST /account-summaries: map of user_id -> summary.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSummariesResponse {
+    pub summaries: HashMap<String, AccountSummary>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SendNotifyRequest {
     pub title: String,
@@ -134,6 +149,7 @@ pub fn create_admin_user_notes_router(pool: PgPool) -> Router<PgPool> {
 
 pub fn create_admin_users_router(pool: PgPool, deposits_state: DepositsState) -> Router<PgPool> {
     Router::new()
+        .route("/account-summaries", post(get_admin_account_summaries_batch))
         .route("/:id/profile", put(update_user_profile))
         .route("/:id/group", put(update_user_group))
         .route("/:id/account-type", put(update_user_account_type))
@@ -170,6 +186,33 @@ async fn get_admin_user_account_summary(
             }),
         )),
     }
+}
+
+/// Batch-fetch account summaries for the given user IDs. POST /api/admin/users/account-summaries.
+async fn get_admin_account_summaries_batch(
+    State(pool): State<PgPool>,
+    Extension(deposits_state): Extension<DepositsState>,
+    Extension(claims): Extension<Claims>,
+    JsonExt(body): JsonExt<AccountSummariesRequest>,
+) -> Result<Json<AccountSummariesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "users:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    const MAX_IDS: usize = 200;
+    let user_ids = body.user_ids.iter().take(MAX_IDS).copied().collect::<Vec<_>>();
+    let mut summaries = HashMap::new();
+    for user_id in user_ids {
+        match get_account_summary_for_user(&pool, deposits_state.redis.as_ref(), user_id).await {
+            Ok(summary) => {
+                summaries.insert(user_id.to_string(), summary);
+            }
+            Err(e) => {
+                tracing::warn!("Account summary skipped for user {}: {}", user_id, e);
+            }
+        }
+    }
+    Ok(Json(AccountSummariesResponse { summaries }))
 }
 
 async fn admin_send_notify(

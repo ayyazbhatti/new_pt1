@@ -168,3 +168,23 @@ export async function rejectTransaction(transactionId: string, reason?: string, 
   })
 }
 
+/** Admin direct deposit: create an approved deposit for a user in one step. POST /api/admin/deposits/direct */
+export interface DirectDepositRequest {
+  userId: string
+  amount: number
+  note?: string
+}
+
+export interface DirectDepositResponse {
+  transactionId: string
+  status: string
+  message: string
+}
+
+export async function createDirectDeposit(payload: DirectDepositRequest): Promise<DirectDepositResponse> {
+  return http<DirectDepositResponse>('/api/admin/deposits/direct', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+

@@ -13,13 +13,16 @@ import { ApproveRejectModal } from '../modals/ApproveRejectModal'
 import { Eye, CheckCircle, X, Loader2 } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchTransactions, Transaction as ApiTransaction } from '../api/finance.api'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
+const FINANCE_TRANSACTIONS_QUERY_KEY = ['finance-transactions']
+
 export function FinanceTransactionsPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const queryClient = useQueryClient()
   const canApprove = useCanAccess('deposits:approve')
   const canReject = useCanAccess('deposits:reject')
   const [filters, setFilters] = useState({
@@ -32,7 +35,7 @@ export function FinanceTransactionsPanel() {
   })
 
   const { data: apiTransactions, isLoading, refetch } = useQuery({
-    queryKey: ['finance-transactions', filters],
+    queryKey: [...FINANCE_TRANSACTIONS_QUERY_KEY, filters],
     queryFn: () => fetchTransactions({
       search: filters.search || undefined,
       type: filters.type !== 'all' ? filters.type : undefined,
@@ -52,33 +55,24 @@ export function FinanceTransactionsPanel() {
           const payload = event.payload as any
           const amount = payload.amount || 0
           const userId = payload.userId || payload.user_id || ''
-          const transactionId = payload.transactionId || payload.requestId || ''
           
           toast.success(
             `💰 New deposit request: $${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} from user ${userId.slice(0, 8)}...`,
-            { 
-              duration: 5000,
-            }
+            { duration: 5000 }
           )
-          // Refresh the transaction list to show the new deposit
-          refetch()
+          queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
         }
-        // When admin receives notification about new deposit request
         else if (event.type === 'notification.push') {
           const payload = event.payload as any
           if (payload.kind === 'DEPOSIT_REQUEST') {
             const amount = payload.meta?.amount || 0
             toast.success(
               `💰 New deposit request: $${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              { 
-                duration: 5000,
-              }
+              { duration: 5000 }
             )
-            // Refresh the transaction list to show the new deposit
-            refetch()
+            queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
           }
         }
-        // When a transaction is approved, refresh the list
         else if (event.type === 'deposit.request.approved') {
           const payload = event.payload as any
           const amount = payload.amount || 0
@@ -86,16 +80,13 @@ export function FinanceTransactionsPanel() {
             `✅ Deposit approved: $${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             { duration: 3000 }
           )
-          // Refresh the transaction list to show updated status
-          refetch()
+          queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
         }
-        // When balance is updated (transaction approved), refresh the list
         else if (event.type === 'wallet.balance.updated') {
-          // Refresh the transaction list to show updated status
-          refetch()
+          queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
         }
       },
-      [refetch]
+      [queryClient]
     )
   )
 
@@ -165,34 +156,38 @@ export function FinanceTransactionsPanel() {
   const handleApprove = (tx: Transaction) => {
     openModal(
       `approve-tx-${tx.id}`,
-      <ApproveRejectModal 
-        transaction={tx} 
-        action="approve" 
+      <ApproveRejectModal
+        transaction={tx}
+        action="approve"
         onSuccess={() => {
-          refetch()
+          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters]
+          queryClient.setQueryData<ApiTransaction[]>(queryKey, (old) => {
+            if (!old) return old
+            return old.map((t) => (t.id === tx.id ? { ...t, status: 'approved' as const } : t))
+          })
+          queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
         }}
       />,
-      {
-        title: 'Approve Transaction',
-        size: 'sm',
-      }
+      { title: 'Approve Transaction', size: 'sm' }
     )
   }
 
   const handleReject = (tx: Transaction) => {
     openModal(
       `reject-tx-${tx.id}`,
-      <ApproveRejectModal 
-        transaction={tx} 
+      <ApproveRejectModal
+        transaction={tx}
         action="reject"
         onSuccess={() => {
-          refetch()
+          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters]
+          queryClient.setQueryData<ApiTransaction[]>(queryKey, (old) => {
+            if (!old) return old
+            return old.map((t) => (t.id === tx.id ? { ...t, status: 'rejected' as const } : t))
+          })
+          queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
         }}
       />,
-      {
-        title: 'Reject Transaction',
-        size: 'sm',
-      }
+      { title: 'Reject Transaction', size: 'sm' }
     )
   }
 

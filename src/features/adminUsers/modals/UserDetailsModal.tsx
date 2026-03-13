@@ -32,8 +32,17 @@ import {
   ChevronDown,
   Check,
   AlertCircle,
+  Eye,
 } from 'lucide-react'
-import { fetchTransactions } from '@/features/adminFinance/api/finance.api'
+import { fetchTransactions, createDirectDeposit, type Transaction as ApiTransaction } from '@/features/adminFinance/api/finance.api'
+import type { Transaction as FinanceTransaction } from '@/features/adminFinance/types/finance'
+import { TransactionDetailsModal } from '@/features/adminFinance/modals/TransactionDetailsModal'
+import { ApproveRejectModal } from '@/features/adminFinance/modals/ApproveRejectModal'
+import { DataTable } from '@/shared/ui/table'
+import { Badge } from '@/shared/ui/badge'
+import { Button } from '@/shared/ui/button'
+import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
+import { ColumnDef } from '@tanstack/react-table'
 import { fetchUserNotes, createUserNote, getAccountSummary, type UserNote } from '../api/users.api'
 import { getPositionsByUserId, type Position } from '@/features/terminal/api/positions.api'
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
@@ -47,8 +56,7 @@ import {
 import { wsClient } from '@/shared/ws/wsClient'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { requestPasswordResetOTP } from '@/shared/api/auth.api'
-import type { Appointment } from '@/features/appointments/types'
-import type { UserSearchResult } from '@/features/appointments/types'
+import type { Appointment, CreateAppointmentRequest, AppointmentType, UserSearchResult } from '@/features/appointments/types'
 import {
   getAppointments,
   createAppointment,
@@ -57,11 +65,9 @@ import {
   cancelAppointment,
   completeAppointment,
   sendAppointmentReminder,
-  searchUsersForAppointment,
 } from '@/features/appointments/api/appointments.api'
 import { AdminAppointmentsTable } from '@/features/appointments/components/AdminAppointmentsTable'
 import { ViewAppointmentModal } from '@/features/appointments/modals/ViewAppointmentModal'
-import { CreateAppointmentModal } from '@/features/appointments/modals/CreateAppointmentModal'
 import { EditAppointmentModal } from '@/features/appointments/modals/EditAppointmentModal'
 import { RescheduleModal } from '@/features/appointments/modals/RescheduleModal'
 import { CancelAppointmentModal } from '@/features/appointments/modals/CancelAppointmentModal'
@@ -231,7 +237,36 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   })
   const [createOrderSymbolDropdownOpen, setCreateOrderSymbolDropdownOpen] = useState(false)
   const [createOrderSymbolSearch, setCreateOrderSymbolSearch] = useState('')
+  const [showDirectDepositForm, setShowDirectDepositForm] = useState(false)
+  const [directDepositAmount, setDirectDepositAmount] = useState('')
+  const [directDepositNote, setDirectDepositNote] = useState('')
+  const [directDepositSubmitting, setDirectDepositSubmitting] = useState(false)
+  const [showCreateAppointmentForm, setShowCreateAppointmentForm] = useState(false)
+  const [aptTitle, setAptTitle] = useState('')
+  const [aptDescription, setAptDescription] = useState('')
+  const [aptScheduledDate, setAptScheduledDate] = useState('')
+  const [aptScheduledTime, setAptScheduledTime] = useState('')
+  const [aptDurationMinutes, setAptDurationMinutes] = useState(30)
+  const [aptType, setAptType] = useState<AppointmentType>('consultation')
+  const [aptMeetingLink, setAptMeetingLink] = useState('')
+  const [aptLocation, setAptLocation] = useState('')
+  const [aptNotes, setAptNotes] = useState('')
   const createOrderSymbolDropdownRef = useRef<HTMLDivElement>(null)
+
+  const APT_TYPES: AppointmentType[] = ['consultation', 'support', 'onboarding', 'review', 'other']
+  const APT_DURATIONS = [15, 30, 45, 60]
+
+  const resetCreateAptForm = useCallback(() => {
+    setAptTitle('')
+    setAptDescription('')
+    setAptScheduledDate('')
+    setAptScheduledTime('')
+    setAptDurationMinutes(30)
+    setAptType('consultation')
+    setAptMeetingLink('')
+    setAptLocation('')
+    setAptNotes('')
+  }, [])
   const [closePositionDialogOpen, setClosePositionDialogOpen] = useState(false)
   const [closePositionId, setClosePositionId] = useState<string | null>(null)
   const [reopenPositionDialogOpen, setReopenPositionDialogOpen] = useState(false)
@@ -284,13 +319,28 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const canCancelApt = useCanAccess('appointments:cancel')
   const canCompleteApt = useCanAccess('appointments:complete')
   const canSendReminderApt = useCanAccess('appointments:send_reminder')
+  const canApproveDeposit = useCanAccess('deposits:approve')
+  const canRejectDeposit = useCanAccess('deposits:reject')
 
-  const { data: transactionsData, isLoading: transactionsLoading } = useQuery({
+  const { data: transactionsData, isLoading: transactionsLoading, refetch: refetchTransactions } = useQuery({
     queryKey: ['user-transactions', user.id, user.email],
     queryFn: () => fetchTransactions({ search: user.email, pageSize: 100 }),
     enabled: !!user.email,
   })
   const transactions = transactionsData ?? []
+
+  // Real-time: refetch Funding tab when deposit/balance events arrive so the table updates live
+  useWebSocketSubscription(
+    useCallback(
+      (event: WsInboundEvent) => {
+        if (event.type === 'deposit.request.created') refetchTransactions()
+        else if (event.type === 'notification.push' && (event.payload as { kind?: string })?.kind === 'DEPOSIT_REQUEST') refetchTransactions()
+        else if (event.type === 'deposit.request.approved') refetchTransactions()
+        else if (event.type === 'wallet.balance.updated') refetchTransactions()
+      },
+      [refetchTransactions]
+    )
+  )
 
   const { data: positionsData, isLoading: positionsLoading } = useQuery({
     queryKey: ['user-positions', user.id],
@@ -498,17 +548,27 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const handleViewApt = (apt: Appointment) => {
     openModal('view-apt', <ViewAppointmentModal appointment={apt} />, { title: 'Appointment details', size: 'md' })
   }
-  const handleCreateApt = () => {
-    openModal(
-      'create-apt',
-      <CreateAppointmentModal
-        onSearchUsers={(q, limit) => searchUsersForAppointment(q, limit)}
-        onSubmit={(payload) => createAptMutation.mutate(payload)}
-        submitting={createAptMutation.isPending}
-        initialUser={userAsSearchResult}
-      />,
-      { title: 'Create appointment', size: 'lg' }
-    )
+  const handleSubmitCreateApt = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!aptTitle.trim() || !aptScheduledDate || !aptScheduledTime) return
+    const [y, m, d] = aptScheduledDate.split('-').map(Number)
+    const [hour, min] = aptScheduledTime.split(':').map(Number)
+    const scheduled_at = new Date(y, m - 1, d, hour, min, 0).toISOString()
+    const payload: CreateAppointmentRequest = {
+      user_id: userState.id,
+      title: aptTitle.trim(),
+      description: aptDescription.trim() || undefined,
+      scheduled_at,
+      duration_minutes: aptDurationMinutes,
+      type: aptType,
+      meeting_link: aptMeetingLink.trim() || undefined,
+      location: aptLocation.trim() || undefined,
+      notes: aptNotes.trim() || undefined,
+    }
+    createAptMutation.mutateAsync(payload).then(() => {
+      setShowCreateAppointmentForm(false)
+      resetCreateAptForm()
+    }).catch(() => {})
   }
   const handleEditApt = (apt: Appointment) => {
     openModal(
@@ -711,6 +771,205 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
     createdAt: string
     method: string
   }
+
+  // Map API transactions to FinanceTransaction shape for Funding table (same columns as Admin Transactions page)
+  const fundingTransactions = useMemo((): FinanceTransaction[] => {
+    if (!transactionsData) return []
+    return transactionsData.map((tx) => ({
+      id: tx.id,
+      user: {
+        id: tx.userId,
+        email: tx.userEmail,
+        name: tx.userFirstName && tx.userLastName ? `${tx.userFirstName} ${tx.userLastName}` : undefined,
+        firstName: tx.userFirstName,
+        lastName: tx.userLastName,
+      },
+      type: tx.type as FinanceTransaction['type'],
+      amount: Number(tx.amount),
+      currency: (tx.currency || 'USD') as FinanceTransaction['currency'],
+      method: tx.method as FinanceTransaction['method'],
+      fee: Number(tx.fee ?? 0),
+      netAmount: Number(tx.netAmount ?? 0),
+      status: (tx.status === 'completed' ? 'approved' : tx.status) as FinanceTransaction['status'],
+      createdAt: tx.createdAt,
+      updatedAt: tx.updatedAt,
+      reference: tx.reference ?? '',
+      methodDetails: tx.methodDetails,
+      adminNotes: tx.adminNotes,
+      rejectionReason: tx.rejectionReason,
+    }))
+  }, [transactionsData])
+
+  const getFundingStatusBadge = (status: string) => {
+    const displayStatus = status === 'completed' ? 'approved' : status
+    const variants: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
+      approved: 'success',
+      completed: 'success',
+      pending: 'warning',
+      rejected: 'danger',
+      failed: 'danger',
+    }
+    return <Badge variant={variants[status] || 'neutral'}>{displayStatus}</Badge>
+  }
+
+  const handleViewFundingTx = (tx: FinanceTransaction) => {
+    openModal(`tx-details-${tx.id}`, <TransactionDetailsModal transaction={tx} />, {
+      title: 'Transaction Details',
+      size: 'lg',
+    })
+  }
+
+  const handleApproveFundingTx = (tx: FinanceTransaction) => {
+    openModal(
+      `approve-tx-${tx.id}`,
+      <ApproveRejectModal
+        transaction={tx}
+        action="approve"
+        onSuccess={() => {
+          const userTxKey = ['user-transactions', user.id, user.email]
+          queryClient.setQueryData<ApiTransaction[]>(userTxKey, (old) => {
+            if (!old) return old
+            return old.map((t) => (t.id === tx.id ? { ...t, status: 'approved' as const } : t))
+          })
+          refetchTransactions()
+          queryClient.invalidateQueries({ queryKey: ['finance-transactions'] })
+        }}
+      />,
+      { title: 'Approve Transaction', size: 'sm' }
+    )
+  }
+
+  const handleRejectFundingTx = (tx: FinanceTransaction) => {
+    openModal(
+      `reject-tx-${tx.id}`,
+      <ApproveRejectModal
+        transaction={tx}
+        action="reject"
+        onSuccess={() => {
+          const userTxKey = ['user-transactions', user.id, user.email]
+          queryClient.setQueryData<ApiTransaction[]>(userTxKey, (old) => {
+            if (!old) return old
+            return old.map((t) => (t.id === tx.id ? { ...t, status: 'rejected' as const } : t))
+          })
+          refetchTransactions()
+          queryClient.invalidateQueries({ queryKey: ['finance-transactions'] })
+        }}
+      />,
+      { title: 'Reject Transaction', size: 'sm' }
+    )
+  }
+
+  const fundingTableColumns = useMemo<ColumnDef<FinanceTransaction>[]>(
+    () => [
+      { accessorKey: 'id', header: 'Tx ID', cell: ({ row }) => <span className="font-mono text-sm">{row.getValue('id')}</span> },
+      {
+        id: 'userName',
+        header: 'Name',
+        cell: ({ row }) => {
+          const tx = row.original
+          const name =
+            tx.user.name ||
+            (tx.user.firstName && tx.user.lastName ? `${tx.user.firstName} ${tx.user.lastName}` : tx.user.firstName || tx.user.lastName || '—')
+          return <span className="text-sm text-slate-200">{name}</span>
+        },
+      },
+      {
+        id: 'userEmail',
+        header: 'Email',
+        cell: ({ row }) => <span className="text-sm text-slate-400">{row.original.user.email}</span>,
+      },
+      {
+        accessorKey: 'type',
+        header: 'Type',
+        cell: ({ row }) => {
+          const type = row.getValue('type') as string
+          const isWithdrawal = type?.toLowerCase() === 'withdrawal'
+          return (
+            <span className={cn('capitalize', isWithdrawal && 'text-red-400 font-semibold')}>
+              {type ? type.charAt(0).toUpperCase() + type.slice(1) : type}
+            </span>
+          )
+        },
+      },
+      {
+        accessorKey: 'netAmount',
+        header: 'Amount',
+        cell: ({ row }) => {
+          const tx = row.original
+          const isWithdrawal = tx.type?.toLowerCase() === 'withdrawal'
+          const color = isWithdrawal ? 'text-red-400' : (tx.netAmount >= 0 ? 'text-green-400' : 'text-red-400')
+          const sign = isWithdrawal ? '-' : (tx.netAmount >= 0 ? '+' : '')
+          return (
+            <span className={cn('font-mono font-semibold text-right block', color)}>
+              {sign}
+              {formatCurrency(Math.abs(tx.netAmount), tx.currency)}
+            </span>
+          )
+        },
+      },
+      {
+        accessorKey: 'currency',
+        header: 'Currency',
+        cell: ({ row }) => <span className="font-mono text-sm">{row.getValue('currency')}</span>,
+      },
+      {
+        accessorKey: 'method',
+        header: 'Method',
+        cell: ({ row }) => <span className="capitalize">{row.getValue('method')}</span>,
+      },
+      {
+        accessorKey: 'status',
+        header: 'Status',
+        cell: ({ row }) => getFundingStatusBadge(row.getValue('status')),
+      },
+      {
+        accessorKey: 'createdAt',
+        header: 'Created',
+        cell: ({ row }) => <span className="text-sm text-slate-400">{formatDateTime(row.getValue('createdAt'))}</span>,
+      },
+      {
+        id: 'actions',
+        header: 'Actions',
+        cell: ({ row }) => {
+          const tx = row.original
+          return (
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => handleViewFundingTx(tx)} title="View">
+                <Eye className="h-4 w-4" />
+              </Button>
+              {tx.status === 'pending' && (
+                <>
+                  {canApproveDeposit && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleApproveFundingTx(tx)}
+                      className="text-green-400 hover:text-green-300 hover:bg-green-900/20"
+                      title="Approve"
+                    >
+                      <CheckCircle className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {canRejectDeposit && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRejectFundingTx(tx)}
+                      className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
+                      title="Reject"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          )
+        },
+      },
+    ],
+    [canApproveDeposit, canRejectDeposit]
+  )
 
   const handleClose = () => closeModal(`user-details-${user.id}`)
 
@@ -1026,25 +1285,125 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toast.success('Direct deposit flow coming soon')}
-                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Direct Deposit
-                    </button>
+                  <div className="flex flex-col gap-2">
+                    {canApproveDeposit && (
+                      <button
+                        type="button"
+                        onClick={() => setShowDirectDepositForm((prev) => !prev)}
+                        className={cn(
+                          'flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white',
+                          showDirectDepositForm ? 'bg-slate-600 hover:bg-slate-500' : 'bg-blue-600 hover:bg-blue-700'
+                        )}
+                      >
+                        <Plus className="h-4 w-4" />
+                        {showDirectDepositForm ? 'Hide form' : 'Direct Deposit'}
+                      </button>
+                    )}
+                    {!canApproveDeposit && (
+                      <button
+                        type="button"
+                        onClick={() => toast.success('Direct deposit flow coming soon')}
+                        className="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Direct Deposit
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => toast.success('Withdraw flow coming soon')}
-                      className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700"
+                      className="flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700"
                     >
                       <ArrowUpCircle className="h-4 w-4" />
                       Withdraw
                     </button>
                   </div>
                 </div>
+
+                {showDirectDepositForm && canApproveDeposit && (
+                  <div className="mt-4">
+                    <h3 className="text-sm font-semibold text-slate-200 mb-3">Direct deposit for this user</h3>
+                    <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4">
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault()
+                        const amountNum = parseFloat(directDepositAmount)
+                        if (!Number.isFinite(amountNum) || amountNum <= 0) {
+                          toast.error('Please enter a valid amount greater than 0')
+                          return
+                        }
+                        setDirectDepositSubmitting(true)
+                        try {
+                          await createDirectDeposit({
+                            userId: user.id,
+                            amount: amountNum,
+                            note: directDepositNote.trim() || undefined,
+                          })
+                          toast.success(`Direct deposit of ${formatCurrency(amountNum, 'USD')} applied.`)
+                          setDirectDepositAmount('')
+                          setDirectDepositNote('')
+                          setShowDirectDepositForm(false)
+                          refetchTransactions()
+                          queryClient.invalidateQueries({ queryKey: ['finance-transactions'] })
+                        } catch (err: unknown) {
+                          const msg = (err as { response?: { data?: { error?: { message?: string }; message?: string } } })?.response?.data?.error?.message
+                            ?? (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+                            ?? (err instanceof Error ? err.message : 'Direct deposit failed')
+                          toast.error(String(msg))
+                        } finally {
+                          setDirectDepositSubmitting(false)
+                        }
+                      }}
+                      className="flex flex-wrap items-end gap-3"
+                    >
+                      <div className="min-w-[120px]">
+                        <Label className="text-slate-400 text-xs">Amount (USD) *</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={directDepositAmount}
+                          onChange={(e) => setDirectDepositAmount(e.target.value)}
+                          placeholder="0.00"
+                          className="mt-1 w-full bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400"
+                          disabled={directDepositSubmitting}
+                        />
+                      </div>
+                      <div className="min-w-[200px] flex-1">
+                        <Label className="text-slate-400 text-xs">Note (optional)</Label>
+                        <Input
+                          type="text"
+                          value={directDepositNote}
+                          onChange={(e) => setDirectDepositNote(e.target.value)}
+                          placeholder="Internal note for this deposit..."
+                          className="mt-1 w-full bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400"
+                          disabled={directDepositSubmitting}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setShowDirectDepositForm(false)}
+                        disabled={directDepositSubmitting}
+                        className="border-slate-600 text-slate-300 hover:bg-slate-700 shrink-0"
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={directDepositSubmitting} className="bg-blue-600 hover:bg-blue-700 shrink-0">
+                        {directDepositSubmitting ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Applying…
+                          </>
+                        ) : (
+                          'Apply deposit'
+                        )}
+                      </Button>
+                    </form>
+                    </div>
+                  </div>
+                )}
+
                 {transactions.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12">
                     <DollarSign className="h-12 w-12 text-slate-600" />
@@ -1053,37 +1412,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                   </div>
                 ) : (
                   <div className="mt-6 overflow-x-auto rounded-lg border border-slate-700">
-                    <table className="w-full text-sm">
-                      <thead className="border-b border-slate-700">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Type</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Status</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Amount</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Fee</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Created</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-700">
-                        {transactions.slice(0, 50).map((tx: TransactionRow) => (
-                          <tr key={tx.id}>
-                            <td className="px-4 py-3 text-slate-300 capitalize">{tx.type}</td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={cn(
-                                  'rounded-full px-2 py-0.5 text-xs',
-                                  tx.status === 'approved' || tx.status === 'completed' ? 'bg-green-900/40 text-green-400' : tx.status === 'pending' ? 'bg-yellow-900/40 text-yellow-400' : 'bg-slate-700 text-slate-400'
-                                )}
-                              >
-                                {tx.status}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 font-mono text-white">{formatCurrency(tx.amount, (tx.currency as 'USD') || 'USD')}</td>
-                            <td className="px-4 py-3 font-mono text-slate-400">{tx.netAmount != null ? formatCurrency(tx.amount - tx.netAmount, 'USD') : '—'}</td>
-                            <td className="px-4 py-3 text-slate-400">{formatDateTime(tx.createdAt)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <DataTable data={fundingTransactions} columns={fundingTableColumns} />
                   </div>
                 )}
               </>
@@ -1610,17 +1939,148 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
 
         <TabsContent value="appointments" className="flex-1 min-h-0 overflow-auto mt-3 data-[state=inactive]:hidden">
           <div className="min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-white sm:text-lg">Appointments</h2>
+            <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
               <button
                 type="button"
-                onClick={handleCreateApt}
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 sm:px-4"
+                onClick={() => setShowCreateAppointmentForm((prev) => !prev)}
+                className={cn(
+                  'rounded-lg px-3 py-2 text-sm font-medium text-white sm:px-4',
+                  showCreateAppointmentForm ? 'bg-slate-600 hover:bg-slate-500' : 'bg-blue-600 hover:bg-blue-700'
+                )}
               >
-                New Appointment
+                {showCreateAppointmentForm ? 'Hide form' : 'New Appointment'}
               </button>
             </div>
-            <p className="mb-3 text-xs text-slate-400">Showing appointments for this user.</p>
+            {showCreateAppointmentForm && (
+              <div className="mt-4 mb-4">
+                <h3 className="text-sm font-semibold text-slate-200 mb-3">Create appointment for this user</h3>
+                <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4">
+                  <form onSubmit={handleSubmitCreateApt} className="space-y-4">
+                    <div className="grid grid-cols-3 gap-3 items-end">
+                      <div className="min-w-0 rounded-lg border border-slate-600 bg-slate-700 p-2 opacity-90 min-h-[2.25rem] flex flex-col justify-center">
+                        <div className="text-slate-200 text-sm font-medium truncate">{userState.name || userState.email}</div>
+                        {userState.email && <div className="text-slate-400 text-xs truncate">{userState.email}</div>}
+                      </div>
+                      <div className="min-w-0">
+                        <Label className="text-slate-300 text-xs">Title *</Label>
+                        <Input
+                          value={aptTitle}
+                          onChange={(e) => setAptTitle(e.target.value)}
+                          placeholder="Appointment title"
+                          required
+                          className="mt-1 border-slate-600 bg-slate-700 text-white"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <Label className="text-slate-300 text-xs">Description</Label>
+                        <Input
+                          value={aptDescription}
+                          onChange={(e) => setAptDescription(e.target.value)}
+                          placeholder="Optional description"
+                          className="mt-1 border-slate-600 bg-slate-700 text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <div className="min-w-[140px] flex-1">
+                        <Label className="text-slate-300 text-xs">Date *</Label>
+                        <Input
+                          type="date"
+                          value={aptScheduledDate}
+                          onChange={(e) => setAptScheduledDate(e.target.value)}
+                          required
+                          className="mt-1 border-slate-600 bg-slate-700 text-white"
+                        />
+                      </div>
+                      <div className="min-w-[100px] flex-1">
+                        <Label className="text-slate-300 text-xs">Time *</Label>
+                        <Input
+                          type="time"
+                          value={aptScheduledTime}
+                          onChange={(e) => setAptScheduledTime(e.target.value)}
+                          required
+                          className="mt-1 border-slate-600 bg-slate-700 text-white"
+                        />
+                      </div>
+                      <div className="min-w-[100px] flex-1">
+                        <Label className="text-slate-300 text-xs">Duration</Label>
+                        <Select value={String(aptDurationMinutes)} onValueChange={(v) => setAptDurationMinutes(Number(v))}>
+                          <SelectTrigger className="mt-1 border-slate-600 bg-slate-700 text-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {APT_DURATIONS.map((m) => (
+                              <SelectItem key={m} value={String(m)}>{m} min</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 items-end">
+                      <div className="min-w-0">
+                        <Label className="text-slate-300 text-xs">Type</Label>
+                        <Select value={aptType} onValueChange={(v) => setAptType(v as AppointmentType)}>
+                          <SelectTrigger className="mt-1 border-slate-600 bg-slate-700 text-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {APT_TYPES.map((t) => (
+                              <SelectItem key={t} value={t}>{t}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="min-w-0">
+                        <Label className="text-slate-300 text-xs">Meeting link</Label>
+                        <Input
+                          value={aptMeetingLink}
+                          onChange={(e) => setAptMeetingLink(e.target.value)}
+                          placeholder="https://..."
+                          type="url"
+                          className="mt-1 border-slate-600 bg-slate-700 text-white"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <Label className="text-slate-300 text-xs">Location</Label>
+                        <Input
+                          value={aptLocation}
+                          onChange={(e) => setAptLocation(e.target.value)}
+                          placeholder="Location"
+                          className="mt-1 border-slate-600 bg-slate-700 text-white"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">Internal notes</Label>
+                      <textarea
+                        value={aptNotes}
+                        onChange={(e) => setAptNotes(e.target.value)}
+                        placeholder="Admin-only notes"
+                        rows={2}
+                        className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2 border-t border-slate-700 pt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => { setShowCreateAppointmentForm(false); resetCreateAptForm(); }}
+                        className="border-slate-600 bg-slate-700 text-slate-300 hover:bg-slate-600"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        disabled={createAptMutation.isPending || !aptTitle.trim() || !aptScheduledDate || !aptScheduledTime}
+                        className="bg-blue-600 hover:bg-blue-700"
+                      >
+                        {createAptMutation.isPending ? 'Creating...' : 'Create appointment'}
+                      </Button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
             {appointmentsLoading ? (
               <div className="flex h-32 items-center justify-center rounded-lg border border-slate-600 bg-slate-700/50">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-600 border-t-blue-500" />
