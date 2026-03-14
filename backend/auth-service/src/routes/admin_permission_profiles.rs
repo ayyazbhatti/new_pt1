@@ -269,6 +269,43 @@ pub fn create_admin_permission_profile_tags_router(pool: PgPool) -> Router<PgPoo
         .with_state(pool)
 }
 
+/// Full Access profile name (case-insensitive). This profile cannot be edited or deleted.
+const FULL_ACCESS_PROFILE_NAME: &str = "full access";
+
+async fn ensure_not_full_access_profile(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM permission_profiles WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    if name.as_ref().map(|n| n.to_lowercase()).as_deref() == Some(FULL_ACCESS_PROFILE_NAME)
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "FORBIDDEN".to_string(),
+                    message: "The Full Access profile cannot be modified or deleted.".to_string(),
+                },
+            }),
+        ));
+    }
+    Ok(())
+}
+
 async fn get_permission_profile_tag_ids(pool: &PgPool, profile_ids: &[Uuid]) -> HashMap<Uuid, Vec<Uuid>> {
     if profile_ids.is_empty() {
         return HashMap::new();
@@ -364,6 +401,7 @@ async fn put_permission_profile_tags(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     check_permission(&pool, &claims, "permissions:edit").await?;
     ensure_profile_allowed(&pool, &claims, id).await?;
+    ensure_not_full_access_profile(&pool, id).await?;
 
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM permission_profiles WHERE id = $1)")
         .bind(id)
@@ -625,6 +663,7 @@ async fn update_profile(
 ) -> Result<Json<PermissionProfileResponse>, (StatusCode, Json<ErrorResponse>)> {
     check_permission(&pool, &claims, "permissions:edit").await?;
     ensure_profile_allowed(&pool, &claims, id).await?;
+    ensure_not_full_access_profile(&pool, id).await?;
 
     let service = PermissionProfilesService::new(pool.clone());
     let updated = service
@@ -701,6 +740,7 @@ async fn delete_profile(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     check_permission(&pool, &claims, "permissions:edit").await?;
     ensure_profile_allowed(&pool, &claims, id).await?;
+    ensure_not_full_access_profile(&pool, id).await?;
 
     let service = PermissionProfilesService::new(pool.clone());
     service.delete(id).await.map_err(|e| {

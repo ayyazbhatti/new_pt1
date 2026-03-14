@@ -137,6 +137,7 @@ export function PermissionsPage() {
   const [formDescription, setFormDescription] = useState('')
   const [formPermissionIds, setFormPermissionIds] = useState<Set<string>>(new Set())
   const [editLoadingId, setEditLoadingId] = useState<string | null>(null)
+  const [editingProfileName, setEditingProfileName] = useState<string | null>(null)
   const [openTagsProfileId, setOpenTagsProfileId] = useState<string | null>(null)
   const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
   const [updatingTagsProfileId, setUpdatingTagsProfileId] = useState<string | null>(null)
@@ -154,35 +155,63 @@ export function PermissionsPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [openTagsProfileId])
 
+  // When editing Full Access, keep formPermissionIds in sync with all definitions (e.g. after definitions load)
+  const allPermissionKeysFromDefinitions = useMemo(
+    () => permissionCategories.flatMap((c) => c.permissions.map((p) => p.key)),
+    [permissionCategories]
+  )
+  useEffect(() => {
+    if (!dialogOpen || editingProfileName?.toLowerCase() !== 'full access' || allPermissionKeysFromDefinitions.length === 0) return
+    setFormPermissionIds((prev) => {
+      const target = new Set(allPermissionKeysFromDefinitions)
+      if (prev.size === target.size && allPermissionKeysFromDefinitions.every((k) => prev.has(k))) return prev
+      return target
+    })
+  }, [dialogOpen, editingProfileName, allPermissionKeysFromDefinitions])
+
   const openCreate = useCallback(() => {
     setEditingId(null)
+    setEditingProfileName(null)
     setFormName('')
     setFormDescription('')
     setFormPermissionIds(new Set())
     setDialogOpen(true)
   }, [])
 
-  const openEdit = useCallback((profile: PermissionProfile) => {
-    setEditLoadingId(profile.id)
-    getPermissionProfile(profile.id)
-      .then((p) => {
-        if (p) {
-          setEditingId(p.id)
-          setFormName(p.name)
-          setFormDescription(p.description ?? '')
-          setFormPermissionIds(new Set(p.permissionIds))
-          setDialogOpen(true)
-        } else {
-          toast.error('Failed to load profile')
-        }
-      })
-      .catch(() => toast.error('Failed to load profile'))
-      .finally(() => setEditLoadingId(null))
-  }, [])
+  const isFullAccessProfile = editingProfileName?.toLowerCase() === 'full access'
+
+  const openEdit = useCallback(
+    (profile: PermissionProfile) => {
+      setEditLoadingId(profile.id)
+      setEditingProfileName(profile.name)
+      getPermissionProfile(profile.id)
+        .then((p) => {
+          if (p) {
+            setEditingId(p.id)
+            setFormName(p.name)
+            setFormDescription(p.description ?? '')
+            if (p.name?.toLowerCase() === 'full access') {
+              setFormPermissionIds(
+                new Set(permissionCategories.flatMap((c) => c.permissions.map((perm) => perm.key)))
+              )
+            } else {
+              setFormPermissionIds(new Set(p.permissionIds))
+            }
+            setDialogOpen(true)
+          } else {
+            toast.error('Failed to load profile')
+          }
+        })
+        .catch(() => toast.error('Failed to load profile'))
+        .finally(() => setEditLoadingId(null))
+    },
+    [permissionCategories]
+  )
 
   const closeDialog = useCallback(() => {
     setDialogOpen(false)
     setEditingId(null)
+    setEditingProfileName(null)
   }, [])
 
   const togglePermission = useCallback((id: string) => {
@@ -329,6 +358,7 @@ export function PermissionsPage() {
         cell: ({ row }) => {
           const profile = row.original
           if (!canEditPermissions) return null
+          const isFullAccess = profile.name?.toLowerCase() === 'full access'
           return (
             <div className="flex items-center justify-end gap-2">
               <Button
@@ -341,6 +371,7 @@ export function PermissionsPage() {
                 <Pencil className="h-3.5 w-3.5" />
                 {editLoadingId === profile.id ? 'Loading…' : 'Edit'}
               </Button>
+              {!isFullAccess && (
               <Button
                 variant="outline"
                 size="sm"
@@ -350,6 +381,7 @@ export function PermissionsPage() {
                 <Trash2 className="h-3.5 w-3.5" />
                 Delete
               </Button>
+              )}
             </div>
           )
         },
@@ -499,20 +531,24 @@ export function PermissionsPage() {
                           <td className="align-middle text-sm text-text whitespace-nowrap p-4">
                             {perm.label}
                           </td>
-                          {profiles.map((profile) => (
-                            <td
-                              key={profile.id}
-                              className="align-middle text-sm text-text whitespace-nowrap p-4 text-center"
-                            >
-                              {profile.permissionIds.includes(perm.key) ? (
-                                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-accent/20 text-accent">
-                                  <Check className="h-3.5 w-3.5" />
-                                </span>
-                              ) : (
-                                <span className="text-text-muted/50">—</span>
-                              )}
-                            </td>
-                          ))}
+                          {profiles.map((profile) => {
+                            const isFullAccess = profile.name?.toLowerCase() === 'full access'
+                            const hasPermission = isFullAccess || profile.permissionIds.includes(perm.key)
+                            return (
+                              <td
+                                key={profile.id}
+                                className="align-middle text-sm text-text whitespace-nowrap p-4 text-center"
+                              >
+                                {hasPermission ? (
+                                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-accent/20 text-accent">
+                                    <Check className="h-3.5 w-3.5" />
+                                  </span>
+                                ) : (
+                                  <span className="text-text-muted/50">—</span>
+                                )}
+                              </td>
+                            )
+                          })}
                         </tr>
                       ))}
                     </Fragment>
@@ -550,6 +586,8 @@ export function PermissionsPage() {
                 onChange={(e) => setFormName(e.target.value)}
                 placeholder="e.g. Trading manager"
                 className="w-full"
+                disabled={isFullAccessProfile}
+                readOnly={isFullAccessProfile}
               />
             </div>
             <div>
@@ -559,35 +597,46 @@ export function PermissionsPage() {
                 onChange={(e) => setFormDescription(e.target.value)}
                 placeholder="Short description of who this profile is for"
                 className="w-full"
+                disabled={isFullAccessProfile}
+                readOnly={isFullAccessProfile}
               />
             </div>
           </div>
+          {isFullAccessProfile && (
+            <p className="text-sm text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2 mb-4 flex-shrink-0">
+              This profile is for super admin. All permissions are included and cannot be changed.
+            </p>
+          )}
           {/* Static: Access rights label + hint */}
           <div className="flex items-center justify-between gap-2 mb-2 flex-shrink-0">
             <label className="text-sm font-medium text-text">Access rights</label>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-xs h-8"
-                onClick={() => setFormPermissionIds(new Set(permissionCategories.flatMap((c) => c.permissions.map((p) => p.key)).filter((k) => userPermissionSet.has(k))))}
-              >
-                Select all
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-xs h-8"
-                onClick={() => setFormPermissionIds(new Set())}
-              >
-                Unselect all
-              </Button>
-            </div>
+            {!isFullAccessProfile && (
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-8"
+                  onClick={() => setFormPermissionIds(new Set(permissionCategories.flatMap((c) => c.permissions.map((p) => p.key)).filter((k) => userPermissionSet.has(k))))}
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-8"
+                  onClick={() => setFormPermissionIds(new Set())}
+                >
+                  Unselect all
+                </Button>
+              </div>
+            )}
           </div>
           <p className="text-xs text-text-muted mb-3 flex-shrink-0">
-            Select the permissions included in this profile. You can only assign permissions you have; others are disabled.
+            {isFullAccessProfile
+              ? 'All permissions are granted and locked for this profile.'
+              : 'Select the permissions included in this profile. You can only assign permissions you have; others are disabled.'}
           </p>
           {/* Scrollable: permission list only (from DB); Users & Groups first */}
           <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-border bg-surface-2/30 p-4 pr-2">
@@ -608,12 +657,12 @@ export function PermissionsPage() {
                 return (
                   <div key={category.id}>
                     <div className="flex items-center gap-2 mb-2">
-                      <label className={cn('flex items-center gap-2 text-sm font-medium text-text', !categoryDisabled && 'cursor-pointer hover:opacity-90')}>
+                      <label className={cn('flex items-center gap-2 text-sm font-medium text-text', !categoryDisabled && !isFullAccessProfile && 'cursor-pointer hover:opacity-90')}>
                         <Checkbox
                           checked={allSelected}
                           indeterminate={sectionIndeterminate}
                           onChange={() => toggleCategory(category, !allSelected)}
-                          disabled={categoryDisabled}
+                          disabled={categoryDisabled || isFullAccessProfile}
                         />
                         <span>{category.name}</span>
                       </label>
@@ -621,18 +670,19 @@ export function PermissionsPage() {
                     <div className="flex flex-wrap gap-x-6 gap-y-2 pl-6">
                       {category.permissions.map((perm) => {
                         const userHasPerm = userPermissionSet.has(perm.key)
+                        const checkboxDisabled = isFullAccessProfile || !userHasPerm
                         return (
                           <label
                             key={perm.id}
                             className={cn(
                               'flex items-center gap-2 text-sm text-text-muted',
-                              userHasPerm ? 'cursor-pointer hover:text-text' : 'cursor-not-allowed opacity-60'
+                              !checkboxDisabled ? 'cursor-pointer hover:text-text' : 'cursor-not-allowed opacity-60'
                             )}
                           >
                             <Checkbox
                               checked={formPermissionIds.has(perm.key)}
                               onChange={() => togglePermission(perm.key)}
-                              disabled={!userHasPerm}
+                              disabled={checkboxDisabled}
                             />
                             <span>{perm.label}</span>
                           </label>
@@ -647,14 +697,16 @@ export function PermissionsPage() {
           </div>
           <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border flex-shrink-0">
             <Button variant="outline" onClick={closeDialog}>
-              Cancel
+              {isFullAccessProfile ? 'Close' : 'Cancel'}
             </Button>
-            <Button
-              onClick={handleSave}
-              disabled={!formName.trim() || createMutation.isPending || updateMutation.isPending || definitionsLoading || !!definitionsError}
-            >
-              {editingId ? (updateMutation.isPending ? 'Saving…' : 'Save changes') : createMutation.isPending ? 'Creating…' : 'Create profile'}
-            </Button>
+            {!isFullAccessProfile && (
+              <Button
+                onClick={handleSave}
+                disabled={!formName.trim() || createMutation.isPending || updateMutation.isPending || definitionsLoading || !!definitionsError}
+              >
+                {editingId ? (updateMutation.isPending ? 'Saving…' : 'Save changes') : createMutation.isPending ? 'Creating…' : 'Create profile'}
+              </Button>
+            )}
           </div>
         </div>
       </ModalShell>
