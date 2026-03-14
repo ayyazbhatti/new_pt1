@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
+import { useAuthStore } from '@/shared/store/auth.store'
 import { Card } from '@/shared/ui/card'
 import { RevenueChart } from '../components/RevenueChart'
 import {
@@ -66,6 +67,8 @@ const PLATFORM_ALERTS_PLACEHOLDER = [
 ]
 
 export function DashboardPage() {
+  const user = useAuthStore((s) => s.user)
+  const isSuperAdmin = user?.role === 'super_admin'
   const { data: usersData, isLoading: usersLoading } = useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.users,
     queryFn: fetchDashboardUsers,
@@ -112,7 +115,11 @@ export function DashboardPage() {
     <ContentShell>
       <PageHeader
         title="Dashboard"
-        description="Overview of your trading platform"
+        description={
+          isSuperAdmin
+            ? 'Overview of your trading platform (all users)'
+            : 'Overview of users you manage — stats and activity match the same scope as the Users page'
+        }
       />
 
       {/* Stats row */}

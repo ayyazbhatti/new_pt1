@@ -9,11 +9,17 @@ use axum::{
     Router,
 };
 use chrono::{DateTime, Utc};
+use redis::AsyncCommands;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::HashMap;
+use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
+use crate::routes::admin_trading::AdminTradingState;
+use crate::routes::deposits::get_price_from_redis_conn;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 
@@ -179,7 +185,8 @@ async fn resolve_allowed_manager_ids_for_user(
 pub fn create_admin_managers_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_managers).post(create_manager))
-        .route("/:id", put(update_manager).delete(delete_manager))
+        .route("/:id/statistics", get(get_manager_statistics))
+        .route("/:id", get(get_manager).put(update_manager).delete(delete_manager))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -350,6 +357,1217 @@ async fn list_managers(
         })
         .collect();
     Ok(Json(list))
+}
+
+async fn get_manager(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ManagerResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "managers:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let allowed_manager_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_manager_ids_for_user(&pool, claims.sub).await?;
+        if ids.is_empty() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "MANAGER_NOT_FOUND".to_string(),
+                        message: "Manager not found".to_string(),
+                    },
+                }),
+            ));
+        }
+        Some(ids)
+    };
+
+    let q_str = if allowed_manager_ids.is_some() {
+        r#"
+        SELECT m.id, m.user_id, m.permission_profile_id, m.status, m.notes, m.created_at,
+               CONCAT(u.first_name, ' ', u.last_name) AS user_name,
+               u.email AS user_email,
+               u."role" AS user_role,
+               p.name AS permission_profile_name,
+               u.last_login_at AS last_login_at,
+               m.created_by_user_id,
+               creator.email AS created_by_email
+        FROM managers m
+        JOIN users u ON u.id = m.user_id
+        JOIN permission_profiles p ON p.id = m.permission_profile_id
+        LEFT JOIN users creator ON creator.id = m.created_by_user_id
+        WHERE m.id = $1 AND m.id = ANY($2)
+        "#
+    } else {
+        r#"
+        SELECT m.id, m.user_id, m.permission_profile_id, m.status, m.notes, m.created_at,
+               CONCAT(u.first_name, ' ', u.last_name) AS user_name,
+               u.email AS user_email,
+               u."role" AS user_role,
+               p.name AS permission_profile_name,
+               u.last_login_at AS last_login_at,
+               m.created_by_user_id,
+               creator.email AS created_by_email
+        FROM managers m
+        JOIN users u ON u.id = m.user_id
+        JOIN permission_profiles p ON p.id = m.permission_profile_id
+        LEFT JOIN users creator ON creator.id = m.created_by_user_id
+        WHERE m.id = $1
+        "#
+    };
+
+    let mut q = sqlx::query_as::<_, ManagerRow>(q_str).bind(id);
+    if let Some(ref ids) = allowed_manager_ids {
+        q = q.bind(ids);
+    }
+
+    let row: Option<ManagerRow> = q
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    let r = match row {
+        Some(row) => row,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "MANAGER_NOT_FOUND".to_string(),
+                        message: "Manager not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    };
+
+    #[derive(sqlx::FromRow)]
+    struct TagRow {
+        entity_id: Uuid,
+        tag_id: Uuid,
+    }
+    let tag_rows = sqlx::query_as::<_, TagRow>(
+        "SELECT entity_id, tag_id FROM tag_assignments WHERE entity_type = 'manager' AND entity_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|t| t.tag_id).collect();
+
+    Ok(Json(ManagerResponse {
+        id: r.id,
+        user_id: r.user_id,
+        user_name: r.user_name,
+        user_email: r.user_email,
+        user_role: r.user_role,
+        permission_profile_id: r.permission_profile_id,
+        permission_profile_name: r.permission_profile_name,
+        status: r.status,
+        notes: r.notes,
+        created_at: r.created_at,
+        last_login_at: r.last_login_at,
+        tag_ids: Some(tag_ids),
+        created_by_user_id: r.created_by_user_id,
+        created_by_email: r.created_by_email,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatisticsResponse {
+    overview: ManagerStatsOverview,
+    deposits: ManagerStatsDeposits,
+    withdrawals: ManagerStatsWithdrawals,
+    positions: ManagerStatsPositions,
+    orders: ManagerStatsOrders,
+    recent_deposits: Vec<ManagerStatsRecentTx>,
+    recent_withdrawals: Vec<ManagerStatsRecentTx>,
+    open_positions: Vec<ManagerStatsPositionRow>,
+    recent_orders: Vec<ManagerStatsOrderRow>,
+    top_traders: Vec<ManagerStatsTraderRow>,
+    top_losers: Vec<ManagerStatsTraderRow>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsOverview {
+    total_users: u64,
+    total_groups: u64,
+    active_users: u64,
+    assigned_leads: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsDeposits {
+    total_count: u64,
+    total_volume: f64,
+    today_count: u64,
+    today_volume: f64,
+    pending_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsWithdrawals {
+    total_count: u64,
+    total_volume: f64,
+    today_count: u64,
+    today_volume: f64,
+    pending_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsPositions {
+    open_count: u64,
+    total_exposure: f64,
+    closed_today: u64,
+    live_pnl: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsOrders {
+    active_count: u64,
+    filled_today: u64,
+    cancelled_today: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsRecentTx {
+    id: String,
+    user: String,
+    amount: f64,
+    currency: String,
+    status: String,
+    time: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsPositionRow {
+    id: String,
+    symbol: String,
+    side: String,
+    size: f64,
+    entry: f64,
+    mark: f64,
+    live_pnl: f64,
+    user: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsOrderRow {
+    id: String,
+    user: String,
+    symbol: String,
+    side: String,
+    #[serde(rename = "type")]
+    type_: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerStatsTraderRow {
+    rank: u32,
+    user: String,
+    pnl: f64,
+    win_rate: u32,
+    volume: f64,
+}
+
+const POS_BY_ID_PREFIX: &str = "pos:by_id:";
+
+async fn get_manager_statistics(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    axum::extract::Extension(admin_state): axum::extract::Extension<AdminTradingState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ManagerStatisticsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "managers:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let allowed_manager_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_manager_ids_for_user(&pool, claims.sub).await?;
+        if ids.is_empty() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "MANAGER_NOT_FOUND".to_string(),
+                        message: "Manager not found".to_string(),
+                    },
+                }),
+            ));
+        }
+        Some(ids)
+    };
+
+    let exists: bool = if let Some(ref ids) = allowed_manager_ids {
+        ids.contains(&id)
+    } else {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM managers WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?
+    };
+
+    if !exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "MANAGER_NOT_FOUND".to_string(),
+                    message: "Manager not found".to_string(),
+                },
+            }),
+        ));
+    }
+
+    // Resolve allowed group IDs for this manager (tag-based: manager's tags -> groups with those tags)
+    #[derive(sqlx::FromRow)]
+    struct TagIdRow { tag_id: Uuid }
+    let tag_rows = sqlx::query_as::<_, TagIdRow>(
+        "SELECT tag_id FROM tag_assignments WHERE entity_type = 'manager' AND entity_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "DATABASE_ERROR".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+    let manager_tag_ids: Vec<Uuid> = tag_rows.into_iter().map(|r| r.tag_id).collect();
+
+    let (total_users, total_groups, active_users) = if manager_tag_ids.is_empty() {
+        (0u64, 0u64, 0u64)
+    } else {
+        #[derive(sqlx::FromRow)]
+        struct GroupIdRow { entity_id: Uuid }
+        let group_rows = sqlx::query_as::<_, GroupIdRow>(
+            "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+        )
+        .bind(&manager_tag_ids)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        let allowed_group_ids: Vec<Uuid> = group_rows.into_iter().map(|r| r.entity_id).collect();
+        let total_groups = allowed_group_ids.len() as u64;
+
+        let (total_users, active_users) = if allowed_group_ids.is_empty() {
+            (0u64, 0u64)
+        } else {
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM users WHERE group_id = ANY($1) AND deleted_at IS NULL AND role NOT IN ('admin', 'super_admin')",
+            )
+            .bind(&allowed_group_ids)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+            let active: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM users WHERE group_id = ANY($1) AND deleted_at IS NULL AND status = 'active' AND role NOT IN ('admin', 'super_admin')",
+            )
+            .bind(&allowed_group_ids)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+            (total.max(0) as u64, active.max(0) as u64)
+        };
+        (total_users, total_groups, active_users)
+    };
+
+    // Assigned leads: leads where owner_id = this manager's user_id
+    let manager_user_id: Option<Uuid> = sqlx::query_scalar("SELECT user_id FROM managers WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    let assigned_leads: u64 = match manager_user_id {
+        None => 0,
+        Some(uid) => {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM leads WHERE owner_id = $1")
+                .bind(uid)
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DATABASE_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+            count.max(0) as u64
+        }
+    };
+
+    // Deposit and withdrawal stats: scope by users in this manager's allowed groups
+    let (deposits_total_count, deposits_total_volume, deposits_today_count, deposits_today_volume, deposits_pending_count,
+         withdrawals_total_count, withdrawals_total_volume, withdrawals_today_count, withdrawals_today_volume, withdrawals_pending_count) =
+        if manager_tag_ids.is_empty() {
+            (0u64, 0.0_f64, 0u64, 0.0_f64, 0u64, 0u64, 0.0_f64, 0u64, 0.0_f64, 0u64)
+        } else {
+            #[derive(sqlx::FromRow)]
+            struct GroupIdRow { entity_id: Uuid }
+            let group_rows = sqlx::query_as::<_, GroupIdRow>(
+                "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+            )
+            .bind(&manager_tag_ids)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+            let allowed_group_ids: Vec<Uuid> = group_rows.into_iter().map(|r| r.entity_id).collect();
+            if allowed_group_ids.is_empty() {
+                (0u64, 0.0_f64, 0u64, 0.0_f64, 0u64, 0u64, 0.0_f64, 0u64, 0.0_f64, 0u64)
+            } else {
+                #[derive(sqlx::FromRow)]
+                struct UserIdRow { id: Uuid }
+                let user_rows = sqlx::query_as::<_, UserIdRow>(
+                    "SELECT id FROM users WHERE group_id = ANY($1) AND deleted_at IS NULL AND role NOT IN ('admin', 'super_admin')",
+                )
+                .bind(&allowed_group_ids)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DATABASE_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+                let allowed_user_ids: Vec<Uuid> = user_rows.into_iter().map(|r| r.id).collect();
+                if allowed_user_ids.is_empty() {
+                    (0u64, 0.0_f64, 0u64, 0.0_f64, 0u64, 0u64, 0.0_f64, 0u64, 0.0_f64, 0u64)
+                } else {
+                    let dep_count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*)::bigint FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND user_id = ANY($1)",
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let dep_vol: Option<Decimal> = sqlx::query_scalar(
+                        "SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND user_id = ANY($1)",
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let dep_today_count: i64 = sqlx::query_scalar(
+                        r#"SELECT COUNT(*)::bigint FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND DATE(created_at) = CURRENT_DATE AND user_id = ANY($1)"#,
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let dep_today_vol: Option<Decimal> = sqlx::query_scalar(
+                        r#"SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND DATE(created_at) = CURRENT_DATE AND user_id = ANY($1)"#,
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let dep_pending: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM transactions WHERE type = 'deposit'::transaction_type AND status = 'pending'::transaction_status AND user_id = ANY($1)",
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+
+                    let wd_count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*)::bigint FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND user_id = ANY($1)",
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let wd_vol: Option<Decimal> = sqlx::query_scalar(
+                        "SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND user_id = ANY($1)",
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let wd_today_count: i64 = sqlx::query_scalar(
+                        r#"SELECT COUNT(*)::bigint FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND DATE(created_at) = CURRENT_DATE AND user_id = ANY($1)"#,
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let wd_today_vol: Option<Decimal> = sqlx::query_scalar(
+                        r#"SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND DATE(created_at) = CURRENT_DATE AND user_id = ANY($1)"#,
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let wd_pending: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM transactions WHERE type = 'withdrawal'::transaction_type AND status = 'pending'::transaction_status AND user_id = ANY($1)",
+                    )
+                    .bind(&allowed_user_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+
+                    fn decimal_to_f64(d: Option<Decimal>) -> f64 {
+                        d.and_then(|x| x.to_string().parse::<f64>().ok()).unwrap_or(0.0)
+                    }
+                    (
+                        dep_count.max(0) as u64,
+                        decimal_to_f64(dep_vol),
+                        dep_today_count.max(0) as u64,
+                        decimal_to_f64(dep_today_vol),
+                        dep_pending.max(0) as u64,
+                        wd_count.max(0) as u64,
+                        decimal_to_f64(wd_vol),
+                        wd_today_count.max(0) as u64,
+                        decimal_to_f64(wd_today_vol),
+                        wd_pending.max(0) as u64,
+                    )
+                }
+            }
+        };
+
+    // Position and order stats: positions from Redis (same source as /admin/trading), orders and closed_today from DB
+    let (positions_open_count, positions_total_exposure, positions_closed_today, positions_live_pnl,
+         orders_active_count, orders_filled_today, orders_cancelled_today, open_positions) =
+        if manager_tag_ids.is_empty() {
+            (0u64, 0.0_f64, 0u64, 0.0_f64, 0u64, 0u64, 0u64, vec![])
+        } else {
+            #[derive(sqlx::FromRow)]
+            struct GroupIdRowPos { entity_id: Uuid }
+            let group_rows_pos = sqlx::query_as::<_, GroupIdRowPos>(
+                "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+            )
+            .bind(&manager_tag_ids)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+            let allowed_group_ids_pos: Vec<Uuid> = group_rows_pos.into_iter().map(|r| r.entity_id).collect();
+            if allowed_group_ids_pos.is_empty() {
+                (0u64, 0.0_f64, 0u64, 0.0_f64, 0u64, 0u64, 0u64, vec![])
+            } else {
+                #[derive(sqlx::FromRow)]
+                struct UserIdRowPos { id: Uuid }
+                let user_rows_pos = sqlx::query_as::<_, UserIdRowPos>(
+                    "SELECT id FROM users WHERE group_id = ANY($1) AND deleted_at IS NULL AND role NOT IN ('admin', 'super_admin')",
+                )
+                .bind(&allowed_group_ids_pos)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DATABASE_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+                let allowed_user_ids_pos: Vec<Uuid> = user_rows_pos.into_iter().map(|r| r.id).collect();
+                if allowed_user_ids_pos.is_empty() {
+                    (0u64, 0.0_f64, 0u64, 0.0_f64, 0u64, 0u64, 0u64, vec![])
+                } else {
+                    // closed_today: from DB (historical)
+                    let pos_closed_today: i64 = sqlx::query_scalar(
+                        r#"SELECT COUNT(*) FROM positions WHERE status IN ('closed'::position_status, 'liquidated'::position_status) AND closed_at IS NOT NULL AND DATE(closed_at) = CURRENT_DATE AND user_id = ANY($1)"#,
+                    )
+                    .bind(&allowed_user_ids_pos)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+
+                    // orders: from DB
+                    let ord_active: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM orders WHERE status = 'pending'::order_status AND user_id = ANY($1)",
+                    )
+                    .bind(&allowed_user_ids_pos)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let ord_filled_today: i64 = sqlx::query_scalar(
+                        r#"SELECT COUNT(*) FROM orders WHERE status = 'filled'::order_status AND user_id = ANY($1) AND filled_at IS NOT NULL AND DATE(filled_at) = CURRENT_DATE"#,
+                    )
+                    .bind(&allowed_user_ids_pos)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+                    let ord_cancelled_today: i64 = sqlx::query_scalar(
+                        r#"SELECT COUNT(*) FROM orders WHERE status = 'cancelled'::order_status AND user_id = ANY($1) AND cancelled_at IS NOT NULL AND DATE(cancelled_at) = CURRENT_DATE"#,
+                    )
+                    .bind(&allowed_user_ids_pos)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: ErrorDetail { code: "DATABASE_ERROR".to_string(), message: e.to_string() } }))
+                    })?;
+
+                    // Open positions: from Redis (same source as /admin/trading)
+                    let allowed_set: std::collections::HashSet<Uuid> = allowed_user_ids_pos.iter().copied().collect();
+                    let mut conn = admin_state.redis.get().await.map_err(|_| {
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(ErrorResponse {
+                                error: ErrorDetail {
+                                    code: "REDIS_ERROR".to_string(),
+                                    message: "Cache unavailable".to_string(),
+                                },
+                            }),
+                        )
+                    })?;
+                    let keys: Vec<String> = conn.keys(format!("{}*", POS_BY_ID_PREFIX)).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: ErrorDetail {
+                                    code: "REDIS_ERROR".to_string(),
+                                    message: e.to_string(),
+                                },
+                            }),
+                        )
+                    })?;
+                    let mut redis_positions: Vec<(String, HashMap<String, String>)> = Vec::new();
+                    for key in keys {
+                        if !key.starts_with(POS_BY_ID_PREFIX) {
+                            continue;
+                        }
+                        let position_id = key.trim_start_matches(POS_BY_ID_PREFIX).to_string();
+                        let pos_data: HashMap<String, String> = match conn.hgetall(&key).await {
+                            Ok(m) => m,
+                            Err(_) => continue,
+                        };
+                        let status = pos_data.get("status").map(|s| s.as_str()).unwrap_or("");
+                        if !status.eq_ignore_ascii_case("OPEN") {
+                            continue;
+                        }
+                        let pos_user_id = match pos_data.get("user_id").and_then(|s| Uuid::parse_str(s).ok()) {
+                            Some(u) => u,
+                            None => continue,
+                        };
+                        if !allowed_set.contains(&pos_user_id) {
+                            continue;
+                        }
+                        redis_positions.push((position_id, pos_data));
+                    }
+
+                    let pos_open_count = redis_positions.len() as u64;
+                    let pos_total_exposure: f64 = redis_positions.iter().filter_map(|(_, m)| m.get("margin").and_then(|s| s.parse::<f64>().ok())).sum();
+
+                    let user_ids: Vec<Uuid> = redis_positions
+                        .iter()
+                        .filter_map(|(_, m)| m.get("user_id").and_then(|s| Uuid::parse_str(s).ok()))
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                    let user_map: HashMap<Uuid, String> = if user_ids.is_empty() {
+                        HashMap::new()
+                    } else {
+                        let rows = sqlx::query_as::<_, (Uuid, String)>(
+                            r#"SELECT id, COALESCE(TRIM(first_name || ' ' || last_name), '') as name FROM users WHERE id = ANY($1)"#,
+                        )
+                        .bind(&user_ids)
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    error: ErrorDetail {
+                                        code: "DATABASE_ERROR".to_string(),
+                                        message: e.to_string(),
+                                    },
+                                }),
+                            )
+                        })?;
+                        rows.into_iter().collect()
+                    };
+
+                    let mut open_positions: Vec<ManagerStatsPositionRow> = Vec::new();
+                    for (pos_id, m) in redis_positions {
+                        let user_id = match m.get("user_id").and_then(|s| Uuid::parse_str(s).ok()) {
+                            Some(u) => u,
+                            None => continue,
+                        };
+                        let user_name = user_map.get(&user_id).cloned().unwrap_or_else(|| "—".to_string());
+                        let symbol = m.get("symbol").cloned().unwrap_or_else(|| "—".to_string());
+                        let group_id = m.get("group_id").cloned().unwrap_or_default();
+                        let side = m.get("side").cloned().unwrap_or_else(|| "LONG".to_string());
+                        let size: f64 = m.get("size").and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                        let entry: f64 = m.get("entry_price").and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                        let avg_price: f64 = m.get("avg_price").and_then(|s| s.parse().ok()).or_else(|| m.get("entry_price").and_then(|s| s.parse().ok())).unwrap_or(entry);
+                        let mark = avg_price;
+                        let live_pnl: f64 = if !symbol.is_empty() && symbol != "—" && size > 0.0 && avg_price > 0.0 {
+                            if let Some((bid, ask)) = get_price_from_redis_conn(&mut conn, &symbol, &group_id).await {
+                                let size_d = Decimal::from_str(&size.to_string()).unwrap_or(Decimal::ZERO);
+                                let avg_d = Decimal::from_str(&avg_price.to_string()).unwrap_or(Decimal::ZERO);
+                                let pnl = match side.as_str() {
+                                    "LONG" => (bid - avg_d) * size_d,
+                                    "SHORT" => (avg_d - ask) * size_d,
+                                    _ => Decimal::ZERO,
+                                };
+                                pnl.to_string().parse::<f64>().unwrap_or(0.0)
+                            } else {
+                                m.get("unrealized_pnl").and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                            }
+                        } else {
+                            m.get("unrealized_pnl").and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                        };
+                        open_positions.push(ManagerStatsPositionRow {
+                            id: pos_id,
+                            symbol,
+                            side,
+                            size,
+                            entry,
+                            mark,
+                            live_pnl,
+                            user: user_name,
+                        });
+                    }
+                    let pos_live_pnl_computed: f64 = open_positions.iter().map(|p| p.live_pnl).sum();
+
+                    (
+                        pos_open_count,
+                        pos_total_exposure,
+                        pos_closed_today.max(0) as u64,
+                        pos_live_pnl_computed,
+                        ord_active.max(0) as u64,
+                        ord_filled_today.max(0) as u64,
+                        ord_cancelled_today.max(0) as u64,
+                        open_positions,
+                    )
+                }
+            }
+        };
+
+    // Recent deposits, withdrawals, and orders: same user scope, latest 10 each
+    const RECENT_TX_LIMIT: i64 = 10;
+    let (recent_deposits, recent_withdrawals, recent_orders) = if manager_tag_ids.is_empty() {
+        (vec![], vec![], vec![])
+    } else {
+        #[derive(sqlx::FromRow)]
+        struct GroupIdRowRecent { entity_id: Uuid }
+        let group_rows_recent = sqlx::query_as::<_, GroupIdRowRecent>(
+            "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+        )
+        .bind(&manager_tag_ids)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        let allowed_group_ids_recent: Vec<Uuid> = group_rows_recent.into_iter().map(|r| r.entity_id).collect();
+            if allowed_group_ids_recent.is_empty() {
+                (vec![], vec![], vec![])
+            } else {
+            #[derive(sqlx::FromRow)]
+            struct UserIdRowRecent { id: Uuid }
+            let user_rows_recent = sqlx::query_as::<_, UserIdRowRecent>(
+                "SELECT id FROM users WHERE group_id = ANY($1) AND deleted_at IS NULL AND role NOT IN ('admin', 'super_admin')",
+            )
+            .bind(&allowed_group_ids_recent)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+            let allowed_user_ids_recent: Vec<Uuid> = user_rows_recent.into_iter().map(|r| r.id).collect();
+            if allowed_user_ids_recent.is_empty() {
+                (vec![], vec![], vec![])
+            } else {
+                #[derive(sqlx::FromRow)]
+                struct RecentTxRow {
+                    id: Uuid,
+                    user_name: String,
+                    net_amount: Option<Decimal>,
+                    currency: Option<String>,
+                    status: String,
+                    created_at: DateTime<Utc>,
+                }
+                let dep_rows = sqlx::query_as::<_, RecentTxRow>(
+                    r#"
+                    SELECT t.id, COALESCE(TRIM(u.first_name || ' ' || u.last_name), u.email, '') as user_name,
+                           t.net_amount, t.currency, t.status::text as status, t.created_at
+                    FROM transactions t
+                    JOIN users u ON t.user_id = u.id
+                    WHERE t.type = 'deposit'::transaction_type AND t.user_id = ANY($1)
+                    ORDER BY t.created_at DESC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(&allowed_user_ids_recent)
+                .bind(RECENT_TX_LIMIT)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DATABASE_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+                let wd_rows = sqlx::query_as::<_, RecentTxRow>(
+                    r#"
+                    SELECT t.id, COALESCE(TRIM(u.first_name || ' ' || u.last_name), u.email, '') as user_name,
+                           t.net_amount, t.currency, t.status::text as status, t.created_at
+                    FROM transactions t
+                    JOIN users u ON t.user_id = u.id
+                    WHERE t.type = 'withdrawal'::transaction_type AND t.user_id = ANY($1)
+                    ORDER BY t.created_at DESC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(&allowed_user_ids_recent)
+                .bind(RECENT_TX_LIMIT)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DATABASE_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+                fn recent_tx_to_stats(r: RecentTxRow) -> ManagerStatsRecentTx {
+                    ManagerStatsRecentTx {
+                        id: r.id.to_string(),
+                        user: r.user_name,
+                        amount: r.net_amount.and_then(|d| d.to_string().parse::<f64>().ok()).unwrap_or(0.0),
+                        currency: r.currency.unwrap_or_else(|| "USD".to_string()),
+                        status: r.status,
+                        time: r.created_at.to_rfc3339(),
+                    }
+                }
+                #[derive(sqlx::FromRow)]
+                struct RecentOrderRow {
+                    id: Uuid,
+                    user_name: String,
+                    symbol: String,
+                    side: String,
+                    order_type: String,
+                    status: String,
+                }
+                let order_rows = sqlx::query_as::<_, RecentOrderRow>(
+                    r#"
+                    SELECT o.id,
+                           COALESCE(TRIM(u.first_name || ' ' || u.last_name), u.email, '') as user_name,
+                           COALESCE(s.code, '') as symbol,
+                           o.side::text as side,
+                           o.type::text as order_type,
+                           o.status::text as status
+                    FROM orders o
+                    JOIN users u ON o.user_id = u.id
+                    LEFT JOIN symbols s ON o.symbol_id = s.id
+                    WHERE o.user_id = ANY($1)
+                    ORDER BY o.created_at DESC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(&allowed_user_ids_recent)
+                .bind(RECENT_TX_LIMIT)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DATABASE_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+                let recent_orders: Vec<ManagerStatsOrderRow> = order_rows
+                    .into_iter()
+                    .map(|r| ManagerStatsOrderRow {
+                        id: r.id.to_string(),
+                        user: r.user_name,
+                        symbol: r.symbol,
+                        side: r.side,
+                        type_: r.order_type,
+                        status: r.status,
+                    })
+                    .collect();
+                (
+                    dep_rows.into_iter().map(recent_tx_to_stats).collect(),
+                    wd_rows.into_iter().map(recent_tx_to_stats).collect(),
+                    recent_orders,
+                )
+            }
+        }
+    };
+
+    // Top traders (best PnL) and top losers (worst PnL): from closed/liquidated positions, same user scope
+    const TOP_TRADERS_LIMIT: usize = 10;
+    let (top_traders, top_losers) = if manager_tag_ids.is_empty() {
+        (vec![], vec![])
+    } else {
+        #[derive(sqlx::FromRow)]
+        struct GroupIdRowTop { entity_id: Uuid }
+        let group_rows_top = sqlx::query_as::<_, GroupIdRowTop>(
+            "SELECT DISTINCT entity_id FROM tag_assignments WHERE entity_type = 'group' AND tag_id = ANY($1)",
+        )
+        .bind(&manager_tag_ids)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+        let allowed_group_ids_top: Vec<Uuid> = group_rows_top.into_iter().map(|r| r.entity_id).collect();
+        if allowed_group_ids_top.is_empty() {
+            (vec![], vec![])
+        } else {
+            #[derive(sqlx::FromRow)]
+            struct UserIdRowTop { id: Uuid }
+            let user_rows_top = sqlx::query_as::<_, UserIdRowTop>(
+                "SELECT id FROM users WHERE group_id = ANY($1) AND deleted_at IS NULL AND role NOT IN ('admin', 'super_admin')",
+            )
+            .bind(&allowed_group_ids_top)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+            let allowed_user_ids_top: Vec<Uuid> = user_rows_top.into_iter().map(|r| r.id).collect();
+            if allowed_user_ids_top.is_empty() {
+                (vec![], vec![])
+            } else {
+                #[derive(sqlx::FromRow)]
+                struct UserPnlRow {
+                    user_id: Uuid,
+                    total_pnl: Option<Decimal>,
+                    volume: Option<Decimal>,
+                    trades: i64,
+                    wins: i64,
+                }
+                let pnl_rows = sqlx::query_as::<_, UserPnlRow>(
+                    r#"
+                    SELECT user_id,
+                           SUM(pnl) as total_pnl,
+                           SUM(size * entry_price) as volume,
+                           COUNT(*)::bigint as trades,
+                           COUNT(*) FILTER (WHERE pnl > 0)::bigint as wins
+                    FROM positions
+                    WHERE status IN ('closed'::position_status, 'liquidated'::position_status)
+                      AND user_id = ANY($1)
+                    GROUP BY user_id
+                    "#,
+                )
+                .bind(&allowed_user_ids_top)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "DATABASE_ERROR".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+                let user_ids_pnl: Vec<Uuid> = pnl_rows.iter().map(|r| r.user_id).collect();
+                let user_names: HashMap<Uuid, String> = if user_ids_pnl.is_empty() {
+                    HashMap::new()
+                } else {
+                    let rows = sqlx::query_as::<_, (Uuid, String)>(
+                        r#"SELECT id, COALESCE(TRIM(first_name || ' ' || last_name), '') as name FROM users WHERE id = ANY($1)"#,
+                    )
+                    .bind(&user_ids_pnl)
+                    .fetch_all(&pool)
+                    .await
+                    .map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: ErrorDetail {
+                                    code: "DATABASE_ERROR".to_string(),
+                                    message: e.to_string(),
+                                },
+                            }),
+                        )
+                    })?;
+                    rows.into_iter().collect()
+                };
+                fn pnl_to_f64(d: Option<Decimal>) -> f64 {
+                    d.and_then(|x| x.to_string().parse::<f64>().ok()).unwrap_or(0.0)
+                }
+                fn win_rate_pct(wins: i64, trades: i64) -> u32 {
+                    if trades <= 0 {
+                        0
+                    } else {
+                        ((wins as f64 / trades as f64) * 100.0).round().min(100.0).max(0.0) as u32
+                    }
+                }
+                let mut with_meta: Vec<(Uuid, f64, f64, u32)> = pnl_rows
+                    .into_iter()
+                    .map(|r| {
+                        let pnl = pnl_to_f64(r.total_pnl);
+                        let vol = pnl_to_f64(r.volume);
+                        let wr = win_rate_pct(r.wins, r.trades);
+                        (r.user_id, pnl, vol, wr)
+                    })
+                    .collect();
+                // Top traders: by PnL descending
+                with_meta.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                let top_traders: Vec<ManagerStatsTraderRow> = with_meta
+                    .iter()
+                    .take(TOP_TRADERS_LIMIT)
+                    .enumerate()
+                    .map(|(i, (uid, pnl, vol, wr))| ManagerStatsTraderRow {
+                        rank: (i + 1) as u32,
+                        user: user_names.get(uid).cloned().unwrap_or_else(|| "—".to_string()),
+                        pnl: *pnl,
+                        win_rate: *wr,
+                        volume: *vol,
+                    })
+                    .collect();
+                // Top losers: by PnL ascending (most negative first)
+                with_meta.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                let top_losers: Vec<ManagerStatsTraderRow> = with_meta
+                    .iter()
+                    .take(TOP_TRADERS_LIMIT)
+                    .enumerate()
+                    .map(|(i, (uid, pnl, vol, wr))| ManagerStatsTraderRow {
+                        rank: (i + 1) as u32,
+                        user: user_names.get(uid).cloned().unwrap_or_else(|| "—".to_string()),
+                        pnl: *pnl,
+                        win_rate: *wr,
+                        volume: *vol,
+                    })
+                    .collect();
+                (top_traders, top_losers)
+            }
+        }
+    };
+
+    Ok(Json(ManagerStatisticsResponse {
+        overview: ManagerStatsOverview {
+            total_users,
+            total_groups,
+            active_users,
+            assigned_leads,
+        },
+        deposits: ManagerStatsDeposits {
+            total_count: deposits_total_count,
+            total_volume: deposits_total_volume,
+            today_count: deposits_today_count,
+            today_volume: deposits_today_volume,
+            pending_count: deposits_pending_count,
+        },
+        withdrawals: ManagerStatsWithdrawals {
+            total_count: withdrawals_total_count,
+            total_volume: withdrawals_total_volume,
+            today_count: withdrawals_today_count,
+            today_volume: withdrawals_today_volume,
+            pending_count: withdrawals_pending_count,
+        },
+        positions: ManagerStatsPositions {
+            open_count: positions_open_count,
+            total_exposure: positions_total_exposure,
+            closed_today: positions_closed_today,
+            live_pnl: positions_live_pnl,
+        },
+        orders: ManagerStatsOrders {
+            active_count: orders_active_count,
+            filled_today: orders_filled_today,
+            cancelled_today: orders_cancelled_today,
+        },
+        recent_deposits,
+        recent_withdrawals,
+        open_positions,
+        recent_orders,
+        top_traders,
+        top_losers,
+    }))
 }
 
 async fn create_manager(

@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
@@ -13,7 +14,7 @@ import { formatDateTime } from '../utils/formatters'
 import { useModalStore } from '@/app/store'
 import { EditManagerModal } from '../modals/EditManagerModal'
 import { DeleteManagerModal } from '../modals/DeleteManagerModal'
-import { Pencil, UserX, UserCheck, Trash2, Tag, ChevronDown } from 'lucide-react'
+import { Pencil, UserX, UserCheck, Trash2, Tag, ChevronDown, BarChart2 } from 'lucide-react'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { RoleBadge } from '@/features/auth/components/RoleBadge'
@@ -35,6 +36,7 @@ export function ManagersTable({
   onManagerRemoved,
   onRefresh,
 }: ManagersTableProps) {
+  const navigate = useNavigate()
   const openModal = useModalStore((state) => state.openModal)
   const canEditManagers = useCanAccess('managers:edit')
   const canDeleteManagers = useCanAccess('managers:delete')
@@ -54,6 +56,10 @@ export function ManagersTable({
     document.addEventListener('click', handleClick)
     return () => document.removeEventListener('click', handleClick)
   }, [openTagsManagerId])
+
+  const handleRowClick = (manager: Manager) => {
+    navigate(`/admin/manager/${manager.id}`)
+  }
 
   const handleEdit = (manager: Manager) => {
     openModal(
@@ -220,7 +226,15 @@ export function ManagersTable({
       cell: ({ row }) => {
         const manager = row.original
         return (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleRowClick(manager)}
+              title="View manager statistics"
+            >
+              <BarChart2 className="h-4 w-4" />
+            </Button>
             {canEditManagers && (
               <Button
                 variant="ghost"
@@ -314,7 +328,12 @@ export function ManagersTable({
 
   return (
     <>
-      <DataTable data={managers} columns={columns} />
+      <DataTable
+        data={managers}
+        columns={columns}
+        onRowClick={handleRowClick}
+        rowClickTitle="View manager statistics"
+      />
       {tagsDropdownPanel}
     </>
   )

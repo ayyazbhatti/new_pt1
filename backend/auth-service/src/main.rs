@@ -232,7 +232,11 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/swap-rule-tags", routes::admin_swap::create_admin_swap_rule_tags_router(pool.clone()))
         .nest("/api/admin/user-notes", create_admin_user_notes_router(pool.clone()))
         .nest("/api/admin/users", create_admin_users_router(pool.clone(), deposits_state.clone()))
-        .nest("/api/admin/managers", create_admin_managers_router(pool.clone()))
+        .nest(
+            "/api/admin/managers",
+            create_admin_managers_router(pool.clone())
+                .layer(axum::extract::Extension(admin_trading_state.clone())),
+        )
         .nest("/api/admin/manager-tags", routes::admin_managers::create_admin_manager_tags_router(pool.clone()))
         .nest("/api/admin/permission-profiles", create_admin_permission_profiles_router(pool.clone()))
         .nest("/api/admin/permission-profile-tags", routes::admin_permission_profiles::create_admin_permission_profile_tags_router(pool.clone()))

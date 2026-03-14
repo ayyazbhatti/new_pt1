@@ -1,5 +1,8 @@
 /**
  * Dashboard data using existing APIs. No dedicated backend dashboard endpoint.
+ * All of these endpoints are scoped on the backend: super_admin sees all data;
+ * other admins/managers see only users they have access to (same scope as Admin Users,
+ * Finance, and Trading pages).
  */
 import { listUsers } from '@/shared/api/users.api'
 import { fetchFinanceOverview } from '@/features/adminFinance/api/finance.api'

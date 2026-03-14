@@ -102,6 +102,7 @@ pub fn create_admin_leverage_profiles_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_profiles).post(create_profile))
         .route("/:id", get(get_profile).put(update_profile).delete(delete_profile))
+        .route("/:id/set-default", post(set_as_default))
         .route("/:id/tiers", get(list_tiers).post(create_tier))
         .route("/:id/tiers/:tier_id", put(update_tier).delete(delete_tier))
         .route("/:id/symbols", get(get_profile_symbols).put(set_profile_symbols))
@@ -373,6 +374,45 @@ async fn update_profile(
                 }),
             ))
         }
+    }
+}
+
+async fn set_as_default(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<LeverageProfile>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "leverage_profiles:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    if claims.role != "super_admin" {
+        let allowed = resolve_allowed_leverage_profile_ids_for_user(&pool, claims.sub).await?;
+        if !allowed.contains(&id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "FORBIDDEN".to_string(),
+                        message: "You can only set default for a profile you have access to".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    let service = AdminLeverageProfilesService::new(pool);
+    match service.set_as_default(id).await {
+        Ok(profile) => Ok(Json(profile)),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "SET_DEFAULT_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )),
     }
 }
 

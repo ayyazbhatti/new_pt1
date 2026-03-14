@@ -15,7 +15,7 @@ import { ReportsPage } from '@/features/reports'
 import { LeverageProfilesPage } from '@/features/leverageProfiles'
 import { AdminMarkupPage } from '@/features/adminMarkup'
 import { AdminTransactionsPage } from '@/features/admin/transactions'
-import { ManagersPage } from '@/features/managers'
+import { ManagersPage, ManagerDetailPage } from '@/features/managers'
 import { TagsPage } from '@/features/tags'
 import { AdminAppointmentsPage } from '@/features/appointments'
 import { AdminProfilePage } from '@/features/adminProfile'
@@ -46,6 +46,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/manager',
     element: <ManagersPage />,
+  },
+  {
+    path: '/admin/manager/:id',
+    element: <ManagerDetailPage />,
   },
   {
     path: '/admin/trading',

@@ -8,13 +8,14 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { Checkbox } from '@/shared/ui/Checkbox'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { PasswordField } from '@/shared/components/auth/PasswordField'
+import { CountrySelect } from '@/shared/components/CountrySelect'
 import { AuthCard } from '@/shared/components/auth/AuthCard'
 import { AuthHeader } from '@/shared/components/auth/AuthHeader'
 import { AuthFooterLinks } from '@/shared/components/auth/AuthFooterLinks'
 import { AuthFooter } from '@/shared/components/auth/AuthFooter'
 import { Label } from '@/shared/components/auth/Label'
+import { getCountryOptions } from '@/shared/utils/countries'
 
 const registerSchema = z
   .object({
@@ -39,7 +40,7 @@ const registerSchema = z
 
 type RegisterFormData = z.infer<typeof registerSchema>
 
-const countries = ['Pakistan', 'UAE', 'UK', 'US', 'Turkey']
+const countryOptions = getCountryOptions()
 
 export function RegisterPage() {
   const navigate = useNavigate()
@@ -171,18 +172,13 @@ export function RegisterPage() {
               name="country"
               control={control}
               render={({ field }) => (
-                <Select value={field.value || ''} onValueChange={field.onChange}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select country" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {countries.map((country) => (
-                      <SelectItem key={country} value={country}>
-                        {country}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <CountrySelect
+                  id="country"
+                  value={field.value || ''}
+                  onChange={field.onChange}
+                  options={countryOptions}
+                  placeholder="Select country"
+                />
               )}
             />
           </div>

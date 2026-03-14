@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, ChevronRight, Settings, Edit, Archive, ArchiveRestore, Trash2, CheckCircle, Tag } from 'lucide-react'
+import { ChevronDown, ChevronRight, Settings, Edit, Archive, ArchiveRestore, Trash2, CheckCircle, Tag, Star } from 'lucide-react'
 import { Button } from '@/shared/ui/button'
 import { LeverageProfile } from '../types/leverageProfile'
 import { useLeverageProfileTiers, useDeleteLeverageTier } from '../hooks/useLeverageProfiles'
@@ -20,11 +20,13 @@ interface LeverageProfileCardProps {
   onArchive: (profile: LeverageProfile) => void
   onUnarchive: (profile: LeverageProfile) => void
   onDelete: (profile: LeverageProfile) => void
+  onSetAsDefault?: (profile: LeverageProfile) => void
   /** All tags for the assign-tags dropdown */
   allTags?: { id: string; name: string }[]
-  onProfileUpdate?: (profileId: string, updates: Partial<Pick<LeverageProfile, 'tagIds'>>) => void
+  onProfileUpdate?: (profileId: string, updates: Partial<Pick<LeverageProfile, 'tagIds' | 'isDefault'>>) => void
   onRefresh?: () => void
   archiveLoading?: boolean
+  setDefaultLoading?: boolean
 }
 
 export function LeverageProfileCard({
@@ -34,10 +36,12 @@ export function LeverageProfileCard({
   onArchive,
   onUnarchive,
   onDelete,
+  onSetAsDefault,
   allTags = [],
   onProfileUpdate,
   onRefresh,
   archiveLoading = false,
+  setDefaultLoading = false,
 }: LeverageProfileCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [openTagsDropdown, setOpenTagsDropdown] = useState(false)
@@ -77,6 +81,12 @@ export function LeverageProfileCard({
         <div className="flex-1 min-w-0">
           <h3 className="text-base sm:text-lg font-medium text-text">{profile.name}</h3>
           <div className="flex flex-wrap items-center gap-2 mt-1">
+            {profile.isDefault && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                <Star className="h-3 w-3 fill-current" />
+                Default
+              </span>
+            )}
             <span
               className={cn(
                 'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border',
@@ -134,6 +144,22 @@ export function LeverageProfileCard({
           )}
           {canEdit && (
             <>
+              {onSetAsDefault && !profile.isDefault && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-text-muted hover:text-amber-400 hover:bg-surface-2 border border-border gap-1.5"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSetAsDefault(profile)
+                  }}
+                  disabled={setDefaultLoading}
+                  title="Set as default profile"
+                >
+                  <Star className="h-4 w-4" />
+                  Set as default
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"

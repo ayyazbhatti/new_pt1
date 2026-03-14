@@ -47,7 +47,8 @@ impl AdminLeverageProfilesService {
                 COALESCE(COUNT(DISTINCT lpt.id), 0)::bigint as tiers_count,
                 COALESCE(COUNT(DISTINCT slpa.symbol_id), 0)::bigint as symbols_count,
                 lp.created_by_user_id,
-                creator.email as created_by_email
+                creator.email as created_by_email,
+                COALESCE(lp.is_default, false) as is_default
             FROM leverage_profiles lp
             LEFT JOIN leverage_profile_tiers lpt ON lp.id = lpt.profile_id
             LEFT JOIN symbol_leverage_profile_assignments slpa ON lp.id = slpa.profile_id
@@ -86,7 +87,7 @@ impl AdminLeverageProfilesService {
             count_query.push(")");
         }
 
-        query.push(" GROUP BY lp.id, lp.name, lp.description, lp.status::text, lp.created_at, lp.updated_at, lp.created_by_user_id, creator.email");
+        query.push(" GROUP BY lp.id, lp.name, lp.description, lp.status::text, lp.created_at, lp.updated_at, lp.created_by_user_id, creator.email, lp.is_default");
 
         let order_by = match sort {
             Some("name_asc") => "lp.name ASC",
@@ -116,7 +117,7 @@ impl AdminLeverageProfilesService {
 
     pub async fn get_profile_by_id(&self, id: Uuid) -> anyhow::Result<LeverageProfile> {
         let profile = sqlx::query_as::<_, LeverageProfile>(
-            "SELECT id, name, description, status::text as status, created_at, updated_at, created_by_user_id FROM leverage_profiles WHERE id = $1",
+            "SELECT id, name, description, status::text as status, created_at, updated_at, created_by_user_id, COALESCE(is_default, false) as is_default FROM leverage_profiles WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -141,7 +142,7 @@ impl AdminLeverageProfilesService {
             r#"
             INSERT INTO leverage_profiles (name, description, status, created_by_user_id)
             VALUES ($1, $2, $3::user_status, $4)
-            RETURNING id, name, description, status::text as status, created_at, updated_at, created_by_user_id
+            RETURNING id, name, description, status::text as status, created_at, updated_at, created_by_user_id, COALESCE(is_default, false) as is_default
             "#,
         )
         .bind(name)
@@ -170,7 +171,7 @@ impl AdminLeverageProfilesService {
             UPDATE leverage_profiles
             SET name = $2, description = $3, status = $4::user_status, updated_at = NOW()
             WHERE id = $1
-            RETURNING id, name, description, status::text as status, created_at, updated_at, created_by_user_id
+            RETURNING id, name, description, status::text as status, created_at, updated_at, created_by_user_id, COALESCE(is_default, false) as is_default
             "#,
         )
         .bind(id)
@@ -181,6 +182,23 @@ impl AdminLeverageProfilesService {
         .await?
         .ok_or_else(|| anyhow::anyhow!("Profile not found"))?;
 
+        Ok(profile)
+    }
+
+    /// Set this profile as the system default. Clears is_default on all others so only one is default.
+    pub async fn set_as_default(&self, id: Uuid) -> anyhow::Result<LeverageProfile> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE leverage_profiles SET is_default = false WHERE is_default = true")
+            .execute(&mut *tx)
+            .await?;
+        let profile = sqlx::query_as::<_, LeverageProfile>(
+            "UPDATE leverage_profiles SET is_default = true, updated_at = NOW() WHERE id = $1 RETURNING id, name, description, status::text as status, created_at, updated_at, created_by_user_id, is_default",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Profile not found"))?;
+        tx.commit().await?;
         Ok(profile)
     }
 

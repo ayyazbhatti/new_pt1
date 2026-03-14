@@ -13,6 +13,9 @@ pub struct LeverageProfile {
     pub updated_at: DateTime<Utc>,
     /// User (manager/admin/super_admin) who created this profile.
     pub created_by_user_id: Option<Uuid>,
+    /// When true, this profile is the system default (only one should be true).
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -43,5 +46,7 @@ pub struct LeverageProfileWithCounts {
     pub updated_at: DateTime<Utc>,
     pub created_by_user_id: Option<Uuid>,
     pub created_by_email: Option<String>,
+    #[serde(default)]
+    pub is_default: bool,
 }
 

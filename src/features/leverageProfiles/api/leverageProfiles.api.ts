@@ -26,6 +26,7 @@ function toCamelCaseProfile(obj: any): LeverageProfile {
     tagIds: obj.tag_ids ?? [],
     createdByUserId: obj.created_by_user_id ?? undefined,
     createdByEmail: obj.created_by_email ?? undefined,
+    isDefault: !!obj.is_default,
   }
 }
 
@@ -123,6 +124,14 @@ export async function deleteLeverageProfile(id: string): Promise<void> {
   await http(`/api/admin/leverage-profiles/${id}`, {
     method: 'DELETE',
   })
+}
+
+/** Set this profile as the system default (only one can be default at a time). */
+export async function setLeverageProfileAsDefault(profileId: string): Promise<LeverageProfile> {
+  const response = await http<any>(`/api/admin/leverage-profiles/${profileId}/set-default`, {
+    method: 'POST',
+  })
+  return toCamelCaseProfile(response)
 }
 
 export async function listLeverageProfileTiers(profileId: string): Promise<LeverageTier[]> {

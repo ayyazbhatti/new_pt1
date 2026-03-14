@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
 import { useCanAccess } from '@/shared/utils/permissions'
@@ -14,6 +14,8 @@ import { ArchiveConfirmModal } from '../modals/ArchiveConfirmModal'
 import { Plus, Scale, CheckCircle, BarChart3, X } from 'lucide-react'
 import { LeverageProfile } from '../types/leverageProfile'
 import { listTags } from '@/features/tags/api/tags.api'
+import { setLeverageProfileAsDefault } from '../api/leverageProfiles.api'
+import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 
 const STORAGE_SEARCH_KEY = 'leverage-tiers-management-search'
@@ -43,7 +45,17 @@ export function LeverageProfilesPage() {
     [searchTerm, statusFilter]
   )
 
+  const queryClient = useQueryClient()
   const { data, isLoading, refetch } = useLeverageProfilesList(listParams)
+  const setDefaultMutation = useMutation({
+    mutationFn: (profileId: string) => setLeverageProfileAsDefault(profileId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['leverageProfiles'] })
+      refetch()
+      toast.success('Default leverage profile updated')
+    },
+    onError: (e: Error) => toast.error(e.message || 'Failed to set default profile'),
+  })
   const { data: tagsList = [] } = useQuery({
     queryKey: ['admin', 'tags'],
     queryFn: () => listTags(),
@@ -75,6 +87,10 @@ export function LeverageProfilesPage() {
 
   const handleDelete = (profile: LeverageProfile) => {
     setDeleteProfile(profile)
+  }
+
+  const handleSetAsDefault = (profile: LeverageProfile) => {
+    setDefaultMutation.mutate(profile.id)
   }
 
   return (
@@ -203,8 +219,10 @@ export function LeverageProfilesPage() {
                 onArchive={handleArchive}
                 onUnarchive={handleUnarchive}
                 onDelete={handleDelete}
+                onSetAsDefault={handleSetAsDefault}
                 allTags={allTags}
                 onRefresh={refetch}
+                setDefaultLoading={setDefaultMutation.isPending}
               />
             ))
           )}

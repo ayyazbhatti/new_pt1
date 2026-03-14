@@ -32,6 +32,8 @@ export type LeverageProfile = {
   /** User who created this profile (manager/admin/super_admin). */
   createdByUserId?: string | null
   createdByEmail?: string | null
+  /** When true, this profile is the system default (only one can be default). */
+  isDefault?: boolean
   /** Tiers for modal/display - optional, loaded separately */
   tiers?: LeverageTier[]
 }

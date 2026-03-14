@@ -38,6 +38,8 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
   })
   const { data: leverageProfilesData } = useLeverageProfilesList({ page_size: 500 })
   const leverageProfiles = leverageProfilesData?.items ?? []
+  const defaultLeverageProfile = leverageProfiles.find((p) => p.isDefault)
+  const defaultOptionLabel = defaultLeverageProfile ? `${defaultLeverageProfile.name} (default)` : 'Default (group)'
 
   const initialSymbols: GroupSymbol[] = useMemo(
     () => groupSymbolsData ?? [],
@@ -209,7 +211,7 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
               <SelectValue placeholder="Default" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__none__">Default (group)</SelectItem>
+              <SelectItem value="__none__">{defaultOptionLabel}</SelectItem>
               {leverageProfiles.map((p) => (
                 <SelectItem key={p.id} value={String(p.id).toLowerCase()}>
                   {p.name}
@@ -282,7 +284,7 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
         </p>
         {leverageProfiles.length === 0 && (
           <p className="text-amber-600 dark:text-amber-400">
-            No leverage profiles in the system. Create them in <strong>Admin → Leverage Profiles</strong> to see more options than “Default (group)” here.
+            No leverage profiles in the system. Create them in <strong>Admin → Leverage Profiles</strong> to see more options here.
           </p>
         )}
         </div>
@@ -320,7 +322,7 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
               {transferSource ? (
                 <>
                   Apply <strong className="font-mono text-text">{transferSource.symbolCode}</strong>'s
-                  Leverage Profile ({transferSource.leverageProfileName ?? 'Default (group)'}) and
+                  Leverage Profile ({transferSource.leverageProfileName ?? defaultOptionLabel}) and
                   Enabled ({transferSource.enabled ? 'On' : 'Off'}) to the symbols you select below.
                 </>
               ) : (
