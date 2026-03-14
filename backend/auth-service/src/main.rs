@@ -6,6 +6,7 @@ use axum::{
 use std::env;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 use tracing_subscriber;
@@ -46,6 +47,8 @@ use routes::finance::create_finance_router;
 use routes::admin_settings::create_admin_settings_router;
 use routes::appointments::create_appointments_router;
 use routes::user_preferences::create_user_preferences_router;
+use routes::kyc::{create_kyc_router, KycUploadDir};
+use routes::admin_kyc::create_admin_kyc_router;
 use routes::admin_appointments::create_admin_appointments_router;
 use routes::promotions::{create_promotions_public_router, create_admin_promotions_router};
 use services::order_event_handler::OrderEventHandler;
@@ -191,6 +194,11 @@ async fn main() -> anyhow::Result<()> {
         nats: Arc::new(nats_client.clone()),
     };
 
+    // KYC upload directory (env KYC_UPLOAD_DIR or default ./uploads/kyc)
+    let kyc_upload_dir = std::path::PathBuf::from(
+        std::env::var("KYC_UPLOAD_DIR").unwrap_or_else(|_| "./uploads/kyc".to_string()),
+    );
+
     // Clone pool for event handler and balance listener before passing to router
     let pool_for_events = Arc::new(pool.clone());
     let pool_for_balance = pool.clone();
@@ -242,7 +250,15 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/wallet", routes::deposits::create_wallet_router(pool.clone(), deposits_state.clone()))
         .nest("/api/account", routes::deposits::create_account_router(pool.clone(), deposits_state.clone()))
         .nest("/api/notifications", routes::deposits::create_notifications_router(pool.clone(), deposits_state.clone()))
+        .nest(
+            "/api/user/kyc",
+            create_kyc_router(pool.clone()).layer(axum::extract::Extension(KycUploadDir(kyc_upload_dir.clone()))),
+        )
         .nest("/api/user", create_user_preferences_router(pool.clone()))
+        .nest(
+            "/api/admin/kyc",
+            create_admin_kyc_router(pool.clone()).layer(axum::extract::Extension(KycUploadDir(kyc_upload_dir))),
+        )
         .nest("/api/promotions", create_promotions_public_router(pool.clone()))
         .nest("/api/admin/promotions", create_admin_promotions_router(pool.clone()))
         .nest(
@@ -253,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/chat", create_admin_chat_router(pool.clone(), deposits_state.clone()))
         .nest("/api/orders", create_orders_router(pool.clone(), orders_state.clone()))
         .nest("/v1/orders", create_orders_router(pool.clone(), orders_state.clone())) // Keep v1 for backward compatibility
+        .layer(NormalizePathLayer::trim_trailing_slash())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(pool.clone());

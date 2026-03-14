@@ -11,6 +11,7 @@ import {
   UserFundedProgramsPage,
 } from '@/features/userPanel'
 import { UserAppointmentsPage } from '@/features/appointments'
+import { UserKycPage } from '@/features/kyc'
 
 export const userRoutes: RouteObject[] = [
   {
@@ -20,6 +21,10 @@ export const userRoutes: RouteObject[] = [
   {
     path: '/user/profile',
     element: <UserProfilePage />,
+  },
+  {
+    path: '/user/kyc',
+    element: <UserKycPage />,
   },
   {
     path: '/user/positions',

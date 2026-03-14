@@ -38,3 +38,6 @@ target/
 # Rust build artifacts
 target/
 **/target/
+
+# KYC uploaded documents (stored on server, not in repo)
+backend/auth-service/uploads/

@@ -99,10 +99,12 @@ export async function http<T>(
   const accessToken = state.accessToken
   const isAuthEndpoint = SKIP_REFRESH_ON_401.some((path) => endpoint.startsWith(path) || endpoint.endsWith(path))
 
-  // Build headers
+  // Build headers (omit Content-Type for FormData so browser sets multipart boundary)
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
+  }
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
   }
 
   // Add auth header if token exists (skip for login/register so we don't send stale token)

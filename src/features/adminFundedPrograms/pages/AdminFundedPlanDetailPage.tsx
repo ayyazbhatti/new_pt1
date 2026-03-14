@@ -90,12 +90,13 @@ export function AdminFundedPlanDetailPage() {
         <PageHeader title="Plan not found" />
         <p className="text-sm text-text-muted mb-4">This plan may have been removed or the link is invalid.</p>
         <div className="flex justify-end">
-          <Button variant="outline" asChild>
-            <Link to="/admin/funded-programs">
-              <ChevronLeft className="h-4 w-4 mr-2" />
-              Back to Funded programs
-            </Link>
-          </Button>
+          <Link
+            to="/admin/funded-programs"
+            className="inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200 border border-border bg-transparent text-text hover:bg-surface-2 active:bg-surface-2/80 focus:outline-none"
+          >
+            <ChevronLeft className="h-4 w-4 mr-2" />
+            Back to Funded programs
+          </Link>
         </div>
       </ContentShell>
     )

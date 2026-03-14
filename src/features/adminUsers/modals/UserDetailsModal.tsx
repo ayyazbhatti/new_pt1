@@ -6,6 +6,7 @@ import { useModalStore } from '@/app/store'
 import { CreateEditUserModal } from './CreateEditUserModal'
 import { formatDateTime, formatCurrency, formatAccountAge } from '../utils/formatters'
 import { toast } from '@/shared/components/common'
+import { getApiErrorMessage } from '@/shared/api/http'
 import {
   Edit,
   X,
@@ -2336,8 +2337,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                       queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
                     }, 1500)
                   } catch (err: unknown) {
-                    const e = err as { response?: { data?: { error?: { message?: string } }; message?: string } }
-                    toast.error(e?.response?.data?.error?.message ?? e?.message ?? 'Failed to update position')
+                    toast.error(getApiErrorMessage(err) || 'Failed to update position')
                   } finally {
                     setModifyPositionSubmitting(false)
                   }
@@ -2537,8 +2537,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                       queryClient.invalidateQueries({ queryKey: ['user-positions', user.id] })
                     }, 2500)
                   } catch (err: unknown) {
-                    const e = err as { response?: { data?: { error?: { message?: string } }; message?: string } }
-                    toast.error(e?.response?.data?.error?.message ?? e?.response?.data?.message ?? 'Failed to re-open position')
+                    toast.error(getApiErrorMessage(err) || 'Failed to re-open position')
                   } finally {
                     setModifyOpenSubmitting(false)
                   }

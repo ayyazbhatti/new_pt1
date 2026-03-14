@@ -25,7 +25,7 @@ export function RevenueChart({
   height = CHART_HEIGHT,
   className = '',
 }: RevenueChartProps) {
-  const { path, areaPath, xLabels, minY, maxY } = useMemo(() => {
+  const { path, areaPath, xLabels } = useMemo(() => {
     const width = 400
     const chartWidth = width - PADDING.left - PADDING.right
     const chartHeight = height - PADDING.top - PADDING.bottom
