@@ -1,0 +1,40 @@
+# Multi-stage: build all Rust backends, then minimal runtime image
+FROM rust:1-bookworm AS builder
+
+WORKDIR /app
+
+# Install deps for sqlx (openssl), etc.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# SQLx compile-time check needs a valid-looking DB URL (not used at runtime)
+ARG DATABASE_URL=postgresql://postgres:postgres@localhost:5432/newpt
+ENV DATABASE_URL=${DATABASE_URL}
+
+# Copy full source
+COPY . .
+
+# Build all backends (order-engine, core-api from workspace; auth, ws-gateway, data-provider from backend)
+RUN cargo build --release -p order-engine -p core-api && \
+    cargo build --release --manifest-path backend/auth-service/Cargo.toml --bin auth-service && \
+    cargo build --release --manifest-path backend/ws-gateway/Cargo.toml && \
+    cargo build --release --manifest-path backend/data-provider/Cargo.toml
+
+# Runtime image
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/order-engine /app/order-engine
+COPY --from=builder /app/target/release/core-api /app/core-api
+COPY --from=builder /app/backend/auth-service/target/release/auth-service /app/auth-service
+COPY --from=builder /app/backend/ws-gateway/target/release/ws-gateway /app/ws-gateway
+COPY --from=builder /app/backend/data-provider/target/release/data-provider /app/data-provider
+
+# Default: run auth-service (overridden by compose)
+CMD ["/app/auth-service"]

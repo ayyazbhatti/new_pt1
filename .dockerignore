@@ -1,0 +1,16 @@
+target/
+node_modules/
+.git/
+.env
+.env.*
+!.env.example
+*.log
+dist/
+.cursor/
+.vscode/
+**/target/
+**/node_modules/
+deploy/
+docs/
+*.md
+.gitignore

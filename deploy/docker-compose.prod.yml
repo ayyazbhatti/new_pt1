@@ -1,0 +1,159 @@
+# Production compose: run from repo root with:
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production up -d
+# Build first: docker compose -f deploy/docker-compose.prod.yml build
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: newpt
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  nats:
+    image: nats:latest
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  migrations:
+    image: postgres:15
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: deploy/.env.production
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - ../infra/migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for f in /migrations/*.sql; do
+          [ -f "$$f" ] && echo "Applying $$f" && psql -h postgres -U postgres -d newpt -f "$$f" || true
+        done
+        echo "Migrations done."
+    restart: "no"
+
+  auth:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: newpt-auth:latest
+    command: ["/app/auth-service"]
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/newpt
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-newpt}
+      PORT: 3000
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      nats: { condition: service_healthy }
+      migrations: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  ws-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: newpt-auth:latest
+    command: ["/app/ws-gateway"]
+    environment:
+      WS_PORT: 3003
+      HTTP_PORT: 9002
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-newpt}
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  data-provider:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: newpt-auth:latest
+    command: ["/app/data-provider"]
+    environment:
+      WS_PORT: 9003
+      HTTP_PORT: 9004
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+    depends_on:
+      redis: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    restart: unless-stopped
+
+  order-engine:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: newpt-auth:latest
+    command: ["/app/order-engine"]
+    environment:
+      PORT: 3002
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+    depends_on:
+      redis: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    restart: unless-stopped
+
+  core-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: newpt-auth:latest
+    command: ["/app/core-api"]
+    environment:
+      PORT: 3004
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/newpt
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - auth
+      - ws-gateway
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
