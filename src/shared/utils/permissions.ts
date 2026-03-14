@@ -15,6 +15,7 @@ export const ALL_PERMISSION_KEYS: readonly string[] = [
   'dashboard:view', 'bonus:view', 'bonus:edit',   'affiliate:view', 'affiliate:create', 'affiliate:edit', 'affiliate:delete',
   'permissions:view', 'permissions:edit', 'system:view', 'settings:view', 'settings:edit',
   'leads:view', 'leads:create', 'leads:edit', 'leads:convert', 'leads:assign', 'leads:delete', 'leads:export',
+  'kyc:view', 'kyc:approve',
 ] as const
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
@@ -70,6 +71,7 @@ export const ADMIN_PAGE_PERMISSIONS: Record<string, string[]> = {
   '/admin/permissions': ['permissions:view', 'permissions:edit'],
   '/admin/settings': ['settings:view', 'settings:edit'],
   '/admin/leads': ['leads:view', 'leads:create', 'leads:edit', 'leads:convert', 'leads:assign', 'leads:delete', 'leads:export'],
+  '/admin/kyc': ['kyc:view', 'kyc:approve'],
 }
 
 /** Required permission to enter each admin path. Admin and manager both need the permission. */
@@ -99,4 +101,5 @@ export const ADMIN_ROUTE_PERMISSIONS: Record<string, string> = {
   '/admin/settings': 'settings:view',
   '/admin/reports': 'reports:view',
   '/admin/leads': 'leads:view',
+  '/admin/kyc': 'kyc:view',
 }

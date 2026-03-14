@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import type { KycDocument } from '../types/kyc'
 import { cn } from '@/shared/utils'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { getApiErrorMessage } from '@/shared/api/http'
 import {
@@ -231,6 +232,8 @@ export function KycSubmissionDetailModal({
   }
 
   const canReview = submission && (submission.status === 'pending' || submission.status === 'under_review')
+  const canApproveReject = useCanAccess('kyc:approve')
+  const showReviewActions = canReview && canApproveReject
   const actionLoading = approveMutation.isPending || rejectMutation.isPending
 
   const identityLabel =
@@ -392,7 +395,7 @@ export function KycSubmissionDetailModal({
         </div>
       )}
 
-      {canReview && showRejectInput && (
+      {showReviewActions && showRejectInput && (
         <div>
           <Label className="text-text-muted">Rejection reason (required)</Label>
           <Textarea
@@ -409,7 +412,7 @@ export function KycSubmissionDetailModal({
         <Button variant="outline" onClick={() => closeModal(modalKey)}>
           Close
         </Button>
-        {canReview && (
+        {showReviewActions && (
           <>
             {showRejectInput ? (
               <Button

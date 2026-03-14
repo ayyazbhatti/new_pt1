@@ -10,11 +10,11 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::routes::kyc::KycUploadDir;
+use crate::routes::scoped_access;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use axum::Extension;
@@ -97,6 +97,18 @@ fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (Stat
     )
 }
 
+fn scoped_err_to_response(e: (StatusCode, Json<scoped_access::ErrorResponse>)) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        e.0,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: e.1.error.code.clone(),
+                message: e.1.error.message.clone(),
+            },
+        }),
+    )
+}
+
 pub fn create_admin_kyc_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_kyc))
@@ -115,6 +127,16 @@ async fn list_kyc(
 ) -> Result<Json<ListKycResponse>, (StatusCode, Json<ErrorResponse>)> {
     permission_check::check_permission(&pool, &claims, "kyc:view").await.map_err(permission_denied_to_response)?;
 
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims).await.map_err(scoped_err_to_response)?;
+    if let Some(ref ids) = allowed_user_ids {
+        if ids.is_empty() {
+            return Ok(Json(ListKycResponse {
+                items: vec![],
+                total: 0,
+            }));
+        }
+    }
+
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).min(100).max(1);
     let offset = (page - 1) * page_size;
@@ -128,10 +150,12 @@ async fn list_kyc(
         JOIN users u ON u.id = s.user_id
         WHERE ($1::text IS NULL OR s.status = $1)
         AND ($2::text IS NULL OR u.email ILIKE '%' || $2 || '%' OR (COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) ILIKE '%' || $2 || '%')
+        AND ($3::uuid[] IS NULL OR s.user_id = ANY($3))
     "#;
     let total: i64 = sqlx::query_scalar(count_sql)
         .bind(status_filter)
         .bind(search)
+        .bind(allowed_user_ids.as_deref())
         .fetch_one(&pool)
         .await
         .map_err(|e| {
@@ -153,14 +177,16 @@ async fn list_kyc(
         JOIN users u ON u.id = s.user_id
         WHERE ($1::text IS NULL OR s.status = $1)
         AND ($2::text IS NULL OR u.email ILIKE '%' || $2 || '%' OR (COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) ILIKE '%' || $2 || '%')
+        AND ($3::uuid[] IS NULL OR s.user_id = ANY($3))
         ORDER BY s.submitted_at DESC
-        LIMIT $3 OFFSET $4
+        LIMIT $4 OFFSET $5
     "#;
     let rows = sqlx::query_as::<_, (Uuid, Uuid, String, String, String, Option<String>, Option<String>, DateTime<Utc>, Option<DateTime<Utc>>)>(
         list_sql,
     )
     .bind(status_filter)
     .bind(search)
+    .bind(allowed_user_ids.as_deref())
     .bind(page_size as i64)
     .bind(offset as i64)
     .fetch_all(&pool)
@@ -255,6 +281,21 @@ async fn get_kyc_submission(
         ));
     };
 
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims).await.map_err(scoped_err_to_response)?;
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&user_id) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NOT_FOUND".to_string(),
+                        message: "Submission not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
     let docs = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
         "SELECT id, document_type, file_name, content_type FROM kyc_documents WHERE submission_id = $1 ORDER BY created_at",
     )
@@ -305,6 +346,47 @@ async fn stream_document(
     Path((submission_id, doc_id)): Path<(Uuid, Uuid)>,
 ) -> Result<axum::body::Bytes, (StatusCode, Json<ErrorResponse>)> {
     permission_check::check_permission(&pool, &claims, "kyc:view").await.map_err(permission_denied_to_response)?;
+
+    let submission_user_id: Option<Uuid> = sqlx::query_scalar("SELECT user_id FROM kyc_submissions WHERE id = $1")
+        .bind(submission_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    let Some(submission_user_id) = submission_user_id else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Submission not found".to_string(),
+                },
+            }),
+        ));
+    };
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims).await.map_err(scoped_err_to_response)?;
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&submission_user_id) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NOT_FOUND".to_string(),
+                        message: "Document not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
 
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT file_path FROM kyc_documents WHERE id = $1 AND submission_id = $2",
@@ -368,11 +450,12 @@ async fn approve_kyc(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    permission_check::check_permission(&pool, &claims, "kyc:approve")
+    // Require kyc:approve in profile (no bypass for admin; only super_admin bypasses)
+    permission_check::check_permission_profile_only(&pool, &claims, "kyc:approve")
         .await
         .map_err(permission_denied_to_response)?;
 
-    let status: Option<String> = sqlx::query_scalar("SELECT status FROM kyc_submissions WHERE id = $1")
+    let row: Option<(Uuid, String)> = sqlx::query_as("SELECT user_id, status FROM kyc_submissions WHERE id = $1")
         .bind(id)
         .fetch_optional(&pool)
         .await
@@ -388,9 +471,35 @@ async fn approve_kyc(
             )
         })?;
 
-    match status.as_deref() {
-        Some("pending") | Some("under_review") => {}
-        Some("approved") => {
+    let Some((submission_user_id, status)) = row else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Submission not found".to_string(),
+                },
+            }),
+        ));
+    };
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims).await.map_err(scoped_err_to_response)?;
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&submission_user_id) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NOT_FOUND".to_string(),
+                        message: "Submission not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    match status.as_str() {
+        "pending" | "under_review" => {}
+        "approved" => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -401,7 +510,7 @@ async fn approve_kyc(
                 }),
             ));
         }
-        Some("rejected") | Some("draft") | None => {
+        "rejected" | "draft" | _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -412,7 +521,6 @@ async fn approve_kyc(
                 }),
             ));
         }
-        _ => {}
     }
 
     sqlx::query(
@@ -443,7 +551,8 @@ async fn reject_kyc(
     Path(id): Path<Uuid>,
     Json(body): Json<RejectKycRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    permission_check::check_permission(&pool, &claims, "kyc:approve")
+    // Require kyc:approve in profile (no bypass for admin; only super_admin bypasses)
+    permission_check::check_permission_profile_only(&pool, &claims, "kyc:approve")
         .await
         .map_err(permission_denied_to_response)?;
 
@@ -460,7 +569,7 @@ async fn reject_kyc(
         ));
     }
 
-    let status: Option<String> = sqlx::query_scalar("SELECT status FROM kyc_submissions WHERE id = $1")
+    let row: Option<(Uuid, String)> = sqlx::query_as("SELECT user_id, status FROM kyc_submissions WHERE id = $1")
         .bind(id)
         .fetch_optional(&pool)
         .await
@@ -476,9 +585,35 @@ async fn reject_kyc(
             )
         })?;
 
-    match status.as_deref() {
-        Some("pending") | Some("under_review") => {}
-        Some("rejected") => {
+    let Some((submission_user_id, status)) = row else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Submission not found".to_string(),
+                },
+            }),
+        ));
+    };
+    let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims).await.map_err(scoped_err_to_response)?;
+    if let Some(ref ids) = allowed_user_ids {
+        if !ids.contains(&submission_user_id) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "NOT_FOUND".to_string(),
+                        message: "Submission not found".to_string(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    match status.as_str() {
+        "pending" | "under_review" => {}
+        "rejected" => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -489,7 +624,7 @@ async fn reject_kyc(
                 }),
             ));
         }
-        Some("approved") | Some("draft") | None => {
+        "approved" | "draft" | _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -500,7 +635,6 @@ async fn reject_kyc(
                 }),
             ));
         }
-        _ => {}
     }
 
     sqlx::query(
