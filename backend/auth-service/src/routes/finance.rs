@@ -18,6 +18,7 @@ use crate::middleware::auth_middleware;
 use crate::routes::scoped_access;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
+use crate::services::affiliate_commission_service;
 use crate::services::ledger_service;
 use crate::routes::deposits::{compute_and_cache_account_summary, publish_wallet_balance_updated, publish_wallet_balance_updated_nats, DepositsState};
 
@@ -299,11 +300,39 @@ async fn approve_transaction(
         })?;
     }
 
+    // Accrue affiliate commission when approving a deposit for a referred user (admin Finance UI uses this endpoint)
+    let referrer_id = if tx_type == "deposit" {
+        match affiliate_commission_service::accrue_commission_on_deposit(
+            &pool,
+            user_id,
+            net_amount,
+            &currency,
+            transaction_id,
+        )
+        .await
+        {
+            Err(e) => {
+                warn!("Affiliate commission accrual failed (transaction still approved): {}", e);
+                None
+            }
+            Ok(opt) => opt,
+        }
+    } else {
+        None
+    };
+
     // Publish to Redis for real-time WebSocket balance update (single source of truth)
     publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), user_id).await;
     compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), user_id).await;
     // Publish to NATS so gateway-ws can push wallet.balance.updated to the user's terminal (balance updates in real time)
     publish_wallet_balance_updated_nats(&pool, deposits_state.nats.as_ref(), user_id).await;
+
+    // If we paid affiliate commission to a referrer, push their balance update too
+    if let Some(rid) = referrer_id {
+        publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), rid).await;
+        compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), rid).await;
+        publish_wallet_balance_updated_nats(&pool, deposits_state.nats.as_ref(), rid).await;
+    }
 
     info!("Transaction approved: transaction_id={}, user_id={}, type={}, amount={}", 
           transaction_id, user_id, tx_type, net_amount);

@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ContentShell } from '@/shared/layout'
 import {
   DollarSign,
@@ -11,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useMyReferrals } from '../hooks/useMyReferrals'
+import { useMyCommissions } from '../hooks/useMyCommissions'
 import { toast } from '@/shared/components/common'
 import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
@@ -24,18 +26,14 @@ const DEFAULT_LEVELS = [
   { level: 3, percent: 2, label: 'Nested referrals' },
 ]
 
-// Placeholder commissions (UI only)
-const PLACEHOLDER_COMMISSIONS: { id: string; amount: string; basis: string; status: 'Paid' | 'Approved' | 'Accrued'; date: string }[] = []
-
-function StatusBadge({ status }: { status: 'Paid' | 'Approved' | 'Accrued' | string }) {
+function StatusBadge({ status }: { status: 'Paid' | 'Pending' | string }) {
+  const display = status === 'completed' ? 'Paid' : status === 'pending' ? 'Pending' : status
   const styles =
-    status === 'Paid'
+    display === 'Paid'
       ? 'bg-green-500/20 text-green-400 border-green-500/50'
-      : status === 'Approved'
-        ? 'bg-blue-500/20 text-blue-400 border-blue-500/50'
-        : status === 'Accrued'
-          ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50'
-          : 'bg-slate-500/20 text-slate-400 border-slate-500/50'
+      : display === 'Pending'
+        ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50'
+        : 'bg-slate-500/20 text-slate-400 border-slate-500/50'
   return (
     <span
       className={cn(
@@ -43,7 +41,7 @@ function StatusBadge({ status }: { status: 'Paid' | 'Approved' | 'Accrued' | str
         styles
       )}
     >
-      {status}
+      {display}
     </span>
   )
 }
@@ -143,9 +141,16 @@ export function UserAffiliatePage() {
   const user = useAuthStore((state) => state.user)
   const [copied, setCopied] = useState(false)
   const [joinModalOpen, setJoinModalOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<UserTab>('overview')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  const activeTab: UserTab =
+    tabParam === 'overview' || tabParam === 'referrals' || tabParam === 'commissions'
+      ? tabParam
+      : 'overview'
+  const setActiveTab = (tab: UserTab) => setSearchParams({ tab })
 
   const { data: referrals = [], isLoading: referralsLoading } = useMyReferrals()
+  const { data: commissions = [], isLoading: commissionsLoading } = useMyCommissions()
 
   const isEnrolled = Boolean(user?.referralCode)
   const refCode = user?.referralCode || (user?.id ? user.id.slice(0, 8) : '')
@@ -160,8 +165,24 @@ export function UserAffiliatePage() {
     () => referrals.filter((r) => (r as { active?: boolean }).active !== false).length,
     [referrals]
   )
-  const totalCommission = '$0.00'
-  const paidCommission = '$0.00'
+  const { totalCommission, paidCommission } = useMemo(() => {
+    const total = commissions.reduce((sum, c) => sum + c.amount, 0)
+    const paid = commissions
+      .filter((c) => c.status === 'completed' || c.paidAt != null)
+      .reduce((sum, c) => sum + c.amount, 0)
+    return {
+      totalCommission: new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: commissions[0]?.currency ?? 'USD',
+        minimumFractionDigits: 2,
+      }).format(total),
+      paidCommission: new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: commissions[0]?.currency ?? 'USD',
+        minimumFractionDigits: 2,
+      }).format(paid),
+    }
+  }, [commissions])
 
   const handleCopy = () => {
     navigator.clipboard
@@ -508,7 +529,7 @@ export function UserAffiliatePage() {
                     Amount
                   </th>
                   <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
-                    Basis
+                    From referral
                   </th>
                   <th className="px-3 sm:px-4 md:px-6 py-2 sm:py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
                     Status
@@ -519,21 +540,35 @@ export function UserAffiliatePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700">
-                {PLACEHOLDER_COMMISSIONS.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-700/50">
-                    <td className="px-3 sm:px-4 md:px-6 py-3 font-mono text-white">{c.amount}</td>
-                    <td className="px-3 sm:px-4 md:px-6 py-3">
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border border-slate-600 text-slate-300">
-                        {c.basis}
-                      </span>
+                {commissionsLoading ? (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-8 text-center text-slate-400 text-sm">
+                      Loading commissions…
                     </td>
-                    <td className="px-3 sm:px-4 md:px-6 py-3">
-                      <StatusBadge status={c.status} />
-                    </td>
-                    <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-400">{c.date}</td>
                   </tr>
-                ))}
-                {PLACEHOLDER_COMMISSIONS.length === 0 && (
+                ) : (
+                  commissions.map((c) => (
+                    <tr key={c.id} className="hover:bg-slate-700/50">
+                      <td className="px-3 sm:px-4 md:px-6 py-3 font-mono text-white">
+                        {new Intl.NumberFormat('en-US', {
+                          style: 'currency',
+                          currency: c.currency,
+                          minimumFractionDigits: 2,
+                        }).format(c.amount)}
+                      </td>
+                      <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-300">
+                        {c.referredUserEmail ?? '—'}
+                      </td>
+                      <td className="px-3 sm:px-4 md:px-6 py-3">
+                        <StatusBadge status={c.status} />
+                      </td>
+                      <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-400">
+                        {format(new Date(c.createdAt), 'PPp')}
+                      </td>
+                    </tr>
+                  ))
+                )}
+                {!commissionsLoading && commissions.length === 0 && (
                   <tr>
                     <td colSpan={4} className="px-4 py-8 text-center text-slate-400 text-sm">
                       No commissions yet

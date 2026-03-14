@@ -32,6 +32,7 @@ use crate::routes::scoped_access;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
+use crate::services::affiliate_commission_service;
 use crate::services::ledger_service;
 use crate::services::email_config_service::{send_email_html_sync, EmailConfigService};
 
@@ -2302,6 +2303,24 @@ async fn create_direct_deposit(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    // Accrue affiliate commission if this user was referred; pay into referrer's wallet and publish balance update
+    match affiliate_commission_service::accrue_commission_on_deposit(
+        &pool,
+        user_id,
+        amount,
+        "USD",
+        transaction_id,
+    )
+    .await
+    {
+        Err(e) => warn!("Affiliate commission accrual failed (direct deposit still applied): {}", e),
+        Ok(Some(referrer_id)) => {
+            publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), referrer_id).await;
+            compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), referrer_id).await;
+        }
+        Ok(None) => {}
+    }
+
     let total_deposits: Decimal = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(net_amount), 0) FROM transactions
@@ -2481,12 +2500,30 @@ async fn approve_deposit(
     info!("Created ledger entry: transaction_id={}, wallet_id={}, amount={}", 
           transaction_id, wallet_id, amount);
 
+    // Accrue affiliate commission if this user was referred (no-op if no referrer or 0% scheme); publish referrer balance if paid
+    match affiliate_commission_service::accrue_commission_on_deposit(
+        &pool,
+        user_id,
+        amount,
+        "USD",
+        transaction_id,
+    )
+    .await
+    {
+        Err(e) => warn!("Affiliate commission accrual failed (deposit still approved): {}", e),
+        Ok(Some(referrer_id)) => {
+            publish_wallet_balance_updated(&pool, deposits_state.redis.as_ref(), referrer_id).await;
+            compute_and_cache_account_summary(&pool, deposits_state.redis.as_ref(), referrer_id).await;
+        }
+        Ok(None) => {}
+    }
+
     // Calculate balance using formula: Balance = deposits - withdrawals + total realised net profit and loss
     // 1. Calculate total deposits (approved or completed deposits only)
     let total_deposits: Decimal = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(net_amount), 0) FROM transactions
-        WHERE user_id = $1 AND type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND currency = $2
+        WHERE user_id = $1 AND type = 'deposit'::transaction_type AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status) AND currency = $2
         "#
     )
     .bind(user_id)

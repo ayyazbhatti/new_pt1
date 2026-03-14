@@ -214,6 +214,42 @@ export async function getMyReferrals(): Promise<ReferredUser[]> {
   }))
 }
 
+/** Commission record for the current user (affiliate). From GET /api/auth/me/commissions */
+export interface CommissionDto {
+  id: string
+  amount: number
+  currency: string
+  status: string
+  paid_at?: string | null
+  created_at: string
+  referred_user_email?: string | null
+}
+
+export interface Commission {
+  id: string
+  amount: number
+  currency: string
+  status: string
+  paidAt: string | null
+  createdAt: string
+  referredUserEmail: string | null
+}
+
+export async function getMyCommissions(): Promise<Commission[]> {
+  const list = await http<CommissionDto[]>('/api/auth/me/commissions', {
+    method: 'GET',
+  })
+  return list.map((d) => ({
+    id: d.id,
+    amount: d.amount,
+    currency: d.currency,
+    status: d.status,
+    paidAt: d.paid_at ?? null,
+    createdAt: d.created_at,
+    referredUserEmail: d.referred_user_email ?? null,
+  }))
+}
+
 function mapUserResponseToMe(response: UserResponse): MeResponse {
   return {
     id: response.id,

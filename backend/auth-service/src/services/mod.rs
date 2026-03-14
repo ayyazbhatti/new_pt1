@@ -1,4 +1,5 @@
 pub mod account_summary_cache_warmup;
+pub mod affiliate_commission_service;
 pub mod auth_service;
 pub mod admin_groups_service;
 pub mod admin_leverage_profiles_service;

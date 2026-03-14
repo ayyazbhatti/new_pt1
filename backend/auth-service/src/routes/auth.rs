@@ -19,6 +19,7 @@ use crate::models::leverage_profile::LeverageProfileTier;
 use crate::services::auth_service::AuthService;
 use crate::services::email_config_service::{send_email_html_sync, send_email_sync, EmailConfigService};
 use crate::utils::jwt::Claims;
+use rust_decimal::Decimal;
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -194,6 +195,20 @@ pub struct ReferredUserResponse {
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// 1 = direct referral, 2 = referral of your referral, etc.
     pub level: i32,
+}
+
+/// One commission record for the current user (affiliate). Returned by GET /me/commissions.
+#[derive(Debug, Serialize)]
+pub struct CommissionResponse {
+    pub id: Uuid,
+    pub amount: f64,
+    pub currency: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paid_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub referred_user_email: Option<String>,
 }
 
 /// Escape for HTML text content (prevents XSS if name/site contain < or &).
@@ -649,6 +664,7 @@ pub fn create_auth_router(pool: PgPool, redis: Arc<crate::redis_pool::RedisPool>
     let protected_routes = Router::new()
         .route("/logout", post(logout))
         .route("/me/referrals", get(my_referrals))
+        .route("/me/commissions", get(my_commissions))
         .route("/me/symbol-leverage", get(symbol_leverage))
         .route("/me", get(me).patch(update_me))
         .route("/users", get(list_users))
@@ -1140,6 +1156,62 @@ async fn my_referrals(
             last_name: r.last_name,
             created_at: r.created_at,
             level: r.level,
+        })
+        .collect();
+    Ok(Json(list))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct CommissionRow {
+    id: Uuid,
+    amount: Decimal,
+    currency: String,
+    status: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    paid_at: Option<chrono::DateTime<chrono::Utc>>,
+    referred_user_email: Option<String>,
+}
+
+async fn my_commissions(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Vec<CommissionResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let rows = sqlx::query_as::<_, CommissionRow>(
+        r#"
+        SELECT ac.id, ac.amount, ac.currency, ac.status::text AS status,
+               ac.created_at, ac.paid_at, u.email AS referred_user_email
+        FROM affiliate_commissions ac
+        JOIN affiliates a ON a.id = ac.affiliate_id
+        LEFT JOIN users u ON u.id = ac.user_id
+        WHERE a.user_id = $1
+        ORDER BY ac.created_at DESC
+        "#,
+    )
+    .bind(claims.sub)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "LIST_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let list: Vec<CommissionResponse> = rows
+        .into_iter()
+        .map(|r| CommissionResponse {
+            id: r.id,
+            amount: r.amount.try_into().unwrap_or(0.0),
+            currency: r.currency,
+            status: r.status,
+            paid_at: r.paid_at,
+            created_at: r.created_at,
+            referred_user_email: r.referred_user_email,
         })
         .collect();
     Ok(Json(list))
