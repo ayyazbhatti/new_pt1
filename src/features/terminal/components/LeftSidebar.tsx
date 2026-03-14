@@ -15,6 +15,7 @@ import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
 import { fetchBalance } from '@/features/wallet/api'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAccountSummary, accountSummaryQueryKey } from '@/features/wallet/hooks/useAccountSummary'
+import { updateTerminalPreferences } from '@/features/terminal/api/preferences.api'
 import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
@@ -448,7 +449,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               : 'text-text-muted hover:text-text hover:bg-white/5'
           )}
         >
-          <span>Watchlist</span>
+          <span>Favourite</span>
           <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></span>
           <span className="text-[10px] font-medium text-success">Live</span>
         </button>
@@ -508,12 +509,18 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 flex-1 min-w-0">
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation()
                         toggleWatchlist(symbol.id)
-                        toast.success(watchlist.has(symbol.id) ? 'Removed from watchlist' : 'Added to watchlist')
+                        const nextIds = Array.from(useTerminalStore.getState().watchlist)
+                        updateTerminalPreferences({ favouriteSymbolIds: nextIds }).catch(() =>
+                          toast.error('Failed to save favourites')
+                        )
+                        toast.success(watchlist.has(symbol.id) ? 'Removed from favourites' : 'Added to favourites')
                       }}
                       className="p-1 hover:bg-white/10 rounded transition-all duration-200 hover:scale-110 active:scale-95 shrink-0 mt-0.5"
+                      aria-label={watchlist.has(symbol.id) ? 'Remove from favourites' : 'Add to favourites'}
                     >
                       <Star
                         className={cn(

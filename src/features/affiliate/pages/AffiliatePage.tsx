@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { ContentShell } from '@/shared/layout'
+import { Card } from '@/shared/ui/card'
 import { DataTable, type ColumnDef } from '@/shared/ui/table'
 import {
   DollarSign,
@@ -17,6 +18,9 @@ import {
   CheckCircle,
   Tag,
   ChevronDown,
+  Layers,
+  UsersRound,
+  Tag as TagIcon,
 } from 'lucide-react'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { useAffiliateLayers } from '../hooks/useAffiliateLayers'
@@ -153,11 +157,13 @@ export function AffiliatePage() {
     )
   }, [users, search])
 
+  const totalSchemes = layers.length
+  const totalAffiliates = users.length
+  const schemesWithTags = useMemo(() => layers.filter((l) => (l.tagIds?.length ?? 0) > 0).length, [layers])
+
   const isLoading =
     (activeTab === 'schemes' && layersLoading) ||
-    (activeTab === 'affiliates' && usersLoading) ||
-    (activeTab === 'referrals') ||
-    (activeTab === 'commissions')
+    (activeTab === 'affiliates' && usersLoading)
 
   const openEdit = (layer: AffiliateLayer) => {
     if (canEdit) {
@@ -513,6 +519,40 @@ export function AffiliatePage() {
         </div>
       </div>
 
+      {/* Stats */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-blue-500">
+            <Layers className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Total schemes</p>
+            <p className="mt-1 text-lg font-bold text-text">{totalSchemes}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Affiliate schemes</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-emerald-500">
+            <UsersRound className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Affiliates</p>
+            <p className="mt-1 text-lg font-bold text-text">{totalAffiliates}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Registered affiliates</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-amber-500">
+            <TagIcon className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Schemes with tags</p>
+            <p className="mt-1 text-lg font-bold text-text">{schemesWithTags}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Tag assignments</p>
+          </div>
+        </Card>
+      </div>
+
       {/* Tabs */}
       <div className="flex space-x-1 bg-slate-800 p-1 rounded-lg overflow-x-auto">
         {TABS.map((tab) => {
@@ -629,12 +669,22 @@ export function AffiliatePage() {
           className="space-y-0"
         />
       ) : activeTab === 'referrals' ? (
-        <DataTable
-          data={PLACEHOLDER_REFERRALS}
-          columns={referralColumns}
-          bordered
-          className="space-y-0"
-        />
+        PLACEHOLDER_REFERRALS.length === 0 ? (
+          <div className="flex items-center justify-center py-16 rounded-lg border border-border bg-surface">
+            <p className="text-sm text-text-muted">No referrals recorded yet. This view will show referral data when available.</p>
+          </div>
+        ) : (
+          <DataTable
+            data={PLACEHOLDER_REFERRALS}
+            columns={referralColumns}
+            bordered
+            className="space-y-0"
+          />
+        )
+      ) : PLACEHOLDER_COMMISSIONS.length === 0 ? (
+        <div className="flex items-center justify-center py-16 rounded-lg border border-border bg-surface">
+          <p className="text-sm text-text-muted">No commissions recorded yet. This view will show commission data when available.</p>
+        </div>
       ) : (
         <DataTable
           data={PLACEHOLDER_COMMISSIONS}

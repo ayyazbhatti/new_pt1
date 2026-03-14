@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ColumnDef } from '@tanstack/react-table'
 import { ContentShell, PageHeader } from '@/shared/layout'
+import { Card } from '@/shared/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
@@ -11,7 +12,7 @@ import { Input } from '@/shared/ui/input'
 import { ModalShell } from '@/shared/ui/modal'
 import { Checkbox } from '@/shared/ui/Checkbox'
 import { Spinner } from '@/shared/ui/loading'
-import { KeyRound, Plus, Pencil, Trash2, Shield, Check, Tag, ChevronDown } from 'lucide-react'
+import { KeyRound, Plus, Pencil, Trash2, Shield, Check, Tag, ChevronDown, ShieldCheck, List, Tag as TagIcon } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useCanAccess } from '@/shared/utils/permissions'
@@ -455,6 +456,54 @@ export function PermissionsPage() {
           ) : undefined
         }
       />
+
+      {/* Stats */}
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-blue-500">
+            <ShieldCheck className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Total profiles</p>
+            <p className="mt-1 text-lg font-bold text-text">{profiles.length}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Permission profiles</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-emerald-500">
+            <List className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Permission categories</p>
+            <p className="mt-1 text-lg font-bold text-text">{permissionCategories.length}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Definition categories</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-amber-500">
+            <TagIcon className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Profiles with tags</p>
+            <p className="mt-1 text-lg font-bold text-text">
+              {profiles.filter((p) => (p.tagIds?.length ?? 0) > 0).length}
+            </p>
+            <p className="mt-0.5 text-xs text-text-muted">Tag assignments</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-slate-400">
+            <KeyRound className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Total permissions</p>
+            <p className="mt-1 text-lg font-bold text-text">
+              {permissionCategories.reduce((sum, c) => sum + (c.permissions?.length ?? 0), 0)}
+            </p>
+            <p className="mt-0.5 text-xs text-text-muted">Across all categories</p>
+          </div>
+        </Card>
+      </div>
 
       {error && (
         <div className="rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3 text-sm text-red-400">

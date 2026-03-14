@@ -75,6 +75,14 @@ pub struct ListGroupsResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupsOverviewResponse {
+    pub total_groups: i64,
+    pub active_groups: i64,
+    pub total_users: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct UsageResponse {
     pub users_count: i64,
 }
@@ -117,6 +125,7 @@ pub fn create_admin_groups_router(pool: PgPool) -> Router<PgPool> {
         .with_state(pool.clone());
     Router::new()
         .merge(tags_router)
+        .route("/overview", get(get_groups_overview))
         .route("/", get(list_groups).post(create_group))
         .route("/:id/usage", get(get_group_usage))
         .route("/:id/price-profile", put(update_group_price_profile))
@@ -208,6 +217,44 @@ async fn resolve_allowed_group_ids_for_user(
     }
 
     Ok(allowed.into_iter().collect())
+}
+
+async fn get_groups_overview(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+) -> Result<Json<GroupsOverviewResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "groups:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let allowed_group_ids: Option<Vec<Uuid>> = if claims.role == "super_admin" {
+        None
+    } else {
+        let ids = resolve_allowed_group_ids_for_user(&pool, claims.sub).await?;
+        Some(ids)
+    };
+
+    let service = AdminGroupsService::new(pool);
+    let (total_groups, active_groups, total_users) = service
+        .groups_overview(allowed_group_ids.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "DB_ERROR".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    Ok(Json(GroupsOverviewResponse {
+        total_groups,
+        active_groups,
+        total_users,
+    }))
 }
 
 async fn list_groups(

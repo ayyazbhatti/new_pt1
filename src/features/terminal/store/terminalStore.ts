@@ -34,6 +34,7 @@ interface TerminalStore {
   setSymbols: (symbols: MockSymbol[]) => void
   setLoading: (loading: boolean) => void
   setSelectedSymbol: (symbol: MockSymbol) => void
+  setWatchlist: (symbolIds: string[]) => void
   toggleWatchlist: (symbolId: string) => void
   setSearchQuery: (query: string) => void
   setActiveTab: (tab: 'all' | 'watchlists') => void
@@ -152,6 +153,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       localStorage.removeItem(STORAGE_KEY_SELECTED_SYMBOL)
     }
   },
+  setWatchlist: (symbolIds) => set({ watchlist: new Set(symbolIds) }),
   toggleWatchlist: (symbolId) =>
     set((state) => {
       const newWatchlist = new Set(state.watchlist)

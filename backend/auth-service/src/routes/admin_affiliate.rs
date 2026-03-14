@@ -198,20 +198,27 @@ async fn list_affiliate_users(
         .await
         .map_err(permission_denied_to_response)?;
 
+    // Single pass: aggregate referral counts once, then join. Avoids N correlated subqueries.
     let rows = sqlx::query_as::<_, AffiliateUserRow>(
         r#"
         SELECT u.id, u.email,
                COALESCE(u.first_name, '') AS first_name,
                COALESCE(u.last_name, '') AS last_name,
                u.referral_code,
-               (SELECT COUNT(*)::bigint FROM users r WHERE r.referred_by_user_id = u.id) AS referred_count,
+               COALESCE(rc.referred_count, 0)::bigint AS referred_count,
                COALESCE(
                  (SELECT acl.commission_percent FROM affiliate_commission_layers acl WHERE acl.level = 1 LIMIT 1),
                  0
                ) AS commission_percent
         FROM users u
+        LEFT JOIN (
+          SELECT referred_by_user_id, COUNT(*)::bigint AS referred_count
+          FROM users
+          WHERE referred_by_user_id IS NOT NULL
+          GROUP BY referred_by_user_id
+        ) rc ON rc.referred_by_user_id = u.id
         WHERE u.referral_code IS NOT NULL
-        ORDER BY referred_count DESC, u.email ASC
+        ORDER BY COALESCE(rc.referred_count, 0) DESC, u.email ASC
         "#,
     )
     .fetch_all(&pool)

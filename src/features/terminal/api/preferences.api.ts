@@ -6,6 +6,7 @@ export interface TerminalPreferences {
   chartShowClosedPositionMarker: boolean
   enableLiquidationEmail: boolean
   enableSlTpEmail: boolean
+  favouriteSymbolIds: string[]
 }
 
 export interface TerminalPreferencesResponse {

@@ -21,9 +21,14 @@ import {
   Trash2,
   Tag,
   ChevronDown,
+  Layers,
+  Building2,
+  Tag as TagIcon,
+  Unlink,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { listTags } from '@/features/tags/api/tags.api'
+import { Card } from '@/shared/ui/card'
 import { Checkbox } from '@/shared/ui/Checkbox'
 import { setMarkupProfileTags } from '../api/markup.api'
 import { toast } from '@/shared/components/common'
@@ -70,6 +75,21 @@ export function AdminMarkupPage() {
         (p.groupName?.toLowerCase().includes(term) ?? false)
     )
   }, [profiles, searchTerm])
+
+  // Stats derived from profiles
+  const totalStreams = profiles?.length ?? 0
+  const assignedToGroup = useMemo(
+    () => (profiles ?? []).filter((p) => p.groupId != null && p.groupId !== '' || (p.groupName != null && p.groupName !== '')).length,
+    [profiles]
+  )
+  const withTags = useMemo(
+    () => (profiles ?? []).filter((p) => (p.tagIds?.length ?? 0) > 0).length,
+    [profiles]
+  )
+  const unassigned = useMemo(
+    () => (profiles ?? []).filter((p) => !p.groupId && !p.groupName).length,
+    [profiles]
+  )
 
   const handleNewStream = () => {
     openModal('create-price-stream', <CreateEditPriceStreamModal />, {
@@ -149,6 +169,51 @@ export function AdminMarkupPage() {
           ) : undefined
         }
       />
+
+      {/* Stats */}
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-blue-500">
+            <Layers className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Total streams</p>
+            <p className="mt-1 text-lg font-bold text-text">{totalStreams}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Price stream profiles</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-emerald-500">
+            <Building2 className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Assigned to group</p>
+            <p className="mt-1 text-lg font-bold text-text">{assignedToGroup}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Streams linked to a group</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-amber-500">
+            <TagIcon className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">With tags</p>
+            <p className="mt-1 text-lg font-bold text-text">{withTags}</p>
+            <p className="mt-0.5 text-xs text-text-muted">Profiles with tag assignments</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-slate-400">
+            <Unlink className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Unassigned</p>
+            <p className="mt-1 text-lg font-bold text-text">{unassigned}</p>
+            <p className="mt-0.5 text-xs text-text-muted">No group linked</p>
+          </div>
+        </Card>
+      </div>
+
       {/* Search */}
       <div className="mb-6 flex items-center">
         <div className="relative w-full max-w-md">

@@ -24,13 +24,23 @@ fn default_preferences() -> TerminalPreferences {
         chart_show_closed_position_marker: true,
         enable_liquidation_email: false,
         enable_sltp_email: false,
+        favourite_symbol_ids: vec![],
     }
 }
 
-/// Normalize DB JSON (or request body) into a full preferences struct. Missing keys → default true.
+/// Normalize DB JSON (or request body) into a full preferences struct. Missing keys → default.
 fn normalize_preferences(value: &serde_json::Value) -> TerminalPreferences {
     let def = default_preferences();
     let obj = value.as_object();
+    let favourite_symbol_ids: Vec<String> = obj
+        .and_then(|o| o.get("favouriteSymbolIds"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| def.favourite_symbol_ids.clone());
     TerminalPreferences {
         chart_show_ask_price: obj
             .and_then(|o| o.get("chartShowAskPrice"))
@@ -52,12 +62,22 @@ fn normalize_preferences(value: &serde_json::Value) -> TerminalPreferences {
             .and_then(|o| o.get("enableSlTpEmail"))
             .and_then(|v| v.as_bool())
             .unwrap_or(def.enable_sltp_email),
+        favourite_symbol_ids,
     }
 }
 
 /// Merge incoming (partial) with existing (or defaults). Incoming keys override.
 fn merge_preferences(existing: &TerminalPreferences, incoming: &serde_json::Value) -> TerminalPreferences {
     let obj = incoming.as_object();
+    let favourite_symbol_ids: Vec<String> = obj
+        .and_then(|o| o.get("favouriteSymbolIds"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| existing.favourite_symbol_ids.clone());
     TerminalPreferences {
         chart_show_ask_price: obj
             .and_then(|o| o.get("chartShowAskPrice"))
@@ -79,6 +99,7 @@ fn merge_preferences(existing: &TerminalPreferences, incoming: &serde_json::Valu
             .and_then(|o| o.get("enableSlTpEmail"))
             .and_then(|v| v.as_bool())
             .unwrap_or(existing.enable_sltp_email),
+        favourite_symbol_ids,
     }
 }
 
@@ -90,6 +111,7 @@ struct TerminalPreferences {
     chart_show_closed_position_marker: bool,
     enable_liquidation_email: bool,
     enable_sltp_email: bool,
+    favourite_symbol_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

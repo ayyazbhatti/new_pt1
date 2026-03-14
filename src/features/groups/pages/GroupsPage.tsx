@@ -5,12 +5,14 @@ import { GroupFormDialog } from '../components/GroupFormDialog'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
+import { Card } from '@/shared/ui/card'
 import { useGroupsList } from '../hooks/useGroups'
 import { useMarkupProfiles } from '@/features/adminMarkup/hooks/useMarkup'
 import { useQuery } from '@tanstack/react-query'
 import { listTags } from '@/features/tags/api/tags.api'
+import { getGroupsOverview } from '../api/groups.api'
 import type { UserGroup } from '../types/group'
-import { Plus, X } from 'lucide-react'
+import { Plus, X, Building2, CheckCircle, Users } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Skeleton } from '@/shared/ui/loading'
@@ -39,6 +41,12 @@ export function GroupsPage() {
   const page = parseInt(searchParams.get('page') || '1', 10)
   const pageSize = parseInt(searchParams.get('page_size') || '20', 10)
   const sort = searchParams.get('sort') || 'created_desc'
+
+  // Overview stats (total groups, active, users)
+  const { data: overview } = useQuery({
+    queryKey: ['admin', 'groups', 'overview'],
+    queryFn: () => getGroupsOverview(),
+  })
 
   // Fetch groups
   const { data, isLoading, error, refetch } = useGroupsList({
@@ -169,6 +177,46 @@ export function GroupsPage() {
           </div>
         }
       />
+
+      {/* Stats */}
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-blue-500">
+            <Building2 className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Total groups</p>
+            <p className="mt-1 text-lg font-bold text-text">
+              {overview != null ? overview.totalGroups : '—'}
+            </p>
+            <p className="mt-0.5 text-xs text-text-muted">All groups you can access</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-emerald-500">
+            <CheckCircle className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Active groups</p>
+            <p className="mt-1 text-lg font-bold text-text">
+              {overview != null ? overview.activeGroups : '—'}
+            </p>
+            <p className="mt-0.5 text-xs text-text-muted">Status = active</p>
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="shrink-0 rounded-lg bg-surface-2 p-2 text-slate-400">
+            <Users className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Total users</p>
+            <p className="mt-1 text-lg font-bold text-text">
+              {overview != null ? overview.totalUsers : '—'}
+            </p>
+            <p className="mt-0.5 text-xs text-text-muted">Users in these groups</p>
+          </div>
+        </Card>
+      </div>
 
       {/* Filters */}
       <div className="sticky top-0 z-10 bg-surface-1 border-b border-border p-4 space-y-3">

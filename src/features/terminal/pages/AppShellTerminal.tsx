@@ -96,6 +96,7 @@ export function AppShellTerminal() {
   const {
     setSymbols,
     setLoading,
+    setWatchlist,
     symbols,
     selectedSymbol,
     notificationPanelOpen,
@@ -118,7 +119,7 @@ export function AppShellTerminal() {
   const { accountSummary } = useAccountSummary()
   const marginCall = useMarginCall(accountSummary ?? null)
 
-  // Load terminal preferences from server once (non-blocking; store already has localStorage values for first paint)
+  // Load terminal preferences from server once (chart options + favourite symbols)
   useEffect(() => {
     if (!user?.id) return
     getTerminalPreferences()
@@ -128,11 +129,13 @@ export function AppShellTerminal() {
         setChartShowClosedPositionMarker(res.preferences.chartShowClosedPositionMarker)
         setEnableLiquidationEmail(res.preferences.enableLiquidationEmail ?? false)
         setEnableSlTpEmail(res.preferences.enableSlTpEmail ?? false)
+        const ids = res.preferences.favouriteSymbolIds ?? []
+        if (ids.length > 0) setWatchlist(ids)
       })
       .catch(() => {
         // Keep current store values (localStorage or defaults); optional: toast could go here
       })
-  }, [user?.id, setChartShowAskPrice, setChartShowPositionMarker, setChartShowClosedPositionMarker, setEnableLiquidationEmail, setEnableSlTpEmail])
+  }, [user?.id, setChartShowAskPrice, setChartShowPositionMarker, setChartShowClosedPositionMarker, setEnableLiquidationEmail, setEnableSlTpEmail, setWatchlist])
 
   // Fetch enabled symbols (page_size large enough to load all, e.g. BTC/ETH on later pages with default sort)
   const { data: symbolsData, isLoading } = useSymbolsList({

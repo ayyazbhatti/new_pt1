@@ -9,7 +9,7 @@ import { cn } from '@/shared/utils'
 const QUOTE_CATEGORIES = [
   { id: 'all' as const, label: 'All' },
   { id: 'crypto' as const, label: 'Cryptocurrencies' },
-  { id: 'watchlist' as const, label: 'Watchlist' },
+  { id: 'watchlist' as const, label: 'Favourite' },
 ] as const
 
 type QuoteCategoryId = (typeof QUOTE_CATEGORIES)[number]['id']

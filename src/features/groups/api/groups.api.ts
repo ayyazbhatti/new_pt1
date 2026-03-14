@@ -55,6 +55,24 @@ function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
   return out
 }
 
+export interface GroupsOverview {
+  totalGroups: number
+  activeGroups: number
+  totalUsers: number
+}
+
+export async function getGroupsOverview(): Promise<GroupsOverview> {
+  const response = await http<GroupsOverview>(
+    '/api/admin/groups/overview',
+    { method: 'GET' }
+  )
+  return {
+    totalGroups: response.totalGroups ?? 0,
+    activeGroups: response.activeGroups ?? 0,
+    totalUsers: response.totalUsers ?? 0,
+  }
+}
+
 export async function listGroups(params?: ListGroupsParams): Promise<ListGroupsResponse> {
   const queryParams = new URLSearchParams()
   if (params?.search) queryParams.append('search', params.search)

@@ -208,6 +208,54 @@ impl AdminGroupsService {
         Ok((groups, total))
     }
 
+    /// Overview counts for the groups page: total groups, active groups, total users (in those groups).
+    /// When `allowed_group_ids` is None (e.g. super_admin), counts all groups and all users in any group.
+    pub async fn groups_overview(
+        &self,
+        allowed_group_ids: Option<&[Uuid]>,
+    ) -> anyhow::Result<(i64, i64, i64)> {
+        if let Some(ids) = allowed_group_ids {
+            if ids.is_empty() {
+                return Ok((0, 0, 0));
+            }
+        }
+
+        let (total_groups, active_groups, total_users) = if let Some(ids) = allowed_group_ids {
+            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_groups WHERE id = ANY($1)")
+                .bind(ids)
+                .fetch_one(&self.pool)
+                .await?;
+            let active: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM user_groups WHERE id = ANY($1) AND status = 'active'",
+            )
+                .bind(ids)
+                .fetch_one(&self.pool)
+                .await?;
+            let users: i64 = sqlx::query_scalar(
+                r#"SELECT COUNT(*) FROM users WHERE group_id = ANY($1) AND deleted_at IS NULL AND role NOT IN ('admin', 'super_admin')"#,
+            )
+                .bind(ids)
+                .fetch_one(&self.pool)
+                .await?;
+            (total, active, users)
+        } else {
+            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_groups")
+                .fetch_one(&self.pool)
+                .await?;
+            let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_groups WHERE status = 'active'")
+                .fetch_one(&self.pool)
+                .await?;
+            let users: i64 = sqlx::query_scalar(
+                r#"SELECT COUNT(*) FROM users WHERE group_id IS NOT NULL AND deleted_at IS NULL AND role NOT IN ('admin', 'super_admin')"#,
+            )
+                .fetch_one(&self.pool)
+                .await?;
+            (total, active, users)
+        };
+
+        Ok((total_groups, active_groups, total_users))
+    }
+
     async fn list_groups_full(
         &self,
         search: Option<&str>,
