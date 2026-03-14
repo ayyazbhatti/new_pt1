@@ -482,6 +482,15 @@ async fn list_profiles(
         list
     };
 
+    // Hide Full Access profile from non–super-admins
+    let list: Vec<_> = if claims.role == "super_admin" {
+        list
+    } else {
+        list.into_iter()
+            .filter(|(p, _)| !p.name.eq_ignore_ascii_case(FULL_ACCESS_PROFILE_NAME))
+            .collect()
+    };
+
     let profile_ids: Vec<Uuid> = list.iter().map(|(p, _)| p.id).collect();
     let tag_map = get_permission_profile_tag_ids(&pool, &profile_ids).await;
 
@@ -576,6 +585,19 @@ async fn get_profile(
             }),
         ));
     };
+
+    // Full Access profile is only visible to super_admin
+    if claims.role != "super_admin" && p.name.eq_ignore_ascii_case(FULL_ACCESS_PROFILE_NAME) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Permission profile not found".to_string(),
+                },
+            }),
+        ));
+    }
 
     let tag_ids = get_permission_profile_tag_ids(&pool, &[id]).await.remove(&id).unwrap_or_default();
 
