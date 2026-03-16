@@ -87,8 +87,13 @@ export function UserCallProvider() {
             })
             .catch(console.error)
         }
-        if (pc) applyOffer(pc)
-        else pendingOfferRef.current = { call_id: e.call_id, sdp: e.sdp }
+        // Only apply offer (and send answer) after we have added our mic tracks to pc.
+        // Otherwise the answer would have no senders and admin would never hear the user.
+        if (pc && localStreamRef.current) {
+          applyOffer(pc)
+        } else {
+          pendingOfferRef.current = { call_id: e.call_id, sdp: e.sdp }
+        }
       } else if (t === 'call.webrtc.ice') {
         const e = event as { type: 'call.webrtc.ice'; call_id: string; candidate: string }
         const pc = pcRef.current
