@@ -33,11 +33,7 @@ services:
   nats:
     image: nats:latest
     command: ["-js", "-m", "8222"]
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+    # No healthcheck: official image is minimal (no wget/curl). Dependents use service_started.
     restart: unless-stopped
 
   migrations:
@@ -45,7 +41,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    env_file: deploy/.env.production
+    env_file: .env.production
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
@@ -64,6 +60,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.backend
     image: newpt-auth:latest
+    env_file: .env.production
     command: ["/app/auth-service"]
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/newpt
@@ -72,28 +69,44 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_ISSUER: ${JWT_ISSUER:-newpt}
       PORT: 3000
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    volumes:
+      - ./stats:/host-stats:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      nats: { condition: service_healthy }
+      nats: { condition: service_started }
       migrations: { condition: service_completed_successfully }
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   ws-gateway:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.backend
     image: newpt-auth:latest
+    env_file: .env.production
     command: ["/app/ws-gateway"]
     environment:
       WS_PORT: 3003
       HTTP_PORT: 9002
       REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
       JWT_SECRET: ${JWT_SECRET}
       JWT_ISSUER: ${JWT_ISSUER:-newpt}
     depends_on:
       redis: { condition: service_healthy }
+      nats: { condition: service_started }
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   data-provider:
     build:
@@ -108,8 +121,13 @@ services:
       NATS_URL: nats://nats:4222
     depends_on:
       redis: { condition: service_healthy }
-      nats: { condition: service_healthy }
+      nats: { condition: service_started }
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   order-engine:
     build:
@@ -121,9 +139,16 @@ services:
       PORT: 3002
       REDIS_URL: redis://redis:6379
       NATS_URL: nats://nats:4222
+      RUST_LOG: info
+      LOG_TO_FILE: "0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     depends_on:
       redis: { condition: service_healthy }
-      nats: { condition: service_healthy }
+      nats: { condition: service_started }
     restart: unless-stopped
 
   core-api:
@@ -140,15 +165,20 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      nats: { condition: service_healthy }
+      nats: { condition: service_started }
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   frontend:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.frontend
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       - auth
       - ws-gateway

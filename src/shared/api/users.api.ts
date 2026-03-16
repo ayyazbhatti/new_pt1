@@ -33,6 +33,7 @@ export interface ListUsersParams {
   search?: string
   status?: string
   group_id?: string
+  country?: string
 }
 
 export interface ListUsersResponse {
@@ -49,6 +50,7 @@ export async function listUsers(params?: ListUsersParams): Promise<ListUsersResp
   if (params?.search) queryParams.append('search', params.search.trim())
   if (params?.status && params.status !== 'all') queryParams.append('status', params.status)
   if (params?.group_id && params.group_id !== 'all') queryParams.append('group_id', params.group_id)
+  if (params?.country && params.country !== 'all') queryParams.append('country', params.country.trim())
 
   const queryString = queryParams.toString()
   const endpoint = `/api/auth/users${queryString ? `?${queryString}` : ''}`

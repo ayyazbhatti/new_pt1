@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react'
-import { Menu, X, Search } from 'lucide-react'
+import { Menu, X, Search, Star } from 'lucide-react'
 import { useTerminalStore } from '../store/terminalStore'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
 import { PriceDisplay } from './PriceDisplay'
 import { cn } from '@/shared/utils'
+import { toast } from '@/shared/components/common'
+import { updateTerminalPreferences } from '../api/preferences.api'
 
 const QUOTE_CATEGORIES = [
   { id: 'all' as const, label: 'All' },
@@ -33,10 +35,11 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
     getFilteredSymbols,
     symbols: allSymbols,
     setSelectedSymbol,
-    searchQuery,
     setSearchQuery,
+    searchQuery,
     setActiveTab,
     watchlist,
+    toggleWatchlist,
     selectedSymbol,
     isLoading,
   } = useTerminalStore()
@@ -159,17 +162,43 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
         ) : (
           <ul className="divide-y divide-white/5">
             {symbols.map((symbol) => (
-              <li key={symbol.id}>
+              <li
+                key={symbol.id}
+                className={cn(
+                  'flex items-center w-full px-4 py-3.5 gap-2 hover:bg-white/5 active:bg-white/10 transition-colors',
+                  selectedSymbol?.id === symbol.id && 'bg-accent/10'
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const wasInList = watchlist.has(symbol.id)
+                    toggleWatchlist(symbol.id)
+                    const nextIds = Array.from(useTerminalStore.getState().watchlist)
+                    updateTerminalPreferences({ favouriteSymbolIds: nextIds }).catch(() =>
+                      toast.error('Failed to save favourites')
+                    )
+                    toast.success(wasInList ? 'Removed from favourites' : 'Added to favourites')
+                  }}
+                  className="p-1.5 shrink-0 rounded-lg hover:bg-white/10 active:scale-95 transition-all"
+                  aria-label={watchlist.has(symbol.id) ? 'Remove from favourites' : 'Add to favourites'}
+                >
+                  <Star
+                    className={cn(
+                      'h-4 w-4 transition-all',
+                      watchlist.has(symbol.id)
+                        ? 'fill-warning text-warning'
+                        : 'text-text-muted/50'
+                    )}
+                  />
+                </button>
                 <button
                   type="button"
                   onClick={() => {
                     setSelectedSymbol(symbol)
                     onClose()
                   }}
-                  className={cn(
-                    'w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-white/5 active:bg-white/10 transition-colors',
-                    selectedSymbol?.id === symbol.id && 'bg-accent/10'
-                  )}
+                  className="flex-1 flex items-center justify-between gap-3 min-w-0 text-left"
                 >
                   <span className="text-sm font-bold text-text truncate">
                     {symbol.code}

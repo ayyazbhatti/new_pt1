@@ -100,16 +100,17 @@ export function useWebSocket(options: UseWebSocketOptions) {
         console.log('🔌 [useWebSocket] wsRef.current in onopen:', !!wsRef.current, '| ReadyState:', wsRef.current?.readyState)
         
         // Authenticate first if we have a token (for ws-gateway)
-        // Get token from auth store
+        // Send raw JWT only (strip any "Bearer " prefix so gateway accepts it)
+        const rawToken = (t: string) => t.replace(/^\s*Bearer\s+/i, '').trim()
         const authState = useAuthStore.getState()
-        const token = authState.accessToken
-        
+        const token = authState.accessToken ? rawToken(authState.accessToken) : null
+
         if (token) {
           console.log('🔐 [useWebSocket] Authenticating with token from store...')
           try {
             ws.send(JSON.stringify({
               type: 'auth',
-              token: token,
+              token,
             }))
             console.log('✅ [useWebSocket] Auth message sent')
           } catch (error) {
@@ -117,13 +118,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
           }
         } else {
           // Fallback to localStorage
-          const localToken = localStorage.getItem('token') || sessionStorage.getItem('token')
-          if (localToken) {
+          const localToken = (localStorage.getItem('token') || sessionStorage.getItem('token') || '').trim()
+          const tokenToSend = localToken ? rawToken(localToken) : ''
+          if (tokenToSend) {
             console.log('🔐 [useWebSocket] Authenticating with token from localStorage...')
             try {
               ws.send(JSON.stringify({
                 type: 'auth',
-                token: localToken,
+                token: tokenToSend,
               }))
               console.log('✅ [useWebSocket] Auth message sent')
             } catch (error) {
@@ -169,11 +171,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
             return
           }
           
-          // Handle auth error
+          // Handle auth error (e.g. InvalidSignature = token from old session or wrong secret)
           if (data.type === 'auth_error') {
             console.error('❌ [useWebSocket] Authentication failed:', (data as any).error)
             isAuthenticatedRef.current = false
-            // Don't return - might still receive messages
+            const errMsg = String((data as any).error || '')
+            if (errMsg.includes('InvalidSignature') || errMsg.includes('Invalid token')) {
+              useAuthStore.getState().logout()
+            }
           }
           
           // Handle welcome message

@@ -42,6 +42,7 @@ use routes::admin_trading::create_admin_trading_router;
 use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
 use routes::admin_call_records::create_admin_call_records_router;
+use routes::admin_system::create_admin_system_router;
 use routes::symbols::create_symbols_router;
 use routes::finance::create_finance_router;
 use routes::admin_settings::create_admin_settings_router;
@@ -133,15 +134,26 @@ async fn main() -> anyhow::Result<()> {
 
     // Create CORS layer
     // Note: Cannot use allow_origin(Any/*) with allow_credentials(true)
-    // So we specify exact origins for development
+    // Allow localhost (dev) + CORS_ORIGINS env (e.g. http://178.104.49.76 or https://app.example.com)
     use tower_http::cors::AllowOrigin;
+    let extra_origins: Vec<String> = env::var("CORS_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(|origin, _parts| {
-            // Allow localhost origins for development
-            origin.to_str().map(|s| 
-                s.starts_with("http://localhost:") || 
-                s.starts_with("http://127.0.0.1:")
-            ).unwrap_or(false)
+        .allow_origin(AllowOrigin::predicate(move |origin, _parts| {
+            let s = match origin.to_str() {
+                Ok(x) => x,
+                Err(_) => return false,
+            };
+            // Development
+            if s.starts_with("http://localhost:") || s.starts_with("http://127.0.0.1:") {
+                return true;
+            }
+            // Production (from env, e.g. CORS_ORIGINS=http://178.104.49.76,https://app.example.com)
+            extra_origins.iter().any(|allowed| s == allowed.as_str())
         }))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([
@@ -220,8 +232,9 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/audit", create_admin_audit_router(pool.clone()))
-        .nest("/api/admin/call-records", create_admin_call_records_router(pool.clone()))
-        .nest("/api/admin/groups", create_admin_groups_router(pool.clone()).layer(axum::extract::Extension(deposits_state.redis.clone())))
+.nest("/api/admin/call-records", create_admin_call_records_router(pool.clone()))
+.nest("/api/admin/system", create_admin_system_router(pool.clone()))
+.nest("/api/admin/groups", create_admin_groups_router(pool.clone()).layer(axum::extract::Extension(deposits_state.redis.clone())))
         .nest("/api/admin/group-tags", routes::admin_groups::create_admin_group_tags_router(pool.clone()))
         .nest("/api/admin/leverage-profiles", create_admin_leverage_profiles_router(pool.clone()))
         .nest("/api/admin/leverage-profile-tags", routes::admin_leverage_profiles::create_admin_leverage_profile_tags_router(pool.clone()))
@@ -395,7 +408,7 @@ async fn main() -> anyhow::Result<()> {
 
         loop {
             match client_pubsub.get_async_connection().await {
-                Ok(mut conn) => {
+                Ok(conn) => {
                     let mut pubsub = conn.into_pubsub();
                     if let Err(e) = pubsub.subscribe("wallet:balance:request").await {
                         error!("Failed to subscribe to wallet:balance:request: {}", e);

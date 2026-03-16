@@ -34,6 +34,8 @@ export type UserGroup = {
   /** User who created this group (manager/admin/super_admin). */
   createdByUserId?: string | null
   createdByEmail?: string | null
+  /** When true, users in this group do not see the Leverage section in the trading terminal. */
+  hideLeverageInTerminal?: boolean
 }
 
 export interface ListGroupsParams {
@@ -61,6 +63,8 @@ export interface CreateGroupPayload {
   stop_out_level?: number | null
   /** Optional. Custom slug (3-20 alphanumeric). If empty, backend auto-generates 5-7 chars. */
   signup_slug?: string | null
+  /** When true, users in this group do not see the Leverage section in the trading terminal. */
+  hide_leverage_in_terminal?: boolean | null
 }
 
 export interface UpdateGroupPayload extends CreateGroupPayload {}

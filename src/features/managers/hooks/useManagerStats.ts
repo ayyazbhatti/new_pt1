@@ -111,7 +111,7 @@ function buildStatsFromApis(
   transactions: Transaction[],
   positions: AdminPosition[],
   orders: AdminOrder[]
-): Omit<ManagerStats, 'manager' | 'isOtherManagerUnsupported' | 'recentDeposits' | 'recentWithdrawals' | 'topTraders' | 'topLosers'> {
+): Omit<ManagerStats, 'manager' | 'isOtherManagerUnsupported'> {
   const deposits = transactions.filter((t) => t.type === 'deposit')
   const withdrawals = transactions.filter((t) => t.type === 'withdrawal')
   const depositVolume = deposits.reduce((s, t) => s + Math.abs(t.netAmount ?? t.amount ?? 0), 0)
@@ -278,7 +278,6 @@ export function useManagerStats(managerId: string | undefined) {
   })
 
   const selfQueries = useQueries({
-    queryKey: [...MANAGER_STATS_QUERY_KEY, 'self', managerId, managerUserId],
     queries: [
       {
         queryKey: ['users', { page: 1, page_size: 1 }],

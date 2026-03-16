@@ -1,10 +1,10 @@
 // Extended types for admin trading with full API support
 
-export type OrderStatus = 'pending' | 'filled' | 'cancelled' | 'rejected' | 'open'
+export type OrderStatus = 'pending' | 'PENDING' | 'filled' | 'cancelled' | 'rejected' | 'open'
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT'
 export type PositionSide = 'LONG' | 'SHORT'
-export type PositionStatus = 'OPEN' | 'CLOSED' | 'LIQUIDATED'
+export type PositionStatus = 'OPEN' | 'open' | 'CLOSED' | 'LIQUIDATED'
 export type TimeInForce = 'GTC' | 'IOC' | 'FOK'
 
 export interface AdminOrder {

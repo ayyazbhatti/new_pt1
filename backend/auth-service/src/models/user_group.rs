@@ -21,5 +21,7 @@ pub struct UserGroup {
     pub updated_at: DateTime<Utc>,
     /// User (manager/admin/super_admin) who created this group.
     pub created_by_user_id: Option<Uuid>,
+    /// When true, users in this group do not see the Leverage section in the trading terminal right panel.
+    pub hide_leverage_in_terminal: bool,
 }
 

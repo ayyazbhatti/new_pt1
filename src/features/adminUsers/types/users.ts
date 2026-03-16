@@ -1,4 +1,14 @@
 export type UserStatus = 'active' | 'disabled' | 'suspended'
+
+export interface UserFilters {
+  search: string
+  status: string
+  kycStatus: string
+  group: string
+  country: string
+  balanceMin: string
+  balanceMax: string
+}
 export type KYCStatus = 'none' | 'pending' | 'verified' | 'rejected'
 export type RiskFlag = 'normal' | 'high' | 'review'
 export type AccountType = 'hedging' | 'netting'

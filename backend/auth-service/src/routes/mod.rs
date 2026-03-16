@@ -20,6 +20,7 @@ pub mod admin_positions;
 pub mod admin_audit;
 pub mod admin_bulk;
 pub mod admin_call_records;
+pub mod admin_system;
 pub mod symbols;
 pub mod finance;
 pub mod kyc;

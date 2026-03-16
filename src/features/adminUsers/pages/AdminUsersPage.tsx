@@ -9,6 +9,7 @@ import { toast } from '@/shared/components/common'
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { listUsers, UserResponse } from '@/shared/api/users.api'
+import { listGroups } from '@/features/groups/api/groups.api'
 import { useDebouncedValue } from '@/shared/hooks/useDebounce'
 import { User } from '../types/users'
 import { useAdminAccountSummaries } from '../hooks/useAdminAccountSummaries'
@@ -86,6 +87,7 @@ export function AdminUsersPage() {
       debouncedSearch,
       filters.status,
       filters.group,
+      filters.country,
     ],
     queryFn: () =>
       listUsers({
@@ -94,9 +96,17 @@ export function AdminUsersPage() {
         search: debouncedSearch.trim() || undefined,
         status: filters.status !== 'all' ? filters.status : undefined,
         group_id: filters.group !== 'all' ? filters.group : undefined,
+        country: filters.country !== 'all' ? filters.country : undefined,
       }),
     placeholderData: keepPreviousData,
   })
+
+  // Groups for filter dropdown (real data from API)
+  const { data: groupsData } = useQuery({
+    queryKey: ['admin', 'groups', 'filter'],
+    queryFn: () => listGroups({ page: 1, page_size: 200 }),
+  })
+  const groupsForFilter = groupsData?.items ?? []
 
   const users = useMemo(
     () => (usersData?.items ?? []).map(mapUserResponse),
@@ -107,15 +117,16 @@ export function AdminUsersPage() {
   const currentPage = Math.min(page, totalPages)
 
   const [usersState, setUsersState] = useState<User[]>([])
+  // Always sync table from server response so filters (group, status, country, search) show correct data
   useEffect(() => {
-    if (users.length > 0) setUsersState(users)
+    setUsersState(users)
   }, [users])
 
   const userIds = useMemo(() => users.map((u) => u.id), [users])
   const { summaries } = useAdminAccountSummaries(userIds)
 
   const displayUsers = useMemo(() => {
-    const base = usersState.length > 0 ? usersState : users
+    const base = usersState
     return base.map((u) => {
       const s = summaries[u.id]
       const balance = s?.balance ?? u.balance
@@ -127,6 +138,23 @@ export function AdminUsersPage() {
     })
   }, [users, usersState, summaries])
 
+  // Client-side filters: KYC status and balance range (server doesn't support these yet)
+  const filteredDisplayUsers = useMemo(() => {
+    let list = displayUsers
+    if (filters.kycStatus !== 'all') {
+      list = list.filter((u) => u.kycStatus === filters.kycStatus)
+    }
+    const minBal = filters.balanceMin.trim() ? Number(filters.balanceMin) : null
+    const maxBal = filters.balanceMax.trim() ? Number(filters.balanceMax) : null
+    if (minBal != null && !Number.isNaN(minBal)) {
+      list = list.filter((u) => Number(u.balance) >= minBal)
+    }
+    if (maxBal != null && !Number.isNaN(maxBal)) {
+      list = list.filter((u) => Number(u.balance) <= maxBal)
+    }
+    return list
+  }, [displayUsers, filters.kycStatus, filters.balanceMin, filters.balanceMax])
+
   const handleUserUpdate = (userId: string, updates: Partial<User>) => {
     setUsersState((prev) =>
       prev.map((user) => (user.id === userId ? { ...user, ...updates } : user))
@@ -135,7 +163,7 @@ export function AdminUsersPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [filters.status, filters.group])
+  }, [filters.status, filters.group, filters.country, filters.kycStatus, filters.balanceMin, filters.balanceMax])
 
   const handlePageChange = (newPage: number) => {
     setPage(Math.max(1, Math.min(newPage, totalPages)))
@@ -219,7 +247,7 @@ export function AdminUsersPage() {
           </div>
         }
       />
-      <UserKPICards users={displayUsers} totalFromServer={total} />
+      <UserKPICards users={filteredDisplayUsers} totalFromServer={total} />
       <div className="relative">
         {isFetching && (
           <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded bg-surface-2/90 px-2 py-1 text-xs text-text-muted">
@@ -227,10 +255,10 @@ export function AdminUsersPage() {
             Updating…
           </div>
         )}
-        <UserFiltersBar filters={filters} onFilterChange={setFilters} />
+        <UserFiltersBar filters={filters} onFilterChange={setFilters} groups={groupsForFilter} />
       </div>
       <UsersTable
-        users={displayUsers}
+        users={filteredDisplayUsers}
         onUserUpdate={handleUserUpdate}
         pagination={{
           page: currentPage,

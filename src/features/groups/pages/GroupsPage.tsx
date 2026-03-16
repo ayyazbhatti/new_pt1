@@ -63,16 +63,14 @@ export function GroupsPage() {
   const availablePriceProfiles =
     (data?.availablePriceProfiles?.length ? data.availablePriceProfiles : (markupProfiles ?? []).map((p) => ({ id: normalizeId(p.id), name: p.name }))) ?? []
 
-  // Local state for groups list (same pattern as Admin Users page) so price profile dropdown updates immediately
+  // Local state for groups list; always sync from API so filters (search, status, sort) show correct data
   const [groupsState, setGroupsState] = useState<UserGroup[]>([])
   const groupsFromApi = data?.items ?? []
   useEffect(() => {
-    if (groupsFromApi.length > 0) {
-      setGroupsState(groupsFromApi)
-    }
-  }, [data?.items])
+    setGroupsState(groupsFromApi)
+  }, [groupsFromApi])
 
-  const displayGroups = groupsState.length > 0 ? groupsState : groupsFromApi
+  const displayGroups = groupsState
 
   const handleGroupUpdate = (
     groupId: string,
@@ -89,8 +87,11 @@ export function GroupsPage() {
   })
   const allTags = tagsList.map((t) => ({ id: t.id, name: t.name }))
 
-  // Debounced search
+  // Debounced search; keep search input in sync with URL (e.g. after Clear or initial load with ?search=)
   const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => {
+    setSearchInput(search)
+  }, [search])
   const debouncedSetSearch = useMemo(
     () =>
       debounce((value: string) => {

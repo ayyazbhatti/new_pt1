@@ -250,8 +250,8 @@ async fn main() -> Result<()> {
                         health_clone.record_message();
                         info!("📨 Received JetStream push message on subject: {} (total: {})", 
                               msg.subject, health_clone.get_stats().0);
-                        
-                        // Process the message
+                        // Capture reply for ack (required for Explicit ack policy so message is not redelivered)
+                        let reply_subject = msg.reply.clone();
                         match order_handler_clone.handle_place_order(msg).await {
                             Ok(_) => {
                                 info!("✅ Successfully processed order from push consumer");
@@ -259,6 +259,11 @@ async fn main() -> Result<()> {
                             Err(e) => {
                                 health_clone.record_error();
                                 error!("❌ Error handling place order: {}", e);
+                            }
+                        }
+                        if let Some(reply) = reply_subject {
+                            if let Err(e) = nats_client_for_deliver.publish(reply, "".into()).await {
+                                error!("Failed to ack JetStream message: {}", e);
                             }
                         }
                     }

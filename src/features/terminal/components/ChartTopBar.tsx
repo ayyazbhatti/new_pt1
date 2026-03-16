@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import type { LucideIcon } from 'lucide-react'
 import { Settings, Maximize2, Minimize2, Pencil, X, SlidersHorizontal, ZoomIn, ZoomOut, SkipForward, Trash2, Download, BarChart2, BarChart3, Magnet, Minus, ArrowUpRight, Square, Tag, Type, DollarSign, Layers, Hash, CircleOff, TrendingUp, Activity, Gauge, Percent, Move, Anchor } from 'lucide-react'
 import { Segmented } from '@/shared/ui'
@@ -111,7 +112,32 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
   const indicatorRef = useRef<HTMLDivElement>(null)
   const drawRef = useRef<HTMLDivElement>(null)
   const magnetRef = useRef<HTMLDivElement>(null)
+  const indicatorDropdownRef = useRef<HTMLDivElement>(null)
+  const drawDropdownRef = useRef<HTMLDivElement>(null)
+  const magnetDropdownRef = useRef<HTMLDivElement>(null)
+  const downloadDropdownRef = useRef<HTMLDivElement>(null)
+  const [indicatorRect, setIndicatorRect] = useState<DOMRect | null>(null)
+  const [drawRect, setDrawRect] = useState<DOMRect | null>(null)
+  const [magnetRect, setMagnetRect] = useState<DOMRect | null>(null)
+  const [downloadRect, setDownloadRect] = useState<DOMRect | null>(null)
   const availableIndicators = indicatorList.filter((n) => !indicators.some((i) => i.name === n))
+
+  useLayoutEffect(() => {
+    if (indicatorOpen) setIndicatorRect(indicatorRef.current?.getBoundingClientRect() ?? null)
+    else setIndicatorRect(null)
+  }, [indicatorOpen])
+  useLayoutEffect(() => {
+    if (drawOpen) setDrawRect(drawRef.current?.getBoundingClientRect() ?? null)
+    else setDrawRect(null)
+  }, [drawOpen])
+  useLayoutEffect(() => {
+    if (magnetOpen) setMagnetRect(magnetRef.current?.getBoundingClientRect() ?? null)
+    else setMagnetRect(null)
+  }, [magnetOpen])
+  useLayoutEffect(() => {
+    if (downloadOpen) setDownloadRect(downloadRef.current?.getBoundingClientRect() ?? null)
+    else setDownloadRect(null)
+  }, [downloadOpen])
 
   const closeAllDropdowns = () => {
     setDownloadOpen(false)
@@ -127,7 +153,11 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
         downloadRef.current?.contains(target) ||
         indicatorRef.current?.contains(target) ||
         drawRef.current?.contains(target) ||
-        magnetRef.current?.contains(target)
+        magnetRef.current?.contains(target) ||
+        indicatorDropdownRef.current?.contains(target) ||
+        drawDropdownRef.current?.contains(target) ||
+        magnetDropdownRef.current?.contains(target) ||
+        downloadDropdownRef.current?.contains(target)
       ) return
       closeAllDropdowns()
     }
@@ -189,29 +219,6 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             >
               <BarChart2 className="h-4 w-4 text-muted hover:text-text" />
             </button>
-            {indicatorOpen && (
-              <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-                <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Add indicator</div>
-                {availableIndicators.length === 0 ? (
-                  <div className="px-2.5 py-1.5 text-xs text-muted-foreground">None</div>
-                ) : (
-                  availableIndicators.map((name) => {
-                    const Icon = getIndicatorIcon(name)
-                    return (
-                      <button
-                        key={name}
-                        type="button"
-                        onClick={() => { onIndicatorAdd(name); setIndicatorOpen(false) }}
-                        className="flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs text-text hover:bg-surface-2"
-                      >
-                        <Icon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{name}</span>
-                      </button>
-                    )
-                  })
-                )}
-              </div>
-            )}
           </div>
           {indicators.length > 0 && (
             <div className="flex items-center gap-1 flex-nowrap shrink-0">
@@ -258,44 +265,12 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             >
               <Pencil className="h-4 w-4 text-muted hover:text-text" />
             </button>
-            {drawOpen && (
-              <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-                <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Draw</div>
-                <button type="button" onClick={() => { onDrawingToolChange(null); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', !drawingTool ? 'text-accent' : 'text-text')}>
-                  <CircleOff className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">None</span>
-                </button>
-                {overlayList.map((name) => {
-                  const Icon = getOverlayIcon(name)
-                  return (
-                    <button key={name} type="button" onClick={() => { onDrawingToolChange(name); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingTool === name ? 'text-accent' : 'text-text')}>
-                      <Icon className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{name}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
           </div>
           {onDrawingMagnetModeChange && (
             <div className="relative" ref={magnetRef}>
               <button type="button" onClick={() => setMagnetOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200" title="Magnet mode">
                 <Magnet className="h-4 w-4 text-muted hover:text-text" />
               </button>
-              {magnetOpen && (
-                <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[7rem] max-w-[10rem] rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-                  <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Magnet</div>
-                  {DRAWING_MAGNET_OPTIONS.map((opt) => {
-                    const Icon = MAGNET_ICONS[opt.value]
-                    return (
-                      <button key={opt.value} type="button" onClick={() => { onDrawingMagnetModeChange(opt.value); setMagnetOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingMagnetMode === opt.value ? 'text-accent' : 'text-text')}>
-                        <Icon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{opt.label}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
             </div>
           )}
           <div className="flex items-center gap-1 bg-surface-2/30 rounded-lg p-1">
@@ -313,16 +288,46 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
                 <button onClick={() => setDownloadOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200" title="Download chart">
                   <Download className="h-4 w-4 text-muted hover:text-text" />
                 </button>
-                {downloadOpen && (
-                  <div className="absolute right-0 top-full z-50 mt-1 min-w-[140px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-                    <button type="button" onClick={() => { onDownloadChart('png'); setDownloadOpen(false) }} className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2">Download as PNG</button>
-                    <button type="button" onClick={() => { onDownloadChart('jpeg'); setDownloadOpen(false) }} className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2">Download as JPEG</button>
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
+      {indicatorOpen && indicatorRect &&
+        createPortal(
+          <div ref={indicatorDropdownRef} className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]" style={{ position: 'fixed', left: indicatorRect.left, top: indicatorRect.bottom + 4 }}>
+            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Add indicator</div>
+            {availableIndicators.length === 0 ? <div className="px-2.5 py-1.5 text-xs text-muted-foreground">None</div> : availableIndicators.map((name) => {
+              const Icon = getIndicatorIcon(name)
+              return <button key={name} type="button" onClick={() => { onIndicatorAdd(name); setIndicatorOpen(false) }} className="flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs text-text hover:bg-surface-2"><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{name}</span></button>
+            })}
+          </div>,
+          document.body
+        )}
+      {drawOpen && drawRect &&
+        createPortal(
+          <div ref={drawDropdownRef} className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]" style={{ position: 'fixed', left: drawRect.left, top: drawRect.bottom + 4 }}>
+            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Draw</div>
+            <button type="button" onClick={() => { onDrawingToolChange(null); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', !drawingTool ? 'text-accent' : 'text-text')}><CircleOff className="h-3.5 w-3.5 shrink-0" /><span className="truncate">None</span></button>
+            {overlayList.map((name) => { const Icon = getOverlayIcon(name); return <button key={name} type="button" onClick={() => { onDrawingToolChange(name); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingTool === name ? 'text-accent' : 'text-text')}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{name}</span></button> })}
+          </div>,
+          document.body
+        )}
+      {magnetOpen && magnetRect && onDrawingMagnetModeChange &&
+        createPortal(
+          <div ref={magnetDropdownRef} className="w-max min-w-[7rem] max-w-[10rem] rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]" style={{ position: 'fixed', left: magnetRect.left, top: magnetRect.bottom + 4 }}>
+            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Magnet</div>
+            {DRAWING_MAGNET_OPTIONS.map((opt) => { const Icon = MAGNET_ICONS[opt.value]; return <button key={opt.value} type="button" onClick={() => { onDrawingMagnetModeChange(opt.value); setMagnetOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingMagnetMode === opt.value ? 'text-accent' : 'text-text')}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{opt.label}</span></button> })}
+          </div>,
+          document.body
+        )}
+      {downloadOpen && downloadRect && onDownloadChart &&
+        createPortal(
+          <div ref={downloadDropdownRef} className="min-w-[140px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]" style={{ position: 'fixed', left: downloadRect.right - 140, top: downloadRect.bottom + 4 }}>
+            <button type="button" onClick={() => { onDownloadChart('png'); setDownloadOpen(false) }} className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2">Download as PNG</button>
+            <button type="button" onClick={() => { onDownloadChart('jpeg'); setDownloadOpen(false) }} className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2">Download as JPEG</button>
+          </div>,
+          document.body
+        )}
       </div>
     )
   }
@@ -359,24 +364,6 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
           <button type="button" onClick={() => setIndicatorOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95" title="Add indicator">
             <BarChart2 className="h-4 w-4 text-muted hover:text-text" />
           </button>
-          {indicatorOpen && (
-            <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-              <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Add indicator</div>
-              {availableIndicators.length === 0 ? (
-                <div className="px-2.5 py-1.5 text-xs text-muted-foreground">None</div>
-              ) : (
-                availableIndicators.map((name) => {
-                  const Icon = getIndicatorIcon(name)
-                  return (
-                    <button key={name} type="button" onClick={() => { onIndicatorAdd(name); setIndicatorOpen(false) }} className="flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs text-text hover:bg-surface-2">
-                      <Icon className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{name}</span>
-                    </button>
-                  )
-                })
-              )}
-            </div>
-          )}
         </div>
         {indicators.length > 0 && (
           <div className="flex items-center gap-1 flex-nowrap shrink-0">
@@ -398,44 +385,12 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
           <button type="button" onClick={() => setDrawOpen((v) => !v)} className={cn('p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95', drawingTool && 'text-accent')} title="Draw">
             <Pencil className="h-4 w-4 text-muted hover:text-text" />
           </button>
-          {drawOpen && (
-            <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-              <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Draw</div>
-              <button type="button" onClick={() => { onDrawingToolChange(null); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', !drawingTool ? 'text-accent' : 'text-text')}>
-                <CircleOff className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">None</span>
-              </button>
-              {overlayList.map((name) => {
-                const Icon = getOverlayIcon(name)
-                return (
-                  <button key={name} type="button" onClick={() => { onDrawingToolChange(name); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingTool === name ? 'text-accent' : 'text-text')}>
-                    <Icon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{name}</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
         </div>
         {onDrawingMagnetModeChange && (
           <div className="relative" ref={magnetRef}>
             <button type="button" onClick={() => setMagnetOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95" title="Magnet mode">
               <Magnet className="h-4 w-4 text-muted hover:text-text" />
             </button>
-            {magnetOpen && (
-              <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[7rem] max-w-[10rem] rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-                <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Magnet</div>
-                {DRAWING_MAGNET_OPTIONS.map((opt) => {
-                  const Icon = MAGNET_ICONS[opt.value]
-                  return (
-                    <button key={opt.value} type="button" onClick={() => { onDrawingMagnetModeChange(opt.value); setMagnetOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingMagnetMode === opt.value ? 'text-accent' : 'text-text')}>
-                      <Icon className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{opt.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
           </div>
         )}
         <div className="flex items-center gap-1 bg-surface-2/30 rounded-lg p-1">
@@ -475,24 +430,6 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             >
               <Download className="h-4 w-4 text-muted hover:text-text" />
             </button>
-            {downloadOpen && onDownloadChart && (
-              <div className="absolute right-0 top-full z-50 mt-1 min-w-[140px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg">
-                <button
-                  type="button"
-                  onClick={() => { onDownloadChart('png'); setDownloadOpen(false) }}
-                  className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2"
-                >
-                  Download as PNG
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { onDownloadChart('jpeg'); setDownloadOpen(false) }}
-                  className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2"
-                >
-                  Download as JPEG
-                </button>
-              </div>
-            )}
           </div>
           <button
             onClick={onOpenSettings}
@@ -516,6 +453,86 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
           )}
         </button>
       )}
+      {indicatorOpen && indicatorRect &&
+        createPortal(
+          <div
+            ref={indicatorDropdownRef}
+            className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]"
+            style={{ position: 'fixed', left: indicatorRect.left, top: indicatorRect.bottom + 4 }}
+          >
+            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Add indicator</div>
+            {availableIndicators.length === 0 ? (
+              <div className="px-2.5 py-1.5 text-xs text-muted-foreground">None</div>
+            ) : (
+              availableIndicators.map((name) => {
+                const Icon = getIndicatorIcon(name)
+                return (
+                  <button key={name} type="button" onClick={() => { onIndicatorAdd(name); setIndicatorOpen(false) }} className="flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs text-text hover:bg-surface-2">
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{name}</span>
+                  </button>
+                )
+              })
+            )}
+          </div>,
+          document.body
+        )}
+      {drawOpen && drawRect &&
+        createPortal(
+          <div
+            ref={drawDropdownRef}
+            className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]"
+            style={{ position: 'fixed', left: drawRect.left, top: drawRect.bottom + 4 }}
+          >
+            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Draw</div>
+            <button type="button" onClick={() => { onDrawingToolChange(null); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', !drawingTool ? 'text-accent' : 'text-text')}>
+              <CircleOff className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">None</span>
+            </button>
+            {overlayList.map((name) => {
+              const Icon = getOverlayIcon(name)
+              return (
+                <button key={name} type="button" onClick={() => { onDrawingToolChange(name); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingTool === name ? 'text-accent' : 'text-text')}>
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{name}</span>
+                </button>
+              )
+            })}
+          </div>,
+          document.body
+        )}
+      {magnetOpen && magnetRect && onDrawingMagnetModeChange &&
+        createPortal(
+          <div
+            ref={magnetDropdownRef}
+            className="w-max min-w-[7rem] max-w-[10rem] rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]"
+            style={{ position: 'fixed', left: magnetRect.left, top: magnetRect.bottom + 4 }}
+          >
+            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Magnet</div>
+            {DRAWING_MAGNET_OPTIONS.map((opt) => {
+              const Icon = MAGNET_ICONS[opt.value]
+              return (
+                <button key={opt.value} type="button" onClick={() => { onDrawingMagnetModeChange(opt.value); setMagnetOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingMagnetMode === opt.value ? 'text-accent' : 'text-text')}>
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{opt.label}</span>
+                </button>
+              )
+            })}
+          </div>,
+          document.body
+        )}
+      {downloadOpen && downloadRect && onDownloadChart &&
+        createPortal(
+          <div
+            ref={downloadDropdownRef}
+            className="min-w-[140px] rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]"
+            style={{ position: 'fixed', left: downloadRect.right - 140, top: downloadRect.bottom + 4 }}
+          >
+            <button type="button" onClick={() => { onDownloadChart('png'); setDownloadOpen(false) }} className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2">Download as PNG</button>
+            <button type="button" onClick={() => { onDownloadChart('jpeg'); setDownloadOpen(false) }} className="w-full px-3 py-1.5 text-left text-sm text-text hover:bg-surface-2">Download as JPEG</button>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

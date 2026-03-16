@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(first_name, '') as first_name, COALESCE(last_name, '') as last_name, email, group_id, COALESCE(account_type, 'hedging') as \"account_type!\" FROM users WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "first_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "account_type!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "3b0a9a0c767115cb8825ead57e103966f892f290ee35694070eeafb380b7f353"
+}

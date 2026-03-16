@@ -293,7 +293,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   useEffect(() => {
     const wsUrl =
       import.meta.env.VITE_WS_URL ||
-      (import.meta.env.DEV ? `ws://${location.host}/ws?group=default` : 'ws://localhost:3003/ws?group=default')
+      (typeof location !== 'undefined'
+        ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?group=default`
+        : 'ws://localhost:3003/ws?group=default')
     let reconnectAttempts = 0
     const maxReconnectAttempts = 30
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null

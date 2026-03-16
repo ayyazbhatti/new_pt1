@@ -10,7 +10,6 @@ dist/
 .vscode/
 **/target/
 **/node_modules/
-deploy/
 docs/
 *.md
 .gitignore

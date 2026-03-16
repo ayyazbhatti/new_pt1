@@ -1,27 +1,18 @@
 import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Button } from '@/shared/ui/button'
-import { UserStatus, KYCStatus } from '../types/users'
-import { mockGroups } from '@/features/groups/mocks/groups.mock'
-
-export type UserFilters = {
-  search: string
-  status: string
-  kycStatus: string
-  group: string
-  country: string
-  balanceMin: string
-  balanceMax: string
-}
+import type { UserFilters } from '../types/users'
 
 interface UserFiltersBarProps {
   filters: UserFilters
   onFilterChange: (filters: UserFilters) => void
+  /** Groups for the Group dropdown (from API). When empty, only "All Groups" is shown. */
+  groups?: { id: string; name: string }[]
 }
 
 const countries = ['US', 'GB', 'CA', 'AU', 'DE', 'SG', 'FR', 'IT', 'ES', 'NL']
 
-export function UserFiltersBar({ filters, onFilterChange }: UserFiltersBarProps) {
+export function UserFiltersBar({ filters, onFilterChange, groups = [] }: UserFiltersBarProps) {
   const handleChange = (field: keyof typeof filters, value: string) => {
     onFilterChange({ ...filters, [field]: value })
   }
@@ -76,7 +67,7 @@ export function UserFiltersBar({ filters, onFilterChange }: UserFiltersBarProps)
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All Groups</SelectItem>
-          {mockGroups.map((g) => (
+          {groups.map((g) => (
             <SelectItem key={g.id} value={g.id}>
               {g.name}
             </SelectItem>

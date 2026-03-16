@@ -148,6 +148,9 @@ pub struct UserResponse {
     pub permission_profile_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<Vec<String>>,
+    /// When true, hide the Leverage section in the trading terminal (from user's group setting).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide_leverage_in_terminal: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -854,6 +857,7 @@ async fn register(
                 permission_profile_id: None,
                 permission_profile_name: None,
                 permissions: Some(vec![]),
+                hide_leverage_in_terminal: None,
             },
         }))
         }
@@ -941,6 +945,7 @@ async fn login(
                     permission_profile_id: user.permission_profile_id,
                     permission_profile_name,
                     permissions: Some(permissions),
+                    hide_leverage_in_terminal: None,
                 },
             }))
         }
@@ -1007,37 +1012,44 @@ async fn me(
 
     match service.get_user_by_id(claims.sub).await {
         Ok(user) => {
-            // Fetch group name and profile names if user has a group
-            let (group_name, price_profile_name, leverage_profile_name): (Option<String>, Option<String>, Option<String>) =
-                if let Some(group_id) = user.group_id {
-                    #[derive(sqlx::FromRow)]
-                    struct GroupProfileRow {
-                        group_name: Option<String>,
-                        price_profile_name: Option<String>,
-                        leverage_profile_name: Option<String>,
-                    }
-                    let row = sqlx::query_as::<_, GroupProfileRow>(
-                        r#"
-                        SELECT ug.name AS group_name, psp.name AS price_profile_name, lp.name AS leverage_profile_name
-                        FROM user_groups ug
-                        LEFT JOIN price_stream_profiles psp ON ug.default_price_profile_id = psp.id
-                        LEFT JOIN leverage_profiles lp ON ug.default_leverage_profile_id = lp.id
-                        WHERE ug.id = $1
-                        "#,
-                    )
-                    .bind(group_id)
-                    .fetch_optional(&pool)
-                    .await
-                    .ok()
-                    .flatten();
-                    (
-                        row.as_ref().and_then(|r| r.group_name.clone()),
-                        row.as_ref().and_then(|r| r.price_profile_name.clone()),
-                        row.as_ref().and_then(|r| r.leverage_profile_name.clone()),
-                    )
-                } else {
-                    (None, None, None)
-                };
+            // Fetch group name, profile names, and hide_leverage_in_terminal if user has a group
+            let (group_name, price_profile_name, leverage_profile_name, hide_leverage_in_terminal): (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<bool>,
+            ) = if let Some(group_id) = user.group_id {
+                #[derive(sqlx::FromRow)]
+                struct GroupProfileRow {
+                    group_name: Option<String>,
+                    price_profile_name: Option<String>,
+                    leverage_profile_name: Option<String>,
+                    hide_leverage_in_terminal: Option<bool>,
+                }
+                let row = sqlx::query_as::<_, GroupProfileRow>(
+                    r#"
+                    SELECT ug.name AS group_name, psp.name AS price_profile_name, lp.name AS leverage_profile_name,
+                           ug.hide_leverage_in_terminal
+                    FROM user_groups ug
+                    LEFT JOIN price_stream_profiles psp ON ug.default_price_profile_id = psp.id
+                    LEFT JOIN leverage_profiles lp ON ug.default_leverage_profile_id = lp.id
+                    WHERE ug.id = $1
+                    "#,
+                )
+                .bind(group_id)
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten();
+                (
+                    row.as_ref().and_then(|r| r.group_name.clone()),
+                    row.as_ref().and_then(|r| r.price_profile_name.clone()),
+                    row.as_ref().and_then(|r| r.leverage_profile_name.clone()),
+                    row.as_ref().and_then(|r| r.hide_leverage_in_terminal),
+                )
+            } else {
+                (None, None, None, None)
+            };
 
             let perm_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
             let permissions = perm_service
@@ -1079,6 +1091,7 @@ async fn me(
                 permission_profile_id: user.permission_profile_id,
                 permission_profile_name,
                 permissions: Some(permissions),
+                hide_leverage_in_terminal,
             }))
         },
         Err(e) => Err((
@@ -1353,6 +1366,7 @@ async fn update_me(
         permission_profile_id: user.permission_profile_id,
         permission_profile_name,
         permissions: Some(permissions),
+        hide_leverage_in_terminal: None,
     }))
 }
 
@@ -1669,9 +1683,10 @@ async fn list_users(
     let allowed_group_ids = resolve_allowed_group_ids_for_list_users(&pool, &claims).await?;
     let service = AuthService::new(pool.clone());
 
-    // Server-side pagination: page, page_size, search, status, group_id
+    // Server-side pagination: page, page_size, search, status, group_id, country
     let use_paginated = params.contains_key("page") || params.contains_key("page_size")
-        || params.contains_key("search") || params.contains_key("status") || params.contains_key("group_id");
+        || params.contains_key("search") || params.contains_key("status") || params.contains_key("group_id")
+        || params.contains_key("country");
 
     let group_id_param = params
         .get("group_id")
@@ -1687,12 +1702,14 @@ async fn list_users(
         let page_size = params.get("page_size").and_then(|s| s.parse::<i64>().ok()).unwrap_or(20);
         let search = params.get("search").map(|s| s.as_str());
         let status = params.get("status").map(|s| s.as_str());
+        let country = params.get("country").map(|s| s.as_str()).filter(|s| !s.is_empty());
 
         match service
             .list_users_paginated(
                 search,
                 status,
                 effective_group_id,
+                country,
                 page,
                 page_size,
                 allowed_group_ids.as_deref(),
@@ -1842,6 +1859,7 @@ async fn list_users(
                     permission_profile_id: u.permission_profile_id,
                     permission_profile_name,
                     permissions,
+                    hide_leverage_in_terminal: None,
                 });
             }
             Ok(Json(ListUsersResponse {

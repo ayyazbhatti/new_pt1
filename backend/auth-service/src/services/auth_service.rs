@@ -488,6 +488,7 @@ impl AuthService {
         search: Option<&str>,
         status: Option<&str>,
         group_id: Option<Uuid>,
+        country: Option<&str>,
         page: i64,
         page_size: i64,
         allowed_group_ids: Option<&[Uuid]>,
@@ -507,6 +508,7 @@ impl AuthService {
         let status_filter: Option<String> = status
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty() && ["active", "disabled", "suspended"].contains(&s.as_str()));
+        let country_filter: Option<&str> = country.map(|s| s.trim()).filter(|s| !s.is_empty());
 
         let (total, users) = if let Some(ids) = allowed_group_ids {
             let total_row: (i64,) = sqlx::query_as(
@@ -514,9 +516,10 @@ impl AuthService {
                 SELECT COUNT(*)::bigint FROM users
                 WHERE deleted_at IS NULL
                   AND group_id = ANY($1)
-                  AND (NOT $2::boolean OR (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3))
+                  AND (NOT $2::boolean OR (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3 OR id::text ILIKE $3))
                   AND ($4::text IS NULL OR status::text = $4)
                   AND ($5::uuid IS NULL OR group_id = $5)
+                  AND ($6::text IS NULL OR country = $6)
                 "#,
             )
             .bind(ids)
@@ -524,6 +527,7 @@ impl AuthService {
             .bind(search_pattern.as_deref().unwrap_or("%"))
             .bind(status_filter.as_deref())
             .bind(group_id)
+            .bind(country_filter)
             .fetch_one(&self.pool)
             .await?;
             let users = sqlx::query_as::<_, User>(
@@ -531,11 +535,12 @@ impl AuthService {
                 SELECT * FROM users
                 WHERE deleted_at IS NULL
                   AND group_id = ANY($1)
-                  AND (NOT $2::boolean OR (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3))
+                  AND (NOT $2::boolean OR (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3 OR id::text ILIKE $3))
                   AND ($4::text IS NULL OR status::text = $4)
                   AND ($5::uuid IS NULL OR group_id = $5)
+                  AND ($6::text IS NULL OR country = $6)
                 ORDER BY created_at DESC
-                LIMIT $6 OFFSET $7
+                LIMIT $7 OFFSET $8
                 "#,
             )
             .bind(ids)
@@ -543,6 +548,7 @@ impl AuthService {
             .bind(search_pattern.as_deref().unwrap_or("%"))
             .bind(status_filter.as_deref())
             .bind(group_id)
+            .bind(country_filter)
             .bind(page_size)
             .bind(offset)
             .fetch_all(&self.pool)
@@ -553,32 +559,36 @@ impl AuthService {
                 r#"
                 SELECT COUNT(*)::bigint FROM users
                 WHERE deleted_at IS NULL
-                  AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
+                  AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2 OR id::text ILIKE $2))
                   AND ($3::text IS NULL OR status::text = $3)
                   AND ($4::uuid IS NULL OR group_id = $4)
+                  AND ($5::text IS NULL OR country = $5)
                 "#,
             )
             .bind(has_search)
             .bind(search_pattern.as_deref().unwrap_or("%"))
             .bind(status_filter.as_deref())
             .bind(group_id)
+            .bind(country_filter)
             .fetch_one(&self.pool)
             .await?;
             let users = sqlx::query_as::<_, User>(
                 r#"
                 SELECT * FROM users
                 WHERE deleted_at IS NULL
-                  AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2))
+                  AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2 OR id::text ILIKE $2))
                   AND ($3::text IS NULL OR status::text = $3)
                   AND ($4::uuid IS NULL OR group_id = $4)
+                  AND ($5::text IS NULL OR country = $5)
                 ORDER BY created_at DESC
-                LIMIT $5 OFFSET $6
+                LIMIT $6 OFFSET $7
                 "#,
             )
             .bind(has_search)
             .bind(search_pattern.as_deref().unwrap_or("%"))
             .bind(status_filter.as_deref())
             .bind(group_id)
+            .bind(country_filter)
             .bind(page_size)
             .bind(offset)
             .fetch_all(&self.pool)

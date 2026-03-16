@@ -3,8 +3,9 @@
  * Use this when the user is authenticated so they receive their group's markup.
  */
 function getGatewayPriceWsUrl(): string {
-  if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV && typeof location !== 'undefined') {
-    return `ws://${location.host}/ws?group=default`
+  if (typeof location !== 'undefined') {
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${protocol}://${location.host}/ws?group=default`
   }
   return 'ws://localhost:3003/ws?group=default'
 }
@@ -29,7 +30,11 @@ type TickListener = (tick: PriceTick) => void
 
 /** True when URL is the gateway (port 8090/3003 or same-origin /ws proxy). Use gateway protocol (type + auth). */
 function isGatewayUrl(url: string): boolean {
-  return /[:/]8090[/?]/.test(url) || /[:/]3003[/?]/.test(url) || url.includes('localhost:8090') || url.includes('localhost:3003') || (url.includes('/ws') && typeof location !== 'undefined' && url.startsWith('ws://' + location.host))
+  if (typeof location !== 'undefined' && url.includes('/ws')) {
+    const prefix = location.protocol === 'https:' ? 'wss://' : 'ws://'
+    if (url.startsWith(prefix + location.host)) return true
+  }
+  return /[:/]8090[/?]/.test(url) || /[:/]3003[/?]/.test(url) || url.includes('localhost:8090') || url.includes('localhost:3003')
 }
 
 /** Interval (ms) for sending ping to gateway to keep connection from being marked stale (server timeout default 300s). */
@@ -70,10 +75,15 @@ class PriceStreamClient {
     this.url = url ?? (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_DATA_PROVIDER_WS_URL) ?? getDefaultPriceWsUrl()
   }
 
+  /** Strip "Bearer " prefix so ws-gateway receives raw JWT. */
+  private static rawToken(t: string): string {
+    return t.replace(/^\s*Bearer\s+/i, '').trim()
+  }
+
   setAuthToken(token: string | null): void {
     const hadToken = !!this.authToken
-    this.authToken = token
-    if (!token) {
+    this.authToken = token ? PriceStreamClient.rawToken(token) : null
+    if (!this.authToken) {
       this.authenticated = false
       return
     }

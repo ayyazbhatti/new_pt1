@@ -79,7 +79,9 @@ impl Config {
             },
             auth: AuthConfig {
                 jwt_secret: env::var("JWT_SECRET")
-                    .expect("JWT_SECRET must be set"),
+                    .expect("JWT_SECRET must be set")
+                    .trim()
+                    .to_string(),
                 jwt_issuer: env::var("JWT_ISSUER")
                     .unwrap_or_else(|_| "newpt".to_string()),
             },

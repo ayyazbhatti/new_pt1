@@ -39,6 +39,8 @@ pub struct UpdateGroupRequest {
     pub stop_out_level: Option<f64>,
     /// Optional signup link slug. Set to null/empty to clear; 3-20 alphanumeric to set.
     pub signup_slug: Option<Option<String>>,
+    /// When true, users in this group do not see the Leverage section in the trading terminal.
+    pub hide_leverage_in_terminal: Option<bool>,
 }
 
 /// Reference to a profile (price stream or leverage) for embedding in group list.
@@ -479,6 +481,7 @@ async fn update_group(
             payload.margin_call_level,
             payload.stop_out_level,
             payload.signup_slug.as_ref().map(|o| o.as_deref()),
+            payload.hide_leverage_in_terminal,
         )
         .await
     {

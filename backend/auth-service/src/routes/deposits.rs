@@ -392,14 +392,14 @@ pub struct WalletBalanceResponse {
 pub async fn calculate_wallet_balance(pool: &PgPool, user_id: Uuid) -> anyhow::Result<WalletBalanceResponse> {
     // Calculate balance using formula: Balance = deposits - withdrawals + total realised net profit and loss
     
-    // 1. Calculate total deposits (completed deposits only)
+    // 1. Calculate total deposits (completed or approved)
     let total_deposits: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
         r#"
         SELECT COALESCE(SUM(net_amount), 0)
         FROM transactions
         WHERE user_id = $1 
           AND type = 'deposit'::transaction_type
-          AND status = 'completed'::transaction_status
+          AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status)
           AND currency = 'USD'
         "#
     )
@@ -879,7 +879,7 @@ pub(crate) async fn get_free_margin_from_db_fast(pool: &PgPool, user_id: Uuid) -
     let balance: Option<Decimal> = sqlx::query_scalar(
         r#"
         SELECT
-            (SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE user_id = $1 AND type = 'deposit'::transaction_type AND status = 'completed'::transaction_status AND currency = 'USD')
+            (SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE user_id = $1 AND type = 'deposit'::transaction_type AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status) AND currency = 'USD')
             - (SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND currency = 'USD')
             + (SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status)
         "#,
@@ -1703,7 +1703,7 @@ pub(crate) async fn compute_account_summary_inner(
         SELECT COALESCE(SUM(net_amount), 0)
         FROM transactions
         WHERE user_id = $1 AND type = 'deposit'::transaction_type
-          AND status = 'completed'::transaction_status AND currency = 'USD'
+          AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status) AND currency = 'USD'
         "#,
     )
     .bind(user_id)

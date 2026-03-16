@@ -139,8 +139,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           return
         }
       }
-      // Fallback to first symbol if no saved symbol found
-      set({ selectedSymbol: symbols[0] })
+      // Default to BTCUSDT for new users; otherwise first symbol
+      const btcSymbol = symbols.find(
+        (s) =>
+          s.code === 'BTCUSDT' ||
+          s.code === 'BTC-USD' ||
+          s.code?.toUpperCase().replace(/-/g, '') === 'BTCUSDT'
+      )
+      set({ selectedSymbol: btcSymbol ?? symbols[0] })
     }
   },
   setLoading: (loading) => set({ isLoading: loading }),

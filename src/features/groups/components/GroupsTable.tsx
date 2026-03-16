@@ -15,7 +15,7 @@ import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { cn } from '@/shared/utils'
 import { formatDistanceToNow } from 'date-fns'
-import { useUpdateGroupPriceProfile } from '../hooks/useGroups'
+import { useUpdateGroupPriceProfile, useUpdateGroup } from '../hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
 import { Checkbox } from '@/shared/ui/Checkbox'
 import { setGroupTags } from '../api/groups.api'
@@ -50,6 +50,7 @@ export function GroupsTable({
   const canPriceProfile = useCanAccess('groups:price_profile')
   const canTags = useCanAccess('groups:tags')
   const updatePriceProfile = useUpdateGroupPriceProfile()
+  const updateGroup = useUpdateGroup()
   const [viewingGroup, setViewingGroup] = useState<UserGroup | null>(null)
   const [editingGroup, setEditingGroup] = useState<UserGroup | null>(null)
   const [deletingGroup, setDeletingGroup] = useState<UserGroup | null>(null)
@@ -127,6 +128,40 @@ export function GroupsTable({
       cell: ({ row }) => {
         const v = row.original.stopOutLevel
         return <span className="text-text">{v != null ? `${v}%` : '—'}</span>
+      },
+    },
+    {
+      id: 'hideLeverage',
+      header: 'Hide leverage',
+      cell: ({ row }) => {
+        const group = row.original
+        const checked = group.hideLeverageInTerminal ?? false
+        const isUpdating = updateGroup.isPending && updateGroup.variables?.id === group.id
+        return (
+          <div onClick={(e) => e.stopPropagation()} className="flex items-center">
+            <Checkbox
+              checked={checked}
+              onChange={() => {
+                if (!canEditGroups || isUpdating) return
+                updateGroup.mutate({
+                  id: group.id,
+                  payload: {
+                    name: group.name,
+                    description: group.description ?? null,
+                    status: group.status,
+                    margin_call_level: group.marginCallLevel ?? null,
+                    stop_out_level: group.stopOutLevel ?? null,
+                    signup_slug: group.signupSlug ?? null,
+                    hide_leverage_in_terminal: !checked,
+                  },
+                })
+              }}
+              disabled={!canEditGroups || isUpdating}
+              title={checked ? 'Leverage hidden in terminal for this group' : 'Show leverage in terminal'}
+            />
+            {isUpdating && <Spinner className="h-3.5 w-3.5 ml-1 shrink-0" />}
+          </div>
+        )
       },
     },
     {
@@ -349,7 +384,7 @@ export function GroupsTable({
         )
       },
     },
-  ], [canTags, openTagsGroupId, updatingTagsGroupId, canEditGroups, canDeleteGroups, canSymbolSettings, canPriceProfile, groups, availablePriceProfiles, allTags])
+  ], [canTags, openTagsGroupId, updatingTagsGroupId, canEditGroups, canDeleteGroups, canSymbolSettings, canPriceProfile, groups, availablePriceProfiles, allTags, updateGroup])
 
   const openTagsGroup = openTagsGroupId ? groups.find((g) => g.id === openTagsGroupId) : null
   const openTagsTagIds = openTagsGroup?.tagIds ?? []

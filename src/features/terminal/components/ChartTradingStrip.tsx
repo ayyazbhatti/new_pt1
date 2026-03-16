@@ -1,22 +1,31 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { TrendingUp, TrendingDown, Loader2, Minus, Plus } from 'lucide-react'
 import { Button, Input } from '@/shared/ui'
+import { useQuery } from '@tanstack/react-query'
 import { useTerminalStore } from '../store'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useWebSocketState } from '@/shared/ws/wsHooks'
 import { toast } from '@/shared/components/common'
 import { placeOrder } from '../api/orders.api'
+import { me, getSymbolLeverage, getEffectiveLeverage } from '@/shared/api/auth.api'
 
 /**
- * Compact Buy/Sell strip for the Chart tab: size input + Buy + Sell (MARKET orders).
- * Reuses same placeOrder API and validation as the Trade panel.
+ * Compact Buy/Sell strip for the Chart tab: size input + Est. Margin + Buy + Sell (MARKET orders).
+ * Reuses same placeOrder API and Est. Margin calculation as the Trade panel.
  */
 export function ChartTradingStrip() {
   const { selectedSymbol } = useTerminalStore()
   const { accountSummary } = useAccountSummary()
   const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
   const wsState = useWebSocketState()
+
+  const { data: meData } = useQuery({ queryKey: ['auth', 'me'], queryFn: me })
+  const { data: symbolLeverage } = useQuery({
+    queryKey: ['auth', 'symbolLeverage', selectedSymbol?.code],
+    queryFn: () => getSymbolLeverage(selectedSymbol!.code),
+    enabled: !!selectedSymbol?.code,
+  })
 
   const [size, setSize] = useState('0.01')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -25,9 +34,27 @@ export function ChartTradingStrip() {
   const wsConnected = wsState === 'authenticated'
   const price = selectedSymbol?.numericPrice ?? 0
   const sizeNum = parseFloat(size) || 0
-  const notional = sizeNum * price
+  const quoteValue = sizeNum * price
   const freeMargin = accountSummary?.freeMargin ?? 0
-  const insufficientFreeMargin = notional > 0 && notional > freeMargin
+
+  // Est. Margin: same formula as Trade panel (RightTradingPanel costBreakdown.margin)
+  const estMargin = useMemo(() => {
+    if (!selectedSymbol || quoteValue <= 0) return 0
+    const effectiveLeverage = getEffectiveLeverage(
+      quoteValue,
+      symbolLeverage?.tiers ?? null,
+      meData?.minLeverage,
+      meData?.maxLeverage,
+      50
+    )
+    return effectiveLeverage > 0 ? quoteValue / effectiveLeverage : quoteValue * 0.02
+  }, [selectedSymbol, quoteValue, symbolLeverage?.tiers, meData?.minLeverage, meData?.maxLeverage])
+
+  const estMarginFormatted = selectedSymbol && (sizeNum > 0 || estMargin > 0)
+    ? `$${estMargin.toFixed(2)}`
+    : '$0.00'
+
+  const insufficientFreeMargin = estMargin > 0 && estMargin > freeMargin
 
   const step = 0.01
   const minSize = 0.001
@@ -85,7 +112,7 @@ export function ChartTradingStrip() {
             placeholder="0.01"
             value={size}
             onChange={(e) => setSize(e.target.value)}
-            className="h-9 text-sm border-0 rounded-none bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 flex-1 min-w-0"
+            className="h-9 text-sm border-0 rounded-none bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 flex-1 min-w-0 w-0"
             disabled={!selectedSymbol}
           />
           <div className="flex flex-row shrink-0 h-9">
@@ -109,6 +136,14 @@ export function ChartTradingStrip() {
             </button>
           </div>
         </div>
+        <Input
+          type="text"
+          readOnly
+          value={estMarginFormatted}
+          className="h-9 w-20 shrink-0 text-sm text-right bg-surface-2/80 border border-border rounded-md text-text cursor-default"
+          tabIndex={-1}
+          aria-label="Estimated margin"
+        />
       </div>
       <div className="flex items-center gap-2">
         <Button

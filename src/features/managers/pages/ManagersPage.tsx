@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
 import { useModalStore } from '@/app/store'
 import { useCanAccess } from '@/shared/utils/permissions'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
 import { listTags } from '@/features/tags/api/tags.api'
 import {
@@ -20,30 +21,66 @@ import { CreateManagerModal } from '../modals/CreateManagerModal'
 import { Download, UserPlus } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 
+function debounce<T extends (...args: any[]) => void>(func: T, wait: number) {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  const debounced = (...args: Parameters<T>) => {
+    if (timeout) clearTimeout(timeout)
+    timeout = setTimeout(() => func(...args), wait)
+  }
+  debounced.cancel = () => {
+    if (timeout) clearTimeout(timeout)
+  }
+  return debounced
+}
+
 const MANAGERS_QUERY_KEY = ['managers'] as const
 
 export function ManagersPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const closeModal = useModalStore((state) => state.closeModal)
   const openModal = useModalStore((state) => state.openModal)
   const queryClient = useQueryClient()
   const canCreateManager = useCanAccess('managers:create')
 
-  const [filters, setFilters] = useState({
-    search: '',
-    status: 'all',
-    permissionProfile: 'all',
-  })
+  const search = searchParams.get('search') || ''
+  const status = searchParams.get('status') || 'all'
+  const permissionProfile = searchParams.get('permission_profile') || 'all'
 
-  const listParams = useMemo(() => ({
-    ...(filters.status !== 'all' && { status: filters.status }),
-    ...(filters.permissionProfile !== 'all' && { permission_profile_id: filters.permissionProfile }),
-    ...(filters.search?.trim() && { search: filters.search.trim() }),
-  }), [filters])
+  const listParams = useMemo(
+    () => ({
+      ...(status !== 'all' && { status }),
+      ...(permissionProfile !== 'all' && { permission_profile_id: permissionProfile }),
+      ...(search?.trim() && { search: search.trim() }),
+    }),
+    [search, status, permissionProfile]
+  )
 
   const { data: managers = [], isLoading, error, refetch } = useQuery({
     queryKey: [...MANAGERS_QUERY_KEY, listParams],
     queryFn: () => listManagers(listParams),
+    placeholderData: keepPreviousData,
   })
+
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => {
+    setSearchInput(search)
+  }, [search])
+  const debouncedSetSearch = useMemo(
+    () =>
+      debounce((value: string) => {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev)
+          if (value.trim()) next.set('search', value.trim())
+          else next.delete('search')
+          return next
+        })
+      }, 300),
+    [setSearchParams]
+  )
+  useEffect(() => {
+    debouncedSetSearch(searchInput)
+    return () => debouncedSetSearch.cancel()
+  }, [searchInput, debouncedSetSearch])
 
   const createMutation = useMutation({
     mutationFn: createManager,
@@ -131,7 +168,20 @@ export function ManagersPage() {
     toast.success('Export functionality coming soon.')
   }
 
-  if (isLoading) {
+  const handleFilterChange = (newFilters: { search: string; status: string; permissionProfile: string }) => {
+    setSearchInput(newFilters.search)
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (!newFilters.search.trim()) next.delete('search')
+      if (newFilters.status !== 'all') next.set('status', newFilters.status)
+      else next.delete('status')
+      if (newFilters.permissionProfile !== 'all') next.set('permission_profile', newFilters.permissionProfile)
+      else next.delete('permission_profile')
+      return next
+    })
+  }
+
+  if (isLoading && managers.length === 0) {
     return (
       <ContentShell>
         <div className="flex items-center justify-center h-64">
@@ -183,8 +233,8 @@ export function ManagersPage() {
       />
       <ManagerKPICards managers={managers} />
       <ManagerFiltersBar
-        filters={filters}
-        onFilterChange={setFilters}
+        filters={{ search: searchInput, status, permissionProfile }}
+        onFilterChange={handleFilterChange}
         permissionProfileOptions={permissionProfileOptions}
       />
       <ManagersTable

@@ -18,6 +18,8 @@ use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::utils::permission_check;
 use crate::routes::scoped_access;
+use crate::routes::deposits::get_free_margin_from_db_fast;
+use redis::AsyncCommands;
 
 #[derive(Clone)]
 pub struct AdminTradingState {
@@ -614,7 +616,31 @@ async fn create_admin_order(
         )
     })?;
 
+    // Sync balance to Redis so order-engine validation sees sufficient balance
+    let free_margin = get_free_margin_from_db_fast(&pool, user_id).await.unwrap_or(rust_decimal::Decimal::from(100_000));
+    if let Ok(mut conn_bal) = admin_state.redis.get().await {
+        let balance_json = serde_json::json!({
+            "currency": "USD",
+            "available": free_margin.to_string(),
+            "locked": "0",
+            "equity": free_margin.to_string(),
+            "margin_used": "0",
+            "free_margin": free_margin.to_string(),
+            "updated_at": now.timestamp_millis()
+        });
+        let balance_key = format!("user:{}:balance", user_id);
+        if let Err(e) = conn_bal.set::<_, _, ()>(&balance_key, balance_json.to_string()).await {
+            tracing::warn!("Admin order: failed to sync balance to Redis: {}", e);
+        }
+    }
+
     info!("Publishing admin order to NATS: cmd.order.place, order_id={}, user_id={}, symbol={}", order_id, user_id, symbol_row.code);
+    // Publish to JetStream so order-engine (which uses JetStream consumer) receives the order
+    let js_context = async_nats::jetstream::new((*admin_state.nats).clone());
+    let payload_bytes = payload.clone();
+    if let Err(e) = js_context.publish("cmd.order.place".to_string(), payload_bytes.into()).await {
+        tracing::warn!("Admin order JetStream publish failed (order will still go via basic): {}", e);
+    }
     admin_state.nats.publish("cmd.order.place".to_string(), payload.into()).await
         .map_err(|e| {
             error!("Failed to publish to NATS: {}", e);

@@ -36,7 +36,7 @@ impl Claims {
 pub fn get_jwt_secret() -> String {
     const DEV_FALLBACK: &str = "dev-jwt-secret-key-change-in-production-minimum-32-characters-long";
     match env::var("JWT_SECRET") {
-        Ok(s) if !s.trim().is_empty() => s,
+        Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => {
             warn!("JWT_SECRET not set; using dev fallback. Set JWT_SECRET in production.");
             DEV_FALLBACK.to_string()

@@ -76,9 +76,14 @@ impl SltpHandler {
             }
         };
         
-        // Parse triggered positions
-        let triggered_list = triggered.as_array()
-            .context("SL/TP triggers result is not an array")?;
+        // Parse triggered positions (Lua cjson may encode empty table as {} or [])
+        let triggered_list = match triggered.as_array() {
+            Some(arr) => arr,
+            None => {
+                debug!("SL/TP triggers result is not an array (e.g. empty object), treating as no triggers");
+                return Ok(());
+            }
+        };
         
         if triggered_list.is_empty() {
             debug!("No SL/TP triggers for symbol {}", symbol);

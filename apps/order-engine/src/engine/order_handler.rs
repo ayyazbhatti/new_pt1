@@ -221,9 +221,11 @@ impl OrderHandler {
                     "ORDER_ACCEPTED"
                 );
                 
-                // For market orders, try immediate execution if tick exists for this group
+                // For market orders, try immediate execution if tick exists (exact group, or global tick as fallback)
                 if cmd.order_type == contracts::enums::OrderType::Market {
-                    if let Some(tick) = self.cache.get_last_tick(&cmd.symbol, cmd.group_id.as_deref()) {
+                    let tick = self.cache.get_last_tick(&cmd.symbol, cmd.group_id.as_deref())
+                        .or_else(|| self.cache.get_last_tick(&cmd.symbol, None));
+                    if let Some(tick) = tick {
                         let fill_price = match cmd.side {
                             contracts::enums::Side::Buy => tick.ask,
                             contracts::enums::Side::Sell => tick.bid,

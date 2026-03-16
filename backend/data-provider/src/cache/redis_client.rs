@@ -60,7 +60,7 @@ impl RedisClient {
 
     pub async fn publish_price_update(&self, channel: &str, message: &str) -> Result<()> {
         let mut conn = self.connection.write().await;
-        conn.publish(channel, message).await?;
+        conn.publish::<_, _, ()>(channel, message).await?;
         Ok(())
     }
 

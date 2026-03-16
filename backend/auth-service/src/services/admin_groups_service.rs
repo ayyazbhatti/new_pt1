@@ -87,6 +87,7 @@ impl From<UserGroupRowMinimal> for UserGroup {
             created_at: r.created_at,
             updated_at: r.updated_at,
             created_by_user_id: None,
+            hide_leverage_in_terminal: false,
         }
     }
 }
@@ -106,6 +107,7 @@ impl From<UserGroupRowMinimalWithProfiles> for UserGroup {
             created_at: r.created_at,
             updated_at: r.updated_at,
             created_by_user_id: None,
+            hide_leverage_in_terminal: false,
         }
     }
 }
@@ -267,7 +269,8 @@ impl AdminGroupsService {
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, signup_slug, default_price_profile_id, \
-             default_leverage_profile_id, margin_call_level, stop_out_level, created_at, updated_at, created_by_user_id FROM user_groups WHERE 1=1"
+             default_leverage_profile_id, margin_call_level, stop_out_level, created_at, updated_at, created_by_user_id, \
+             hide_leverage_in_terminal FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
             if !search.is_empty() {
@@ -483,6 +486,7 @@ impl AdminGroupsService {
         margin_call_level: Option<f64>,
         stop_out_level: Option<f64>,
         signup_slug: Option<Option<&str>>,
+        hide_leverage_in_terminal: Option<bool>,
     ) -> anyhow::Result<UserGroup> {
         // Validate (same as create)
         if name.len() < 2 || name.len() > 40 {
@@ -506,6 +510,7 @@ impl AdminGroupsService {
                 margin_call_level = $5,
                 stop_out_level = $6,
                 signup_slug = $7,
+                hide_leverage_in_terminal = COALESCE($8, hide_leverage_in_terminal),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -518,6 +523,7 @@ impl AdminGroupsService {
         .bind(margin_call_level.and_then(rust_decimal::Decimal::from_f64))
         .bind(stop_out_level.and_then(rust_decimal::Decimal::from_f64))
         .bind(&slug_value)
+        .bind(hide_leverage_in_terminal)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Group not found"))?;

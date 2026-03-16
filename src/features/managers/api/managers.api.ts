@@ -1,6 +1,8 @@
 import { http } from '@/shared/api/http'
 import type { Manager } from '../types/manager'
 
+export type { Manager }
+
 /** Backend response shape (snake_case) */
 export interface ManagerDto {
   id: string

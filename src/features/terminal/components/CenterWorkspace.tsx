@@ -94,8 +94,8 @@ export function CenterWorkspace({ hideBottomDock = false, mobileShowOnlyBottomDo
 
   return (
     <div className="h-full min-h-0 overflow-hidden flex flex-col">
-      <div ref={chartFullscreenRef} className="flex flex-1 min-h-0 flex-col overflow-hidden bg-background">
-        <div className="shrink-0">
+      <div ref={chartFullscreenRef} className="flex flex-1 min-h-0 flex-col bg-background">
+        <div className="shrink-0 overflow-visible relative z-10">
           <ChartTopBar
             chartType={chartType}
             timeframe={timeframe}
@@ -126,7 +126,7 @@ export function CenterWorkspace({ hideBottomDock = false, mobileShowOnlyBottomDo
             onOpenSettings={() => setChartSettingsOpen(true)}
           />
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden min-h-[200px]">
+        <div className="flex-1 min-h-0 overflow-hidden min-h-[200px] relative z-0">
           <ChartPlaceholder
             ref={chartRef}
             chartType={chartType}

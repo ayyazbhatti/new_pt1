@@ -23,13 +23,12 @@ export function getApiErrorMessage(err: unknown): string {
 }
 
 // In dev: same-origin so Vite's custom api-proxy middleware forwards /api and /v1 to auth-service.
-// Set VITE_API_URL=http://localhost:3000 to bypass and call auth-service directly (CORS must allow your origin).
+// In production: same-origin (empty) so requests go to current domain and nginx proxies /api to auth.
+// Set VITE_API_URL to override (e.g. http://localhost:3000 for direct auth-service in dev).
 const API_BASE_URL =
   import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== ''
     ? import.meta.env.VITE_API_URL
-    : import.meta.env.DEV
-      ? ''
-      : 'http://localhost:3000'
+    : ''
 
 export function getApiBaseUrl(): string {
   return API_BASE_URL || (typeof location !== 'undefined' ? `${location.origin}` : '')

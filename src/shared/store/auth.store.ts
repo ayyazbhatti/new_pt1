@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { getAccessTokenExp, EXPIRY_BUFFER_SEC } from '@/shared/utils/jwt'
 
 export interface User {
   id: string
@@ -38,6 +39,8 @@ interface AuthState {
   hydrateFromStorage: () => Promise<void>
   refreshUser: () => Promise<void>
   refreshAccessToken: () => Promise<void>
+  /** Returns a valid access token (current or refreshed). Use before WebSocket auth. No polling. */
+  ensureValidAccessToken: () => Promise<string | null>
 }
 
 export interface RegisterData {
@@ -141,10 +144,24 @@ export const useAuthStore = create<AuthState>()(
           user: null,
           isAuthenticated: false,
         })
+        // Clear legacy token keys so WebSocket fallback never sends a stale token
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('token')
+          sessionStorage.removeItem('token')
+        }
       },
 
       setTokens: (accessToken: string, refreshToken: string) => {
         set({ accessToken, refreshToken })
+        // Re-auth WebSocket with new token when HTTP layer refreshed (e.g. after 401)
+        if (typeof window !== 'undefined') {
+          import('@/shared/ws/wsClient').then(({ wsClient }) => {
+            const state = wsClient.getState()
+            if (state === 'connected' || state === 'authenticated') {
+              wsClient.reauthenticate()
+            }
+          })
+        }
       },
 
       setImpersonationTokens: (accessToken: string, refreshToken: string) => {
@@ -240,6 +257,23 @@ export const useAuthStore = create<AuthState>()(
         } catch (error) {
           console.error('Failed to refresh access token:', error)
           throw error
+        }
+      },
+
+      ensureValidAccessToken: async (): Promise<string | null> => {
+        const state = get()
+        const token = state.accessToken
+        if (!token || !state.refreshToken) return token ?? null
+        const exp = getAccessTokenExp(token)
+        const nowSec = Math.floor(Date.now() / 1000)
+        if (exp !== null && exp > nowSec + EXPIRY_BUFFER_SEC) {
+          return token
+        }
+        try {
+          await get().refreshAccessToken()
+          return get().accessToken ?? null
+        } catch {
+          return token
         }
       },
     }),

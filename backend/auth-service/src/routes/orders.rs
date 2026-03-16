@@ -461,6 +461,30 @@ async fn place_order(
 
     info!("📤 Publishing order command to NATS: cmd.order.place, order_id={}, user_id={}, symbol={}, account_type={:?}",
           order_id, user_id, req.symbol, account_type);
+
+    // Sync balance to Redis so order-engine validation sees the same balance we validated
+    if let Ok(mut conn_bal) = orders_state.redis.get().await {
+        let summary_key = Keys::account_summary(user_id);
+        let equity_val: Option<String> = conn_bal.hget(&summary_key, "equity").await.ok().flatten();
+        let margin_used_val: Option<String> = conn_bal.hget(&summary_key, "margin_used").await.ok().flatten();
+        let free_margin_synced: String = conn_bal.hget(&summary_key, "free_margin").await.ok().flatten()
+            .unwrap_or_else(|| free_margin.to_string());
+        let equity = equity_val.as_deref().unwrap_or(&free_margin_synced);
+        let margin_used = margin_used_val.as_deref().unwrap_or("0");
+        let balance_json = serde_json::json!({
+            "currency": "USD",
+            "available": free_margin_synced,
+            "locked": "0",
+            "equity": equity,
+            "margin_used": margin_used,
+            "free_margin": free_margin_synced,
+            "updated_at": now.timestamp_millis()
+        });
+        let balance_key = format!("user:{}:balance", user_id);
+        if let Err(e) = conn_bal.set::<_, _, ()>(&balance_key, balance_json.to_string()).await {
+            warn!(order_id = %order_id, user_id = %user_id, error = %e, "Failed to sync balance to Redis for order-engine");
+        }
+    }
     
     // Try JetStream first, but ALWAYS also publish to basic pub/sub
     // This ensures order-engine receives messages even if JetStream consumer fails

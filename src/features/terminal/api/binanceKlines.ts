@@ -42,21 +42,28 @@ export function toBinanceInterval(span: number, type: string): string {
   return '1d'
 }
 
+/** Chunk size for on-demand loading (scroll back/forward). Binance max per request is 1000. */
+export const BARS_PER_CHUNK = 500
+
 /**
  * Fetch historical klines from Binance (no auth required).
+ * @param endTime - If set, return bars with open time <= endTime (for loading older data when scrolling back).
+ * @param startTime - If set, return bars with open time >= startTime (for loading newer data when scrolling forward).
  */
 export async function fetchBinanceKlines(
   binanceSymbol: string,
   interval: string,
-  limit = 500,
-  endTime?: number
+  limit = BARS_PER_CHUNK,
+  endTime?: number,
+  startTime?: number
 ): Promise<KLineBar[]> {
   const params = new URLSearchParams({
     symbol: binanceSymbol,
     interval,
-    limit: String(limit),
+    limit: String(Math.min(limit, 1000)),
   })
   if (endTime != null) params.set('endTime', String(endTime))
+  if (startTime != null) params.set('startTime', String(startTime))
 
   const url = `${BINANCE_KLINES}?${params.toString()}`
   const res = await fetch(url)

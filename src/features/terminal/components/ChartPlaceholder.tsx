@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { init, dispose } from 'klinecharts'
 import type { KLineData } from 'klinecharts'
 import { useTerminalStore } from '../store'
-import { fetchBinanceKlines, toBinanceSymbol, toBinanceInterval, type KLineBar } from '../api/binanceKlines'
+import { fetchBinanceKlines, toBinanceSymbol, toBinanceInterval, BARS_PER_CHUNK, type KLineBar } from '../api/binanceKlines'
 import { timeframeToPeriod, chartTypeToCandleType } from '../utils/chartOptions'
 import type { ChartTypeKey, TimeframeKey } from '../utils/chartOptions'
 import type { ChartSettings, DrawingMagnetMode } from '../utils/chartOptions'
@@ -159,12 +159,36 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     chart.setPeriod(timeframeToPeriod(timeframe))
 
     chart.setDataLoader({
-      getBars: async ({ callback, period }) => {
+      getBars: async (params: { type: string; callback: (data: KLineData[], more?: { backward?: boolean; forward?: boolean }) => void; period: { span: number; type: string } }) => {
+        const { type, callback, period } = params
+        const timestamp = (params as { timestamp?: number }).timestamp ?? null
         setLoadingRef.current?.(true)
         const symbol = binanceSymbolRef.current
         const interval = toBinanceInterval(period.span, period.type)
+        const hideLoader = () => setLoadingRef.current?.(false)
+        const done = () => {
+          chartRef.current?.resize()
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => setTimeout(hideLoader, 250))
+          })
+        }
         try {
-          const bars = await fetchBinanceKlines(symbol, interval, 500)
+          let bars: KLineBar[]
+          // Library: 'forward' = user at LEFT edge → load OLDER data (prepended, so it appears on the left).
+          // Library: 'backward' = user at RIGHT edge → load NEWER data (appended).
+          if (type === 'init') {
+            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK)
+          } else if (type === 'forward' && timestamp != null) {
+            // Oldest bar timestamp: fetch bars before it (older), library will prepend → correct left-side history
+            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK, timestamp - 1)
+          } else if (type === 'backward' && timestamp != null) {
+            // Newest bar timestamp: fetch bars after it (newer), library will append
+            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK, undefined, timestamp + 1)
+          } else {
+            callback([], { backward: false, forward: false })
+            done()
+            return
+          }
           const klineData: KLineData[] = bars.map((b) => ({
             timestamp: b.timestamp,
             open: b.open,
@@ -173,30 +197,27 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
             close: b.close,
             volume: b.volume,
           }))
-          if (klineData.length > 0) {
+          if (type === 'init' && klineData.length > 0) {
             lastBarRef.current = bars[bars.length - 1]
             currentBarRef.current = { ...lastBarRef.current }
             lastBarDataIndexRef.current = klineData.length - 1
+            chartDataRef.current = klineData
+            setChartDataLengthRef.current?.(klineData.length)
           }
-          chartDataRef.current = klineData
-          setChartDataLengthRef.current?.(klineData.length)
-          callback(klineData)
+          const hasMoreForward = type === 'forward' ? bars.length >= BARS_PER_CHUNK : type === 'init'
+          const hasMoreBackward = type === 'backward' ? bars.length >= BARS_PER_CHUNK : true
+          callback(klineData, { backward: hasMoreBackward, forward: hasMoreForward })
         } catch (err) {
-          console.warn('Binance klines failed, using empty data:', err)
-          lastBarRef.current = null
-          currentBarRef.current = null
-          chartDataRef.current = []
-          setChartDataLengthRef.current?.(0)
-          callback([])
+          console.warn('Binance klines failed:', err)
+          if (type === 'init') {
+            lastBarRef.current = null
+            currentBarRef.current = null
+            chartDataRef.current = []
+            setChartDataLengthRef.current?.(0)
+          }
+          callback([], { backward: false, forward: false })
         }
-        // Hide loader only after chart has painted: force layout then wait for paint + short delay
-        const hideLoader = () => setLoadingRef.current?.(false)
-        chartRef.current?.resize()
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            setTimeout(hideLoader, 250)
-          })
-        })
+        done()
       },
       subscribeBar: ({ callback }) => {
         subscribeBarCallbackRef.current = callback

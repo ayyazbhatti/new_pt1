@@ -41,6 +41,8 @@ export interface UserResponse {
   permission_profile_name?: string | null
   permissions?: string[] | null
   referral_code?: string | null
+  /** When true, hide the Leverage section in the trading terminal (from user's group). */
+  hide_leverage_in_terminal?: boolean | null
 }
 
 export async function login(email: string, password: string): Promise<{
@@ -170,6 +172,8 @@ export interface MeResponse {
   permissionProfileId?: string | null
   permissionProfileName?: string | null
   referralCode?: string | null
+  /** When true, hide the Leverage section in the trading terminal (from user's group). */
+  hideLeverageInTerminal?: boolean
 }
 
 export async function me(): Promise<MeResponse> {
@@ -269,6 +273,7 @@ function mapUserResponseToMe(response: UserResponse): MeResponse {
     permissionProfileId: response.permission_profile_id ?? undefined,
     permissionProfileName: response.permission_profile_name ?? undefined,
     referralCode: response.referral_code ?? undefined,
+    hideLeverageInTerminal: response.hide_leverage_in_terminal ?? undefined,
   }
 }
 

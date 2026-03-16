@@ -53,6 +53,18 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
 
   return (
     <div className="flex items-center gap-4 mb-6 flex-wrap">
+      <div className="flex-1 max-w-sm min-w-[200px]">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+          <Input
+            type="search"
+            placeholder="Search symbols..."
+            value={symbol}
+            onChange={(e) => handleChange('symbol', e.target.value)}
+            className="pl-10"
+          />
+        </div>
+      </div>
       <Select value={group} onValueChange={(value) => handleChange('group', value)}>
         <SelectTrigger className="w-[180px]">
           <SelectValue placeholder="Group" />
@@ -79,18 +91,6 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
           <SelectItem value="stocks">Stocks</SelectItem>
         </SelectContent>
       </Select>
-      <div className="flex-1 max-w-sm">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
-          <Input
-            type="search"
-            placeholder="Search symbols..."
-            value={symbol}
-            onChange={(e) => handleChange('symbol', e.target.value)}
-            className="pl-10"
-          />
-        </div>
-      </div>
       <Select value={status} onValueChange={(value) => handleChange('status', value)}>
         <SelectTrigger className="w-[180px]">
           <SelectValue placeholder="Status" />

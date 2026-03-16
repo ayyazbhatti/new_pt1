@@ -1,9 +1,18 @@
 import { useState } from 'react'
 import { ContentShell, PageHeader } from '@/shared/layout'
-import { BulkUserCreation } from '../components/BulkUserCreation'
+import { BulkUserCreation, BulkDepositSection, BulkPositionSection } from '../components'
 import { Users, DollarSign, TrendingUp } from 'lucide-react'
 
 type TabId = 'users' | 'deposit' | 'positions'
+
+const BULK_OPERATIONS_TAB_STORAGE_KEY = 'admin-bulk-operations-tab'
+
+function getStoredTab(): TabId {
+  if (typeof sessionStorage === 'undefined') return 'users'
+  const stored = sessionStorage.getItem(BULK_OPERATIONS_TAB_STORAGE_KEY)
+  if (stored === 'users' || stored === 'deposit' || stored === 'positions') return stored
+  return 'users'
+}
 
 const tabs: { id: TabId; label: string; icon: React.ElementType }[] = [
   { id: 'users', label: 'Bulk User Creation', icon: Users },
@@ -12,7 +21,7 @@ const tabs: { id: TabId; label: string; icon: React.ElementType }[] = [
 ]
 
 export function AdminBulkOperationsPage() {
-  const [activeTab, setActiveTab] = useState<TabId>('users')
+  const [activeTab, setActiveTab] = useState<TabId>(getStoredTab)
 
   return (
     <ContentShell className="space-y-4 sm:space-y-6">
@@ -27,7 +36,14 @@ export function AdminBulkOperationsPage() {
             <button
               key={id}
               type="button"
-              onClick={() => setActiveTab(id)}
+              onClick={() => {
+                setActiveTab(id)
+                try {
+                  sessionStorage.setItem(BULK_OPERATIONS_TAB_STORAGE_KEY, id)
+                } catch {
+                  // ignore
+                }
+              }}
               className={`flex items-center space-x-2 px-6 py-3 font-medium text-sm transition-colors border-b-2 ${
                 activeTab === id
                   ? 'text-accent border-accent'
@@ -43,16 +59,8 @@ export function AdminBulkOperationsPage() {
 
       <div className="rounded-lg border border-border bg-surface-2 p-4 sm:p-6">
         {activeTab === 'users' && <BulkUserCreation />}
-        {activeTab === 'deposit' && (
-          <div className="py-8 text-center text-sm text-text-muted">
-            Bulk Deposit — coming soon
-          </div>
-        )}
-        {activeTab === 'positions' && (
-          <div className="py-8 text-center text-sm text-text-muted">
-            Bulk Position Creation — coming soon
-          </div>
-        )}
+        {activeTab === 'deposit' && <BulkDepositSection />}
+        {activeTab === 'positions' && <BulkPositionSection />}
       </div>
     </ContentShell>
   )

@@ -1,0 +1,29 @@
+# Override for deploy-from-registry: use pre-built images instead of building on server.
+# Requires REGISTRY env (e.g. docker.io/username or ghcr.io/owner/repo).
+# Use: docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml pull
+#      docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml up -d
+
+services:
+  auth:
+    image: ${REGISTRY}/newpt-auth:latest
+    build: ~
+
+  ws-gateway:
+    image: ${REGISTRY}/newpt-auth:latest
+    build: ~
+
+  data-provider:
+    image: ${REGISTRY}/newpt-auth:latest
+    build: ~
+
+  order-engine:
+    image: ${REGISTRY}/newpt-auth:latest
+    build: ~
+
+  core-api:
+    image: ${REGISTRY}/newpt-auth:latest
+    build: ~
+
+  frontend:
+    image: ${REGISTRY}/newpt-frontend:latest
+    build: ~

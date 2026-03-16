@@ -40,9 +40,9 @@ class WebSocketClient {
         console.log('🔌 WebSocket opened, authenticating...')
         this.setState('connected')
         this.reconnectAttempts = 0
-        // Small delay to ensure connection is fully established
+        // Small delay to ensure connection is fully established; then ensure valid token (refresh if expired) and auth
         setTimeout(() => {
-          this.authenticate()
+          this.authenticateAsync()
         }, 100)
       }
 
@@ -267,20 +267,30 @@ class WebSocketClient {
     return this.isAuthenticated && this.state === 'authenticated' && this.ws?.readyState === WebSocket.OPEN
   }
 
-  private authenticate(): void {
-    const authState = useAuthStore.getState()
-    const token = authState.accessToken
-    
+  /** Strip "Bearer " prefix so ws-gateway receives raw JWT. */
+  private static rawToken(t: string): string {
+    return t.replace(/^\s*Bearer\s+/i, '').trim()
+  }
+
+  /** Ensure token valid (refresh if expired/expiring), then send auth. Used on connect/reconnect. */
+  private async authenticateAsync(): Promise<void> {
+    const token = await useAuthStore.getState().ensureValidAccessToken()
     if (!token) {
       console.warn('⚠️ No access token available for WebSocket authentication')
       return
     }
-    
-    console.log('🔐 Sending auth message with token:', token.substring(0, 20) + '...')
-    this.send({
-      type: 'auth',
-      token,
-    })
+    const raw = WebSocketClient.rawToken(token)
+    if (this.state !== 'connected' || this.ws?.readyState !== WebSocket.OPEN) return
+    console.log('🔐 Sending auth message with token:', raw.substring(0, 20) + '...')
+    this.ws.send(JSON.stringify({ type: 'auth', token: raw }))
+  }
+
+  /** Re-send auth with current (valid) token. Call after HTTP layer refreshes token so WS stays valid. */
+  async reauthenticate(): Promise<void> {
+    const token = await useAuthStore.getState().ensureValidAccessToken()
+    if (!token || this.ws?.readyState !== WebSocket.OPEN) return
+    const raw = WebSocketClient.rawToken(token)
+    this.ws.send(JSON.stringify({ type: 'auth', token: raw }))
   }
 
 
@@ -322,12 +332,11 @@ class WebSocketClient {
 
 // Singleton instance
 // @ts-ignore - Vite env types
-// In dev: use Vite proxy (same origin). Override with VITE_WS_URL if needed.
-// In dev we use Vite proxy (same origin → /ws → backend/ws-gateway on 3003). Default URL for direct connect.
+// Use same-origin in browser (dev: Vite proxies /ws; production: nginx proxies /ws). Use wss when page is HTTPS.
 const WS_URL =
   import.meta.env?.VITE_WS_URL ||
-  (import.meta.env.DEV && typeof location !== 'undefined'
-    ? `ws://${location.host}/ws?group=default`
+  (typeof location !== 'undefined'
+    ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?group=default`
     : 'ws://localhost:3003/ws?group=default')
 export const wsClient = new WebSocketClient(WS_URL)
 

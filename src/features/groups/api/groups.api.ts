@@ -39,6 +39,7 @@ function toCamelCase(obj: any): UserGroup {
     updatedAt: obj.updated_at,
     createdByUserId: obj.created_by_user_id ?? undefined,
     createdByEmail: obj.created_by_email ?? undefined,
+    hideLeverageInTerminal: obj.hide_leverage_in_terminal ?? undefined,
   }
 }
 
@@ -52,6 +53,7 @@ function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
     stop_out_level: payload.stop_out_level ?? null,
   }
   if ('signup_slug' in payload) out.signup_slug = payload.signup_slug ?? null
+  if ('hide_leverage_in_terminal' in payload) out.hide_leverage_in_terminal = payload.hide_leverage_in_terminal ?? null
   return out
 }
 

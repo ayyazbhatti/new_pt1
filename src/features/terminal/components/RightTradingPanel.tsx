@@ -33,6 +33,9 @@ import type { PromotionSlidePublic } from '../api/promotions.api'
 // Local storage key for trading panel state
 const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
 
+/** When true, only Units size mode is shown; Lots and Pip Position are hidden (set to false to show them again). */
+const SHOW_ONLY_UNITS_SIZE_MODE = true
+
 interface TradingPanelState {
   orderType: string
   sizeMode: 'units' | 'lots' | 'pipPosition'
@@ -592,10 +595,12 @@ export function RightTradingPanel() {
   useEffect(() => {
     const wsUrl =
       import.meta.env?.VITE_WS_URL ||
-      (import.meta.env.DEV ? `ws://${location.host}/ws?group=default` : 'ws://localhost:3003/ws?group=default')
+      (typeof location !== 'undefined'
+        ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?group=default`
+        : 'ws://localhost:3003/ws?group=default')
     const healthUrl = import.meta.env.DEV
       ? '/ws-health'
-      : wsUrl.replace(/^ws/, 'http').replace(/\/ws.*$/, '') + '/health'
+      : wsUrl.replace(/^wss?/, (m) => (m === 'wss' ? 'https' : 'http')).replace(/\/ws.*$/, '') + '/health'
 
     const measurePing = async () => {
       const start = performance.now()
@@ -679,11 +684,12 @@ export function RightTradingPanel() {
       return
     }
 
-    // Get base size in units based on current mode
+    // Get base size in units based on current mode (when only Units is shown, always use units)
+    const effectiveSizeMode = SHOW_ONLY_UNITS_SIZE_MODE ? 'units' : sizeMode
     let baseSize = 0
     let displaySize = ''
 
-    if (sizeMode === 'units') {
+    if (effectiveSizeMode === 'units') {
       const sizeNum = parseFloat(size)
       if (!sizeNum || sizeNum <= 0) {
         toast.error('Please enter a valid size')
@@ -696,7 +702,7 @@ export function RightTradingPanel() {
       displaySize = currency === selectedSymbol.quoteCurrency 
         ? `${size} ${selectedSymbol.quoteCurrency} (${baseSize.toFixed(8)} ${selectedSymbol.baseCurrency})`
         : `${size} ${selectedSymbol.baseCurrency}`
-    } else if (sizeMode === 'lots') {
+    } else if (effectiveSizeMode === 'lots') {
       const lotSizeNum = parseFloat(lotSize)
       if (!lotSizeNum || lotSizeNum <= 0) {
         toast.error('Please enter a valid lot size')
@@ -705,7 +711,7 @@ export function RightTradingPanel() {
       const normalizedLots = normalizeLotSize(lotSizeNum, symbolForCalc)
       baseSize = calculateUnitsFromLots(normalizedLots, symbolForCalc)
       displaySize = `${formatLotSize(normalizedLots, symbolForCalc)} lots (${formatUnits(baseSize, symbolForCalc)} units)`
-    } else if (sizeMode === 'pipPosition') {
+    } else if (effectiveSizeMode === 'pipPosition') {
       const pipPosNum = parseFloat(pipPosition)
       if (!pipPosNum || pipPosNum <= 0) {
         toast.error('Please enter a valid pip position')
@@ -765,11 +771,11 @@ export function RightTradingPanel() {
 
       // Reset form for market orders (keep limit orders for potential modifications)
       if (orderType === 'market') {
-        if (sizeMode === 'units') {
+        if (effectiveSizeMode === 'units') {
           setSize('0.003457')
-        } else if (sizeMode === 'lots') {
+        } else if (effectiveSizeMode === 'lots') {
           setLotSize('0.5')
-        } else if (sizeMode === 'pipPosition') {
+        } else if (effectiveSizeMode === 'pipPosition') {
           setPipPosition('5')
         }
         setStopLoss('')
@@ -974,7 +980,8 @@ export function RightTradingPanel() {
             </div>
           )}
 
-          {/* Size Mode Selector */}
+          {/* Size Mode Selector - hidden when only Units is shown */}
+          {!SHOW_ONLY_UNITS_SIZE_MODE && (
           <div className="mb-3">
             <label className="text-xs font-semibold text-muted uppercase tracking-wider mb-2 block">Size Mode</label>
             <Segmented
@@ -988,14 +995,15 @@ export function RightTradingPanel() {
               className="w-full"
             />
           </div>
+          )}
 
           {/* Size Input - Conditional based on mode */}
           <div className="mb-4">
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-muted uppercase tracking-wider">
-                {sizeMode === 'units' ? 'Size' : sizeMode === 'lots' ? 'Lot Size' : 'Pip Position'}
+                {SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units' ? 'Size' : sizeMode === 'lots' ? 'Lot Size' : 'Pip Position'}
               </label>
-              {sizeMode === 'units' && (
+              {(SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units') && (
                 <button
                   onClick={handleMaxSize}
                   className="text-xs font-bold text-accent hover:text-accent/80 transition-colors px-2 py-0.5 rounded hover:bg-accent/10"
@@ -1007,7 +1015,7 @@ export function RightTradingPanel() {
             </div>
 
             {/* Units Mode */}
-            {sizeMode === 'units' && (
+            {(SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units') && (
               <>
                 <div className="flex items-center gap-2">
                   <Input
@@ -1058,8 +1066,8 @@ export function RightTradingPanel() {
               </>
             )}
 
-            {/* Lots Mode */}
-            {sizeMode === 'lots' && (
+            {/* Lots Mode - hidden when SHOW_ONLY_UNITS_SIZE_MODE */}
+            {!SHOW_ONLY_UNITS_SIZE_MODE && sizeMode === 'lots' && (
               <>
                 <div className="flex items-center gap-2">
                   <Input
@@ -1094,8 +1102,8 @@ export function RightTradingPanel() {
               </>
             )}
 
-            {/* Pip Position Mode */}
-            {sizeMode === 'pipPosition' && (
+            {/* Pip Position Mode - hidden when SHOW_ONLY_UNITS_SIZE_MODE */}
+            {!SHOW_ONLY_UNITS_SIZE_MODE && sizeMode === 'pipPosition' && (
               <>
                 <div className="flex items-center gap-2">
                   <Input
@@ -1405,7 +1413,8 @@ export function RightTradingPanel() {
 
         {/* Leverage, Symbol Details, User - collapsibles */}
         <div className="border-b border-white/5">
-          {/* Leverage - collapsible (first) */}
+          {/* Leverage - collapsible (first); hidden when user's group has hide_leverage_in_terminal */}
+          {!meData?.hideLeverageInTerminal && (
           <div className="border-b border-white/5">
             <button
               onClick={() => setLeverageDetailsOpen(!leverageDetailsOpen)}
@@ -1508,6 +1517,7 @@ export function RightTradingPanel() {
               </div>
             )}
           </div>
+          )}
 
           {/* Symbol Details - collapsible (second) */}
           <div className="border-t border-white/5">

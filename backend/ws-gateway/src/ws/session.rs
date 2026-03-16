@@ -160,7 +160,9 @@ impl Session {
                         match client_msg {
                             ClientMessage::Auth { token } => {
                                 info!("Auth message received from connection {}, validating token...", conn_id);
-                                match jwt_auth.validate_token(&token) {
+                                // Strip "Bearer " prefix if frontend sent it; trim whitespace
+                                let token = token.trim().strip_prefix("Bearer ").unwrap_or(token.trim());
+                                match jwt_auth.validate_token(token) {
                                     Ok(claims) => {
                                         info!("✅ Token validated successfully for connection {}", conn_id);
                                         info!("   Claims - sub (user_id): {}, email: {}, role: {}, group_id: {:?}", 
@@ -296,7 +298,8 @@ impl Session {
                                         continue;
                                     }
                                 };
-                                if conn.role != "admin" {
+                                let is_admin = conn.role.eq_ignore_ascii_case("admin") || conn.role.eq_ignore_ascii_case("super_admin");
+                                if !is_admin {
                                     let err = ServerMessage::CallError {
                                         call_id: None,
                                         code: "FORBIDDEN".to_string(),

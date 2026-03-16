@@ -17,6 +17,7 @@ const groupSchema = z.object({
   margin_call_level: z.number().min(0).max(1000).optional().nullable(),
   stop_out_level: z.number().min(0).max(1000).optional().nullable(),
   signup_slug: z.string().max(20).optional().nullable(),
+  hide_leverage_in_terminal: z.boolean().optional(),
 })
 
 type GroupFormData = z.infer<typeof groupSchema>
@@ -49,6 +50,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           margin_call_level: initial.marginCallLevel ?? undefined,
           stop_out_level: initial.stopOutLevel ?? undefined,
           signup_slug: initial.signupSlug ?? '',
+          hide_leverage_in_terminal: initial.hideLeverageInTerminal ?? false,
         }
       : {
           name: '',
@@ -57,6 +59,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           margin_call_level: undefined,
           stop_out_level: undefined,
           signup_slug: '',
+          hide_leverage_in_terminal: false,
         },
   })
 
@@ -74,6 +77,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
         margin_call_level: data.margin_call_level ?? null,
         stop_out_level: data.stop_out_level ?? null,
         signup_slug: data.signup_slug?.trim() || null,
+        hide_leverage_in_terminal: data.hide_leverage_in_terminal ?? null,
       }
 
       if (mode === 'create') {
@@ -181,6 +185,23 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
         </div>
         <p className="text-xs text-text-muted">
           Margin call: when user margin level falls below this %, they see a margin call warning. Leave empty for default (50%). Stop out: when margin falls below this %, positions are closed automatically. Leave empty to disable. Stop out should be lower than margin call.
+        </p>
+
+        <div className="flex items-center gap-2 pt-2">
+          <input
+            type="checkbox"
+            id="hide_leverage_in_terminal"
+            checked={watch('hide_leverage_in_terminal') ?? false}
+            onChange={(e) => setValue('hide_leverage_in_terminal', e.target.checked)}
+            disabled={isLoading || isReadOnly}
+            className="h-4 w-4 rounded border-border"
+          />
+          <Label htmlFor="hide_leverage_in_terminal" className="text-sm font-normal cursor-pointer">
+            Hide leverage section in user trading terminal
+          </Label>
+        </div>
+        <p className="text-xs text-text-muted">
+          When checked, users in this group will not see the Leverage collapse in the right panel of the trading terminal.
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
