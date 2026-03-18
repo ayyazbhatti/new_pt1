@@ -99,7 +99,7 @@ export function DashboardPage() {
     risk: { value: String(pendingCount), change: null },
   }
 
-  const recentActivity = (transactionsData ?? []).map((tx) => ({
+  const recentActivity = (transactionsData?.items ?? []).map((tx) => ({
     id: tx.id,
     time: formatRelativeTime(tx.createdAt),
     action: `${tx.type} ${tx.status}`,

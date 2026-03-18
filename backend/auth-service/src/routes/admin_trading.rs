@@ -113,7 +113,7 @@ pub struct ListOrdersQuery {
     pub cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListPositionsQuery {
     pub status: Option<String>,
@@ -187,6 +187,12 @@ pub struct PaginatedResponse<T> {
     pub cursor: Option<String>,
     pub has_more: bool,
     pub total: Option<i64>,
+    /// Open positions only: sum of margin_used across all matching rows (not just this page).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_margin_used: Option<f64>,
+    /// Open positions only: sum of unrealized PnL from Redis across all matching rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_unrealized_pnl: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -235,8 +241,62 @@ async fn list_admin_orders(
         .await
         .map_err(|(status, Json(se))| (status, Json(ErrorResponse { error: ErrorDetail { code: se.error.code, message: se.error.message } })))?;
 
-    let limit = params.limit.unwrap_or(100).min(1000);
+    let limit = params.limit.unwrap_or(50).min(500);
     let offset = params.cursor.and_then(|c| c.parse::<i64>().ok()).unwrap_or(0);
+    let is_order_history = params.status.as_deref() == Some("order-history");
+
+    let status_filter = if is_order_history {
+        None::<&str>
+    } else {
+        params.status.as_deref()
+    };
+
+    let count_row: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM orders o
+        LEFT JOIN users u ON o.user_id = u.id
+        LEFT JOIN user_groups ug ON u.group_id = ug.id
+        LEFT JOIN symbols s ON o.symbol_id = s.id
+        WHERE 
+            (
+                ($7::bool AND o.status::text IN ('filled', 'cancelled'))
+                OR (NOT $7::bool AND ($1::text IS NULL OR o.status::text = $1))
+            )
+            AND ($2::text IS NULL OR s.code = $2)
+            AND ($3::text IS NULL OR o.user_id::text = $3)
+            AND ($4::text IS NULL OR u.group_id::text = $4)
+            AND ($5::text IS NULL OR (
+                s.code ILIKE $5 OR 
+                u.email ILIKE $5 OR 
+                u.first_name ILIKE $5 OR 
+                u.last_name ILIKE $5
+            ))
+            AND ($6::uuid[] IS NULL OR o.user_id = ANY($6))
+        "#,
+    )
+    .bind(status_filter)
+    .bind(params.symbol.as_deref())
+    .bind(params.user_id.as_deref())
+    .bind(params.group_id.as_deref())
+    .bind(params.search.as_ref().map(|s| format!("%{}%", s)))
+    .bind(allowed_user_ids.as_deref())
+    .bind(is_order_history)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to count orders: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: "Failed to fetch orders".to_string(),
+                },
+            }),
+        )
+    })?;
+    let total_count = count_row.0;
 
     // Use a single query with COALESCE for optional filters. When allowed_user_ids is Some(ids), restrict to those users.
     let rows = sqlx::query(
@@ -266,7 +326,10 @@ async fn list_admin_orders(
         LEFT JOIN user_groups ug ON u.group_id = ug.id
         LEFT JOIN symbols s ON o.symbol_id = s.id
         WHERE 
-            ($1::text IS NULL OR o.status::text = $1)
+            (
+                ($9::bool AND o.status::text IN ('filled', 'cancelled'))
+                OR (NOT $9::bool AND ($1::text IS NULL OR o.status::text = $1))
+            )
             AND ($2::text IS NULL OR s.code = $2)
             AND ($3::text IS NULL OR o.user_id::text = $3)
             AND ($4::text IS NULL OR u.group_id::text = $4)
@@ -277,11 +340,11 @@ async fn list_admin_orders(
                 u.last_name ILIKE $5
             ))
             AND ($8::uuid[] IS NULL OR o.user_id = ANY($8))
-        ORDER BY o.created_at DESC
+        ORDER BY CASE WHEN $9::bool THEN o.updated_at ELSE o.created_at END DESC NULLS LAST
         LIMIT $6 OFFSET $7
         "#
     )
-    .bind(params.status.as_deref())
+    .bind(status_filter)
     .bind(params.symbol.as_deref())
     .bind(params.user_id.as_deref())
     .bind(params.group_id.as_deref())
@@ -289,6 +352,7 @@ async fn list_admin_orders(
     .bind(limit)
     .bind(offset)
     .bind(allowed_user_ids.as_deref())
+    .bind(is_order_history)
     .fetch_all(&pool)
     .await
         .map_err(|e| {
@@ -341,7 +405,7 @@ async fn list_admin_orders(
         })
         .collect();
 
-    let has_more = orders.len() as i64 == limit;
+    let has_more = offset + (orders.len() as i64) < total_count;
     let next_cursor = if has_more {
         Some((offset + limit).to_string())
     } else {
@@ -352,7 +416,9 @@ async fn list_admin_orders(
         items: orders,
         cursor: next_cursor,
         has_more,
-        total: None, // Could add COUNT query if needed
+        total: Some(total_count),
+        total_margin_used: None,
+        total_unrealized_pnl: None,
     }))
 }
 
@@ -616,8 +682,14 @@ async fn create_admin_order(
         )
     })?;
 
-    // Sync balance to Redis so order-engine validation sees sufficient balance
-    let free_margin = get_free_margin_from_db_fast(&pool, user_id).await.unwrap_or(rust_decimal::Decimal::from(100_000));
+    // Sync balance to Redis so order-engine validation sees sufficient balance.
+    // For admin orders, use a minimum (100_000) when user has 0 or no balance so bulk position works for demo/new users.
+    let free_margin_raw = get_free_margin_from_db_fast(&pool, user_id).await;
+    let free_margin = match free_margin_raw {
+        None => rust_decimal::Decimal::from(100_000),
+        Some(v) if v <= rust_decimal::Decimal::ZERO => rust_decimal::Decimal::from(100_000),
+        Some(v) => v,
+    };
     if let Ok(mut conn_bal) = admin_state.redis.get().await {
         let balance_json = serde_json::json!({
             "currency": "USD",
@@ -635,12 +707,24 @@ async fn create_admin_order(
     }
 
     info!("Publishing admin order to NATS: cmd.order.place, order_id={}, user_id={}, symbol={}", order_id, user_id, symbol_row.code);
-    // Publish to JetStream so order-engine (which uses JetStream consumer) receives the order
+    // Publish to JetStream first — order-engine only consumes from JetStream, so this must succeed for the order to be processed.
     let js_context = async_nats::jetstream::new((*admin_state.nats).clone());
     let payload_bytes = payload.clone();
-    if let Err(e) = js_context.publish("cmd.order.place".to_string(), payload_bytes.into()).await {
-        tracing::warn!("Admin order JetStream publish failed (order will still go via basic): {}", e);
-    }
+    js_context
+        .publish("cmd.order.place".to_string(), payload_bytes.into())
+        .await
+        .map_err(|e| {
+            error!("Admin order JetStream publish failed: {}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "ORDER_QUEUE_UNAVAILABLE".to_string(),
+                        message: "Order queue temporarily unavailable. Please try again.".to_string(),
+                    },
+                }),
+            )
+        })?;
     admin_state.nats.publish("cmd.order.place".to_string(), payload.into()).await
         .map_err(|e| {
             error!("Failed to publish to NATS: {}", e);

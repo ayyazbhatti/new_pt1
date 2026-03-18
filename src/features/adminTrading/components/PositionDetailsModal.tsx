@@ -5,8 +5,11 @@ import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
 
 export function PositionDetailsModal() {
-  const { openModal, setOpenModal, selectedPositionId, positions } = useAdminTradingStore()
-  const position = selectedPositionId ? positions.get(selectedPositionId) : null
+  const { openModal, setOpenModal, selectedPositionId, positions, positionHistory } =
+    useAdminTradingStore()
+  const position = selectedPositionId
+    ? positions.get(selectedPositionId) ?? positionHistory.get(selectedPositionId)
+    : null
   const open = openModal === 'position-details'
 
   if (!position) return null

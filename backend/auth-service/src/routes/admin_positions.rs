@@ -8,7 +8,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use contracts::VersionedMessage;
 use redis::AsyncCommands;
-use sqlx::PgPool;
+use rust_decimal::Decimal;
+use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -17,10 +18,193 @@ use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
 use crate::utils::permission_check;
 use crate::routes::admin_trading::{AdminTradingState, AdminPosition, PaginatedResponse, ListPositionsQuery, ClosePositionRequest, ModifySltpRequest, ReopenWithParamsRequest, UpdatePositionParamsRequest, ErrorResponse, ErrorDetail};
+use crate::routes::deposits::get_price_from_redis_conn;
 use crate::routes::scoped_access;
 use redis_model::keys::Keys;
+use std::str::FromStr;
 
 const POS_BY_ID_PREFIX: &str = "pos:by_id:";
+
+async fn list_closed_positions_admin(
+    pool: &PgPool,
+    params: &ListPositionsQuery,
+    allowed_user_ids: &Option<Vec<Uuid>>,
+) -> Result<Json<PaginatedResponse<AdminPosition>>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = params.limit.unwrap_or(50).min(500);
+    let offset = params
+        .cursor
+        .as_ref()
+        .and_then(|c| c.parse::<i64>().ok())
+        .unwrap_or(0);
+    let search_pat = params.search.as_ref().map(|s| format!("%{}%", s));
+
+    let total_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::bigint FROM positions p
+        LEFT JOIN users u ON p.user_id = u.id
+        LEFT JOIN symbols s ON p.symbol_id = s.id
+        WHERE p.status IN ('closed', 'liquidated')
+        AND ($1::text IS NULL OR s.code = $1)
+        AND ($2::text IS NULL OR p.user_id::text = $2)
+        AND ($3::text IS NULL OR u.group_id::text = $3)
+        AND ($4::text IS NULL OR (
+            s.code ILIKE $4 OR COALESCE(u.email, '') ILIKE $4
+            OR COALESCE(u.first_name, '') ILIKE $4 OR COALESCE(u.last_name, '') ILIKE $4
+        ))
+        AND ($5::uuid[] IS NULL OR p.user_id = ANY($5))
+        "#,
+    )
+    .bind(params.symbol.as_deref())
+    .bind(params.user_id.as_deref())
+    .bind(params.group_id.as_deref())
+    .bind(search_pat.as_deref())
+    .bind(allowed_user_ids.as_deref())
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Admin closed positions count: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: "Failed to list position history".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            p.id,
+            p.user_id,
+            TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) as user_name,
+            u.email as user_email,
+            COALESCE(ug.id::text, '') as group_id,
+            COALESCE(ug.name, '') as group_name,
+            p.symbol_id::text as symbol_id,
+            s.code as symbol,
+            p.side::text as side,
+            p.size,
+            p.entry_price,
+            p.mark_price,
+            p.leverage,
+            p.margin_used,
+            p.liquidation_price,
+            p.pnl,
+            p.pnl_percent,
+            p.status::text as status,
+            p.opened_at,
+            p.closed_at,
+            p.updated_at
+        FROM positions p
+        LEFT JOIN users u ON p.user_id = u.id
+        LEFT JOIN user_groups ug ON u.group_id = ug.id
+        LEFT JOIN symbols s ON p.symbol_id = s.id
+        WHERE p.status IN ('closed', 'liquidated')
+        AND ($1::text IS NULL OR s.code = $1)
+        AND ($2::text IS NULL OR p.user_id::text = $2)
+        AND ($3::text IS NULL OR u.group_id::text = $3)
+        AND ($4::text IS NULL OR (
+            s.code ILIKE $4 OR COALESCE(u.email, '') ILIKE $4
+            OR COALESCE(u.first_name, '') ILIKE $4 OR COALESCE(u.last_name, '') ILIKE $4
+        ))
+        AND ($5::uuid[] IS NULL OR p.user_id = ANY($5))
+        ORDER BY COALESCE(p.closed_at, p.updated_at) DESC NULLS LAST
+        LIMIT $6 OFFSET $7
+        "#,
+    )
+    .bind(params.symbol.as_deref())
+    .bind(params.user_id.as_deref())
+    .bind(params.group_id.as_deref())
+    .bind(search_pat.as_deref())
+    .bind(allowed_user_ids.as_deref())
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Admin closed positions list: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: "Failed to list position history".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    let items: Vec<AdminPosition> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let id: Uuid = row.try_get(0).ok()?;
+            let user_id: Uuid = row.try_get(1).ok()?;
+            let size: Decimal = row.try_get(9).unwrap_or(Decimal::ZERO);
+            let entry: Decimal = row.try_get(10).unwrap_or(Decimal::ZERO);
+            let mark: Decimal = row.try_get(11).unwrap_or(Decimal::ZERO);
+            let margin: Decimal = row.try_get(13).unwrap_or(Decimal::ZERO);
+            let liq: Decimal = row.try_get(14).unwrap_or(Decimal::ZERO);
+            let pnl: Decimal = row.try_get(15).unwrap_or(Decimal::ZERO);
+            let pnl_pct: Decimal = row.try_get(16).unwrap_or(Decimal::ZERO);
+            Some(AdminPosition {
+                id: id.to_string(),
+                user_id: user_id.to_string(),
+                user_name: row.try_get(2).unwrap_or_else(|_| "—".to_string()),
+                user_email: row.try_get(3).ok(),
+                group_id: row.try_get(4).unwrap_or_else(|_| "—".to_string()),
+                group_name: row.try_get(5).unwrap_or_else(|_| "—".to_string()),
+                symbol_id: row.try_get(6).unwrap_or_else(|_| "—".to_string()),
+                symbol: row.try_get(7).unwrap_or_else(|_| "—".to_string()),
+                side: row.try_get(8).unwrap_or_else(|_| "LONG".to_string()),
+                size: size.to_string().parse().unwrap_or(0.0),
+                entry_price: entry.to_string().parse().unwrap_or(0.0),
+                mark_price: mark.to_string().parse().unwrap_or(0.0),
+                leverage: row.try_get(12).unwrap_or(1),
+                margin_used: margin.to_string().parse().unwrap_or(0.0),
+                margin_available: None,
+                liquidation_price: liq.to_string().parse().unwrap_or(0.0),
+                pnl: pnl.to_string().parse().unwrap_or(0.0),
+                pnl_percent: pnl_pct.to_string().parse().unwrap_or(0.0),
+                status: row.try_get(17).unwrap_or_else(|_| "closed".to_string()),
+                stop_loss: None,
+                take_profit: None,
+                opened_at: row
+                    .try_get::<chrono::DateTime<Utc>, _>(18)
+                    .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_else(|_| "—".to_string()),
+                closed_at: row
+                    .try_get::<Option<chrono::DateTime<Utc>>, _>(19)
+                    .ok()
+                    .flatten()
+                    .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
+                last_updated_at: row
+                    .try_get::<chrono::DateTime<Utc>, _>(20)
+                    .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_else(|_| "—".to_string()),
+            })
+        })
+        .collect();
+
+    let total = total_count.0;
+    let has_more = offset + (items.len() as i64) < total;
+    let next_cursor = if has_more {
+        Some((offset + limit).to_string())
+    } else {
+        None
+    };
+
+    Ok(Json(PaginatedResponse {
+        items,
+        cursor: next_cursor,
+        has_more,
+        total: Some(total),
+        total_margin_used: None,
+        total_unrealized_pnl: None,
+    }))
+}
 
 fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -47,6 +231,18 @@ async fn list_admin_positions(
     let allowed_user_ids = scoped_access::resolve_allowed_user_ids_for_trading(&pool, &claims)
         .await
         .map_err(|(status, Json(se))| (status, Json(ErrorResponse { error: ErrorDetail { code: se.error.code, message: se.error.message } })))?;
+
+    if params
+        .status
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("closed"))
+        .unwrap_or(false)
+    {
+        return list_closed_positions_admin(&pool, &params, &allowed_user_ids).await;
+    }
+
+    let limit = params.limit.unwrap_or(50).min(500);
+    let offset = params.cursor.and_then(|c| c.parse::<i64>().ok()).unwrap_or(0);
 
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
@@ -168,7 +364,7 @@ async fn list_admin_positions(
         map
     };
 
-    let items: Vec<AdminPosition> = open_positions
+    let mut keyed: Vec<(i64, AdminPosition)> = open_positions
         .into_iter()
         .filter_map(|(id, m)| {
             let user_id = m.get("user_id").cloned().unwrap_or_default();
@@ -196,43 +392,120 @@ async fn list_admin_positions(
             } else {
                 0.0
             };
-            Some(AdminPosition {
-                id: id.clone(),
-                user_id,
-                user_name,
-                user_email,
-                group_id: group_id.map(|u| u.to_string()).unwrap_or_else(|| "—".to_string()),
-                group_name,
-                symbol_id: symbol.clone(),
-                symbol,
-                side,
-                size,
-                entry_price,
-                mark_price: avg_price,
-                leverage,
-                margin_used: margin,
-                margin_available: None,
-                liquidation_price: 0.0,
-                pnl: unrealized_pnl,
-                pnl_percent: pnl_pct,
-                status: "OPEN".to_string(),
-                stop_loss: sl,
-                take_profit: tp,
-                opened_at,
-                closed_at: None,
-                last_updated_at,
-            })
+            let gid_str = group_id.map(|u| u.to_string()).unwrap_or_else(|| "—".to_string());
+            Some((
+                opened_at_ms,
+                AdminPosition {
+                    id: id.clone(),
+                    user_id,
+                    user_name,
+                    user_email,
+                    group_id: gid_str.clone(),
+                    group_name,
+                    symbol_id: symbol.clone(),
+                    symbol,
+                    side,
+                    size,
+                    entry_price,
+                    mark_price: avg_price,
+                    leverage,
+                    margin_used: margin,
+                    margin_available: None,
+                    liquidation_price: 0.0,
+                    pnl: unrealized_pnl,
+                    pnl_percent: pnl_pct,
+                    status: "OPEN".to_string(),
+                    stop_loss: sl,
+                    take_profit: tp,
+                    opened_at,
+                    closed_at: None,
+                    last_updated_at,
+                },
+            ))
         })
         .collect();
 
-    let total = items.len() as i64;
-    info!("Admin positions API: returning {} items (total={})", items.len(), total);
+    if let Some(ref gid) = params.group_id {
+        keyed.retain(|(_, p)| p.group_id == *gid);
+    }
+    if let Some(ref q) = params.search {
+        let s = q.to_lowercase();
+        keyed.retain(|(_, p)| {
+            p.symbol.to_lowercase().contains(&s)
+                || p.user_name.to_lowercase().contains(&s)
+                || p
+                    .user_email
+                    .as_ref()
+                    .map(|e| e.to_lowercase().contains(&s))
+                    .unwrap_or(false)
+        });
+    }
+
+    keyed.sort_by(|a, b| b.0.cmp(&a.0));
+    let total = keyed.len() as i64;
+    let total_margin_used: f64 = keyed.iter().map(|(_, p)| p.margin_used).sum();
+
+    // Compute unrealized PnL from current Redis prices (no polling: prices written by order-engine on each tick)
+    let mut price_cache: HashMap<(String, String), (Decimal, Decimal)> = HashMap::new();
+    let mut total_unrealized_pnl: f64 = 0.0;
+    for (_, p) in keyed.iter_mut() {
+        let key = (p.symbol.clone(), p.group_id.clone());
+        let (bid, ask) = if let Some(&(b, a)) = price_cache.get(&key) {
+            (b, a)
+        } else {
+            match get_price_from_redis_conn(&mut conn, &p.symbol, &p.group_id).await {
+                Some((b, a)) => {
+                    price_cache.insert(key.clone(), (b, a));
+                    (b, a)
+                }
+                None => continue,
+            }
+        };
+        let mark = (bid + ask) / Decimal::from(2);
+        let size = Decimal::from_str(&p.size.to_string()).unwrap_or(Decimal::ZERO);
+        let entry = Decimal::from_str(&p.entry_price.to_string()).unwrap_or(Decimal::ZERO);
+        let pnl_decimal = match p.side.as_str() {
+            "LONG" => (mark - entry) * size,
+            "SHORT" => (entry - mark) * size,
+            _ => Decimal::ZERO,
+        };
+        let pnl_f64: f64 = pnl_decimal.to_string().parse().unwrap_or(0.0);
+        total_unrealized_pnl += pnl_f64;
+        p.pnl = pnl_f64;
+        p.pnl_percent = if p.margin_used > 0.0 {
+            (pnl_f64 / p.margin_used) * 100.0
+        } else {
+            0.0
+        };
+    }
+
+    let page_items: Vec<AdminPosition> = keyed
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .map(|(_, p)| p)
+        .collect();
+
+    let has_more = offset + (page_items.len() as i64) < total;
+    let next_cursor = if has_more {
+        Some((offset + limit).to_string())
+    } else {
+        None
+    };
+
+    info!(
+        "Admin positions API: page {} items, total open={}",
+        page_items.len(),
+        total
+    );
 
     Ok(Json(PaginatedResponse {
-        items,
-        cursor: None,
-        has_more: false,
+        items: page_items,
+        cursor: next_cursor,
+        has_more,
         total: Some(total),
+        total_margin_used: Some(total_margin_used),
+        total_unrealized_pnl: Some(total_unrealized_pnl),
     }))
 }
 

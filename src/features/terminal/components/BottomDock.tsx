@@ -804,23 +804,23 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                           <div className="text-right shrink-0">
                             <div className="text-[11px] text-muted">{openedAtStr}</div>
                             <div className={cn('text-sm font-semibold', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
-                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(2)}
+                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(4)}
                             </div>
                           </div>
                         </div>
                         {isExpanded && (
                           <div className="pt-3 pb-2 space-y-2 border-t border-white/5 mt-2" onClick={(e) => e.stopPropagation()}>
                             <div className={cn('text-lg font-bold', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
-                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(2)}
+                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(4)}
                             </div>
                             <div className="text-xs text-muted font-mono">
-                              {entryPrice.toFixed(2)} → {livePrice != null ? livePrice.toFixed(2) : '—'}
+                              {entryPrice.toFixed(4)} → {livePrice != null ? livePrice.toFixed(4) : '—'}
                             </div>
                             <div className="text-xs text-muted">{openedAtLongStr}</div>
                             <div className="flex justify-between gap-4 text-xs">
                               <div className="space-y-1 text-muted">
                                 {hasValidSl && <div>S/L {Number(pos.sl).toFixed(2)}</div>}
-                                <div>Margin {Number.isFinite(marginNum) ? marginNum.toFixed(2) : '—'}</div>
+                                <div>Margin {Number.isFinite(marginNum) ? marginNum.toFixed(4) : '—'}</div>
                               </div>
                               <div className="space-y-1 text-muted text-right">
                                 {hasValidTp && <div>T/P {Number(pos.tp).toFixed(2)}</div>}
@@ -1041,14 +1041,14 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               {pos.side}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-text font-semibold">${marginNum.toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(2)}</td>
+                          <td className="px-4 py-3 text-text font-semibold">${marginNum.toFixed(4)}</td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(4)}</td>
                           <td className={cn(
                             "px-4 py-3 font-mono font-bold",
                             livePrice !== null ? "text-accent" : "text-text/40"
                           )}>
                             {livePrice !== null 
-                              ? `$${livePrice.toFixed(2)}` 
+                              ? `$${livePrice.toFixed(4)}` 
                               : <span className="text-text/40">--</span>
                             }
                           </td>
@@ -1056,7 +1056,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                             "px-4 py-3 font-mono font-bold",
                             unrealizedPnl >= 0 ? "text-success" : "text-danger"
                           )}>
-                            {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}
+                            {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(4)}
                           </td>
                           <td className="px-4 py-3 font-mono text-text/70">{pos.sl ? `$${parseFloat(pos.sl).toFixed(2)}` : '-'}</td>
                           <td className="px-4 py-3 font-mono text-text/70">{pos.tp ? `$${parseFloat(pos.tp).toFixed(2)}` : '-'}</td>
@@ -1389,15 +1389,15 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               {pos.side}
                         </span>
                       </td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(2)}</td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(4)}</td>
                           <td className="px-4 py-3 font-mono text-text font-medium">
-                            {exitPrice !== null ? `$${exitPrice.toFixed(2)}` : '-'}
+                            {exitPrice !== null ? `$${exitPrice.toFixed(4)}` : '-'}
                           </td>
                           <td className={cn(
                             "px-4 py-3 font-mono font-bold",
                             realizedPnl >= 0 ? "text-success" : "text-danger"
                           )}>
-                            {realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(2)}
+                            {realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(4)}
                           </td>
                           <td className="px-4 py-3">
                             <span className={cn(

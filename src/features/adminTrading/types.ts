@@ -4,7 +4,7 @@ export type OrderStatus = 'pending' | 'PENDING' | 'filled' | 'cancelled' | 'reje
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT'
 export type PositionSide = 'LONG' | 'SHORT'
-export type PositionStatus = 'OPEN' | 'open' | 'CLOSED' | 'LIQUIDATED'
+export type PositionStatus = 'OPEN' | 'open' | 'CLOSED' | 'closed' | 'LIQUIDATED'
 export type TimeInForce = 'GTC' | 'IOC' | 'FOK'
 
 export interface AdminOrder {
@@ -89,6 +89,10 @@ export interface PaginatedResponse<T> {
   cursor?: string
   hasMore: boolean
   total?: number
+  /** Open positions API: sum of margin across all matching positions */
+  totalMarginUsed?: number
+  /** Open positions API: sum of unrealized PnL (Redis) across all matching positions */
+  totalUnrealizedPnl?: number
 }
 
 export interface LookupSymbol {

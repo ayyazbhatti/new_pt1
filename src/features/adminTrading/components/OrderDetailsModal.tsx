@@ -4,8 +4,10 @@ import { useAdminTradingStore } from '../store/adminTrading.store'
 import { format } from 'date-fns'
 
 export function OrderDetailsModal() {
-  const { openModal, setOpenModal, selectedOrderId, orders } = useAdminTradingStore()
-  const order = selectedOrderId ? orders.get(selectedOrderId) : null
+  const { openModal, setOpenModal, selectedOrderId, orders, orderHistory } = useAdminTradingStore()
+  const order = selectedOrderId
+    ? orders.get(selectedOrderId) ?? orderHistory.get(selectedOrderId)
+    : null
   const open = openModal === 'order-details'
 
   if (!order) return null

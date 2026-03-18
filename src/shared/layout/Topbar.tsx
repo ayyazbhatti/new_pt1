@@ -5,6 +5,7 @@ import { toast } from '@/shared/components/common'
 import { Button } from '@/shared/ui/button'
 import { NotificationBell } from '@/shared/components/NotificationBell'
 import { CommandPalette } from '@/shared/components/CommandPalette'
+import { UserSearchPalette } from '@/shared/components/UserSearchPalette'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useUIStore } from '@/app/store'
 import { cn } from '@/shared/utils'
@@ -22,6 +23,7 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
   const logout = useAuthStore((state) => state.logout)
   const toggleSidebar = useUIStore((state) => state.toggleSidebar)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [userSearchPaletteOpen, setUserSearchPaletteOpen] = useState(false)
   const isAdmin = location.pathname.startsWith('/admin')
   const profilePath = isAdmin ? '/admin/profile' : '/user/profile'
 
@@ -55,6 +57,15 @@ export function Topbar({ showTerminalLink, showLogout }: TopbarProps = {}) {
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+        {isAdmin && (
+          <div className="hidden sm:flex sm:min-w-[200px] sm:max-w-[260px]">
+            <UserSearchPalette
+              open={userSearchPaletteOpen}
+              onOpenChange={setUserSearchPaletteOpen}
+              showTrigger
+            />
+          </div>
+        )}
         {showTerminalLink && (
           <a
             href="/"

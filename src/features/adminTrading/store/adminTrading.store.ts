@@ -46,9 +46,21 @@ interface AdminTradingState {
   setUsers: (users: LookupUser[]) => void
   setGroups: (groups: LookupGroup[]) => void
 
+  // Order history (filled, cancelled, etc.) and position history (closed)
+  orderHistory: Map<string, AdminOrder>
+  orderHistoryLoading: boolean
+  setOrderHistory: (orders: AdminOrder[]) => void
+  setOrderHistoryLoading: (loading: boolean) => void
+  getOrderHistoryArray: () => AdminOrder[]
+  positionHistory: Map<string, AdminPosition>
+  positionHistoryLoading: boolean
+  setPositionHistory: (positions: AdminPosition[], cursor?: string, hasMore?: boolean) => void
+  setPositionHistoryLoading: (loading: boolean) => void
+  getPositionHistoryArray: () => AdminPosition[]
+
   // UI State
-  activeTab: 'orders' | 'positions'
-  setActiveTab: (tab: 'orders' | 'positions') => void
+  activeTab: 'orders' | 'positions' | 'order-history' | 'position-history'
+  setActiveTab: (tab: 'orders' | 'positions' | 'order-history' | 'position-history') => void
   selectedOrderId: string | null
   setSelectedOrderId: (id: string | null) => void
   selectedPositionId: string | null
@@ -152,6 +164,26 @@ export const useAdminTradingStore = create<AdminTradingState>((set, get) => ({
     })),
   setAuditLoading: (loading) => set({ auditLoading: loading }),
 
+  // Order history & position history
+  orderHistory: new Map(),
+  orderHistoryLoading: false,
+  setOrderHistory: (orders) => {
+    const m = new Map<string, AdminOrder>()
+    orders.forEach((o) => m.set(o.id, o))
+    set({ orderHistory: m })
+  },
+  setOrderHistoryLoading: (loading) => set({ orderHistoryLoading: loading }),
+  getOrderHistoryArray: () => Array.from(get().orderHistory.values()),
+  positionHistory: new Map(),
+  positionHistoryLoading: false,
+  setPositionHistory: (positions, _cursor?, _hasMore?) => {
+    const m = new Map<string, AdminPosition>()
+    positions.forEach((p) => m.set(p.id, p))
+    set({ positionHistory: m })
+  },
+  setPositionHistoryLoading: (loading) => set({ positionHistoryLoading: loading }),
+  getPositionHistoryArray: () => Array.from(get().positionHistory.values()),
+
   // Lookups
   symbols: [],
   users: [],
@@ -164,7 +196,7 @@ export const useAdminTradingStore = create<AdminTradingState>((set, get) => ({
   activeTab: (() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('adminTradingActiveTab')
-      if (saved === 'orders' || saved === 'positions') {
+      if (saved === 'orders' || saved === 'positions' || saved === 'order-history' || saved === 'position-history') {
         return saved
       }
     }

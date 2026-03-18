@@ -340,7 +340,7 @@ export function TerminalHistoryView() {
                       <div className="text-right shrink-0">
                         <div className="text-[11px] text-muted">{closedAtStr}</div>
                         <div className={cn('text-sm font-semibold', realizedPnl >= 0 ? 'text-success' : 'text-danger')}>
-                          {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(2)}
+                          {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(4)}
                         </div>
                       </div>
                     </div>

@@ -14,7 +14,7 @@ import { Eye, CheckCircle, X, Loader2 } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchTransactions, Transaction as ApiTransaction } from '../api/finance.api'
+import { fetchTransactions, Transaction as ApiTransaction, PaginatedTransactions } from '../api/finance.api'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 
@@ -33,9 +33,11 @@ export function FinanceTransactionsPanel() {
     dateFrom: '',
     dateTo: '',
   })
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
 
-  const { data: apiTransactions, isLoading, refetch } = useQuery({
-    queryKey: [...FINANCE_TRANSACTIONS_QUERY_KEY, filters],
+  const { data: paginated, isLoading } = useQuery({
+    queryKey: [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, page, pageSize],
     queryFn: () => fetchTransactions({
       search: filters.search || undefined,
       type: filters.type !== 'all' ? filters.type : undefined,
@@ -43,8 +45,14 @@ export function FinanceTransactionsPanel() {
       currency: filters.currency !== 'all' ? filters.currency : undefined,
       dateFrom: filters.dateFrom || undefined,
       dateTo: filters.dateTo || undefined,
+      page,
+      pageSize,
     }),
   })
+
+  const total = paginated?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const apiTransactions = paginated?.items ?? []
 
   // Subscribe to WebSocket events for real-time updates
   useWebSocketSubscription(
@@ -119,32 +127,10 @@ export function FinanceTransactionsPanel() {
     })) as Transaction[]
   }, [apiTransactions])
 
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
-      if (filters.search) {
-        const searchLower = filters.search.toLowerCase()
-        if (
-          !tx.user.email.toLowerCase().includes(searchLower) &&
-          !tx.id.toLowerCase().includes(searchLower) &&
-          !tx.reference.toLowerCase().includes(searchLower)
-        ) {
-          return false
-        }
-      }
-      if (filters.type !== 'all' && tx.type !== filters.type) return false
-      if (filters.status !== 'all' && tx.status !== filters.status) return false
-      if (filters.currency !== 'all' && tx.currency !== filters.currency) return false
-      if (filters.dateFrom) {
-        const txDate = new Date(tx.createdAt).toISOString().split('T')[0]
-        if (txDate < filters.dateFrom) return false
-      }
-      if (filters.dateTo) {
-        const txDate = new Date(tx.createdAt).toISOString().split('T')[0]
-        if (txDate > filters.dateTo) return false
-      }
-      return true
-    })
-  }, [transactions, filters])
+  const updateFilters = useCallback((next: Partial<typeof filters>) => {
+    setFilters((f) => ({ ...f, ...next }))
+    setPage(1)
+  }, [])
 
   const handleView = (tx: Transaction) => {
     openModal(`tx-details-${tx.id}`, <TransactionDetailsModal transaction={tx} />, {
@@ -160,10 +146,13 @@ export function FinanceTransactionsPanel() {
         transaction={tx}
         action="approve"
         onSuccess={() => {
-          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters]
-          queryClient.setQueryData<ApiTransaction[]>(queryKey, (old) => {
+          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, page, pageSize]
+          queryClient.setQueryData<PaginatedTransactions>(queryKey, (old) => {
             if (!old) return old
-            return old.map((t) => (t.id === tx.id ? { ...t, status: 'approved' as const } : t))
+            return {
+              ...old,
+              items: old.items.map((t) => (t.id === tx.id ? { ...t, status: 'approved' as const } : t)),
+            }
           })
           queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
         }}
@@ -179,10 +168,13 @@ export function FinanceTransactionsPanel() {
         transaction={tx}
         action="reject"
         onSuccess={() => {
-          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters]
-          queryClient.setQueryData<ApiTransaction[]>(queryKey, (old) => {
+          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, page, pageSize]
+          queryClient.setQueryData<PaginatedTransactions>(queryKey, (old) => {
             if (!old) return old
-            return old.map((t) => (t.id === tx.id ? { ...t, status: 'rejected' as const } : t))
+            return {
+              ...old,
+              items: old.items.map((t) => (t.id === tx.id ? { ...t, status: 'rejected' as const } : t)),
+            }
           })
           queryClient.invalidateQueries({ queryKey: FINANCE_TRANSACTIONS_QUERY_KEY })
         }}
@@ -353,12 +345,12 @@ export function FinanceTransactionsPanel() {
           type="search"
           placeholder="Search user, Tx ID, or reference..."
           value={filters.search}
-          onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+          onChange={(e) => updateFilters({ search: e.target.value })}
           className="flex-1 max-w-sm"
         />
         <Select
           value={filters.type}
-          onValueChange={(value) => setFilters({ ...filters, type: value as typeof filters.type })}
+          onValueChange={(value) => updateFilters({ type: value as typeof filters.type })}
         >
           <SelectTrigger className="w-[150px]">
             <SelectValue placeholder="Type" />
@@ -374,7 +366,7 @@ export function FinanceTransactionsPanel() {
         </Select>
         <Select
           value={filters.status}
-          onValueChange={(value) => setFilters({ ...filters, status: value as typeof filters.status })}
+          onValueChange={(value) => updateFilters({ status: value as typeof filters.status })}
         >
           <SelectTrigger className="w-[150px]">
             <SelectValue placeholder="Status" />
@@ -389,7 +381,7 @@ export function FinanceTransactionsPanel() {
         </Select>
         <Select
           value={filters.currency}
-          onValueChange={(value) => setFilters({ ...filters, currency: value as typeof filters.currency })}
+          onValueChange={(value) => updateFilters({ currency: value as typeof filters.currency })}
         >
           <SelectTrigger className="w-[120px]">
             <SelectValue placeholder="Currency" />
@@ -406,27 +398,73 @@ export function FinanceTransactionsPanel() {
           type="date"
           placeholder="From"
           value={filters.dateFrom}
-          onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })}
+          onChange={(e) => updateFilters({ dateFrom: e.target.value })}
           className="w-[150px]"
         />
         <Input
           type="date"
           placeholder="To"
           value={filters.dateTo}
-          onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
+          onChange={(e) => updateFilters({ dateTo: e.target.value })}
           className="w-[150px]"
         />
         <Button
           variant="outline"
           size="sm"
-          onClick={() =>
+          onClick={() => {
             setFilters({ search: '', type: 'all', status: 'all', currency: 'all', dateFrom: '', dateTo: '' })
-          }
+            setPage(1)
+          }}
         >
           Clear
         </Button>
       </div>
-      <DataTable data={filteredTransactions} columns={columns} />
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <p className="text-sm text-text-muted">
+          {total === 0
+            ? 'No transactions'
+            : `Showing ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total} transactions`}
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-text-muted">Per page</span>
+          <Select
+            value={String(pageSize)}
+            onValueChange={(v) => {
+              setPageSize(Number(v))
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className="w-[70px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="10">10</SelectItem>
+              <SelectItem value="20">20</SelectItem>
+              <SelectItem value="50">50</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            Previous
+          </Button>
+          <span className="text-sm px-2">
+            Page {page} of {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            Next
+          </Button>
+        </div>
+      </div>
+      <DataTable data={transactions} columns={columns} />
     </div>
   )
 }

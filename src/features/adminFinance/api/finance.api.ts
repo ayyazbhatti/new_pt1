@@ -62,6 +62,11 @@ export interface ListTransactionsParams {
   pageSize?: number
 }
 
+export interface PaginatedTransactions {
+  items: Transaction[]
+  total: number
+}
+
 export interface ListWalletsParams {
   search?: string
   walletType?: string
@@ -91,23 +96,8 @@ export async function fetchFinanceOverview(): Promise<FinanceOverview> {
   }
 }
 
-export async function fetchTransactions(params?: ListTransactionsParams): Promise<Transaction[]> {
-  const queryParams = new URLSearchParams()
-  if (params?.search) queryParams.append('search', params.search)
-  if (params?.type && params.type !== 'all') queryParams.append('type', params.type)
-  if (params?.status && params.status !== 'all') queryParams.append('status', params.status)
-  if (params?.currency && params.currency !== 'all') queryParams.append('currency', params.currency)
-  if (params?.dateFrom) queryParams.append('date_from', params.dateFrom)
-  if (params?.dateTo) queryParams.append('date_to', params.dateTo)
-  if (params?.page) queryParams.append('page', params.page.toString())
-  if (params?.pageSize) queryParams.append('page_size', params.pageSize.toString())
-
-  const url = `/api/admin/finance/transactions${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
-  const response = await http<any[]>(url)
-  if (!response) return []
-  
-  // Transform snake_case to camelCase and ensure date fields are strings
-  return response.map((tx: any) => ({
+function mapTransactionFromApi(tx: any): Transaction {
+  return {
     id: tx.id,
     userId: tx.user_id ?? tx.userId,
     userEmail: tx.user_email ?? tx.userEmail,
@@ -127,7 +117,31 @@ export async function fetchTransactions(params?: ListTransactionsParams): Promis
     createdAt: tx.created_at ?? tx.createdAt ?? '',
     updatedAt: tx.updated_at ?? tx.updatedAt ?? '',
     completedAt: tx.completed_at ?? tx.completedAt,
-  }))
+  }
+}
+
+export async function fetchTransactions(params?: ListTransactionsParams): Promise<PaginatedTransactions> {
+  const queryParams = new URLSearchParams()
+  if (params?.search) queryParams.append('search', params.search)
+  if (params?.type && params.type !== 'all') queryParams.append('type', params.type)
+  if (params?.status && params.status !== 'all') queryParams.append('status', params.status)
+  if (params?.currency && params.currency !== 'all') queryParams.append('currency', params.currency)
+  if (params?.dateFrom) queryParams.append('date_from', params.dateFrom)
+  if (params?.dateTo) queryParams.append('date_to', params.dateTo)
+  const page = params?.page ?? 1
+  const pageSize = params?.pageSize ?? 20
+  queryParams.append('page', page.toString())
+  queryParams.append('page_size', pageSize.toString())
+
+  const url = `/api/admin/finance/transactions?${queryParams.toString()}`
+  const response = await http<{ items?: any[]; total?: number }>(url)
+  if (!response) return { items: [], total: 0 }
+
+  const rawItems = response.items ?? response
+  const items = Array.isArray(rawItems) ? rawItems.map(mapTransactionFromApi) : []
+  const total = response.total ?? items.length
+
+  return { items, total }
 }
 
 export async function fetchWallets(params?: ListWalletsParams): Promise<Wallet[]> {

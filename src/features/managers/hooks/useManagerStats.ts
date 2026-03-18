@@ -358,7 +358,7 @@ export function useManagerStats(managerId: string | undefined) {
     const usersActive = usersActiveCountRes?.data?.total ?? 0
     const leadsTotal = leadsRes?.data?.total ?? 0
     const overview = overviewRes?.data
-    const transactions = transactionsRes?.data ?? []
+    const transactions = (transactionsRes?.data?.items ?? []) as Transaction[]
     const positions = (positionsRes?.data?.items ?? []) as AdminPosition[]
     const orders = (ordersRes?.data?.items ?? []) as AdminOrder[]
 

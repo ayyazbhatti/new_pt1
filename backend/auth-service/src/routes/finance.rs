@@ -134,6 +134,12 @@ pub struct ApproveTransactionResponse {
     pub message: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PaginatedTransactionsResponse {
+    pub items: Vec<TransactionResponse>,
+    pub total: i64,
+}
+
 async fn approve_transaction(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
@@ -760,7 +766,7 @@ async fn list_transactions(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListTransactionsQuery>,
-) -> Result<Json<Vec<TransactionResponse>>, StatusCode> {
+) -> Result<Json<PaginatedTransactionsResponse>, StatusCode> {
     permission_check::check_permission(&pool, &claims, "finance:view")
         .await
         .map_err(|e| e.status)?;
@@ -769,141 +775,154 @@ async fn list_transactions(
         .await
         .map_err(|(status, _)| status)?;
 
-    // Admin/manager with no allowed users → empty list
     if let Some(ref ids) = allowed_user_ids {
         if ids.is_empty() {
-            return Ok(Json(vec![]));
+            return Ok(Json(PaginatedTransactionsResponse { items: vec![], total: 0 }));
         }
     }
 
-    let transactions = match &allowed_user_ids {
-        None => {
-            sqlx::query_as::<_, TransactionResponse>(
-                r#"
-                SELECT 
-                    t.id,
-                    t.user_id,
-                    u.email as user_email,
-                    u.first_name as user_first_name,
-                    u.last_name as user_last_name,
-                    t.type::text as type,
-                    t.amount,
-                    t.currency,
-                    t.fee,
-                    t.net_amount,
-                    t.method::text as method,
-                    t.status::text as status,
-                    t.reference,
-                    t.method_details,
-                    t.admin_notes,
-                    t.rejection_reason,
-                    t.created_at,
-                    t.updated_at,
-                    t.completed_at
-                FROM transactions t
-                JOIN users u ON t.user_id = u.id
-                ORDER BY t.created_at DESC
-                LIMIT 1000
-                "#
-            )
-        }
-        Some(ids) => {
-            sqlx::query_as::<_, TransactionResponse>(
-                r#"
-                SELECT 
-                    t.id,
-                    t.user_id,
-                    u.email as user_email,
-                    u.first_name as user_first_name,
-                    u.last_name as user_last_name,
-                    t.type::text as type,
-                    t.amount,
-                    t.currency,
-                    t.fee,
-                    t.net_amount,
-                    t.method::text as method,
-                    t.status::text as status,
-                    t.reference,
-                    t.method_details,
-                    t.admin_notes,
-                    t.rejection_reason,
-                    t.created_at,
-                    t.updated_at,
-                    t.completed_at
-                FROM transactions t
-                JOIN users u ON t.user_id = u.id
-                WHERE t.user_id = ANY($1)
-                ORDER BY t.created_at DESC
-                LIMIT 1000
-                "#
-            )
-            .bind(ids)
-        }
+    let page_size = params.page_size.clamp(1, 100);
+    let page = params.page.max(1);
+    let offset = (page - 1) * page_size;
+
+    let search_pattern = params.search.as_ref().filter(|s| !s.is_empty()).map(|s| format!("%{}%", s.to_lowercase()));
+    let type_filter = params.r#type.as_ref().filter(|s| s.as_str() != "all");
+    let status_filter = params.status.as_ref().filter(|s| s.as_str() != "all");
+    let currency_filter = params.currency.as_ref().filter(|s| s.as_str() != "all");
+    let date_from = params.date_from.as_ref().filter(|s| !s.is_empty());
+    let date_to = params.date_to.as_ref().filter(|s| !s.is_empty());
+
+    // Build WHERE conditions: user scope + optional filters
+    let (user_condition, mut bind_index) = match &allowed_user_ids {
+        None => ("true".to_string(), 1i32),
+        Some(_) => ("t.user_id = ANY($1)".to_string(), 2),
+    };
+
+    let mut where_clauses = vec![user_condition];
+    if search_pattern.is_some() {
+        where_clauses.push(format!("(u.email ILIKE ${} OR t.id::text ILIKE ${} OR t.reference ILIKE ${})", bind_index, bind_index, bind_index));
+        bind_index += 1;
     }
-    .fetch_all(&pool)
-    .await
-    .map_err(|e| {
+    if type_filter.is_some() {
+        where_clauses.push(format!("t.type::text = ${}", bind_index));
+        bind_index += 1;
+    }
+    if status_filter.is_some() {
+        where_clauses.push(format!("t.status::text = ${}", bind_index));
+        bind_index += 1;
+    }
+    if currency_filter.is_some() {
+        where_clauses.push(format!("t.currency = ${}", bind_index));
+        bind_index += 1;
+    }
+    if date_from.is_some() {
+        where_clauses.push(format!("t.created_at::date >= ${}::date", bind_index));
+        bind_index += 1;
+    }
+    if date_to.is_some() {
+        where_clauses.push(format!("t.created_at::date <= ${}::date", bind_index));
+        bind_index += 1;
+    }
+    let where_sql = where_clauses.join(" AND ");
+    let count_sql = format!(
+        "SELECT COUNT(*) as count FROM transactions t JOIN users u ON t.user_id = u.id WHERE {}",
+        where_sql
+    );
+    let list_sql = format!(
+        r#"
+        SELECT 
+            t.id,
+            t.user_id,
+            u.email as user_email,
+            u.first_name as user_first_name,
+            u.last_name as user_last_name,
+            t.type::text as type,
+            t.amount,
+            t.currency,
+            t.fee,
+            t.net_amount,
+            t.method::text as method,
+            t.status::text as status,
+            t.reference,
+            t.method_details,
+            t.admin_notes,
+            t.rejection_reason,
+            t.created_at,
+            t.updated_at,
+            t.completed_at
+        FROM transactions t
+        JOIN users u ON t.user_id = u.id
+        WHERE {}
+        ORDER BY t.created_at DESC
+        LIMIT ${} OFFSET ${}
+        "#,
+        where_sql,
+        bind_index,
+        bind_index + 1
+    );
+
+    // Run count query with same filters
+    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+    if let Some(ref ids) = allowed_user_ids {
+        count_query = count_query.bind(ids);
+    }
+    if let Some(ref p) = search_pattern {
+        count_query = count_query.bind(p);
+    }
+    if let Some(ref v) = type_filter {
+        count_query = count_query.bind(v.as_str());
+    }
+    if let Some(ref v) = status_filter {
+        count_query = count_query.bind(v.as_str());
+    }
+    if let Some(ref v) = currency_filter {
+        count_query = count_query.bind(v.as_str());
+    }
+    if let Some(ref v) = date_from {
+        count_query = count_query.bind(v.as_str());
+    }
+    if let Some(ref v) = date_to {
+        count_query = count_query.bind(v.as_str());
+    }
+    let total: i64 = count_query
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to count transactions: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Run list query
+    let mut list_query = sqlx::query_as::<_, TransactionResponse>(&list_sql);
+    if let Some(ref ids) = allowed_user_ids {
+        list_query = list_query.bind(ids);
+    }
+    if let Some(ref p) = search_pattern {
+        list_query = list_query.bind(p);
+    }
+    if let Some(ref v) = type_filter {
+        list_query = list_query.bind(v.as_str());
+    }
+    if let Some(ref v) = status_filter {
+        list_query = list_query.bind(v.as_str());
+    }
+    if let Some(ref v) = currency_filter {
+        list_query = list_query.bind(v.as_str());
+    }
+    if let Some(ref v) = date_from {
+        list_query = list_query.bind(v.as_str());
+    }
+    if let Some(ref v) = date_to {
+        list_query = list_query.bind(v.as_str());
+    }
+    list_query = list_query.bind(page_size).bind(offset);
+
+    let items = list_query.fetch_all(&pool).await.map_err(|e| {
         tracing::error!("Failed to list transactions: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // Apply filters in memory
-    let mut filtered: Vec<TransactionResponse> = transactions.into_iter().filter(|tx| {
-        if let Some(search) = &params.search {
-            if !search.is_empty() {
-                let search_lower = search.to_lowercase();
-                if !tx.user_email.to_lowercase().contains(&search_lower)
-                    && !tx.id.to_string().contains(&search_lower)
-                    && !tx.reference.to_lowercase().contains(&search_lower)
-                {
-                    return false;
-                }
-            }
-        }
-        if let Some(tx_type) = &params.r#type {
-            if tx_type != "all" && tx.r#type != *tx_type {
-                return false;
-            }
-        }
-        if let Some(status) = &params.status {
-            if status != "all" && tx.status != *status {
-                return false;
-            }
-        }
-        if let Some(currency) = &params.currency {
-            if currency != "all" && tx.currency != *currency {
-                return false;
-            }
-        }
-        if let Some(date_from) = &params.date_from {
-            if !date_from.is_empty() {
-                let tx_date = tx.created_at.date_naive().to_string();
-                if tx_date < *date_from {
-                    return false;
-                }
-            }
-        }
-        if let Some(date_to) = &params.date_to {
-            if !date_to.is_empty() {
-                let tx_date = tx.created_at.date_naive().to_string();
-                if tx_date > *date_to {
-                    return false;
-                }
-            }
-        }
-        true
-    }).collect();
-
-    // Apply pagination
-    let offset = ((params.page - 1) * params.page_size) as usize;
-    let end = (offset + params.page_size as usize).min(filtered.len());
-    if offset < filtered.len() {
-        filtered = filtered[offset..end].to_vec();
-    } else {
-        filtered = vec![];
-    }
-
-    Ok(Json(filtered))
+    Ok(Json(PaginatedTransactionsResponse { items, total }))
 }
 
 async fn list_wallets(

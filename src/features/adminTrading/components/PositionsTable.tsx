@@ -38,9 +38,11 @@ const GRID_COLUMNS = COLUMN_WIDTHS.join(' ')
 interface PositionsTableProps {
   positions: AdminPosition[]
   onPositionClick?: (position: AdminPosition) => void
+  /** When true (e.g. Position History tab), hide Close/Modify/Liquidate; only show Details */
+  readOnly?: boolean
 }
 
-export function PositionsTable({ positions, onPositionClick }: PositionsTableProps) {
+export function PositionsTable({ positions, onPositionClick, readOnly }: PositionsTableProps) {
   const { setSelectedPositionId, setOpenModal, liveMarkBySymbol } = useAdminTradingStore()
   const canClosePosition = useCanAccess('trading:close_position')
   const canLiquidate = useCanAccess('trading:liquidate')
@@ -234,7 +236,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
           const isOpen = position.status === 'OPEN'
           return (
             <div className="flex items-center gap-1">
-              {isOpen && (
+              {isOpen && !readOnly && (
                 <>
                   {canClosePosition && (
                     <>
@@ -282,7 +284,7 @@ export function PositionsTable({ positions, onPositionClick }: PositionsTablePro
         },
       },
     ],
-    [handleClose, handleModifySltp, handleLiquidate, handleRowClick, canClosePosition, canLiquidate, liveMarkBySymbol]
+    [handleClose, handleModifySltp, handleLiquidate, handleRowClick, canClosePosition, canLiquidate, liveMarkBySymbol, readOnly]
   )
 
   const parentRef = useRef<HTMLDivElement>(null)

@@ -328,7 +328,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
     queryFn: () => fetchTransactions({ search: user.email, pageSize: 100 }),
     enabled: !!user.email,
   })
-  const transactions = transactionsData ?? []
+  const transactions = transactionsData?.items ?? []
 
   // Real-time: refetch Funding tab when deposit/balance events arrive so the table updates live
   useWebSocketSubscription(
@@ -775,8 +775,8 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
 
   // Map API transactions to FinanceTransaction shape for Funding table (same columns as Admin Transactions page)
   const fundingTransactions = useMemo((): FinanceTransaction[] => {
-    if (!transactionsData) return []
-    return transactionsData.map((tx) => ({
+    const items = transactionsData?.items ?? []
+    return items.map((tx) => ({
       id: tx.id,
       user: {
         id: tx.userId,

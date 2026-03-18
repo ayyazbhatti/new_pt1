@@ -39,6 +39,8 @@ async fn list_admin_audit(
         cursor: None,
         has_more: false,
         total: Some(0),
+        total_margin_used: None,
+        total_unrealized_pnl: None,
     }))
 }
 

@@ -46,9 +46,9 @@ export function FinanceOverviewPanel() {
     }
   }, [overview])
 
-  const recentActivity = useMemo(() => {
-    if (!recentTransactions) return []
-    return recentTransactions.map((tx) => ({
+  const recentActivity = useMemo((): Transaction[] => {
+    const items = recentTransactions?.items ?? []
+    return items.map((tx) => ({
       id: tx.id,
       user: {
         id: tx.userId,
@@ -67,6 +67,7 @@ export function FinanceOverviewPanel() {
       netAmount: Number(tx.netAmount),
       status: tx.status,
       createdAt: tx.createdAt,
+      updatedAt: tx.updatedAt,
       reference: tx.reference,
       methodDetails: tx.methodDetails,
       adminNotes: tx.adminNotes,
