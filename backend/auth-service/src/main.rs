@@ -42,6 +42,7 @@ use routes::admin_trading::create_admin_trading_router;
 use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
 use routes::admin_call_records::create_admin_call_records_router;
+use routes::admin_voiso::create_admin_voiso_router;
 use routes::admin_system::create_admin_system_router;
 use routes::symbols::create_symbols_router;
 use routes::finance::create_finance_router;
@@ -233,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/audit", create_admin_audit_router(pool.clone()))
 .nest("/api/admin/call-records", create_admin_call_records_router(pool.clone()))
+.nest("/api/admin/voiso", create_admin_voiso_router(pool.clone()))
 .nest("/api/admin/system", create_admin_system_router(pool.clone()))
 .nest("/api/admin/groups", create_admin_groups_router(pool.clone()).layer(axum::extract::Extension(deposits_state.redis.clone())))
         .nest("/api/admin/group-tags", routes::admin_groups::create_admin_group_tags_router(pool.clone()))

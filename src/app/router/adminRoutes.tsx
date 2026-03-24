@@ -20,6 +20,7 @@ import { TagsPage } from '@/features/tags'
 import { AdminAppointmentsPage } from '@/features/appointments'
 import { AdminProfilePage } from '@/features/adminProfile'
 import { AdminCallUserPage } from '@/features/adminCalls/pages/AdminCallUserPage'
+import { AdminVoisoPage } from '@/features/adminVoiso/pages/AdminVoisoPage'
 import { AdminBulkOperationsPage } from '@/features/adminBulkOperations'
 import { AdminPromotionsPage } from '@/features/adminPromotions'
 import { AdminFundedProgramsPage, AdminFundedPlanDetailPage } from '@/features/adminFundedPrograms'
@@ -135,6 +136,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/call-user',
     element: <AdminCallUserPage />,
+  },
+  {
+    path: '/admin/voiso',
+    element: <AdminVoisoPage />,
   },
   {
     path: '/admin/system',
