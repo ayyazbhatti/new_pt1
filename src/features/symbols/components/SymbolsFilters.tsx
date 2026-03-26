@@ -44,11 +44,14 @@ export function SymbolsFilters({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All Classes</SelectItem>
-          <SelectItem value="FX">FX</SelectItem>
-          <SelectItem value="Crypto">Crypto</SelectItem>
+          <SelectItem value="Forex">Forex</SelectItem>
+          <SelectItem value="Cryptocurrencies">Cryptocurrencies</SelectItem>
           <SelectItem value="Metals">Metals</SelectItem>
           <SelectItem value="Indices">Indices</SelectItem>
           <SelectItem value="Stocks">Stocks</SelectItem>
+          <SelectItem value="Shares">Shares</SelectItem>
+          <SelectItem value="ETFs">ETFs</SelectItem>
+          <SelectItem value="Energies">Energies</SelectItem>
           <SelectItem value="Commodities">Commodities</SelectItem>
         </SelectContent>
       </Select>

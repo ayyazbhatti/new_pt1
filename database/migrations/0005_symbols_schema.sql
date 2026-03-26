@@ -4,7 +4,7 @@
 DO $$ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'asset_class') THEN
-        CREATE TYPE asset_class AS ENUM ('FX', 'Crypto', 'Metals', 'Indices', 'Stocks', 'Commodities');
+        CREATE TYPE asset_class AS ENUM ('Forex', 'Cryptocurrencies', 'Metals', 'Indices', 'Stocks', 'Commodities');
     END IF;
 END $$;
 
@@ -68,12 +68,12 @@ BEGIN
         -- Update asset_class from market if null
         UPDATE symbols SET asset_class = 
             CASE 
-                WHEN market::text = 'forex' THEN 'FX'::asset_class
-                WHEN market::text = 'crypto' THEN 'Crypto'::asset_class
+                WHEN market::text = 'forex' THEN 'Forex'::asset_class
+                WHEN market::text = 'crypto' THEN 'Cryptocurrencies'::asset_class
                 WHEN market::text = 'metals' THEN 'Metals'::asset_class
                 WHEN market::text = 'indices' THEN 'Indices'::asset_class
                 WHEN market::text = 'stocks' THEN 'Stocks'::asset_class
-                ELSE 'FX'::asset_class
+                ELSE 'Forex'::asset_class
             END
         WHERE asset_class IS NULL;
 

@@ -1,5 +1,14 @@
 export type SymbolMarket = 'crypto' | 'forex' | 'metals' | 'indices' | 'stocks'
-export type AssetClass = 'FX' | 'Crypto' | 'Metals' | 'Indices' | 'Stocks' | 'Commodities'
+export type AssetClass =
+  | 'Forex'
+  | 'Cryptocurrencies'
+  | 'Metals'
+  | 'Indices'
+  | 'Stocks'
+  | 'Shares'
+  | 'ETFs'
+  | 'Energies'
+  | 'Commodities'
 
 export interface AdminSymbol {
   id: string

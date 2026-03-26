@@ -8,6 +8,7 @@ mod validation;
 
 use crate::cache::redis_client::RedisClient;
 use crate::config::Config;
+use crate::feeds::aws_feed::AwsFeed;
 use crate::feeds::binance_feed::BinanceFeed;
 use crate::pricing::markup_engine::MarkupEngine;
 use crate::stream::broadcaster::Broadcaster;
@@ -44,6 +45,14 @@ async fn main() -> anyhow::Result<()> {
     info!("   Region: {}", config.server_region);
     info!("   WS Port: {}", config.ws_port);
     info!("   HTTP Port: {}", config.http_port);
+    info!(
+        "   Provider: {} (AWS_PROVIDER={})",
+        if config.aws_provider { "aws" } else { "binance" },
+        config.aws_provider
+    );
+    if config.aws_provider {
+        info!("   AWS WS URL: {}", config.aws_ws_url);
+    }
 
     // Initialize Redis
     let redis = Arc::new(RedisClient::new(&config.redis_url).await?);
@@ -64,6 +73,27 @@ async fn main() -> anyhow::Result<()> {
     let nats_for_ticks = nats.clone();
 
     // Initialize components
+    //
+    // Tiny step: start AWS ingest when enabled, but keep Binance path intact when disabled.
+    let aws_feed: Option<Arc<AwsFeed>> = if config.aws_provider {
+        let feed = Arc::new(AwsFeed::new(config.aws_ws_url.clone()));
+        tokio::spawn({
+            let feed = feed.clone();
+            async move {
+                loop {
+                    if let Err(e) = feed.clone().run().await {
+                        warn!("AWS feed loop ended: {}. Reconnecting soon...", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        });
+        Some(feed)
+    } else {
+        None
+    };
+
+    // Binance feed remains available (legacy path and WS subscribe flow for now).
     let feed = Arc::new(BinanceFeed::new(config.binance_ws_url.clone()));
     let markup_engine = MarkupEngine::new(redis.clone());
     let broadcaster = Arc::new(Broadcaster::new(markup_engine));
@@ -187,6 +217,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Price update loop — per-group: one Redis message with prices[], per-group NATS, per-group WS
+    let aws_enabled = config.aws_provider;
+    let aws_feed_clone = aws_feed.clone();
     let feed_clone = feed.clone();
     let broadcaster_clone = broadcaster.clone();
     let markup_engine_clone = Arc::new(MarkupEngine::new(redis.clone()));
@@ -208,15 +240,27 @@ async fn main() -> anyhow::Result<()> {
 
             for symbol in &symbols_to_broadcast {
                 if !subscribed_symbols_clone.read().await.contains(symbol) {
-                    if let Err(e) = feed_clone.subscribe_symbol(symbol).await {
-                        warn!("Failed to subscribe to symbol {}: {}", symbol, e);
-                        continue;
+                    // AWS pushes all symbols; no WS subscribe needed.
+                    if !aws_enabled {
+                        if let Err(e) = feed_clone.subscribe_symbol(symbol).await {
+                            warn!("Failed to subscribe to symbol {}: {}", symbol, e);
+                            continue;
+                        }
                     }
                     subscribed_symbols_clone.write().await.insert(symbol.clone());
                     info!("📈 Subscribed to new symbol: {}", symbol);
                 }
 
-                if let Some(price_state) = feed_clone.get_price(symbol).await {
+                let price_state = if aws_enabled {
+                    match &aws_feed_clone {
+                        Some(aws) => aws.get_price(symbol).await,
+                        None => None,
+                    }
+                } else {
+                    feed_clone.get_price(symbol).await
+                };
+
+                if let Some(price_state) = price_state {
                     let mut prices_by_group: Vec<serde_json::Value> = Vec::new();
                     for group_id in &group_ids {
                         let (bid, ask) = match markup_engine_clone
@@ -350,6 +394,8 @@ async fn main() -> anyhow::Result<()> {
     let health_app = create_health_router(
         broadcaster.clone(),
         feed.clone(),
+        aws_feed.clone(),
+        config.aws_provider,
         config.server_region.clone(),
         start_time,
     );

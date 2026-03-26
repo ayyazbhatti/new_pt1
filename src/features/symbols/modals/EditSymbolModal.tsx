@@ -17,7 +17,7 @@ import { useEffect } from 'react'
 const symbolSchema = z.object({
   symbol_code: z.string().min(2, 'Symbol code must be at least 2 characters').max(50),
   provider_symbol: z.string().min(1, 'Provider symbol is required'),
-  asset_class: z.enum(['FX', 'Crypto', 'Metals', 'Indices', 'Stocks', 'Commodities']),
+  asset_class: z.enum(['Forex', 'Cryptocurrencies', 'Metals', 'Indices', 'Stocks', 'Shares', 'ETFs', 'Energies', 'Commodities']),
   base_currency: z.string().min(1, 'Base currency is required').max(10),
   quote_currency: z.string().min(1, 'Quote currency is required').max(10),
   price_precision: z.number().min(0).max(10),
@@ -122,7 +122,7 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
     defaultValues: {
       symbol_code: symbol?.symbolCode || '',
       provider_symbol: symbol?.providerSymbol || symbol?.symbolCode?.toLowerCase() || '',
-      asset_class: (symbol?.assetClass || 'FX') as AssetClass,
+      asset_class: (symbol?.assetClass || 'Forex') as AssetClass,
       base_currency: symbol?.baseCurrency || '',
       quote_currency: symbol?.quoteCurrency || '',
       price_precision: symbol?.pricePrecision || 2,
@@ -218,11 +218,14 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="FX">FX</SelectItem>
-                <SelectItem value="Crypto">Crypto</SelectItem>
+                <SelectItem value="Forex">Forex</SelectItem>
+                <SelectItem value="Cryptocurrencies">Cryptocurrencies</SelectItem>
                 <SelectItem value="Metals">Metals</SelectItem>
                 <SelectItem value="Indices">Indices</SelectItem>
                 <SelectItem value="Stocks">Stocks</SelectItem>
+                <SelectItem value="Shares">Shares</SelectItem>
+                <SelectItem value="ETFs">ETFs</SelectItem>
+                <SelectItem value="Energies">Energies</SelectItem>
                 <SelectItem value="Commodities">Commodities</SelectItem>
               </SelectContent>
             </Select>

@@ -28,11 +28,14 @@ interface SymbolsTableProps {
 }
 
 const assetClassBadgeColors: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
-  Crypto: 'primary',
-  FX: 'success',
+  Cryptocurrencies: 'primary',
+  Forex: 'success',
   Metals: 'warning',
   Indices: 'info',
   Stocks: 'primary',
+  Shares: 'primary',
+  ETFs: 'info',
+  Energies: 'warning',
   Commodities: 'warning',
 }
 
@@ -102,7 +105,7 @@ export function SymbolsTable({
         payload: {
           symbol_code: symbol.symbolCode,
           provider_symbol: symbol.providerSymbol || symbol.symbolCode.toLowerCase(),
-          asset_class: symbol.assetClass || 'FX',
+          asset_class: symbol.assetClass || 'Forex',
           base_currency: symbol.baseCurrency,
           quote_currency: symbol.quoteCurrency,
           price_precision: symbol.pricePrecision,

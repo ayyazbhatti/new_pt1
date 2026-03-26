@@ -4,6 +4,9 @@ use std::env;
 pub struct Config {
     pub redis_url: String,
     pub feed_provider: String,
+    /// Single provider switch (false = current Binance path, true = new AWS path)
+    pub aws_provider: bool,
+    pub aws_ws_url: String,
     pub server_region: String,
     pub max_connections: usize,
     pub ws_port: u16,
@@ -18,6 +21,17 @@ impl Config {
             redis_url: env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
             feed_provider: env::var("FEED_PROVIDER").unwrap_or_else(|_| "binance".to_string()),
+            aws_provider: matches!(
+                env::var("AWS_PROVIDER")
+                    .unwrap_or_else(|_| "false".to_string())
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "1" | "true" | "yes" | "y" | "on"
+            ),
+            aws_ws_url: env::var("AWS_WS_URL").unwrap_or_else(|_| {
+                "wss://aws-data-provider-2.dtrader.tech/?token=change-me".to_string()
+            }),
             server_region: env::var("SERVER_REGION").unwrap_or_else(|_| "asia-1".to_string()),
             max_connections: env::var("MAX_CONNECTIONS")
                 .unwrap_or_else(|_| "200000".to_string())
