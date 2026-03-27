@@ -39,6 +39,11 @@ function Start-Service {
 }
 
 Write-Host "==> Starting infra (Postgres, Redis, NATS)..."
+try {
+    & docker info | Out-Null
+} catch {
+    throw "Docker daemon is not reachable. Please start Docker Desktop, wait until it's fully running, then rerun this script."
+}
 & docker compose -f $infraCompose up -d | Out-Null
 
 # Defaults (matches service code expectations / existing start-all.sh)
@@ -117,10 +122,10 @@ Start-Service -Name "core-api" `
     -Arguments @("run", "-p", "core-api")
 
 Write-Host "==> Starting frontend (Vite, port 5173)..."
+# Quote npm.cmd path because it contains spaces ("Program Files").
 Start-Service -Name "frontend" `
     -WorkingDirectory $repoRoot `
     -FilePath "cmd.exe" `
-    # Quote npm.cmd path because it contains spaces ("Program Files").
     -Arguments @("/c", "`"$npmCmd`"", "run", "dev")
 
 Write-Host ""

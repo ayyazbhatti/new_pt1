@@ -3,6 +3,9 @@ import { BARS_PER_CHUNK, fetchBinanceKlines, KLineBar } from './binanceKlines'
 const INTERWARE_BASE_URL =
   (import.meta.env.VITE_INTERWARE_BASE_URL as string | undefined) ||
   'https://provider.interwarepvt.com'
+const EXCHANGE_RATE_URL =
+  (import.meta.env.VITE_EXCHANGE_RATE_URL as string | undefined) ||
+  'https://exchange4.dtrader.tech/api/exchange-rate'
 
 type InterwareKline = {
   time: number
@@ -11,6 +14,13 @@ type InterwareKline = {
   low: string | number
   close: string | number
   volume: string | number
+}
+
+type ExchangeRateResponse = {
+  ask?: number | string
+  bid?: number | string
+  rate?: number | string
+  [key: string]: unknown
 }
 
 function toInterwareTimeframe(interval: string): string {
@@ -30,13 +40,18 @@ function normalizeInterwareSymbol(symbolCode: string): string {
 export async function fetchInterwareKlines(
   symbolCode: string,
   interval: string,
-  count = BARS_PER_CHUNK
+  count = BARS_PER_CHUNK,
+  endTime?: number,
+  startTime?: number
 ): Promise<KLineBar[]> {
   const providerSymbol = normalizeInterwareSymbol(symbolCode)
   const timeframe = toInterwareTimeframe(interval)
+  // Interware API uses count-based fetch (no explicit start/end window like Binance).
+  // We fetch a bounded recent window and apply start/end filtering client-side.
+  const requestCount = Math.min(Math.max(count, BARS_PER_CHUNK), 1000)
   const url = `${INTERWARE_BASE_URL}/api/rates/${providerSymbol}?timeframe=${encodeURIComponent(
     timeframe
-  )}&count=${Math.min(count, 1000)}`
+  )}&count=${requestCount}`
 
   const res = await fetch(url)
   if (!res.ok) {
@@ -44,7 +59,7 @@ export async function fetchInterwareKlines(
   }
 
   const rows = (await res.json()) as InterwareKline[]
-  return rows.map((r) => ({
+  let bars = rows.map((r) => ({
     timestamp: Number(r.time),
     open: Number(r.open),
     high: Number(r.high),
@@ -52,6 +67,40 @@ export async function fetchInterwareKlines(
     close: Number(r.close),
     volume: Number(r.volume),
   }))
+
+  // Normalize order just in case provider order changes.
+  bars = bars.sort((a, b) => a.timestamp - b.timestamp)
+
+  if (endTime != null) {
+    bars = bars.filter((b) => b.timestamp <= endTime)
+  }
+  if (startTime != null) {
+    bars = bars.filter((b) => b.timestamp >= startTime)
+  }
+
+  // Keep same chunk size behavior expected by chart loader.
+  if (bars.length > count) {
+    bars = bars.slice(-count)
+  }
+  return bars
+}
+
+/**
+ * Optional helper for future conversion path.
+ * Not applied to kline values yet (kept non-breaking for this tiny step).
+ */
+export async function fetchExchangeRate(quotation = 'USDT'): Promise<ExchangeRateResponse | null> {
+  try {
+    const res = await fetch(EXCHANGE_RATE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quotation }),
+    })
+    if (!res.ok) return null
+    return (await res.json()) as ExchangeRateResponse
+  } catch {
+    return null
+  }
 }
 
 export async function fetchProviderKlines(params: {
@@ -85,7 +134,6 @@ export async function fetchProviderKlines(params: {
     return fetchBinanceKlines(binanceSymbol, interval, limit, endTime, startTime)
   }
 
-  // Interware endpoint doesn't support start/end pagination in the same way.
-  return fetchInterwareKlines(symbolCode, interval, limit)
+  return fetchInterwareKlines(symbolCode, interval, limit, endTime, startTime)
 }
 

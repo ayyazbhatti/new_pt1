@@ -3,7 +3,9 @@
  * Used only for chart history; live data comes from data-provider WebSocket (bid).
  */
 
-const BINANCE_KLINES = 'https://api.binance.com/api/v3/klines'
+const BINANCE_REST_BASE =
+  (import.meta.env.VITE_BINANCE_REST_URL as string | undefined) || 'https://api.binance.com'
+const BINANCE_KLINES = `${BINANCE_REST_BASE}/api/v3/klines`
 
 /** Binance kline response: [openTime, open, high, low, close, volume, closeTime, ...] */
 type BinanceKlineRow = [number, string, string, string, string, string, number, ...unknown[]]
