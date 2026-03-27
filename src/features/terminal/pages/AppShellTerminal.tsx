@@ -141,7 +141,7 @@ export function AppShellTerminal() {
   // Fetch enabled symbols (page_size large enough to load all, e.g. BTC/ETH on later pages with default sort)
   const { data: symbolsData, isLoading } = useSymbolsList({
     is_enabled: 'true',
-    page_size: 500,
+    page_size: 5000,
   })
 
   // Get symbol codes for price streaming - must match feed symbols (e.g. BTCUSDT from data-provider)

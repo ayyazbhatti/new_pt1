@@ -1,0 +1,195 @@
+{
+  "source_tuples": 3197,
+  "insert_blocks": 17,
+  "parsed_rows": 3197,
+  "bad_rows": 0,
+  "mapped_rows": 3197,
+  "skipped_rows": 0,
+  "asset_class_counts": {
+    "Cryptocurrencies": 1239,
+    "Forex": 87,
+    "Metals": 21,
+    "Indices": 11,
+    "Shares": 1781,
+    "ETFs": 47,
+    "Energies": 4,
+    "Stocks": 7
+  },
+  "enabled_counts": {
+    "Cryptocurrencies": 1239,
+    "Forex": 87,
+    "Metals": 21,
+    "Indices": 11,
+    "Shares": 1781,
+    "ETFs": 47,
+    "Energies": 4,
+    "Stocks": 7
+  },
+  "sample_rows": [
+    {
+      "symbol_code": "APTUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "APT",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "CHRUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "CHR",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "CRVUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "CRV",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "DOTUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "DOT",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "EIGENUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "EIGEN",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "LDOUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "LDO",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "MINAUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "MINA",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "PHAUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "PHA",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "PYTHUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "PYTH",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "RLCUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "RLC",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "SANDUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "SAND",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "SOLUSDT",
+      "provider_symbol": "SOLUSD",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "SOL",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "TRXUSDT",
+      "provider_symbol": "TRXUSD",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "TRX",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "WIFUSDT",
+      "provider_symbol": "NULL",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "WIF",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    },
+    {
+      "symbol_code": "BTCUSDT",
+      "provider_symbol": "BTCUSD",
+      "asset_class": "Cryptocurrencies",
+      "base_currency": "BTC",
+      "quote_currency": "USDT",
+      "price_precision": 8,
+      "volume_precision": 2,
+      "is_enabled": true,
+      "trading_enabled": true
+    }
+  ]
+}
