@@ -2,7 +2,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { init, dispose } from 'klinecharts'
 import type { KLineData } from 'klinecharts'
 import { useTerminalStore } from '../store'
-import { fetchBinanceKlines, toBinanceSymbol, toBinanceInterval, BARS_PER_CHUNK, type KLineBar } from '../api/binanceKlines'
+import { toBinanceSymbol, toBinanceInterval, BARS_PER_CHUNK, type KLineBar } from '../api/binanceKlines'
+import { fetchProviderKlines } from '../api/providerKlines'
 import { timeframeToPeriod, chartTypeToCandleType } from '../utils/chartOptions'
 import type { ChartTypeKey, TimeframeKey } from '../utils/chartOptions'
 import type { ChartSettings, DrawingMagnetMode } from '../utils/chartOptions'
@@ -21,6 +22,8 @@ function normalizeSymbolKey(symbol: string): string {
 }
 
 const CHART_CONTAINER_ID = 'terminal-kline-chart'
+const AWS_PROVIDER_ENABLED =
+  String(import.meta.env.VITE_AWS_PROVIDER ?? 'false').toLowerCase() === 'true'
 
 const ZOOM_IN_SCALE = 1.2
 const ZOOM_OUT_SCALE = 1 / ZOOM_IN_SCALE
@@ -103,6 +106,7 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   const currentBarRef = useRef<KLineBar | null>(null)
   const lastBarDataIndexRef = useRef<number>(0)
   const binanceSymbolRef = useRef<string>('BTCUSDT')
+  const selectedAssetClassRef = useRef<string | null>(null)
   const selectedSymbolKeyRef = useRef<string>('')
   const chartShowAskPriceRef = useRef(chartShowAskPrice)
   const chartShowPositionMarkerRef = useRef(chartShowPositionMarker)
@@ -117,6 +121,7 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   selectedSymbolKeyRef.current = selectedSymbol?.code ? normalizeSymbolKey(selectedSymbol.code) : ''
   chartShowAskPriceRef.current = chartShowAskPrice
   chartShowPositionMarkerRef.current = chartShowPositionMarker
+  selectedAssetClassRef.current = selectedSymbol?.assetClass ?? null
 
   useImperativeHandle(
     ref,
@@ -177,13 +182,36 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
           // Library: 'forward' = user at LEFT edge → load OLDER data (prepended, so it appears on the left).
           // Library: 'backward' = user at RIGHT edge → load NEWER data (appended).
           if (type === 'init') {
-            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK)
+            bars = await fetchProviderKlines({
+              awsProviderEnabled: AWS_PROVIDER_ENABLED,
+              assetClass: selectedAssetClassRef.current,
+              symbolCode: ticker,
+              binanceSymbol: symbol,
+              interval,
+              limit: BARS_PER_CHUNK,
+            })
           } else if (type === 'forward' && timestamp != null) {
             // Oldest bar timestamp: fetch bars before it (older), library will prepend → correct left-side history
-            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK, timestamp - 1)
+            bars = await fetchProviderKlines({
+              awsProviderEnabled: AWS_PROVIDER_ENABLED,
+              assetClass: selectedAssetClassRef.current,
+              symbolCode: ticker,
+              binanceSymbol: symbol,
+              interval,
+              limit: BARS_PER_CHUNK,
+              endTime: timestamp - 1,
+            })
           } else if (type === 'backward' && timestamp != null) {
             // Newest bar timestamp: fetch bars after it (newer), library will append
-            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK, undefined, timestamp + 1)
+            bars = await fetchProviderKlines({
+              awsProviderEnabled: AWS_PROVIDER_ENABLED,
+              assetClass: selectedAssetClassRef.current,
+              symbolCode: ticker,
+              binanceSymbol: symbol,
+              interval,
+              limit: BARS_PER_CHUNK,
+              startTime: timestamp + 1,
+            })
           } else {
             callback([], { backward: false, forward: false })
             done()

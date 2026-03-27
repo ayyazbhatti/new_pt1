@@ -216,7 +216,7 @@ export function RightTradingPanel() {
       id: selectedSymbol.id,
       symbolCode: selectedSymbol.code,
       providerSymbol: null,
-      assetClass: 'Crypto' as const,
+      assetClass: 'Cryptocurrencies' as const,
       baseCurrency: selectedSymbol.baseCurrency,
       quoteCurrency: selectedSymbol.quoteCurrency,
       pricePrecision: 2,

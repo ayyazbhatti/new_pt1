@@ -77,6 +77,7 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
   return {
     id: symbol.id,
     code: symbol.symbolCode,
+    assetClass: symbol.assetClass,
     price: formatPrice(bid),
     price2: formatPrice(ask),
     value: '$0',
@@ -153,7 +154,7 @@ export function AppShellTerminal() {
         }
         const normalized = s.symbolCode.toUpperCase().replace(/-/g, '')
         // Feed uses BTCUSDT etc.; for crypto USD pairs derive XXXUSDT so gateway receives matching ticks
-        if (s.assetClass === 'Crypto' && s.quoteCurrency === 'USD' && normalized.endsWith('USD') && !normalized.endsWith('USDT')) {
+        if (s.assetClass === 'Cryptocurrencies' && s.quoteCurrency === 'USD' && normalized.endsWith('USD') && !normalized.endsWith('USDT')) {
           return normalized.slice(0, -3) + 'USDT'
         }
         return normalized

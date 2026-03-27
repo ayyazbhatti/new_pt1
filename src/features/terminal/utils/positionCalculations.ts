@@ -17,10 +17,10 @@ export function calculatePipValuePerLot(
   if (!price || price <= 0) return 0
   
   // Get tick size (default to 0.0001 for FX if not set)
-  const tickSize = symbol.tickSize ?? (symbol.assetClass === 'FX' ? 0.0001 : 0.01)
+  const tickSize = symbol.tickSize ?? (symbol.assetClass === 'Forex' ? 0.0001 : 0.01)
   
   // Get contract size (default to 100000 for FX if not set)
-  const contractSize = parseFloat(symbol.contractSize) || (symbol.assetClass === 'FX' ? 100000 : 1)
+  const contractSize = parseFloat(symbol.contractSize) || (symbol.assetClass === 'Forex' ? 100000 : 1)
   
   // cTrader formula: (Tick Size × Contract Size) / Current Price
   const pipValue = (tickSize * contractSize) / price
@@ -94,7 +94,7 @@ export function calculateLotSizeFromPipPosition(
 export function calculateUnitsFromLots(lots: number, symbol: AdminSymbol): number {
   if (lots <= 0) return 0
   
-  const contractSize = parseFloat(symbol.contractSize) || (symbol.assetClass === 'FX' ? 100000 : 1)
+  const contractSize = parseFloat(symbol.contractSize) || (symbol.assetClass === 'Forex' ? 100000 : 1)
   return lots * contractSize
 }
 
@@ -109,7 +109,7 @@ export function calculateUnitsFromLots(lots: number, symbol: AdminSymbol): numbe
 export function calculateLotsFromUnits(units: number, symbol: AdminSymbol): number {
   if (units <= 0) return 0
   
-  const contractSize = parseFloat(symbol.contractSize) || (symbol.assetClass === 'FX' ? 100000 : 1)
+  const contractSize = parseFloat(symbol.contractSize) || (symbol.assetClass === 'Forex' ? 100000 : 1)
   if (contractSize === 0) return 0
   
   const lotSize = units / contractSize

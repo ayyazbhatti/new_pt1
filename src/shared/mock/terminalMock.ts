@@ -1,6 +1,7 @@
 export interface MockSymbol {
   id: string
   code: string
+  assetClass?: string | null
   price: string
   price2: string
   value: string
