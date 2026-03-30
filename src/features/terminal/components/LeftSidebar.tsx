@@ -50,7 +50,30 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
   const { balance, equity, margin_used, currency, isLoading: balanceLoading, setWalletData, setLoading } = useWalletStore()
-  const [cryptoExpanded, setCryptoExpanded] = useState(true)
+  const ASSET_CLASS_ORDER = [
+    'Cryptocurrencies',
+    'Forex',
+    'Metals',
+    'Indices',
+    'Stocks',
+    'Shares',
+    'ETFs',
+    'Energies',
+    'Commodities',
+  ] as const
+
+  const [expandedByClass, setExpandedByClass] = useState<Record<string, boolean>>(() => ({
+    Cryptocurrencies: true,
+    Forex: true,
+    Metals: false,
+    Indices: false,
+    Stocks: false,
+    Shares: false,
+    ETFs: false,
+    Energies: false,
+    Commodities: false,
+    Unknown: false,
+  }))
   const [isScrolling, setIsScrolling] = useState(false)
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
@@ -60,6 +83,11 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const { accountSummary, isLoading: accountSummaryLoading } = useAccountSummary()
   const wsState = useWebSocketState()
   const symbols = getFilteredSymbols()
+
+  const groupedSymbols = ASSET_CLASS_ORDER.map((assetClass) => ({
+    assetClass,
+    symbols: symbols.filter((s) => (s.assetClass ?? 'Unknown') === assetClass),
+  })).filter((g) => g.symbols.length > 0)
 
   // Ensure WebSocket is connected when user is on terminal (so balance push is received)
   useEffect(() => {
@@ -222,7 +250,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
         clearTimeout(scrollTimeoutRef.current)
       }
     }
-  }, [cryptoExpanded])
+  }, [expandedByClass])
 
   const getUserInitials = () => {
     if (user?.firstName && user?.lastName) {
@@ -455,49 +483,56 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
         </button>
       </div>
 
-      {/* Section Header */}
-      <button
-        onClick={() => setCryptoExpanded(!cryptoExpanded)}
-        className="shrink-0 px-4 py-2.5 flex items-center justify-between w-full hover:bg-white/5 transition-all duration-200 group"
-      >
-        <div className="text-[11px] font-bold text-text/70 uppercase tracking-widest">Cryptocurrencies</div>
-        {cryptoExpanded ? (
-          <ChevronUp className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors" />
-        )}
-      </button>
-
-      {/* Symbols List */}
+      {/* Symbols List (grouped by asset class) */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {cryptoExpanded && (
-          <div 
-            ref={scrollContainerRef}
-            className={cn(
-              "h-full overflow-y-auto scrollbar-thin",
-              isScrolling && "scrolling"
-            )}
-          >
-            {isLoading ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="px-4 py-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-1">
-                      <Skeleton className="h-3.5 w-3.5 rounded" variant="rectangular" />
-                      <div className="flex-1 space-y-1.5">
-                        <Skeleton className="h-4 w-16" variant="text" />
-                        <Skeleton className="h-3 w-20" variant="text" />
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1.5">
-                      <Skeleton className="h-3 w-12" variant="text" />
-                      <Skeleton className="h-4 w-10 rounded" variant="rectangular" />
+        <div
+          ref={scrollContainerRef}
+          className={cn("h-full overflow-y-auto scrollbar-thin", isScrolling && "scrolling")}
+        >
+          {isLoading ? (
+            Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="px-4 py-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-1">
+                    <Skeleton className="h-3.5 w-3.5 rounded" variant="rectangular" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-20" variant="text" />
+                      <Skeleton className="h-3 w-24" variant="text" />
                     </div>
                   </div>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <Skeleton className="h-3 w-12" variant="text" />
+                    <Skeleton className="h-4 w-12 rounded" variant="rectangular" />
+                  </div>
                 </div>
-              ))
-            ) : (
-              symbols.map((symbol) => (
+              </div>
+            ))
+          ) : (
+            groupedSymbols.map((group) => {
+              const isExpanded = expandedByClass[group.assetClass] ?? false
+              return (
+                <div key={group.assetClass}>
+                  <button
+                    onClick={() =>
+                      setExpandedByClass((s) => ({
+                        ...s,
+                        [group.assetClass]: !(s[group.assetClass] ?? false),
+                      }))
+                    }
+                    className="px-4 py-2.5 flex items-center justify-between w-full hover:bg-white/5 transition-all duration-200 group"
+                  >
+                    <div className="text-[11px] font-bold text-text/70 uppercase tracking-widest">
+                      {group.assetClass} ({group.symbols.length})
+                    </div>
+                    {isExpanded ? (
+                      <ChevronUp className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors" />
+                    )}
+                  </button>
+
+                  {isExpanded &&
+                    group.symbols.map((symbol) => (
               <div
                 key={symbol.id}
                 onClick={() => setSelectedSymbol(symbol)}
@@ -566,10 +601,12 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                   </div>
                 </div>
               </div>
-            ))
-            )}
-          </div>
-        )}
+                    ))}
+                </div>
+              )
+            })
+          )}
+        </div>
       </div>
 
       {/* Bottom Buttons */}

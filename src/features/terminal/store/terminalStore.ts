@@ -1,5 +1,31 @@
 import { create } from 'zustand'
 import { type MockSymbol } from '@/shared/mock/terminalMock'
+import type { AssetClass } from '@/features/symbols/types/symbol'
+
+/** Display / fetch order for terminal sidebar market tabs (one category loaded at a time). */
+export const TERMINAL_SIDEBAR_ASSET_CLASS_ORDER: readonly AssetClass[] = [
+  'Cryptocurrencies',
+  'Forex',
+  'Metals',
+  'Indices',
+  'Stocks',
+  'Shares',
+  'ETFs',
+  'Energies',
+  'Commodities',
+]
+
+const STORAGE_KEY_SIDEBAR_ASSET_CLASS = 'terminal.sidebarAssetClass'
+
+function getSidebarAssetClassFromStorage(): AssetClass {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_SIDEBAR_ASSET_CLASS)
+    if (v && (TERMINAL_SIDEBAR_ASSET_CLASS_ORDER as readonly string[]).includes(v)) {
+      return v as AssetClass
+    }
+  } catch {}
+  return 'Cryptocurrencies'
+}
 
 interface TerminalStore {
   selectedSymbol: MockSymbol | null
