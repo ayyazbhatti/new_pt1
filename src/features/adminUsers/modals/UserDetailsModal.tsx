@@ -1127,8 +1127,11 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           ))}
         </div>
 
-        <TabsContent value="overview" className="flex-1 min-h-0 overflow-auto mt-3 data-[state=inactive]:hidden">
-          <div className="min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
+        <TabsContent
+          value="overview"
+          className="scrollbar-modal mt-3 min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden"
+        >
+          <div className="scrollbar-modal min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
             <h2 className="border-b border-slate-700 pb-3 text-base font-semibold text-white sm:pb-4 sm:text-lg">
               User Information
             </h2>
@@ -1248,8 +1251,11 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="funding" className="flex-1 min-h-0 overflow-auto mt-3 data-[state=inactive]:hidden">
-          <div className="min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
+        <TabsContent
+          value="funding"
+          className="scrollbar-modal mt-3 min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden"
+        >
+          <div className="scrollbar-modal min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
             {transactionsLoading ? (
               <div className="flex h-64 items-center justify-center">
                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-600 border-t-blue-500" />
@@ -1421,8 +1427,11 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="orders-positions" className="flex-1 min-h-0 overflow-auto mt-3 data-[state=inactive]:hidden">
-          <div className="min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
+        <TabsContent
+          value="orders-positions"
+          className="scrollbar-modal mt-3 min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden"
+        >
+          <div className="scrollbar-modal min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
             <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-700 pb-2">
               <div className="flex flex-wrap gap-1 sm:gap-2">
                 {(['positions', 'orders', 'pending', 'closed'] as const).map((sub) => (
@@ -1544,7 +1553,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                               />
                             </div>
                           </div>
-                          <div className="flex-1 min-h-0 overflow-y-auto">
+                          <div className="scrollbar-modal flex-1 min-h-0 overflow-y-auto">
                             {createOrderSymbolsFiltered.length === 0 ? (
                               <div className="px-3 py-4 text-center text-slate-400 text-sm">No symbols match</div>
                             ) : (
@@ -1938,8 +1947,11 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="appointments" className="flex-1 min-h-0 overflow-auto mt-3 data-[state=inactive]:hidden">
-          <div className="min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
+        <TabsContent
+          value="appointments"
+          className="scrollbar-modal mt-3 min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden"
+        >
+          <div className="scrollbar-modal min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
             <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
               <button
                 type="button"
@@ -2106,8 +2118,11 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="notes" className="flex-1 min-h-0 overflow-auto mt-3 data-[state=inactive]:hidden">
-          <div className="min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
+        <TabsContent
+          value="notes"
+          className="scrollbar-modal mt-3 min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden"
+        >
+          <div className="scrollbar-modal min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-base font-semibold text-white sm:text-lg">Notes & Timeline</h2>
             </div>
@@ -2157,14 +2172,17 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="chat" className="flex-1 min-h-0 flex flex-col mt-3 data-[state=inactive]:hidden">
+        <TabsContent
+          value="chat"
+          className="scrollbar-modal mt-3 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+        >
           <div className="flex-shrink-0 px-3 pt-2 pb-1 sm:px-4">
             <h2 className="text-base font-semibold text-white sm:text-lg">
               Chat with {userState.name || userState.email || 'User'}
             </h2>
           </div>
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3">
+            <div className="scrollbar-modal flex-1 min-h-0 overflow-y-auto space-y-3 p-3 sm:p-4">
               {chatLoading ? (
                 <div className="flex h-32 items-center justify-center">
                   <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-600 border-t-blue-500" />
@@ -2301,7 +2319,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[100]" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-800 border border-slate-600 rounded-lg p-6 z-[100] w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+          <Dialog.Content className="scrollbar-modal fixed left-1/2 top-1/2 z-[100] max-h-[90vh] w-full max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-slate-600 bg-slate-800 p-6 shadow-xl">
             <Dialog.Title className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
               <Pencil className="h-5 w-5 text-blue-400" />
               Modify position
@@ -2502,7 +2520,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[100]" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-800 border border-slate-600 rounded-lg p-6 z-[100] w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+          <Dialog.Content className="scrollbar-modal fixed left-1/2 top-1/2 z-[100] max-h-[90vh] w-full max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-slate-600 bg-slate-800 p-6 shadow-xl">
             <Dialog.Title className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
               <Pencil className="h-5 w-5 text-blue-400" />
               Modify & open position

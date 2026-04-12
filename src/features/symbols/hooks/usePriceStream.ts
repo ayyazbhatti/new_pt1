@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { priceStreamClient, getDataProviderPricesBaseUrl } from '@/shared/ws/priceStreamClient'
 import { useAuthStore } from '@/shared/store/auth.store'
 
@@ -14,9 +14,14 @@ const priceStore = new Map<string, PriceData>()
 // Subscribers map: symbol -> Set of callbacks
 const subscribers = new Map<string, Set<(price: PriceData) => void>>()
 
-/** Normalize symbol key for storage/lookup: uppercase, no slashes, USDT->USD. Export for modal. */
+/** Normalize symbol key for storage/lookup: uppercase, no slashes/dashes, USDT->USD (must match gateway ticks + mapSymbolToTerminal). */
 export function normalizeSymbolKey(symbol: string): string {
-  return symbol.toUpperCase().trim().replace(/\//g, '').replace('USDT', 'USD')
+  return symbol
+    .toUpperCase()
+    .trim()
+    .replace(/\//g, '')
+    .replace(/-/g, '')
+    .replace('USDT', 'USD')
 }
 
 function notifySubscribers(symbol: string, price: PriceData) {
@@ -39,10 +44,15 @@ export function usePriceStream(symbols: string[]) {
   const subscribeFnRef = useRef<((symbols: string[]) => boolean) | null>(null)
   const unsubscribeFnRef = useRef<((symbols: string[]) => void) | null>(null)
 
+  const symbolsKey = useMemo(
+    () => symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0).join(','),
+    [symbols]
+  )
+
   // Update symbols ref when they change
   useEffect(() => {
-    symbolsRef.current = symbols.map(s => s.toUpperCase().trim()).filter(s => s.length > 0)
-  }, [symbols.join(',')])
+    symbolsRef.current = symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0)
+  }, [symbolsKey])
 
   // Create callback that updates only the specific symbol - use useCallback to ensure stability
   const updatePrice = useCallback((symbol: string, price: PriceData) => {
@@ -119,7 +129,7 @@ export function usePriceStream(symbols: string[]) {
         }
       })
     }
-  }, [symbols.join(','), updatePrice]) // Include updatePrice in dependencies
+  }, [symbolsKey, updatePrice]) // Include updatePrice in dependencies
 
   // Use data-provider WebSocket directly for prices (no auth, port 9003)
   const [isConnected, setIsConnected] = useState(priceStreamClient.isConnected())
@@ -137,6 +147,7 @@ export function usePriceStream(symbols: string[]) {
 
   // Sync auth token so gateway accepts subscribe (gateway requires auth first)
   const accessToken = useAuthStore((s) => s.accessToken)
+  const accessTokenRef = useRef<string | null>(null)
   useEffect(() => {
     priceStreamClient.setAuthToken(accessToken)
   }, [accessToken])
@@ -186,20 +197,30 @@ export function usePriceStream(symbols: string[]) {
     return () => {
       cancelled = true
     }
-  }, [symbols.join(',')])
+  }, [symbolsKey])
 
-  // Subscribe to data-provider when symbols are available (no auth delay)
+  // Subscribe when symbols change; re-push subscribe when access token appears/changes so gateway streams are not stuck after login
   useEffect(() => {
     if (symbols.length === 0) return
     if (performSubscriptionRef.current) {
       performSubscriptionRef.current()
     }
-  }, [symbols.join(',')])
+  }, [symbolsKey])
+
+  useEffect(() => {
+    if (!accessToken || symbols.length === 0) return
+    const prev = accessTokenRef.current
+    accessTokenRef.current = accessToken
+    if (prev !== accessToken) {
+      priceStreamClient.resyncSymbolSubscriptions(symbolsRef.current)
+    }
+  }, [accessToken, symbolsKey])
 
   const triggerResubscribe = useCallback(() => {
     if (performSubscriptionRef.current && symbolsRef.current.length > 0) {
       performSubscriptionRef.current()
     }
+    priceStreamClient.resyncSymbolSubscriptions(symbolsRef.current)
   }, [])
 
   return {
@@ -220,10 +241,16 @@ export function usePriceStreamConnection(symbols: string[]) {
   const symbolsRef = useRef<string[]>([])
   const subscribeFnRef = useRef<((symbols: string[]) => boolean) | null>(null)
   const unsubscribeFnRef = useRef<((symbols: string[]) => void) | null>(null)
+  const accessTokenRef = useRef<string | null>(null)
+
+  const symbolsKey = useMemo(
+    () => symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0).join(','),
+    [symbols]
+  )
 
   useEffect(() => {
     symbolsRef.current = symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0)
-  }, [symbols.join(',')])
+  }, [symbolsKey])
 
   const performSubscriptionRef = useRef<() => void>()
   performSubscriptionRef.current = () => {
@@ -304,15 +331,25 @@ export function usePriceStreamConnection(symbols: string[]) {
     return () => {
       cancelled = true
     }
-  }, [symbols.join(',')])
+  }, [symbolsKey])
 
   useEffect(() => {
     if (symbols.length === 0) return
     if (performSubscriptionRef.current) performSubscriptionRef.current()
-  }, [symbols.join(',')])
+  }, [symbolsKey])
+
+  useEffect(() => {
+    if (!accessToken || symbols.length === 0) return
+    const prev = accessTokenRef.current
+    accessTokenRef.current = accessToken
+    if (prev !== accessToken) {
+      priceStreamClient.resyncSymbolSubscriptions(symbolsRef.current)
+    }
+  }, [accessToken, symbolsKey])
 
   const triggerResubscribe = useCallback(() => {
     if (performSubscriptionRef.current && symbolsRef.current.length > 0) performSubscriptionRef.current()
+    priceStreamClient.resyncSymbolSubscriptions(symbolsRef.current)
   }, [])
 
   return { isConnected, triggerResubscribe }
@@ -386,8 +423,8 @@ export function useSymbolPrice(symbol: string | null) {
         const removed = callbacks.delete(priceCallback)
         console.log(`🗑️ Cleanup: Removed subscriber for ${normalizedSymbol}, removed: ${removed}, remaining: ${callbacks.size}`)
         if (callbacks.size === 0) {
-          subscribers.delete(symbolUpper)
-          console.log(`🗑️ Cleanup: Deleted empty subscriber set for ${symbolUpper}`)
+          subscribers.delete(normalizedSymbol)
+          console.log(`🗑️ Cleanup: Deleted empty subscriber set for ${normalizedSymbol}`)
         }
       } else {
         console.log(`🗑️ Cleanup: No subscriber set found for ${symbolUpper}`)

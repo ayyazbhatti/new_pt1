@@ -254,6 +254,18 @@ export const useAuthStore = create<AuthState>()(
           set({ accessToken: newAccessToken })
           // Also refresh user data to get updated role
           await get().refreshUser()
+          // Keep both WebSocket clients on the new JWT (HTTP refresh does not go through setTokens).
+          if (typeof window !== 'undefined') {
+            const token = get().accessToken
+            if (token) {
+              const [{ wsClient }, { priceStreamClient }] = await Promise.all([
+                import('@/shared/ws/wsClient'),
+                import('@/shared/ws/priceStreamClient'),
+              ])
+              priceStreamClient.setAuthToken(token)
+              void wsClient.reauthenticate()
+            }
+          }
         } catch (error) {
           console.error('Failed to refresh access token:', error)
           throw error

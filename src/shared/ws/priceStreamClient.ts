@@ -37,6 +37,27 @@ function isGatewayUrl(url: string): boolean {
   return /[:/]8090[/?]/.test(url) || /[:/]3003[/?]/.test(url) || url.includes('localhost:8090') || url.includes('localhost:3003')
 }
 
+/**
+ * True when the live WebSocket was opened to the same price endpoint we would use now (auth on/off can change target).
+ * Prevents sending gateway `auth` to a data-provider socket or vice versa.
+ */
+function priceWsUrlsMatch(openWsUrl: string, targetUrl: string): boolean {
+  try {
+    const a = new URL(openWsUrl)
+    const b = new URL(targetUrl)
+    const normHost = (h: string) => (h === 'localhost' || h === '127.0.0.1' ? 'loopback' : h)
+    const port = (u: URL) => u.port || (u.protocol === 'wss:' || u.protocol === 'https:' ? '443' : '80')
+    return (
+      a.protocol === b.protocol &&
+      normHost(a.hostname) === normHost(b.hostname) &&
+      port(a) === port(b) &&
+      a.pathname.replace(/\/+$/, '') === b.pathname.replace(/\/+$/, '')
+    )
+  } catch {
+    return openWsUrl === targetUrl
+  }
+}
+
 /** Interval (ms) for sending ping to gateway to keep connection from being marked stale (server timeout default 300s). */
 const PING_INTERVAL_MS = 60_000
 
@@ -49,9 +70,11 @@ export function getDataProviderPricesBaseUrl(): string {
   if (wsUrl && typeof wsUrl === 'string') {
     try {
       const u = new URL(wsUrl)
-      // Data-provider serves HTTP and WS on the same port (e.g. 3001 in this project)
       const port = u.port || '3001'
-      return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.hostname}:${port}`
+      // backend/data-provider uses WS_PORT (default 9003) and HTTP_PORT (default 9004) on different ports.
+      const httpPort =
+        port === '9003' ? '9004' : port
+      return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.hostname}:${httpPort}`
     } catch {
       return 'http://localhost:3001'
     }
@@ -70,6 +93,9 @@ class PriceStreamClient {
   private pingIntervalId: ReturnType<typeof setInterval> | null = null
   private pendingSymbols: string[] = []
   private subscribedSymbols = new Set<string>()
+  /** Limit auth_error → refresh → re-auth loops (e.g. refresh failing). */
+  private gatewayAuthErrorRetries = 0
+  private static readonly MAX_GATEWAY_AUTH_ERRORS = 6
 
   constructor(url?: string) {
     this.url = url ?? (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_DATA_PROVIDER_WS_URL) ?? getDefaultPriceWsUrl()
@@ -78,6 +104,17 @@ class PriceStreamClient {
   /** Strip "Bearer " prefix so ws-gateway receives raw JWT. */
   private static rawToken(t: string): string {
     return t.replace(/^\s*Bearer\s+/i, '').trim()
+  }
+
+  /** Refresh JWT via auth store, then send gateway auth (avoids ExpiredSignature on reconnect). */
+  private async sendGatewayAuthWithFreshToken(): Promise<void> {
+    const { useAuthStore } = await import('@/shared/store/auth.store')
+    const raw = await useAuthStore.getState().ensureValidAccessToken()
+    const token = raw ? PriceStreamClient.rawToken(raw) : null
+    if (token) this.authToken = token
+    if (this.ws?.readyState === WebSocket.OPEN && token) {
+      this.ws.send(JSON.stringify({ type: 'auth', token }))
+    }
   }
 
   setAuthToken(token: string | null): void {
@@ -89,10 +126,16 @@ class PriceStreamClient {
     }
     const effectiveUrl = this.getEffectiveUrl()
     if (this.ws?.readyState === WebSocket.OPEN) {
+      const openUrl = this.ws.url
+      if (!priceWsUrlsMatch(openUrl, effectiveUrl)) {
+        // Still on data-provider (or old host) but we need same-origin /ws gateway — reconnect, keep symbols
+        this.pendingSymbols = [...new Set([...this.pendingSymbols, ...this.subscribedSymbols])]
+        this.ws.close()
+        return
+      }
       if (isGatewayUrl(effectiveUrl)) {
-        this.ws.send(JSON.stringify({ type: 'auth', token: this.authToken }))
+        void this.sendGatewayAuthWithFreshToken()
       } else if (!hadToken) {
-        // Just got a token; reconnect to gateway so user gets marked-up prices
         this.disconnect()
       }
     }
@@ -135,8 +178,9 @@ class PriceStreamClient {
       this.ws.onopen = () => {
         this.reconnectAttempts = 0
         this.authenticated = !gatewayMode
-        if (gatewayMode && this.authToken) {
-          this.ws?.send(JSON.stringify({ type: 'auth', token: this.authToken }))
+        this.gatewayAuthErrorRetries = 0
+        if (gatewayMode) {
+          void this.sendGatewayAuthWithFreshToken()
         } else if (!gatewayMode) {
           // Re-subscribe all symbols so we get ticks after reconnect (server-side connection stays in sync)
           const all = [...new Set([...this.subscribedSymbols, ...this.pendingSymbols])]
@@ -148,12 +192,23 @@ class PriceStreamClient {
         try {
           const data = JSON.parse(event.data as string)
           if (data.type === 'auth_success') {
+            this.gatewayAuthErrorRetries = 0
             this.authenticated = true
             if (this.pendingSymbols.length > 0) {
-              this.sendSubscribe(this.pendingSymbols)
+              const batch = [...this.pendingSymbols]
+              this.pendingSymbols = []
+              this.sendSubscribe(batch)
             }
             if (isGatewayUrl(this.getEffectiveUrl())) {
               this.startPingLoop()
+            }
+          }
+          if (data.type === 'auth_error') {
+            this.authenticated = false
+            this.stopPingLoop()
+            if (this.gatewayAuthErrorRetries < PriceStreamClient.MAX_GATEWAY_AUTH_ERRORS) {
+              this.gatewayAuthErrorRetries++
+              void this.sendGatewayAuthWithFreshToken()
             }
           }
           if (data.type === 'tick' && data.symbol) {
@@ -171,6 +226,8 @@ class PriceStreamClient {
         this.stopPingLoop()
         this.ws = null
         this.authenticated = false
+        // Preserve symbol list across reconnect (token-triggered close, network blip, etc.)
+        this.pendingSymbols = [...new Set([...this.pendingSymbols, ...this.subscribedSymbols])]
         // Keep reconnecting so connection stays server-based and recovers from drops
         this.reconnectAttempts++
         const delay = Math.min(1000 * Math.pow(2, Math.min(this.reconnectAttempts, 6)), 15000)
@@ -194,6 +251,7 @@ class PriceStreamClient {
     this.authenticated = false
     this.pendingSymbols = []
     this.subscribedSymbols.clear()
+    this.gatewayAuthErrorRetries = 0
   }
 
   private sendSubscribe(symbols: string[]): void {
@@ -210,6 +268,17 @@ class PriceStreamClient {
   }
 
   subscribe(symbols: string[]): void {
+    const upper = symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0)
+    if (upper.length === 0) return
+    this.connect()
+    this.sendSubscribe(upper)
+  }
+
+  /**
+   * Re-send subscribe after JWT is available or refreshed so the gateway applies symbol streams.
+   * Safe to call when the symbol list is unchanged (idempotent on server).
+   */
+  resyncSymbolSubscriptions(symbols: string[]): void {
     const upper = symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0)
     if (upper.length === 0) return
     this.connect()

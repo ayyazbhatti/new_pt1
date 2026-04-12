@@ -119,12 +119,13 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         symbolCode: symbol.symbolCode,
         baseCurrency: symbol.baseCurrency,
         quoteCurrency: symbol.quoteCurrency,
-        bidMarkup: override?.bid ?? '0',
-        askMarkup: override?.ask ?? '0',
+        // Show effective markup used at runtime: symbol override, else profile default.
+        bidMarkup: override?.bid ?? stream.bidMarkup,
+        askMarkup: override?.ask ?? stream.askMarkup,
         isOverride: !!override,
       }
     })
-  }, [symbolsData, overrides])
+  }, [symbolsData, overrides, stream.bidMarkup, stream.askMarkup])
 
   useEffect(() => {
     setLocalMarkups((prev) => {
@@ -235,6 +236,8 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         bidMarkup: localMarkups[source.symbolId]?.bid ?? source.bidMarkup,
         askMarkup: localMarkups[source.symbolId]?.ask ?? source.askMarkup,
       }
+      // Avoid nested modal-on-modal rendering; open transfer as a standalone modal.
+      closeModal(modalKey)
       openModal(
         `transfer-markups-${stream.id}-${source.symbolId}`,
         <TransferMarkupsModal
@@ -248,7 +251,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         { title: '', size: 'md' }
       )
     },
-    [stream, symbolsWithMarkup, localMarkups, openModal, closeModal]
+    [stream, symbolsWithMarkup, localMarkups, openModal, closeModal, modalKey]
   )
 
   const columns: ColumnDef<SymbolWithMarkup>[] = useMemo(

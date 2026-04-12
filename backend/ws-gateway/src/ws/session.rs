@@ -3,7 +3,7 @@ use crate::state::call_registry::{CallRegistry, CallState, CallStatus};
 use crate::state::connection_registry::{Connection, ConnectionRegistry};
 use crate::validation::message_validation::MessageValidator;
 use crate::ws::protocol::{ClientMessage, ServerMessage};
-use crate::stream::broadcaster::Broadcaster;
+use crate::stream::broadcaster::{Broadcaster, WS_CONN_CHANNEL_CAP};
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -55,7 +55,7 @@ impl Session {
         let (mut sender, mut receiver) = socket.split();
 
         // Create channel for this connection
-        let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
+        let (tx, mut rx) = mpsc::channel::<ServerMessage>(WS_CONN_CHANNEL_CAP);
         self.broadcaster.register_connection(self.conn_id, tx.clone());
 
         // Create channel for responses from recv_task

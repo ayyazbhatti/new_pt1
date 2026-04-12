@@ -434,7 +434,7 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="scrollbar-modal flex-1 overflow-y-auto p-6">
             {boxes.length === 0 ? (
               <div className="flex flex-col items-center justify-center min-h-[400px]">
                 <User className="w-16 h-16 text-slate-600 mb-4" />
@@ -503,7 +503,7 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
                                   <X className="w-3.5 h-3.5" />
                                 </button>
                               </div>
-                              <div className="overflow-y-auto flex-1 py-1">
+                              <div className="scrollbar-modal flex-1 overflow-y-auto py-1">
                                 {usersLoading ? (
                                   <div className="flex flex-col items-center p-4">
                                     <span className="w-4 h-4 border-2 border-slate-600 border-t-blue-500 rounded-full animate-spin" />
@@ -573,7 +573,7 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
                                   <X className="w-3.5 h-3.5" />
                                 </button>
                               </div>
-                              <div className="overflow-y-auto flex-1 py-1">
+                              <div className="scrollbar-modal flex-1 overflow-y-auto py-1">
                                 {filteredUsers.map((u) => (
                                   <button
                                     key={u.id}
@@ -767,7 +767,7 @@ export function MultiUserMetricsModal({ open, onOpenChange }: MultiUserMetricsMo
             <p className="text-sm text-slate-400 mb-4">
               Select which metrics to display in the metrics boxes
             </p>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
+            <div className="scrollbar-modal max-h-96 space-y-2 overflow-y-auto">
               {(VISIBLE_METRICS_IDS as unknown as string[]).map((id) => {
                 const selected = visibleMetrics.has(id)
                 return (

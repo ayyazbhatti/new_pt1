@@ -107,7 +107,9 @@ export function ModalShell({
                   <span className="sr-only">Close</span>
                 </button>
               </Dialog.Close>
-              <div className="flex flex-col min-h-0 overflow-y-auto max-h-[calc(90vh-8rem)]">{children}</div>
+              <div className="scrollbar-modal flex max-h-[calc(90vh-8rem)] min-h-0 flex-col overflow-y-auto">
+                {children}
+              </div>
             </>
           )}
         </Dialog.Content>

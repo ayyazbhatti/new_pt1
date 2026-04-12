@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { MarkupProfile, SymbolWithMarkup } from '../types/markup'
-import { X, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { useUpsertSymbolOverride } from '../hooks/useMarkup'
 import { toast } from '@/shared/components/common'
 
@@ -92,25 +92,15 @@ export function TransferMarkupsModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
-      <div className="bg-slate-800 rounded-lg p-6 w-full max-w-xl max-h-[90vh] flex flex-col overflow-hidden">
-        <div className="flex items-start justify-between mb-4 flex-shrink-0">
-          <div>
-            <h2 className="text-lg font-semibold text-white">
-              Transfer Markups
-            </h2>
-            <p className="text-sm text-slate-400 mt-0.5">
-              Copy markups from{' '}
-              <span className="text-white font-medium">{sourceSymbol.symbolCode}</span>
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded hover:bg-slate-700 flex-shrink-0"
-          >
-            <X className="w-4 h-4 text-slate-400" />
-          </button>
+    <div className="w-full max-w-xl max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="mb-4 flex-shrink-0">
+          <h2 className="text-lg font-semibold text-white">
+            Transfer Markups
+          </h2>
+          <p className="text-sm text-slate-400 mt-0.5">
+            Copy markups from{' '}
+            <span className="text-white font-medium">{sourceSymbol.symbolCode}</span>
+          </p>
         </div>
 
         <div className="bg-slate-900 rounded-lg p-3 border border-slate-700 mb-4 flex-shrink-0">
@@ -218,7 +208,6 @@ export function TransferMarkupsModal({
             Transfer Markups
           </button>
         </div>
-      </div>
     </div>
   )
 }

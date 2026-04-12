@@ -2,13 +2,44 @@ use crate::state::connection_registry::ConnectionRegistry;
 use crate::ws::protocol::ServerMessage;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 use tracing::{debug, error, info, warn};
 use dashmap::DashMap;
 
+/// Max queued outbound messages per WebSocket. Slow clients cannot grow memory without bound;
+/// price ticks are safe to drop when the queue is full.
+pub const WS_CONN_CHANNEL_CAP: usize = 4096;
+
+fn try_dispatch_conn(
+    registry: &ConnectionRegistry,
+    connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
+    conn_id: Uuid,
+    msg: ServerMessage,
+) {
+    let Some(tx) = connection_txs.get(&conn_id) else {
+        return;
+    };
+    match tx.try_send(msg) {
+        Ok(()) => {}
+        Err(TrySendError::Full(m)) => {
+            if matches!(m, ServerMessage::Tick { .. }) {
+                // expected under high tick rate
+            } else {
+                debug!("conn {} outbound queue full; dropping non-tick", conn_id);
+            }
+        }
+        Err(TrySendError::Closed(_)) => {
+            drop(tx);
+            connection_txs.remove(&conn_id);
+            registry.unregister(conn_id);
+        }
+    }
+}
+
 pub struct Broadcaster {
     registry: Arc<ConnectionRegistry>,
-    connection_txs: Arc<DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>>,
+    connection_txs: Arc<DashMap<Uuid, mpsc::Sender<ServerMessage>>>,
 }
 
 impl Broadcaster {
@@ -39,7 +70,7 @@ impl Broadcaster {
         }
     }
 
-    pub fn register_connection(&self, conn_id: Uuid, tx: mpsc::UnboundedSender<ServerMessage>) {
+    pub fn register_connection(&self, conn_id: Uuid, tx: mpsc::Sender<ServerMessage>) {
         self.connection_txs.insert(conn_id, tx);
     }
 
@@ -50,15 +81,18 @@ impl Broadcaster {
     /// Send a message to specific connections (e.g. for call signaling). Used only from session.
     pub fn send_to_connections(&self, conn_ids: &[Uuid], msg: ServerMessage) {
         for conn_id in conn_ids {
-            if let Some(tx) = self.connection_txs.get(conn_id) {
-                let _ = tx.send(msg.clone());
-            }
+            try_dispatch_conn(
+                &self.registry,
+                &self.connection_txs,
+                *conn_id,
+                msg.clone(),
+            );
         }
     }
 
     async fn handle_message(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         channel: String,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
@@ -99,7 +133,7 @@ impl Broadcaster {
 
     async fn broadcast_tick(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         let symbol = payload
@@ -184,12 +218,15 @@ impl Broadcaster {
                         ts,
                     };
                     if let Some(tx) = connection_txs.get(&conn_id) {
-                        if tx.send(message).is_ok() {
-                            sent += 1;
-                        } else {
-                            failed += 1;
-                            connection_txs.remove(&conn_id);
-                            registry.unregister(conn_id);
+                        match tx.try_send(message) {
+                            Ok(()) => sent += 1,
+                            Err(TrySendError::Full(_)) => {}
+                            Err(TrySendError::Closed(_)) => {
+                                failed += 1;
+                                drop(tx);
+                                connection_txs.remove(&conn_id);
+                                registry.unregister(conn_id);
+                            }
                         }
                     }
                 }
@@ -216,12 +253,15 @@ impl Broadcaster {
             };
             for conn_id in subscriber_ids {
                 if let Some(tx) = connection_txs.get(&conn_id) {
-                    if tx.send(message.clone()).is_ok() {
-                        sent += 1;
-                    } else {
-                        failed += 1;
-                        connection_txs.remove(&conn_id);
-                        registry.unregister(conn_id);
+                    match tx.try_send(message.clone()) {
+                        Ok(()) => sent += 1,
+                        Err(TrySendError::Full(_)) => {}
+                        Err(TrySendError::Closed(_)) => {
+                            failed += 1;
+                            drop(tx);
+                            connection_txs.remove(&conn_id);
+                            registry.unregister(conn_id);
+                        }
                     }
                 }
             }
@@ -238,7 +278,7 @@ impl Broadcaster {
 
     async fn broadcast_order_update(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         let user_id = payload
@@ -304,9 +344,7 @@ impl Broadcaster {
         // Send to all user connections
         let connections = registry.get_user_connections(user_id);
         for conn_id in connections {
-            if let Some(tx) = connection_txs.get(&conn_id) {
-                let _ = tx.send(message.clone());
-            }
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         Ok(())
@@ -314,7 +352,7 @@ impl Broadcaster {
 
     async fn broadcast_position_update(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         let user_id = payload
@@ -389,9 +427,7 @@ impl Broadcaster {
         // Send to all user connections
         let connections = registry.get_user_connections(user_id);
         for conn_id in connections {
-            if let Some(tx) = connection_txs.get(&conn_id) {
-                let _ = tx.send(message.clone());
-            }
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         Ok(())
@@ -399,7 +435,7 @@ impl Broadcaster {
 
     async fn broadcast_risk_alert(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         let user_id = payload
@@ -442,9 +478,7 @@ impl Broadcaster {
         // Send to all user connections
         let connections = registry.get_user_connections(user_id);
         for conn_id in connections {
-            if let Some(tx) = connection_txs.get(&conn_id) {
-                let _ = tx.send(message.clone());
-            }
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         Ok(())
@@ -452,7 +486,7 @@ impl Broadcaster {
 
     async fn broadcast_deposit_request(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         // Create message in format frontend expects: { type: "deposit.request.created", payload: {...} }
@@ -463,7 +497,8 @@ impl Broadcaster {
         // Broadcast to all connections (admin should receive this)
         // In production, filter by user role from registry
         for entry in connection_txs.iter() {
-            let _ = entry.value().send(message.clone());
+            let conn_id = *entry.key();
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         Ok(())
@@ -471,7 +506,7 @@ impl Broadcaster {
 
     async fn broadcast_deposit_approved(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         let user_id = payload
@@ -487,15 +522,14 @@ impl Broadcaster {
         // Send to the user who made the deposit
         let connections = registry.get_user_connections(user_id);
         for conn_id in connections {
-            if let Some(tx) = connection_txs.get(&conn_id) {
-                let _ = tx.send(message.clone());
-            }
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         // Also send to all admins (they should see the approval)
         // For now, broadcast to all - in production filter by role
         for entry in connection_txs.iter() {
-            let _ = entry.value().send(message.clone());
+            let conn_id = *entry.key();
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         Ok(())
@@ -503,7 +537,7 @@ impl Broadcaster {
 
     async fn broadcast_notification(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         // Extract user_id from payload if available, otherwise broadcast to all
@@ -520,14 +554,13 @@ impl Broadcaster {
             // Send to specific user
             let connections = registry.get_user_connections(user_id);
             for conn_id in connections {
-                if let Some(tx) = connection_txs.get(&conn_id) {
-                    let _ = tx.send(message.clone());
-                }
+                try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
             }
         } else {
             // Broadcast to all (for admin notifications)
             for entry in connection_txs.iter() {
-                let _ = entry.value().send(message.clone());
+                let conn_id = *entry.key();
+                try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
             }
         }
 
@@ -536,7 +569,7 @@ impl Broadcaster {
 
     async fn broadcast_wallet_balance(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         let user_id = payload
@@ -562,13 +595,7 @@ impl Broadcaster {
         }
 
         for conn_id in connections {
-            if let Some(tx) = connection_txs.get(&conn_id) {
-                if let Err(e) = tx.send(message.clone()) {
-                    warn!("Failed to send wallet.balance.updated to connection {}: {}", conn_id, e);
-                } else {
-                    info!("✅ Sent wallet.balance.updated to connection {}", conn_id);
-                }
-            }
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         Ok(())
@@ -576,7 +603,7 @@ impl Broadcaster {
 
     async fn broadcast_account_summary(
         registry: &ConnectionRegistry,
-        connection_txs: &DashMap<Uuid, mpsc::UnboundedSender<ServerMessage>>,
+        connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
         let user_id = payload
@@ -591,9 +618,7 @@ impl Broadcaster {
 
         let connections = registry.get_user_connections(user_id);
         for conn_id in connections {
-            if let Some(tx) = connection_txs.get(&conn_id) {
-                let _ = tx.send(message.clone());
-            }
+            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
         Ok(())

@@ -144,6 +144,40 @@
     background-color: rgba(148, 163, 184, 0.5);
   }
 
+  /**
+   * Modals / dialogs on Windows (Chrome, Edge): native scrollbars are light gray and clash with dark UI.
+   * Use on any overflow-y-auto / overflow-auto scroll surface inside dialogs.
+   */
+  .scrollbar-modal {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.75) rgba(15, 23, 42, 0.5);
+  }
+
+  .scrollbar-modal::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-modal::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.45);
+    border-radius: 6px;
+  }
+
+  .scrollbar-modal::-webkit-scrollbar-thumb {
+    background-color: rgba(100, 116, 139, 0.55);
+    border-radius: 6px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .scrollbar-modal::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(148, 163, 184, 0.65);
+  }
+
+  .scrollbar-modal::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }

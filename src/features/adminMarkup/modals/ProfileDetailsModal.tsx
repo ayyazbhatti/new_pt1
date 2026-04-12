@@ -55,12 +55,13 @@ export function ProfileDetailsModal({ profile }: ProfileDetailsModalProps) {
         symbolCode: symbol.symbolCode,
         baseCurrency: symbol.baseCurrency,
         quoteCurrency: symbol.quoteCurrency,
-        bidMarkup: override?.bid ?? '0',
-        askMarkup: override?.ask ?? '0',
+        // Match effective runtime behavior: symbol override takes precedence over profile default.
+        bidMarkup: override?.bid ?? profile.bidMarkup,
+        askMarkup: override?.ask ?? profile.askMarkup,
         isOverride: !!override,
       }
     })
-  }, [symbols, profile, overrides])
+  }, [symbols, profile.bidMarkup, profile.askMarkup, overrides])
 
   const [localMarkups, setLocalMarkups] = useLocalMarkups(symbolsWithMarkup)
 

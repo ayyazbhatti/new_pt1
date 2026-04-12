@@ -11,12 +11,15 @@ class WebSocketClient {
   private state: ConnectionState = 'disconnected'
   private handlers: Set<MessageHandler> = new Set()
   private reconnectAttempts = 0
-  private maxReconnectAttempts = 10
+  private maxReconnectAttempts = 50
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
   private messageQueue: WsOutboundEvent[] = []
   private shouldReconnect = true
   private stateListeners: Set<(state: ConnectionState) => void> = new Set()
   private isAuthenticated = false
+  /** Retries after server sends auth_error (e.g. expired JWT). */
+  private authErrorRetries = 0
+  private static readonly MAX_AUTH_ERROR_RETRIES = 8
 
   constructor(url: string) {
     this.url = url
@@ -57,6 +60,7 @@ class WebSocketClient {
 
           // Handle authentication responses
           if (data.type === 'auth_success') {
+            this.authErrorRetries = 0
             this.isAuthenticated = true
             this.setState('authenticated')
             this.flushMessageQueue()
@@ -101,7 +105,18 @@ class WebSocketClient {
           } else if (data.type === 'auth_error') {
             this.isAuthenticated = false
             console.error('❌ WebSocket authentication failed:', (data as any).error)
-            // Don't disconnect, but mark as unauthenticated
+            if (this.authErrorRetries < WebSocketClient.MAX_AUTH_ERROR_RETRIES) {
+              this.authErrorRetries++
+              void useAuthStore
+                .getState()
+                .ensureValidAccessToken()
+                .then((t) => {
+                  if (!t || this.ws?.readyState !== WebSocket.OPEN) return
+                  const raw = WebSocketClient.rawToken(t)
+                  this.ws?.send(JSON.stringify({ type: 'auth', token: raw }))
+                })
+                .catch(() => {})
+            }
           }
           
           // Log all messages for debugging (filter important ones)
