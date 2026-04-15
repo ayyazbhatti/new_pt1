@@ -63,6 +63,7 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
     providerDescription: symbol.providerDescription ?? null,
     bidQuote: priceData?.bid,
     askQuote: priceData?.ask,
+    priceLookupKey: lookupKey,
   }
 }
 

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { init, dispose } from 'klinecharts'
-import type { KLineData } from 'klinecharts'
+import type { KLineData, Period } from 'klinecharts'
 import { useTerminalStore } from '../store'
 import {
   fetchChartKlines,
@@ -108,7 +108,7 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   const selectedSymbolKeyRef = useRef<string>('')
   const chartShowAskPriceRef = useRef(chartShowAskPrice)
   const chartShowPositionMarkerRef = useRef(chartShowPositionMarker)
-  const lastAppliedPeriodRef = useRef<string | null>(null)
+  const lastAppliedPeriodRef = useRef<Period | null>(null)
   const lastAppliedCandleTypeRef = useRef<string | null>(null)
   const chartDataRef = useRef<KLineData[]>([])
   const setChartDataLengthRef = useRef<((n: number) => void) | null>(null)
@@ -118,7 +118,9 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   const setLoadingRef = useRef<(loading: boolean) => void>(() => {})
 
   setChartDataLengthRef.current = setChartDataLength
-  selectedSymbolKeyRef.current = selectedSymbol?.code ? normalizeSymbolKey(selectedSymbol.code) : ''
+  selectedSymbolKeyRef.current =
+    selectedSymbol?.priceLookupKey?.trim() ||
+    (selectedSymbol?.code ? normalizeSymbolKey(selectedSymbol.code) : '')
   chartShowAskPriceRef.current = chartShowAskPrice
   chartShowPositionMarkerRef.current = chartShowPositionMarker
 
@@ -387,7 +389,11 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     const nextCandleType = chartTypeToCandleType(chartType)
 
     // Prevent duplicate startup reloads when values are already applied during chart init.
-    if (lastAppliedPeriodRef.current !== nextPeriod) {
+    const periodUnchanged =
+      lastAppliedPeriodRef.current != null &&
+      lastAppliedPeriodRef.current.span === nextPeriod.span &&
+      lastAppliedPeriodRef.current.type === nextPeriod.type
+    if (!periodUnchanged) {
       chart.setPeriod(nextPeriod)
       lastAppliedPeriodRef.current = nextPeriod
     }
@@ -533,6 +539,31 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
 
     if (cb) cb({ ...bar })
   }, [selectedSymbol?.numericPrice])
+
+  // Ask line must update when bid/ask come from the store alone (tick.symbol used to mismatch catalog code).
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !chartShowAskPrice) {
+      chart?.removeOverlay({ name: 'askPriceLine' })
+      return
+    }
+    const ask = selectedSymbol?.numericPrice2
+    if (ask == null || ask <= 0 || !currentBarRef.current) {
+      chart.removeOverlay({ name: 'askPriceLine' })
+      return
+    }
+    chart.removeOverlay({ name: 'askPriceLine' })
+    chart.createOverlay({
+      name: 'askPriceLine',
+      points: [
+        {
+          value: ask,
+          timestamp: currentBarRef.current.timestamp,
+          dataIndex: lastBarDataIndexRef.current,
+        },
+      ],
+    })
+  }, [chartShowAskPrice, selectedSymbol?.numericPrice2, selectedSymbol?.code, chartDataLength])
 
   return (
     <div className="h-full w-full flex-1 min-h-0 relative overflow-hidden border-b border-border bg-background">

@@ -27,6 +27,11 @@ export interface MockSymbol {
   bidQuote?: string
   /** Raw ask string from WebSocket/API */
   askQuote?: string
+  /**
+   * Key used to match `priceStreamClient` ticks to this row (same as `terminalPriceLookupKey` on catalog).
+   * Must be used for chart tick filtering — `code` alone can normalize differently than feed `tick.symbol`.
+   */
+  priceLookupKey?: string
 }
 
 export interface MockPosition {

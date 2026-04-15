@@ -88,6 +88,7 @@ export const useAuthStore = create<AuthState>()(
           },
           isAuthenticated: true,
         })
+        scheduleProactiveAccessTokenRefresh()
         // Connect WebSocket after successful login
         if (typeof window !== 'undefined') {
           const { wsClient } = await import('@/shared/ws/wsClient')
@@ -116,6 +117,7 @@ export const useAuthStore = create<AuthState>()(
           },
           isAuthenticated: true,
         })
+        scheduleProactiveAccessTokenRefresh()
         // Connect WebSocket after successful registration
         if (typeof window !== 'undefined') {
           const { wsClient } = await import('@/shared/ws/wsClient')
@@ -124,6 +126,7 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: async () => {
+        clearProactiveAccessTokenRefresh()
         const state = get()
         if (state.refreshToken) {
           try {
@@ -153,6 +156,7 @@ export const useAuthStore = create<AuthState>()(
 
       setTokens: (accessToken: string, refreshToken: string) => {
         set({ accessToken, refreshToken })
+        scheduleProactiveAccessTokenRefresh()
         // Re-auth WebSocket with new token when HTTP layer refreshed (e.g. after 401)
         if (typeof window !== 'undefined') {
           import('@/shared/ws/wsClient').then(({ wsClient }) => {
@@ -166,6 +170,7 @@ export const useAuthStore = create<AuthState>()(
 
       setImpersonationTokens: (accessToken: string, refreshToken: string) => {
         set({ accessToken, refreshToken, user: null })
+        scheduleProactiveAccessTokenRefresh()
       },
 
       setUser: (user: User) => {
@@ -200,6 +205,7 @@ export const useAuthStore = create<AuthState>()(
               const { wsClient } = await import('@/shared/ws/wsClient')
               wsClient.connect()
             }
+            scheduleProactiveAccessTokenRefresh()
           } catch (error) {
             set({
               accessToken: null,
@@ -266,6 +272,7 @@ export const useAuthStore = create<AuthState>()(
               void wsClient.reauthenticate()
             }
           }
+          scheduleProactiveAccessTokenRefresh()
         } catch (error) {
           console.error('Failed to refresh access token:', error)
           throw error
@@ -275,17 +282,25 @@ export const useAuthStore = create<AuthState>()(
       ensureValidAccessToken: async (): Promise<string | null> => {
         const state = get()
         const token = state.accessToken
-        if (!token || !state.refreshToken) return token ?? null
-        const exp = getAccessTokenExp(token)
+        if (!token) return null
+
         const nowSec = Math.floor(Date.now() / 1000)
+        const exp = getAccessTokenExp(token)
+
+        if (!state.refreshToken) {
+          if (exp === null) return token
+          return exp > nowSec + EXPIRY_BUFFER_SEC ? token : null
+        }
+
         if (exp !== null && exp > nowSec + EXPIRY_BUFFER_SEC) {
           return token
         }
+
         try {
           await get().refreshAccessToken()
           return get().accessToken ?? null
         } catch {
-          return token
+          return null
         }
       },
     }),
@@ -304,9 +319,51 @@ export const useAuthStore = create<AuthState>()(
         // Signal that persist has finished so guards can safely read tokens / decide auth (avoids new-tab race).
         setTimeout(() => {
           useAuthStore.setState({ persistRehydrated: true })
+          scheduleProactiveAccessTokenRefresh()
         }, 0)
       },
     }
   )
 )
+
+/** Browser timer handle (avoids NodeJS.Timeout vs number mismatch under @types/node). */
+let proactiveAccessTokenTimer: number | null = null
+
+function clearProactiveAccessTokenRefresh(): void {
+  if (proactiveAccessTokenTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(proactiveAccessTokenTimer)
+  }
+  proactiveAccessTokenTimer = null
+}
+
+/**
+ * One-shot timer to refresh the access token before it expires (no polling loop).
+ * Rescheduled after each successful refresh and after login/hydrate.
+ */
+function scheduleProactiveAccessTokenRefresh(): void {
+  clearProactiveAccessTokenRefresh()
+  if (typeof window === 'undefined') return
+
+  const { accessToken, refreshToken } = useAuthStore.getState()
+  if (!accessToken || !refreshToken) return
+
+  const exp = getAccessTokenExp(accessToken)
+  if (exp === null) return
+
+  const nowSec = Math.floor(Date.now() / 1000)
+  const triggerSec = exp - EXPIRY_BUFFER_SEC
+  let delayMs = (triggerSec - nowSec) * 1000
+  if (delayMs < 5_000) delayMs = 5_000
+  if (delayMs > 86_400_000) delayMs = 86_400_000
+
+  proactiveAccessTokenTimer = window.setTimeout(() => {
+    proactiveAccessTokenTimer = null
+    void useAuthStore
+      .getState()
+      .refreshAccessToken()
+      .catch(() => {
+        window.setTimeout(() => scheduleProactiveAccessTokenRefresh(), 120_000)
+      })
+  }, delayMs)
+}
 

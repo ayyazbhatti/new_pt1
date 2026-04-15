@@ -124,7 +124,6 @@ export function usePriceStream(symbols: string[]) {
     }
   }, [symbolsKey, updatePrice]) // Include updatePrice in dependencies
 
-  // Use data-provider WebSocket directly for prices (no auth, port 9003)
   const [isConnected, setIsConnected] = useState(priceStreamClient.isConnected())
 
   // Sync connection state
@@ -170,8 +169,9 @@ export function usePriceStream(symbols: string[]) {
     unsubscribeFnRef.current = unsubscribeFromSymbols
   }, [subscribeToSymbols, unsubscribeFromSymbols])
 
-  // Server-side snapshot: fetch current prices on load so UI shows values immediately instead of 0.00
+  // Server-side snapshot: raw data-provider `/prices` only when logged out. Logged-in users get marked-up bids/asks from gateway WS only.
   useEffect(() => {
+    if (accessToken) return
     const base = getDataProviderPricesBaseUrl()
     if (!base || symbols.length === 0) return
     const symbolsParam = symbols.map((s) => s.toUpperCase().trim()).filter(Boolean)
@@ -190,7 +190,7 @@ export function usePriceStream(symbols: string[]) {
     return () => {
       cancelled = true
     }
-  }, [symbolsKey])
+  }, [symbolsKey, accessToken])
 
   // Subscribe when symbols change; re-push subscribe when access token appears/changes so gateway streams are not stuck after login
   useEffect(() => {
@@ -306,6 +306,7 @@ export function usePriceStreamConnection(symbols: string[]) {
   }, [subscribeToSymbols, unsubscribeFromSymbols])
 
   useEffect(() => {
+    if (accessToken) return
     const base = getDataProviderPricesBaseUrl()
     if (!base || symbols.length === 0) return
     const symbolsParam = symbols.map((s) => s.toUpperCase().trim()).filter(Boolean)
@@ -324,7 +325,7 @@ export function usePriceStreamConnection(symbols: string[]) {
     return () => {
       cancelled = true
     }
-  }, [symbolsKey])
+  }, [symbolsKey, accessToken])
 
   useEffect(() => {
     if (symbols.length === 0) return
