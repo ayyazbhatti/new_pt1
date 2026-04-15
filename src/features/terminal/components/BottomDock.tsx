@@ -21,7 +21,7 @@ import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useWalletStore } from '@/shared/store/walletStore'
-import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
+import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { useTerminalStore } from '../store/terminalStore'
@@ -105,11 +105,6 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       await el.requestFullscreen()
     }
   }, [])
-
-  // Normalize symbol key - convert USDT to USD to match price stream format
-  const normalizeSymbolKey = (symbol: string): string => {
-    return symbol.toUpperCase().trim().replace('USDT', 'USD')
-  }
 
   // Get symbols from positions for price streaming
   const positionSymbols = useMemo(() => {

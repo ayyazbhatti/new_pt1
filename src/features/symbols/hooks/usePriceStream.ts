@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { priceStreamClient, getDataProviderPricesBaseUrl } from '@/shared/ws/priceStreamClient'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { normalizeSymbolKey } from '@/shared/utils/symbolKeyNormalize'
 
 interface PriceData {
   bid: string
@@ -14,15 +15,7 @@ const priceStore = new Map<string, PriceData>()
 // Subscribers map: symbol -> Set of callbacks
 const subscribers = new Map<string, Set<(price: PriceData) => void>>()
 
-/** Normalize symbol key for storage/lookup: uppercase, no slashes/dashes, USDT->USD (must match gateway ticks + mapSymbolToTerminal). */
-export function normalizeSymbolKey(symbol: string): string {
-  return symbol
-    .toUpperCase()
-    .trim()
-    .replace(/\//g, '')
-    .replace(/-/g, '')
-    .replace('USDT', 'USD')
-}
+export { normalizeSymbolKey }
 
 function notifySubscribers(symbol: string, price: PriceData) {
   const symbolUpper = symbol.toUpperCase().trim()

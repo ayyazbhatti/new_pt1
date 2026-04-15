@@ -211,9 +211,13 @@ cd "$REPO_ROOT/infra" || exit 1
 if docker-compose ps | grep -q "Up"; then
     print_warning "Infrastructure services are already running"
 else
-    docker-compose up -d
-    print_status "Infrastructure services started"
-    sleep 3  # Wait for services to initialize
+    # DB is managed by newpt-postgres on 5433; only start redis/nats here.
+    if docker-compose up -d redis nats; then
+        print_status "Infrastructure services started"
+        sleep 3  # Wait for services to initialize
+    else
+        print_warning "docker-compose up failed (ports may be in use). Continuing if Redis/NATS/Postgres are already available."
+    fi
 fi
 
 cd "$REPO_ROOT" || exit 1
@@ -224,7 +228,7 @@ if [ -d "$REPO_ROOT/infra/migrations" ]; then
     shopt -s nullglob 2>/dev/null || true
     for f in "$REPO_ROOT"/infra/migrations/*.sql; do
         print_info "  Applying $(basename "$f")..."
-        PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -U postgres -d newpt -f "$f" || true
+        PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -p 5433 -U postgres -d newpt -f "$f" || true
     done
     shopt -u nullglob 2>/dev/null || true
 else
@@ -245,10 +249,10 @@ else
     print_warning "Redis is not running on port 6379"
 fi
 
-if check_port 5432; then
-    print_status "Postgres is running on port 5432"
+if check_port 5433; then
+    print_status "Postgres is running on port 5433"
 else
-    print_warning "Postgres is not running on port 5432"
+    print_warning "Postgres is not running on port 5433"
 fi
 
 echo ""
@@ -258,14 +262,14 @@ print_info "Step 2: Starting Backend Services..."
 
 # Ensure Docker PostgreSQL is running (not local PostgreSQL)
 # Check if local PostgreSQL is running and warn
-if pg_isready -h localhost -U postgres -d newpt >/dev/null 2>&1 && ! docker ps --format "{{.Names}}" | grep -q "^trading-postgres$"; then
-    print_warning "Local PostgreSQL detected on port 5432"
+if pg_isready -h localhost -p 5433 -U postgres -d newpt >/dev/null 2>&1 && ! docker ps --format "{{.Names}}" | grep -q "^newpt-postgres$"; then
+    print_warning "Local PostgreSQL detected on port 5433"
     print_warning "This project uses Docker PostgreSQL. Please stop local PostgreSQL or use a different port."
     print_info "To stop local PostgreSQL: brew services stop postgresql@14 (or your version)"
 fi
 
 # Set common environment variables - Using Docker PostgreSQL
-export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/newpt}"
+export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/newpt}"
 print_info "Using Docker PostgreSQL: ${DATABASE_URL}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export NATS_URL="${NATS_URL:-nats://localhost:4222}"
@@ -341,7 +345,7 @@ echo ""
 echo "  Infrastructure:"
 echo "    - NATS:        nats://localhost:4222"
 echo "    - Redis:       redis://localhost:6379"
-echo "    - Postgres:    postgresql://localhost:5432"
+echo "    - Postgres:    postgresql://localhost:5433"
 echo ""
 echo "  Backend Services:"
 echo "    - Auth Service:    http://localhost:$AUTH_SERVICE_PORT"

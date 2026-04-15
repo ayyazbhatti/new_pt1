@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to start infrastructure services (Postgres, Redis, NATS)
+# Script to start infrastructure services (Redis, NATS)
 
 echo "🚀 Starting Infrastructure Services..."
 echo ""
@@ -23,8 +23,8 @@ echo ""
 cd "$(dirname "$0")/../infra" || exit 1
 
 # Start services
-echo "Starting Postgres, Redis, and NATS..."
-docker-compose up -d
+echo "Starting Redis and NATS (Postgres is external: newpt-postgres on 5433)..."
+docker-compose up -d redis nats
 
 # Wait for services to be ready
 echo ""
@@ -40,7 +40,7 @@ echo ""
 echo "✅ Infrastructure services started!"
 echo ""
 echo "Services:"
-echo "  - Postgres: localhost:5432"
+echo "  - Postgres: localhost:5433 (newpt-postgres container)"
 echo "  - Redis: localhost:6379"
 echo "  - NATS: localhost:4222"
 echo "  - NATS Monitoring: http://localhost:8222"

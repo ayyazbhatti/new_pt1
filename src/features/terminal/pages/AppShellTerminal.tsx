@@ -15,7 +15,7 @@ import { TerminalMobileMenuPage } from '../components/TerminalMobileMenuPage'
 import { TerminalSymbolsPage } from '../components/TerminalSymbolsPage'
 import { TerminalMobileNav } from '../components/TerminalMobileNav'
 import { useTerminalStore } from '../store'
-import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
+import { useAllEnabledSymbolsForTerminal } from '@/features/symbols/hooks/useSymbols'
 import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
 import { AdminSymbol } from '@/features/symbols/types/symbol'
 import { MockSymbol } from '@/shared/mock/terminalMock'
@@ -25,44 +25,13 @@ import { MarginCallModal } from '@/features/wallet/components/MarginCallModal'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { getTerminalPreferences } from '../api/preferences.api'
+import { terminalFeedSymbol, terminalPriceLookupKey } from '../utils/terminalFeedSymbol'
 
 // Map AdminSymbol to MockSymbol format
 function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: string; ask: string; ts: number }>): MockSymbol {
-  // Normalize symbol key - try multiple formats to match price map
-  // Gateway sends BTCUSD (after converting from BTCUSDT)
-  // Symbol might have providerSymbol="BTCUSDT" or symbolCode="BTC-USD" or "BTCUSD"
-  const normalizeKey = (key: string) => {
-    return key
-      .toUpperCase()
-      .replace(/-/g, '') // Remove dashes: BTC-USD -> BTCUSD
-      .replace('USDT', 'USD') // Convert USDT to USD: BTCUSDT -> BTCUSD
-  }
-  
-  // Try multiple lookup keys
-  const possibleKeys = [
-    normalizeKey(symbol.providerSymbol || ''),
-    normalizeKey(symbol.symbolCode),
-    symbol.providerSymbol?.toUpperCase().replace('USDT', 'USD'),
-    symbol.symbolCode.toUpperCase().replace(/-/g, ''),
-  ].filter(k => k && k.length > 0)
-  
-  let priceData: { bid: string; ask: string; ts: number } | undefined
-  let matchedKey: string | undefined
-  
-  for (const key of possibleKeys) {
-    priceData = prices.get(key)
-    if (priceData) {
-      matchedKey = key
-      break
-    }
-  }
-  
-  // Debug: Log symbol matching
-  if (!priceData) {
-    console.log(`⚠️ No price data for symbol: ${symbol.symbolCode} | Tried keys: ${possibleKeys.join(', ')} | Available keys:`, Array.from(prices.keys()))
-  } else {
-    console.log(`✅ Found price for ${symbol.symbolCode} (matched key: ${matchedKey}): bid=${priceData.bid}, ask=${priceData.ask}`)
-  }
+  // Single lookup key: same derivation as subscription (`terminalFeedSymbol` + `normalizeSymbolKey`)
+  const lookupKey = terminalPriceLookupKey(symbol)
+  const priceData = prices.get(lookupKey)
   
   const bid = priceData ? parseFloat(priceData.bid) : 0
   const ask = priceData ? parseFloat(priceData.ask) : bid || 0
@@ -89,6 +58,9 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
     quoteCurrency: symbol.quoteCurrency,
     pricePrecision: symbol.pricePrecision,
     volumePrecision: symbol.volumePrecision,
+    assetClass: symbol.assetClass,
+    bidQuote: priceData?.bid,
+    askQuote: priceData?.ask,
   }
 }
 
@@ -137,30 +109,13 @@ export function AppShellTerminal() {
       })
   }, [user?.id, setChartShowAskPrice, setChartShowPositionMarker, setChartShowClosedPositionMarker, setEnableLiquidationEmail, setEnableSlTpEmail, setWatchlist])
 
-  // Fetch enabled symbols (page_size large enough to load all, e.g. BTC/ETH on later pages with default sort)
-  const { data: symbolsData, isLoading } = useSymbolsList({
-    is_enabled: 'true',
-    page_size: 500,
-  })
+  // Fetch all enabled symbols (paged API under the hood) so forex and other classes are not truncated at 500 rows
+  const { data: symbolsData, isLoading } = useAllEnabledSymbolsForTerminal()
 
   // Get symbol codes for price streaming - must match feed symbols (e.g. BTCUSDT from data-provider)
   const symbolCodes = useMemo(() => {
     if (!symbolsData?.items) return []
-    const codes = symbolsData.items
-      .map((s) => {
-        if (s.providerSymbol) {
-          return s.providerSymbol.toUpperCase()
-        }
-        const normalized = s.symbolCode.toUpperCase().replace(/-/g, '')
-        // Feed uses BTCUSDT etc.; for crypto USD pairs derive XXXUSDT so gateway receives matching ticks
-        if (s.assetClass === 'Crypto' && s.quoteCurrency === 'USD' && normalized.endsWith('USD') && !normalized.endsWith('USDT')) {
-          return normalized.slice(0, -3) + 'USDT'
-        }
-        return normalized
-      })
-      .filter((code) => code && code.length > 0)
-    console.log('📡 Final symbol codes to subscribe (feed format):', codes)
-    return codes
+    return symbolsData.items.map((s) => terminalFeedSymbol(s)).filter((code) => code && code.length > 0)
   }, [symbolsData])
 
   // Subscribe to price stream
@@ -181,33 +136,9 @@ export function AppShellTerminal() {
   // Update symbols when data or prices change
   useEffect(() => {
     if (symbolsData?.items) {
-      console.log('🔄 Mapping symbols with prices. Price map size:', priceMap.size)
-      console.log('🔄 Price map keys:', Array.from(priceMap.keys()))
-      console.log('🔄 Symbols to map:', symbolsData.items.map(s => ({ 
-        code: s.symbolCode, 
-        provider: s.providerSymbol, 
-        lookupKey: (s.providerSymbol || s.symbolCode).toUpperCase() 
-      })))
-      
       const mappedSymbols = symbolsData.items.map((symbol) =>
         mapSymbolToTerminal(symbol, priceMap)
       )
-      const priceSummary = mappedSymbols.map(s => ({ 
-        code: s.code, 
-        price: s.numericPrice, 
-        ask: s.numericPrice2,
-        hasPrice: s.numericPrice > 0 
-      }))
-      const withPrices = priceSummary.filter(s => s.hasPrice)
-      const withoutPrices = priceSummary.filter(s => !s.hasPrice)
-      console.log('📋 Terminal: Mapped symbols with prices:', priceSummary)
-      console.log(`📊 Summary: ${withPrices.length} symbols with prices, ${withoutPrices.length} without prices`)
-      if (withoutPrices.length > 0) {
-        console.log('⚠️ Symbols without prices:', withoutPrices.slice(0, 10).map(s => s.code))
-      }
-      if (withPrices.length > 0) {
-        console.log('✅ Symbols with prices (first 5):', withPrices.slice(0, 5))
-      }
       setSymbols(mappedSymbols)
     }
   }, [symbolsData, priceMap, setSymbols])

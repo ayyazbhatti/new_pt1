@@ -2,20 +2,25 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from '@/shared/components/common'
 import {
   listSymbols,
+  listAllSymbolsMatching,
   listAdminSymbols,
   getSymbol,
   createSymbol,
   updateSymbol,
   deleteSymbol,
   toggleSymbolEnabled,
+  syncMmdpsSymbols,
   CreateSymbolPayload,
   UpdateSymbolPayload,
   ListSymbolsParams,
+  SyncMmdpsPayload,
 } from '../api/symbols.api'
 
 const queryKeys = {
   all: ['symbols'] as const,
   lists: () => [...queryKeys.all, 'list'] as const,
+  /** Full enabled-symbol set for the trading terminal (all pages). */
+  allEnabledTerminal: () => [...queryKeys.lists(), 'all-enabled-terminal'] as const,
   list: (params?: ListSymbolsParams) => [...queryKeys.lists(), params] as const,
   adminLists: () => [...queryKeys.all, 'admin', 'list'] as const,
   adminList: (params?: ListSymbolsParams) => [...queryKeys.adminLists(), params] as const,
@@ -27,6 +32,23 @@ export function useSymbolsList(params?: ListSymbolsParams) {
   return useQuery({
     queryKey: queryKeys.list(params),
     queryFn: () => listSymbols(params),
+    retry: (failureCount, error: any) => {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        return false
+      }
+      return failureCount < 2
+    },
+  })
+}
+
+/** Loads every enabled symbol for the user terminal (forex, crypto, etc.), not capped at one page. */
+export function useAllEnabledSymbolsForTerminal() {
+  return useQuery({
+    queryKey: queryKeys.allEnabledTerminal(),
+    queryFn: async () => {
+      const items = await listAllSymbolsMatching({ is_enabled: 'true' })
+      return { items, total: items.length }
+    },
     retry: (failureCount, error: any) => {
       if (error?.response?.status === 401 || error?.response?.status === 403) {
         return false
@@ -106,6 +128,25 @@ export function useDeleteSymbol() {
     },
     onError: (error: any) => {
       const message = error?.response?.data?.error?.message || error?.message || 'Failed to delete symbol'
+      toast.error(message)
+    },
+  })
+}
+
+export function useSyncMmdpsSymbols() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload?: SyncMmdpsPayload) => syncMmdpsSymbols(payload),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminLists() })
+      toast.success(
+        `MMDPS sync: ${data.upserted} upserted, ${data.skipped} skipped — ${data.db_symbol_count} symbols in database (API returned ${data.fetched})`
+      )
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.error?.message || error?.message || 'MMDPS sync failed'
       toast.error(message)
     },
   })

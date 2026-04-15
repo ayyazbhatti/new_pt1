@@ -2,23 +2,25 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { init, dispose } from 'klinecharts'
 import type { KLineData } from 'klinecharts'
 import { useTerminalStore } from '../store'
-import { fetchBinanceKlines, toBinanceSymbol, toBinanceInterval, BARS_PER_CHUNK, type KLineBar } from '../api/binanceKlines'
+import {
+  fetchChartKlines,
+  toChartFeedSymbol,
+  toBinanceInterval,
+  BARS_PER_CHUNK,
+  type KLineBar,
+} from '../api/binanceKlines'
 import { timeframeToPeriod, chartTypeToCandleType } from '../utils/chartOptions'
 import type { ChartTypeKey, TimeframeKey } from '../utils/chartOptions'
 import type { ChartSettings, DrawingMagnetMode } from '../utils/chartOptions'
 import type { ChartIndicator } from '../utils/indicatorParams'
 import { Spinner } from '@/shared/ui/loading'
 import { priceStreamClient } from '@/shared/ws/priceStreamClient'
+import { normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { getPositions } from '../api/positions.api'
 import type { Position } from '../api/positions.api'
 import './chartAskPriceLineOverlay'
 import './chartPositionOpenMarkerOverlay'
 import './chartPositionClosedMarkerOverlay'
-
-/** Normalize symbol for matching WS ticks (e.g. BTC-USD / BTCUSDT -> BTCUSD) */
-function normalizeSymbolKey(symbol: string): string {
-  return symbol.toUpperCase().trim().replace(/-/g, '').replace('USDT', 'USD')
-}
 
 const CHART_CONTAINER_ID = 'terminal-kline-chart'
 
@@ -102,10 +104,12 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   const lastBarRef = useRef<KLineBar | null>(null)
   const currentBarRef = useRef<KLineBar | null>(null)
   const lastBarDataIndexRef = useRef<number>(0)
-  const binanceSymbolRef = useRef<string>('BTCUSDT')
+  const chartFeedSymbolRef = useRef<string>('BTCUSDT')
   const selectedSymbolKeyRef = useRef<string>('')
   const chartShowAskPriceRef = useRef(chartShowAskPrice)
   const chartShowPositionMarkerRef = useRef(chartShowPositionMarker)
+  const lastAppliedPeriodRef = useRef<string | null>(null)
+  const lastAppliedCandleTypeRef = useRef<string | null>(null)
   const chartDataRef = useRef<KLineData[]>([])
   const setChartDataLengthRef = useRef<((n: number) => void) | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -138,6 +142,9 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   )
 
   useEffect(() => {
+    // Wait for real terminal selection to avoid loading fallback BTC chart, then immediately reloading.
+    if (!selectedSymbol?.code) return
+
     setLoadingRef.current = setIsLoading
     setIsLoading(true)
 
@@ -149,21 +156,25 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
 
     chart.setStyles('dark')
     chart.setStyles(APP_THEME_CHART_STYLES as any)
-    chart.setStyles({ candle: { type: chartTypeToCandleType(chartType) } })
+    const candleType = chartTypeToCandleType(chartType)
+    chart.setStyles({ candle: { type: candleType } })
     const ticker = selectedSymbol?.code ?? 'BTC-USD'
     const name = selectedSymbol?.code?.replace('-', '/') ?? 'BTC/USD'
     const pricePrecision = selectedSymbol?.pricePrecision ?? 2
     const volumePrecision = selectedSymbol?.volumePrecision ?? 2
-    binanceSymbolRef.current = toBinanceSymbol(ticker, selectedSymbol?.quoteCurrency)
+    chartFeedSymbolRef.current = toChartFeedSymbol(ticker, selectedSymbol?.quoteCurrency)
     chart.setSymbol({ ticker, exchange: '', name, pricePrecision, volumePrecision })
-    chart.setPeriod(timeframeToPeriod(timeframe))
+    const period = timeframeToPeriod(timeframe)
+    chart.setPeriod(period)
+    lastAppliedPeriodRef.current = period
+    lastAppliedCandleTypeRef.current = candleType
 
     chart.setDataLoader({
       getBars: async (params: { type: string; callback: (data: KLineData[], more?: { backward?: boolean; forward?: boolean }) => void; period: { span: number; type: string } }) => {
         const { type, callback, period } = params
         const timestamp = (params as { timestamp?: number }).timestamp ?? null
         setLoadingRef.current?.(true)
-        const symbol = binanceSymbolRef.current
+        const symbol = chartFeedSymbolRef.current
         const interval = toBinanceInterval(period.span, period.type)
         const hideLoader = () => setLoadingRef.current?.(false)
         const done = () => {
@@ -177,13 +188,13 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
           // Library: 'forward' = user at LEFT edge → load OLDER data (prepended, so it appears on the left).
           // Library: 'backward' = user at RIGHT edge → load NEWER data (appended).
           if (type === 'init') {
-            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK)
+            bars = await fetchChartKlines(symbol, interval, BARS_PER_CHUNK)
           } else if (type === 'forward' && timestamp != null) {
             // Oldest bar timestamp: fetch bars before it (older), library will prepend → correct left-side history
-            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK, timestamp - 1)
+            bars = await fetchChartKlines(symbol, interval, BARS_PER_CHUNK, timestamp - 1)
           } else if (type === 'backward' && timestamp != null) {
             // Newest bar timestamp: fetch bars after it (newer), library will append
-            bars = await fetchBinanceKlines(symbol, interval, BARS_PER_CHUNK, undefined, timestamp + 1)
+            bars = await fetchChartKlines(symbol, interval, BARS_PER_CHUNK, undefined, timestamp + 1)
           } else {
             callback([], { backward: false, forward: false })
             done()
@@ -208,7 +219,7 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
           const hasMoreBackward = type === 'backward' ? bars.length >= BARS_PER_CHUNK : true
           callback(klineData, { backward: hasMoreBackward, forward: hasMoreForward })
         } catch (err) {
-          console.warn('Binance klines failed:', err)
+          console.warn('Chart klines failed:', err)
           if (type === 'init') {
             lastBarRef.current = null
             currentBarRef.current = null
@@ -372,8 +383,18 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-    chart.setPeriod(timeframeToPeriod(timeframe))
-    chart.setStyles({ candle: { type: chartTypeToCandleType(chartType) } })
+    const nextPeriod = timeframeToPeriod(timeframe)
+    const nextCandleType = chartTypeToCandleType(chartType)
+
+    // Prevent duplicate startup reloads when values are already applied during chart init.
+    if (lastAppliedPeriodRef.current !== nextPeriod) {
+      chart.setPeriod(nextPeriod)
+      lastAppliedPeriodRef.current = nextPeriod
+    }
+    if (lastAppliedCandleTypeRef.current !== nextCandleType) {
+      chart.setStyles({ candle: { type: nextCandleType } })
+      lastAppliedCandleTypeRef.current = nextCandleType
+    }
   }, [timeframe, chartType])
 
   // When indicators change, sync chart: remove all then add each with calcParams
