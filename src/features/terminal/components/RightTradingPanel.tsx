@@ -25,6 +25,7 @@ import {
   formatUnits,
 } from '../utils/positionCalculations'
 import { AdminSymbol } from '@/features/symbols/types/symbol'
+import type { MockSymbol } from '@/shared/mock/terminalMock'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { getPromotionSlides } from '../api/promotions.api'
@@ -80,6 +81,55 @@ const saveTradingPanelState = (state: Partial<TradingPanelState>) => {
 function formatTierNotional(value: string): string {
   const n = parseFloat(value)
   return Number.isNaN(n) ? value : n.toFixed(2)
+}
+
+function isForexTerminalSymbol(s: MockSymbol): boolean {
+  return s.assetClass === 'FX'
+}
+
+function quoteFractionDigits(bid?: string, ask?: string): number {
+  const frac = (q?: string) => {
+    if (!q?.includes('.')) return 0
+    return q.split('.')[1]?.length ?? 0
+  }
+  return Math.max(frac(bid), frac(ask), 2)
+}
+
+/** Live Quote: show full WebSocket decimals for FX; otherwise use `pricePrecision`. */
+function liveQuoteBidFormatted(s: MockSymbol): string {
+  if (s.numericPrice <= 0) return ''
+  if (isForexTerminalSymbol(s) && s.bidQuote !== undefined && s.bidQuote !== '') {
+    return `$${s.bidQuote}`
+  }
+  const p = s.pricePrecision ?? 2
+  const n = s.numericPrice
+  return `$${n.toFixed(n % 1 === 0 ? 0 : p)}`
+}
+
+function liveQuoteAskFormatted(s: MockSymbol): string {
+  if (s.numericPrice2 <= 0) return ''
+  if (isForexTerminalSymbol(s) && s.askQuote !== undefined && s.askQuote !== '') {
+    return `$${s.askQuote}`
+  }
+  const p = s.pricePrecision ?? 2
+  const n = s.numericPrice2
+  return `$${n.toFixed(n % 1 === 0 ? 0 : p)}`
+}
+
+function liveQuoteSpreadFormatted(s: MockSymbol): string {
+  if (s.numericPrice <= 0 || s.numericPrice2 <= 0) return '0'
+  if (
+    isForexTerminalSymbol(s) &&
+    s.bidQuote !== undefined &&
+    s.bidQuote !== '' &&
+    s.askQuote !== undefined &&
+    s.askQuote !== ''
+  ) {
+    const diff = Math.abs(parseFloat(s.askQuote) - parseFloat(s.bidQuote))
+    return diff.toFixed(quoteFractionDigits(s.bidQuote, s.askQuote))
+  }
+  const p = s.pricePrecision ?? 2
+  return Math.abs(s.numericPrice2 - s.numericPrice).toFixed(p)
 }
 
 export function RightTradingPanel() {
@@ -916,7 +966,7 @@ export function RightTradingPanel() {
                   {selectedSymbol.numericPrice > 0 ? (
                     <SinglePriceDisplay
                       price={selectedSymbol.numericPrice}
-                      formatted={selectedSymbol.numericPrice.toFixed(selectedSymbol.numericPrice % 1 === 0 ? 0 : 2)}
+                      formatted={liveQuoteBidFormatted(selectedSymbol)}
                     />
                   ) : (
                     <div className="text-lg font-bold text-text-muted">—</div>
@@ -928,7 +978,7 @@ export function RightTradingPanel() {
                     <div className="flex justify-end">
                       <SinglePriceDisplay
                         price={selectedSymbol.numericPrice2}
-                        formatted={selectedSymbol.numericPrice2.toFixed(selectedSymbol.numericPrice2 % 1 === 0 ? 0 : 2)}
+                        formatted={liveQuoteAskFormatted(selectedSymbol)}
                       />
                     </div>
                   ) : (
@@ -943,7 +993,7 @@ export function RightTradingPanel() {
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-muted/70">Spread</span>
                     <span className="text-xs font-semibold text-text">
-                      {Math.abs(selectedSymbol.numericPrice2 - selectedSymbol.numericPrice).toFixed(2)}
+                      {liveQuoteSpreadFormatted(selectedSymbol)}
                     </span>
                   </div>
                 </div>
@@ -1540,9 +1590,7 @@ export function RightTradingPanel() {
                 <div className="flex justify-between items-center py-2 border-b border-white/5">
                   <span className="text-muted/80">Price</span>
                   <span className="font-semibold text-text">
-                    {selectedSymbol.numericPrice > 0 
-                      ? `$${selectedSymbol.numericPrice.toLocaleString()}`
-                      : '—'}
+                    {selectedSymbol.numericPrice > 0 ? liveQuoteBidFormatted(selectedSymbol) : '—'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-white/5">

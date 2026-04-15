@@ -1,4 +1,5 @@
 mod cache;
+mod catalog;
 mod config;
 mod feeds;
 mod health;
@@ -8,21 +9,24 @@ mod validation;
 
 use crate::cache::redis_client::RedisClient;
 use crate::config::Config;
+use contracts::DataProvidersConfig;
 use crate::feeds::binance_feed::BinanceFeed;
+use crate::feeds::feed_router::FeedRouter;
+use crate::feeds::mmdps_feed::MmdpsFeed;
 use crate::pricing::markup_engine::MarkupEngine;
 use crate::stream::broadcaster::Broadcaster;
 use crate::health::health_routes::create_health_router;
 use crate::validation::symbol_validation::{RateLimiter, SymbolValidator};
-use axum::Router;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber;
+
+use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,16 +41,28 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = Config::from_env()?;
+    let mut config = Config::from_env()?;
+
+    // Initialize Redis (needed before merge so we can read admin integrations mirror)
+    let redis = Arc::new(RedisClient::new(&config.redis_url).await?);
+    if let Ok(Some(json)) = redis.get_admin_integrations_json().await {
+        match serde_json::from_str::<DataProvidersConfig>(&json) {
+            Ok(admin_cfg) => {
+                config.merge_data_providers_admin(&admin_cfg);
+                info!("Applied data provider integrations from Redis (admin settings)");
+            }
+            Err(e) => warn!("Could not parse admin integrations JSON from Redis: {}", e),
+        }
+    }
+
     let start_time = SystemTime::now();
 
     info!("🚀 Starting Data Provider Server");
     info!("   Region: {}", config.server_region);
     info!("   WS Port: {}", config.ws_port);
     info!("   HTTP Port: {}", config.http_port);
+    info!("   FEED_PROVIDER (label): {}", config.feed_provider);
 
-    // Initialize Redis
-    let redis = Arc::new(RedisClient::new(&config.redis_url).await?);
     let redis_for_pubsub = redis.clone();
 
     // Connect to NATS for order-engine
@@ -64,7 +80,30 @@ async fn main() -> anyhow::Result<()> {
     let nats_for_ticks = nats.clone();
 
     // Initialize components
-    let feed = Arc::new(BinanceFeed::new(config.binance_ws_url.clone()));
+    let binance_feed = Arc::new(BinanceFeed::new(config.binance_ws_url.clone()));
+
+    let mmdps_feed = if config.mmdps_api_key.is_some() {
+        if let Some(ws_url) = config.mmdps_ws_connect_url() {
+            info!(
+                "MMDPS feed enabled (auto_route={}, explicit_symbols={})",
+                config.mmdps_auto_route,
+                config.mmdps_symbols.len()
+            );
+            Some(Arc::new(MmdpsFeed::new(ws_url)))
+        } else {
+            warn!("MMDPS_API_KEY missing — MMDPS disabled");
+            None
+        }
+    } else {
+        None
+    };
+
+    let feed = Arc::new(FeedRouter::new(
+        binance_feed,
+        mmdps_feed,
+        config.mmdps_auto_route,
+        config.mmdps_symbols.clone(),
+    ));
     let markup_engine = MarkupEngine::new(redis.clone());
     let broadcaster = Arc::new(Broadcaster::new(markup_engine));
     let validator = Arc::new(SymbolValidator::new(100));
@@ -128,7 +167,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         use futures_util::StreamExt;
         let client = redis_for_markup.get_client();
-        while let Ok(mut conn) = client.get_async_connection().await {
+        while let Ok(conn) = client.get_async_connection().await {
             let mut pubsub = conn.into_pubsub();
             if pubsub.subscribe("markup:update").await.is_ok() {
                 let mut stream = pubsub.into_on_message();
@@ -179,11 +218,112 @@ async fn main() -> anyhow::Result<()> {
             "XAIUSDT".into(), "YFIUSDT".into(), "ZILUSDT".into(), "ZROUSDT".into(),
         ],
     };
-    info!("📊 Initial symbols ({}): {:?}", initial_symbols.len(), initial_symbols);
-    for symbol in &initial_symbols {
+    let mut bootstrap_symbols = initial_symbols.clone();
+    for s in &config.mmdps_symbols {
+        if !bootstrap_symbols.iter().any(|x| x == s) {
+            bootstrap_symbols.push(s.clone());
+        }
+    }
+
+    let catalog_pool = if let Some(ref db_url) = config.symbols_database_url {
+        match PgPoolOptions::new()
+            .max_connections(3)
+            .connect(db_url)
+            .await
+        {
+            Ok(pool) => {
+                match catalog::symbol_catalog::fetch_mmdps_catalog_symbols(&pool).await {
+                    Ok(mut extra) => {
+                        extra.truncate(config.catalog_mmdps_max_symbols);
+                        let added: usize = extra
+                            .iter()
+                            .filter(|s| !bootstrap_symbols.iter().any(|x| x == *s))
+                            .count();
+                        for s in extra {
+                            if !bootstrap_symbols.iter().any(|x| x == &s) {
+                                bootstrap_symbols.push(s);
+                            }
+                        }
+                        info!(
+                            "📚 Symbol catalog (Postgres): merged {} new MMDPS-routed symbols (total bootstrap: {})",
+                            added,
+                            bootstrap_symbols.len()
+                        );
+                    }
+                    Err(e) => warn!(
+                        "Symbol catalog query failed — continuing with env/bootstrap only: {}",
+                        e
+                    ),
+                }
+                Some(pool)
+            }
+            Err(e) => {
+                warn!(
+                    "SYMBOLS_DATABASE_URL / DATABASE_URL connect failed — catalog merge skipped: {}",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        info!(
+            "SYMBOLS_DATABASE_URL / DATABASE_URL not set — MMDPS catalog merge disabled (set to same Postgres as auth-service for automatic forex/equity upstream list)"
+        );
+        None
+    };
+
+    info!(
+        "📊 Initial symbols ({}): {:?}",
+        bootstrap_symbols.len(),
+        bootstrap_symbols
+    );
+    for symbol in &bootstrap_symbols {
         feed.subscribe_symbol(symbol).await?;
         validator.enable_symbol(symbol.clone());
         subscribed_symbols.write().await.insert(symbol.clone());
+    }
+
+    if let Some(pool) = &catalog_pool {
+        if config.symbol_catalog_refresh_secs > 0 {
+            let pool = pool.clone();
+            let feed_c = feed.clone();
+            let subs_c = subscribed_symbols.clone();
+            let validator_c = validator.clone();
+            let secs = config.symbol_catalog_refresh_secs;
+            let max = config.catalog_mmdps_max_symbols;
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(secs));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    match catalog::symbol_catalog::fetch_mmdps_catalog_symbols(&pool).await {
+                        Ok(mut list) => {
+                            list.truncate(max);
+                            for sym in list {
+                                if subs_c.read().await.contains(&sym) {
+                                    continue;
+                                }
+                                match feed_c.subscribe_symbol(&sym).await {
+                                    Ok(()) => {
+                                        subs_c.write().await.insert(sym.clone());
+                                        validator_c.enable_symbol(sym);
+                                    }
+                                    Err(e) => {
+                                        debug!("catalog refresh: upstream subscribe {} failed: {}", sym, e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => warn!("symbol catalog refresh query failed: {}", e),
+                    }
+                }
+            });
+            info!(
+                "📚 Symbol catalog refresh: every {}s (Postgres)",
+                config.symbol_catalog_refresh_secs
+            );
+        }
     }
 
     // Price update loop — per-group: one Redis message with prices[], per-group NATS, per-group WS
@@ -352,6 +492,8 @@ async fn main() -> anyhow::Result<()> {
         feed.clone(),
         config.server_region.clone(),
         start_time,
+        config.mmdps_api_key.clone(),
+        config.mmdps_history_base.clone(),
     );
 
     // Start HTTP server

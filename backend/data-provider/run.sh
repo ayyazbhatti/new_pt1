@@ -18,6 +18,14 @@ export HTTP_PORT=${HTTP_PORT:-9002}
 export ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY:-change-me-in-production}
 export BINANCE_WS_URL=${BINANCE_WS_URL:-wss://stream.binance.com:9443/ws}
 
+# Optional: MMDPS live + history (defaults to EURUSD,GBPUSD when MMDPS_API_KEY is set and MMDPS_SYMBOLS is unset)
+# export MMDPS_API_KEY=your-key
+# export MMDPS_SYMBOLS=EURUSD,GBPUSD
+
+# Optional: Postgres (same as auth-service) — loads enabled non-crypto symbols from `symbols` for upstream MMDPS.
+# Uses DATABASE_URL or SYMBOLS_DATABASE_URL from the environment / .env (see root .env.example).
+# export SYMBOLS_CATALOG_REFRESH_SECS=300
+
 echo "🚀 Starting Data Provider Server..."
 echo "   Redis: $REDIS_URL"
 echo "   WebSocket Port: $WS_PORT"

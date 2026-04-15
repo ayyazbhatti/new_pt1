@@ -1,8 +1,234 @@
 use crate::models::symbol::{Symbol, SymbolWithProfile};
 use anyhow::Result;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+#[derive(Debug, Deserialize)]
+struct MmdpsSymbolsBody {
+    symbols: Vec<MmdpsSymbolRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MmdpsSymbolRow {
+    name: String,
+    description: Option<String>,
+    category: String,
+}
+
+/// Result of [AdminSymbolsService::sync_from_mmdps].
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncMmdpsResult {
+    pub fetched: usize,
+    pub upserted: usize,
+    pub skipped: usize,
+    /// Total rows in `symbols` after this sync (same database as auth-service).
+    pub db_symbol_count: i64,
+    pub categories_seen: std::collections::HashMap<String, usize>,
+    /// When `prune_stocks_not_in_mmdps_feed` was true: stocks/indices rows disabled (not in feed).
+    pub disabled_stocks_not_in_feed: Option<i64>,
+}
+
+fn split_six_letter_pair(code: &str) -> Option<(String, String)> {
+    let u = code.trim();
+    if u.len() != 6 || !u.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some((u[0..3].to_uppercase(), u[3..6].to_uppercase()))
+}
+
+/// `symbols.base_currency` / `quote_currency` are VARCHAR(10) in many deployments.
+fn clip_currency(s: &str) -> String {
+    s.chars().take(10).collect()
+}
+
+fn map_mmdps_symbol(
+    row: &MmdpsSymbolRow,
+    enable_forex: bool,
+    enable_metals: bool,
+    enable_stocks: bool,
+    enable_crypto: bool,
+) -> Option<(
+    String,
+    String,
+    &'static str,
+    &'static str,
+    String,
+    String,
+    i32,
+    i32,
+    &'static str,
+    bool,
+)> {
+    let raw = row.name.trim();
+    if raw.is_empty() || raw.len() > 50 {
+        return None;
+    }
+    let code = raw.to_uppercase();
+    let provider_symbol = code.to_lowercase();
+    let cat = row.category.trim().to_ascii_lowercase();
+
+    if cat == "forex" || cat == "fx" {
+        if !enable_forex {
+            return None;
+        }
+        if let Some((base, quote)) = split_six_letter_pair(&code) {
+            return Some((
+                code,
+                provider_symbol,
+                "FX",
+                "forex",
+                clip_currency(&base),
+                clip_currency(&quote),
+                5,
+                2,
+                "100000",
+                true,
+            ));
+        }
+        // Still store the symbol: best-effort FX row (e.g. non–6-letter codes from the feed).
+        let base_fb = clip_currency(&code);
+        return Some((
+            code,
+            provider_symbol,
+            "FX",
+            "forex",
+            base_fb,
+            clip_currency("USD"),
+            5,
+            2,
+            "100000",
+            true,
+        ));
+    }
+
+    if cat.contains("metal") || cat == "metals" || cat == "precious" {
+        if !enable_metals {
+            return None;
+        }
+        if let Some((base, quote)) = split_six_letter_pair(&code) {
+            return Some((
+                code,
+                provider_symbol,
+                "Metals",
+                "commodities",
+                clip_currency(&base),
+                clip_currency(&quote),
+                2,
+                2,
+                "100",
+                true,
+            ));
+        }
+        let base_fb = clip_currency(&code);
+        return Some((
+            code,
+            provider_symbol,
+            "Metals",
+            "commodities",
+            base_fb,
+            clip_currency("USD"),
+            2,
+            2,
+            "100",
+            true,
+        ));
+    }
+
+    if cat == "nasdaq"
+        || cat.contains("stock")
+        || cat == "stocks"
+        || cat == "equities"
+        || cat == "nyse"
+    {
+        if !enable_stocks {
+            return None;
+        }
+        let base = clip_currency(&code);
+        return Some((
+            code.clone(),
+            provider_symbol,
+            "Stocks",
+            "stocks",
+            base,
+            clip_currency("USD"),
+            2,
+            2,
+            "1",
+            false,
+        ));
+    }
+
+    if cat == "crypto" || cat.contains("crypto") {
+        if !enable_crypto {
+            return None;
+        }
+        let u = code.as_str();
+        if u.len() > 4 && u.ends_with("USDT") {
+            let base = clip_currency(&u[..u.len() - 4]);
+            return Some((
+                code.clone(),
+                provider_symbol,
+                "Crypto",
+                "crypto",
+                base,
+                clip_currency("USDT"),
+                2,
+                6,
+                "1",
+                true,
+            ));
+        }
+        return Some((
+            code.clone(),
+            provider_symbol,
+            "Crypto",
+            "crypto",
+            clip_currency(&code),
+            clip_currency("USD"),
+            2,
+            6,
+            "1",
+            true,
+        ));
+    }
+
+    if cat == "indices" || cat.contains("index") {
+        if !enable_stocks {
+            return None;
+        }
+        let base = clip_currency(&code);
+        return Some((
+            code.clone(),
+            provider_symbol,
+            "Indices",
+            "indices",
+            base,
+            clip_currency("USD"),
+            2,
+            2,
+            "1",
+            false,
+        ));
+    }
+
+    // Unknown category: still persist so new/odd feed labels are not dropped.
+    // (Known buckets above still honor their enable_* flags.)
+    let base = clip_currency(&code);
+    Some((
+        code.clone(),
+        provider_symbol,
+        "Stocks",
+        "stocks",
+        base,
+        clip_currency("USD"),
+        2,
+        2,
+        "1",
+        false,
+    ))
+}
 
 /// Default for tick_size when not provided (DB column is NOT NULL).
 fn default_tick_size() -> Decimal {
@@ -57,6 +283,8 @@ impl AdminSymbolsService {
                 s.trading_enabled,
                 s.leverage_profile_id,
                 lp.name as leverage_profile_name,
+                s.mmdps_category,
+                s.provider_description,
                 s.created_at,
                 s.updated_at
             FROM symbols s
@@ -195,6 +423,8 @@ impl AdminSymbolsService {
                 s.trading_enabled,
                 s.leverage_profile_id,
                 NULL::text as leverage_profile_name,
+                NULL::text as mmdps_category,
+                NULL::text as provider_description,
                 s.created_at,
                 s.updated_at
             FROM symbols s
@@ -252,6 +482,8 @@ impl AdminSymbolsService {
                 trading_enabled: row.get("trading_enabled"),
                 leverage_profile_id: row.get("leverage_profile_id"),
                 leverage_profile_name: row.get("leverage_profile_name"),
+                mmdps_category: row.get("mmdps_category"),
+                provider_description: row.get("provider_description"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
             })
@@ -261,7 +493,7 @@ impl AdminSymbolsService {
 
     pub async fn get_symbol_by_id(&self, id: Uuid) -> Result<Symbol> {
         let symbol = sqlx::query_as::<_, Symbol>(
-            "SELECT id, code as symbol_code, provider_symbol, asset_class::text as asset_class, base_currency, quote_currency, price_precision, volume_precision, contract_size::text as contract_size, tick_size, lot_min, lot_max, default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, leverage_profile_id, created_at, updated_at FROM symbols WHERE id = $1",
+            "SELECT id, code as symbol_code, provider_symbol, asset_class::text as asset_class, base_currency, quote_currency, price_precision, volume_precision, contract_size::text as contract_size, tick_size, lot_min, lot_max, default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, leverage_profile_id, mmdps_category, provider_description, created_at, updated_at FROM symbols WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -325,7 +557,7 @@ impl AdminSymbolsService {
                 base_currency, quote_currency, price_precision, volume_precision, 
                 contract_size::text as contract_size, tick_size, lot_min, lot_max, 
                 default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
-                leverage_profile_id, created_at, updated_at
+                leverage_profile_id, mmdps_category, provider_description, created_at, updated_at
             "#,
         )
         .bind(symbol_code)
@@ -423,7 +655,7 @@ impl AdminSymbolsService {
                 base_currency, quote_currency, price_precision, volume_precision, 
                 contract_size::text as contract_size, tick_size, lot_min, lot_max, 
                 default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
-                leverage_profile_id, created_at, updated_at
+                leverage_profile_id, mmdps_category, provider_description, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -475,7 +707,7 @@ impl AdminSymbolsService {
                 base_currency, quote_currency, price_precision, volume_precision, 
                 contract_size::text as contract_size, tick_size, lot_min, lot_max, 
                 default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
-                leverage_profile_id, created_at, updated_at
+                leverage_profile_id, mmdps_category, provider_description, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -485,6 +717,192 @@ impl AdminSymbolsService {
         .ok_or_else(|| anyhow::anyhow!("Symbol not found"))?;
 
         Ok(symbol)
+    }
+
+    /// Fetches `/feed/symbols` from MMDPS and upserts into `symbols`.
+    /// Uses `MMDPS_API_KEY` and optional `MMDPS_SYMBOLS_URL` (default `https://api.mmdps.uk/feed/symbols`).
+    /// New rows get `is_enabled` / `trading_enabled` from the mapped default; existing rows keep flags and leverage.
+    /// After upserting from MMDPS `/feed/symbols`, optionally disable **stocks** and **indices**
+    /// rows whose `code` is **not** in the feed list. **Never** touches `Crypto` / `market = crypto`
+    /// (Binance) or forex/metals/commodities — only `asset_class` + `market` in `Stocks`/`Indices`.
+    pub async fn sync_from_mmdps(
+        &self,
+        enable_forex: bool,
+        enable_metals: bool,
+        enable_stocks: bool,
+        enable_crypto: bool,
+        prune_stocks_not_in_mmdps_feed: bool,
+    ) -> Result<SyncMmdpsResult> {
+        let base = std::env::var("MMDPS_SYMBOLS_URL")
+            .unwrap_or_else(|_| "https://api.mmdps.uk/feed/symbols".to_string());
+        let mut url =
+            reqwest::Url::parse(&base).map_err(|e| anyhow::anyhow!("MMDPS_SYMBOLS_URL: {e}"))?;
+        let has_api_key = url
+            .query_pairs()
+            .any(|(k, _)| k.eq_ignore_ascii_case("api_key"));
+        if !has_api_key {
+            let api_key = std::env::var("MMDPS_API_KEY").map_err(|_| {
+                anyhow::anyhow!("Set MMDPS_API_KEY or include api_key= in MMDPS_SYMBOLS_URL")
+            })?;
+            url.query_pairs_mut().append_pair("api_key", &api_key);
+        }
+
+        // Large JSON + thousands of upserts: allow a long HTTP read on the auth-service side.
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .build()?;
+        let res = client.get(url).send().await?.error_for_status()?;
+        let body: MmdpsSymbolsBody = res.json().await?;
+
+        let tick = default_tick_size();
+        let lot_min = default_lot_min();
+        let fetched = body.symbols.len();
+        let mut upserted = 0usize;
+        let mut skipped = 0usize;
+        let mut categories_seen = std::collections::HashMap::<String, usize>::new();
+
+        for row in &body.symbols {
+            let ck = row.category.trim().to_string();
+            *categories_seen.entry(ck).or_insert(0) += 1;
+            let Some(mapped) = map_mmdps_symbol(
+                row,
+                enable_forex,
+                enable_metals,
+                enable_stocks,
+                enable_crypto,
+            ) else {
+                skipped += 1;
+                continue;
+            };
+            let (
+                code,
+                provider_symbol,
+                asset_class,
+                market,
+                base_c,
+                quote_c,
+                price_precision,
+                volume_precision,
+                contract_size,
+                default_enabled,
+            ) = mapped;
+            let mmdps_cat_trim = row.category.trim();
+            let mmdps_cat = if mmdps_cat_trim.is_empty() {
+                None
+            } else {
+                Some(mmdps_cat_trim.to_string())
+            };
+            let desc = row
+                .description
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+
+            match sqlx::query(
+                r#"
+                INSERT INTO symbols (
+                    code, provider_symbol, asset_class, base_currency, quote_currency,
+                    price_precision, volume_precision, contract_size, tick_size, lot_min, lot_max,
+                    default_pip_position, pip_position_min, pip_position_max,
+                    leverage_profile_id, is_enabled, trading_enabled, market,
+                    mmdps_category, provider_description
+                ) VALUES (
+                    $1, $2, $3::asset_class, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11::numeric,
+                    NULL, NULL, NULL, NULL, $12, $13, $14::market_type, $15, $16
+                )
+                ON CONFLICT (code) DO UPDATE SET
+                    provider_symbol = EXCLUDED.provider_symbol,
+                    asset_class = EXCLUDED.asset_class,
+                    base_currency = EXCLUDED.base_currency,
+                    quote_currency = EXCLUDED.quote_currency,
+                    price_precision = EXCLUDED.price_precision,
+                    volume_precision = EXCLUDED.volume_precision,
+                    contract_size = EXCLUDED.contract_size,
+                    tick_size = EXCLUDED.tick_size,
+                    lot_min = EXCLUDED.lot_min,
+                    lot_max = EXCLUDED.lot_max,
+                    market = EXCLUDED.market,
+                    mmdps_category = EXCLUDED.mmdps_category,
+                    provider_description = EXCLUDED.provider_description,
+                    updated_at = NOW()
+                "#,
+            )
+            .bind(&code)
+            .bind(&provider_symbol)
+            .bind(asset_class)
+            .bind(&base_c)
+            .bind(&quote_c)
+            .bind(price_precision)
+            .bind(volume_precision)
+            .bind(contract_size)
+            .bind(tick)
+            .bind(lot_min)
+            .bind(Option::<Decimal>::None)
+            .bind(default_enabled)
+            .bind(default_enabled)
+            .bind(market)
+            .bind(mmdps_cat)
+            .bind(desc)
+            .execute(&self.pool)
+            .await
+            {
+                Ok(_) => upserted += 1,
+                Err(e) => {
+                    tracing::warn!(error = %e, code = %code, "mmdps symbol upsert failed; row skipped");
+                    skipped += 1;
+                }
+            }
+        }
+
+        let db_symbol_count: i64 = sqlx::query_scalar("SELECT COUNT(*)::bigint FROM symbols")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let mut disabled_stocks_not_in_feed: Option<i64> = None;
+        if prune_stocks_not_in_mmdps_feed {
+            let mut allow: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for row in &body.symbols {
+                let c = row.name.trim().to_uppercase();
+                if !c.is_empty() && c.len() <= 50 {
+                    allow.insert(c);
+                }
+            }
+            let allow_vec: Vec<String> = allow.into_iter().collect();
+            if allow_vec.is_empty() {
+                tracing::warn!("MMDPS prune skipped: feed returned no symbol names");
+            } else {
+                let res = sqlx::query(
+                    r#"
+                    UPDATE symbols
+                    SET is_enabled = false, trading_enabled = false, updated_at = NOW()
+                    WHERE (asset_class::text IN ('Stocks', 'Indices'))
+                      AND (market::text IN ('stocks', 'indices'))
+                      AND COALESCE(asset_class::text, '') IS DISTINCT FROM 'Crypto'
+                      AND COALESCE(market::text, '') IS DISTINCT FROM 'crypto'
+                      AND NOT (UPPER(TRIM(code)) = ANY($1::text[]))
+                    "#,
+                )
+                .bind(&allow_vec)
+                .execute(&self.pool)
+                .await?;
+                let n = res.rows_affected() as i64;
+                disabled_stocks_not_in_feed = Some(n);
+                tracing::info!(
+                    "MMDPS prune: disabled {} stocks/indices rows not in /feed/symbols allowlist",
+                    n
+                );
+            }
+        }
+
+        Ok(SyncMmdpsResult {
+            fetched,
+            upserted,
+            skipped,
+            db_symbol_count,
+            categories_seen,
+            disabled_stocks_not_in_feed,
+        })
     }
 }
 

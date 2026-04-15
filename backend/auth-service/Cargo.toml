@@ -5,9 +5,21 @@ edition = "2021"
 
 [workspace]
 
+[lib]
+name = "auth_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "auth-service"
+path = "src/main.rs"
+
 [[bin]]
 name = "seed_admin"
 path = "src/bin/seed_admin.rs"
+
+[[bin]]
+name = "sync_mmdps"
+path = "src/bin/sync_mmdps.rs"
 
 [dependencies]
 # Web framework
@@ -64,6 +76,10 @@ futures = { version = "0.3", features = ["std"] }
 
 # Event streaming
 async-nats = "0.32"
+
+# WebSocket probe for admin "test Binance URL" (multiplex /ws)
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
 
 # HTTP client (Voiso Click2Call proxy)
 reqwest = { version = "0.11", features = ["json"] }

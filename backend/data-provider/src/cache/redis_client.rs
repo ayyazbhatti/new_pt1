@@ -1,4 +1,5 @@
 use anyhow::Result;
+use contracts::REDIS_KEY_ADMIN_INTEGRATIONS;
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Client};
 use serde::{Deserialize, Serialize};
@@ -100,6 +101,13 @@ impl RedisClient {
 
     pub fn get_client(&self) -> Client {
         self.client.clone()
+    }
+
+    /// JSON blob written by auth-service admin settings (`DataProvidersConfig`).
+    pub async fn get_admin_integrations_json(&self) -> Result<Option<String>> {
+        let mut conn = self.connection.write().await;
+        let v: Option<String> = conn.get(REDIS_KEY_ADMIN_INTEGRATIONS).await?;
+        Ok(v)
     }
 }
 

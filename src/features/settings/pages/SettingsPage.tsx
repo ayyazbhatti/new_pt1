@@ -35,6 +35,7 @@ import {
   sendTestEmail,
 } from '../api/emailConfig.api'
 import { getEmailTemplates, updateEmailTemplate } from '../api/emailTemplates.api'
+import { IntegrationsSettingsTab } from '../components/IntegrationsSettingsTab'
 
 const SETTINGS_TABS = [
   { id: 'general', label: 'General', icon: Settings },
@@ -698,6 +699,10 @@ export function SettingsPage() {
             </div>
           )}
 
+          {tab === 'integrations' && (
+            <IntegrationsSettingsTab canEdit={canEditSettings} />
+          )}
+
           {tab === 'email-templates' && (
             <div className="space-y-8">
               {templatesQuery.isLoading && (
@@ -846,7 +851,10 @@ export function SettingsPage() {
             </div>
           )}
 
-          {tab !== 'general' && tab !== 'email-config' && tab !== 'email-templates' && (
+          {tab !== 'general' &&
+            tab !== 'email-config' &&
+            tab !== 'email-templates' &&
+            tab !== 'integrations' && (
             <Card className="p-8">
               <p className="text-sm text-text-muted">
                 {SETTINGS_TABS.find((t) => t.id === tab)?.label} settings — coming soon.

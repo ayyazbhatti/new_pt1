@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useMemo } from 'react'
 import { Menu, X, Search, Star } from 'lucide-react'
 import { useTerminalStore } from '../store/terminalStore'
 import { Input } from '@/shared/ui'
@@ -7,14 +7,11 @@ import { PriceDisplay } from './PriceDisplay'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import { updateTerminalPreferences } from '../api/preferences.api'
-
-const QUOTE_CATEGORIES = [
-  { id: 'all' as const, label: 'All' },
-  { id: 'crypto' as const, label: 'Cryptocurrencies' },
-  { id: 'watchlist' as const, label: 'Favourite' },
-] as const
-
-type QuoteCategoryId = (typeof QUOTE_CATEGORIES)[number]['id']
+import {
+  assetClassDisplayLabel,
+  distinctAssetClasses,
+  normalizeSymbolAssetClass,
+} from '../utils/symbolCategories'
 
 interface TerminalSymbolsPageProps {
   onClose: () => void
@@ -28,7 +25,8 @@ interface TerminalSymbolsPageProps {
  */
 export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPageProps) {
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const [category, setCategory] = useState<QuoteCategoryId>('all')
+  /** Narrow list to one asset class; 'all' = no extra filter (still uses All vs Favourite from store). */
+  const [assetClassFilter, setAssetClassFilter] = useState<string>('all')
   const [searchOpen, setSearchOpen] = useState(false)
 
   const {
@@ -42,15 +40,32 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
     toggleWatchlist,
     selectedSymbol,
     isLoading,
+    activeTab,
   } = useTerminalStore()
 
-  // Sync category with store tabs: "watchlist" -> watchlists, else all
-  const applyCategory = (cat: QuoteCategoryId) => {
-    setCategory(cat)
-    setActiveTab(cat === 'watchlist' ? 'watchlists' : 'all')
+  const assetClassesPresent = useMemo(() => distinctAssetClasses(allSymbols), [allSymbols])
+
+  const applyAllTab = () => {
+    setActiveTab('all')
+    setAssetClassFilter('all')
   }
 
-  const symbols = getFilteredSymbols()
+  const applyFavouritesTab = () => {
+    setActiveTab('watchlists')
+    setAssetClassFilter('all')
+  }
+
+  const applyAssetClass = (key: string) => {
+    setActiveTab('all')
+    setAssetClassFilter(key)
+  }
+
+  const baseFiltered = getFilteredSymbols()
+  const symbols = useMemo(() => {
+    if (assetClassFilter === 'all') return baseFiltered
+    return baseFiltered.filter((s) => normalizeSymbolAssetClass(s) === assetClassFilter)
+  }, [baseFiltered, assetClassFilter])
+
   const totalCount = allSymbols.length
   const watchlistCount = watchlist.size
 
@@ -116,18 +131,38 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
       {/* Category filter: horizontally scrollable pills */}
       <div className="shrink-0 border-b border-white/10 overflow-x-auto scrollbar-none">
         <div className="flex items-center gap-2 px-4 py-3 min-w-max">
-          {QUOTE_CATEGORIES.map((cat) => {
-            const count =
-              cat.id === 'watchlist'
-                ? watchlistCount
-                : cat.id === 'all'
-                  ? totalCount
-                  : totalCount
-            const isSelected = category === cat.id
+          <button
+            type="button"
+            onClick={applyAllTab}
+            className={cn(
+              'shrink-0 px-4 py-2.5 rounded-full text-sm font-semibold border transition-all',
+              assetClassFilter === 'all' && activeTab === 'all'
+                ? 'bg-accent/20 text-text border-accent text-white'
+                : 'bg-white/5 text-text-muted border-white/10 hover:bg-white/10 hover:text-text'
+            )}
+          >
+            All ({totalCount})
+          </button>
+          <button
+            type="button"
+            onClick={applyFavouritesTab}
+            className={cn(
+              'shrink-0 px-4 py-2.5 rounded-full text-sm font-semibold border transition-all',
+              activeTab === 'watchlists' && assetClassFilter === 'all'
+                ? 'bg-accent/20 text-text border-accent text-white'
+                : 'bg-white/5 text-text-muted border-white/10 hover:bg-white/10 hover:text-text'
+            )}
+          >
+            Favourite ({watchlistCount})
+          </button>
+          {assetClassesPresent.map((key) => {
+            const count = allSymbols.filter((s) => normalizeSymbolAssetClass(s) === key).length
+            const isSelected = assetClassFilter === key && activeTab === 'all'
             return (
               <button
-                key={cat.id}
-                onClick={() => applyCategory(cat.id)}
+                key={key}
+                type="button"
+                onClick={() => applyAssetClass(key)}
                 className={cn(
                   'shrink-0 px-4 py-2.5 rounded-full text-sm font-semibold border transition-all',
                   isSelected
@@ -135,9 +170,7 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
                     : 'bg-white/5 text-text-muted border-white/10 hover:bg-white/10 hover:text-text'
                 )}
               >
-                {cat.label}
-                {cat.id !== 'watchlist' && ` (${count})`}
-                {cat.id === 'watchlist' && ` (${watchlistCount})`}
+                {assetClassDisplayLabel(key)} ({count})
               </button>
             )
           })}

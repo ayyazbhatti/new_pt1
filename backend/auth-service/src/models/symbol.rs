@@ -30,6 +30,8 @@ pub struct Symbol {
     pub is_enabled: bool,
     pub trading_enabled: bool,
     pub leverage_profile_id: Option<Uuid>,
+    pub mmdps_category: Option<String>,
+    pub provider_description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -63,6 +65,9 @@ pub struct SymbolWithProfile {
     pub trading_enabled: bool,
     pub leverage_profile_id: Option<Uuid>,
     pub leverage_profile_name: Option<String>,
+    /// Raw MMDPS `category` (e.g. Nasdaq, Forex) when synced from `/feed/symbols`.
+    pub mmdps_category: Option<String>,
+    pub provider_description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

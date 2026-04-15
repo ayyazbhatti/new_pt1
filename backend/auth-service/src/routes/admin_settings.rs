@@ -1,14 +1,17 @@
-//! Admin settings routes: email configuration (GET/PUT), send test email (POST), email templates (GET/PUT).
+//! Admin settings routes: email configuration (GET/PUT), send test email (POST), email templates (GET/PUT),
+//! data provider integrations (GET/PUT).
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post, put},
     Router,
 };
+use contracts::DataProvidersConfig;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 
 use tracing::error;
 use crate::middleware::auth_middleware;
@@ -16,9 +19,11 @@ use crate::routes::auth::send_welcome_email_after_signup;
 use crate::services::email_config_service::{
     send_test_email_sync, EmailConfigService, UpdateEmailConfigRequest,
 };
+use crate::services::data_provider_integrations_service::DataProviderIntegrationsService;
 use crate::services::email_templates_service::{
     EmailTemplatesService, UpdateEmailTemplateRequest,
 };
+use crate::redis_pool::RedisPool;
 use crate::utils::jwt::Claims;
 
 /// Allow if role is admin or user has the given permission from their permission profile.
@@ -77,8 +82,96 @@ pub fn create_admin_settings_router(pool: PgPool) -> Router<PgPool> {
         .route("/email-templates", get(get_email_templates))
         .route("/email-templates/:id", put(put_email_template))
         .route("/resend-welcome-email", post(post_resend_welcome_email))
+        .route("/data-providers", get(get_data_providers).put(put_data_providers))
+        .route(
+            "/data-providers/test-ws",
+            post(post_test_data_providers_ws),
+        )
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+async fn get_data_providers(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "settings:view").await?;
+    let svc = DataProviderIntegrationsService::new(pool);
+    let cfg = svc.get().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+    let cfg = DataProviderIntegrationsService::merge_with_defaults(cfg);
+    Ok(Json(serde_json::to_value(cfg).unwrap()))
+}
+
+async fn put_data_providers(
+    State(pool): State<PgPool>,
+    Extension(redis): Extension<Arc<RedisPool>>,
+    claims: axum::extract::Extension<Claims>,
+    axum::Json(body): axum::Json<DataProvidersConfig>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
+    let cfg = DataProviderIntegrationsService::merge_with_defaults(body);
+    let normalized = DataProviderIntegrationsService::validate_and_normalize(cfg).map_err(|msg| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+    })?;
+    let svc = DataProviderIntegrationsService::new(pool);
+    svc.save(&normalized).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+    DataProviderIntegrationsService::sync_to_redis(redis.as_ref(), &normalized)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "config": serde_json::to_value(&normalized).unwrap(),
+        "message": "Saved. Restart the data-provider process to apply WebSocket URL changes."
+    })))
+}
+
+#[derive(Deserialize)]
+struct TestDataProvidersWsBody {
+    /// When null/omitted/empty, server uses `BINANCE_WS_URL` or the public Binance default.
+    #[serde(default, rename = "wsUrl")]
+    ws_url: Option<String>,
+}
+
+/// Connects from the auth-service host, subscribes to `btcusdt@bookTicker`, checks for a ticker payload.
+async fn post_test_data_providers_ws(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+    axum::Json(body): axum::Json<TestDataProvidersWsBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
+    let url_ref = body
+        .ws_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match crate::services::binance_multiplex_ws_test::test_binance_multiplex_ws(url_ref).await {
+        Ok(detail) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "detail": detail,
+        }))),
+        Err(err) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": err,
+        }))),
+    }
 }
 
 async fn get_email_config(

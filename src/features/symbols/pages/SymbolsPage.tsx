@@ -5,10 +5,10 @@ import { Button } from '@/shared/ui/button'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { AddSymbolModal } from '../modals/AddSymbolModal'
 import { useModalStore } from '@/app/store'
-import { Plus, Upload } from 'lucide-react'
+import { Loader2, Plus, Upload } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useAdminSymbolsList } from '../hooks/useSymbols'
+import { useAdminSymbolsList, useSyncMmdpsSymbols } from '../hooks/useSymbols'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { Skeleton } from '@/shared/ui/loading'
 import { EmptyState } from '@/shared/ui/empty'
@@ -43,6 +43,9 @@ export function SymbolsPage() {
   useLeverageProfilesList({ page_size: 500 })
 
   // Fetch symbols
+  const syncMmdps = useSyncMmdpsSymbols()
+  const [mmdpsPruneOffListStocks, setMmdpsPruneOffListStocks] = useState(false)
+
   const { data, isLoading, error, refetch } = useAdminSymbolsList({
     search: search || undefined,
     asset_class: assetClass !== 'all' ? assetClass : undefined,
@@ -105,10 +108,35 @@ export function SymbolsPage() {
         description="Manage tradable instruments, leverage profiles, and group markups"
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="outline" disabled>
-              <Upload className="h-4 w-4 mr-2" />
-              Import
-            </Button>
+            {canCreateSymbol && (
+              <label className="flex items-center gap-2 text-sm text-muted-foreground mr-2">
+                <input
+                  type="checkbox"
+                  checked={mmdpsPruneOffListStocks}
+                  onChange={(e) => setMmdpsPruneOffListStocks(e.target.checked)}
+                />
+                Prune off-list stocks/indices
+              </label>
+            )}
+            {canCreateSymbol && (
+              <Button
+                variant="outline"
+                disabled={syncMmdps.isPending}
+                onClick={() =>
+                  syncMmdps.mutate({
+                    prune_stocks_not_in_mmdps_feed: mmdpsPruneOffListStocks,
+                  })
+                }
+                title="Fetches symbols from MMDPS /feed/symbols and upserts. Optional: disable stocks/indices not in that feed (never touches Crypto)."
+              >
+                {syncMmdps.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4 mr-2" />
+                )}
+                Sync from MMDPS
+              </Button>
+            )}
             {canCreateSymbol && (
               <Button onClick={handleAddSymbol}>
                 <Plus className="h-4 w-4 mr-2" />

@@ -19,6 +19,14 @@ function getDefaultPriceWsUrl(): string {
   }
   return getGatewayPriceWsUrl()
 }
+
+/** When set in `.env`, always use data-provider for ticks (not gateway), even if the user is logged in. */
+function explicitDataProviderWsUrl(): string | null {
+  const env = typeof import.meta !== 'undefined' && (import.meta as any).env
+  const u = env?.VITE_DATA_PROVIDER_WS_URL
+  if (typeof u === 'string' && u.trim().length > 0) return u.trim()
+  return null
+}
 export interface PriceTick {
   symbol: string
   bid: string
@@ -128,21 +136,27 @@ class PriceStreamClient {
     if (this.ws?.readyState === WebSocket.OPEN) {
       const openUrl = this.ws.url
       if (!priceWsUrlsMatch(openUrl, effectiveUrl)) {
-        // Still on data-provider (or old host) but we need same-origin /ws gateway — reconnect, keep symbols
+        // e.g. switch between data-provider WS and same-origin gateway — reconnect, keep symbols
         this.pendingSymbols = [...new Set([...this.pendingSymbols, ...this.subscribedSymbols])]
         this.ws.close()
         return
       }
       if (isGatewayUrl(effectiveUrl)) {
         void this.sendGatewayAuthWithFreshToken()
-      } else if (!hadToken) {
-        this.disconnect()
       }
     }
   }
 
-  /** When user has a token, use gateway URL so they get per-group (marked-up) prices. */
+  /**
+   * WebSocket URL for price ticks.
+   * - If `VITE_DATA_PROVIDER_WS_URL` is set, always use it (live ticks from data-provider even when logged in).
+   *   Otherwise HTTP `/prices` snapshots would update but WS would move to gateway and look "stuck" if gateway is down.
+   * - If unset and user has a JWT, use gateway for per-group marked-up prices.
+   * - Otherwise use constructor default (often gateway when no env).
+   */
   private getEffectiveUrl(): string {
+    const dp = explicitDataProviderWsUrl()
+    if (dp) return dp
     return this.authToken ? getGatewayPriceWsUrl() : this.url
   }
 

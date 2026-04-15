@@ -60,3 +60,6 @@ async-nats = "0.32"
 # Contracts for event types
 contracts = { path = "../../crates/contracts" }
 
+# Optional: shared Postgres catalog (same DB as auth-service) for MMDPS symbol list
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+

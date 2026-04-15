@@ -8,7 +8,7 @@ import { useWalletStore } from '@/shared/store/walletStore'
 import { useNavigate } from 'react-router-dom'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { PriceDisplay } from './PriceDisplay'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
@@ -19,6 +19,7 @@ import { updateTerminalPreferences } from '@/features/terminal/api/preferences.a
 import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
+import { groupSymbolsByAssetClass } from '../utils/symbolCategories'
 
 interface LeftSidebarProps {
   /** When provided, Deposit button opens parent's deposit modal and parent renders DepositModal. */
@@ -50,7 +51,8 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
   const { balance, equity, margin_used, currency, isLoading: balanceLoading, setWalletData, setLoading } = useWalletStore()
-  const [cryptoExpanded, setCryptoExpanded] = useState(true)
+  /** Collapsible sections per asset class (key = FX, Crypto, …). Default expanded when key missing. */
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({})
   const [isScrolling, setIsScrolling] = useState(false)
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
@@ -60,6 +62,19 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const { accountSummary, isLoading: accountSummaryLoading } = useAccountSummary()
   const wsState = useWebSocketState()
   const symbols = getFilteredSymbols()
+  const symbolsByCategory = useMemo(() => groupSymbolsByAssetClass(symbols), [symbols])
+
+  const toggleSection = useCallback((key: string) => {
+    setExpandedSections((prev) => {
+      const cur = prev[key] ?? true
+      return { ...prev, [key]: !cur }
+    })
+  }, [])
+
+  const isSectionOpen = useCallback(
+    (key: string) => expandedSections[key] !== false,
+    [expandedSections]
+  )
 
   // Ensure WebSocket is connected when user is on terminal (so balance push is received)
   useEffect(() => {
@@ -222,7 +237,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
         clearTimeout(scrollTimeoutRef.current)
       }
     }
-  }, [cryptoExpanded])
+  }, [symbolsByCategory.length])
 
   const getUserInitials = () => {
     if (user?.firstName && user?.lastName) {
@@ -455,121 +470,126 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
         </button>
       </div>
 
-      {/* Section Header */}
-      <button
-        onClick={() => setCryptoExpanded(!cryptoExpanded)}
-        className="shrink-0 px-4 py-2.5 flex items-center justify-between w-full hover:bg-white/5 transition-all duration-200 group"
-      >
-        <div className="text-[11px] font-bold text-text/70 uppercase tracking-widest">Cryptocurrencies</div>
-        {cryptoExpanded ? (
-          <ChevronUp className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors" />
-        )}
-      </button>
-
-      {/* Symbols List */}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {cryptoExpanded && (
-          <div 
-            ref={scrollContainerRef}
-            className={cn(
-              "h-full overflow-y-auto scrollbar-thin",
-              isScrolling && "scrolling"
-            )}
-          >
-            {isLoading ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="px-4 py-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-1">
-                      <Skeleton className="h-3.5 w-3.5 rounded" variant="rectangular" />
-                      <div className="flex-1 space-y-1.5">
-                        <Skeleton className="h-4 w-16" variant="text" />
-                        <Skeleton className="h-3 w-20" variant="text" />
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1.5">
-                      <Skeleton className="h-3 w-12" variant="text" />
-                      <Skeleton className="h-4 w-10 rounded" variant="rectangular" />
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              symbols.map((symbol) => (
-              <div
-                key={symbol.id}
-                onClick={() => setSelectedSymbol(symbol)}
-                className={cn(
-                  'px-4 py-2.5 hover:bg-white/5 transition-all duration-200 cursor-pointer group relative',
-                  selectedSymbol.id === symbol.id && 'bg-accent/10 border-l-2 border-accent'
-                )}
-              >
+      {/* Symbols by asset class (same classification as admin Symbols) */}
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+        <div
+          ref={scrollContainerRef}
+          className={cn('flex-1 min-h-0 overflow-y-auto scrollbar-thin', isScrolling && 'scrolling')}
+        >
+          {isLoading ? (
+            Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="px-4 py-2.5">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        toggleWatchlist(symbol.id)
-                        const nextIds = Array.from(useTerminalStore.getState().watchlist)
-                        updateTerminalPreferences({ favouriteSymbolIds: nextIds }).catch(() =>
-                          toast.error('Failed to save favourites')
-                        )
-                        toast.success(watchlist.has(symbol.id) ? 'Removed from favourites' : 'Added to favourites')
-                      }}
-                      className="p-1 hover:bg-white/10 rounded transition-all duration-200 hover:scale-110 active:scale-95 shrink-0 mt-0.5"
-                      aria-label={watchlist.has(symbol.id) ? 'Remove from favourites' : 'Add to favourites'}
-                    >
-                      <Star
-                        className={cn(
-                          'h-3.5 w-3.5 transition-all',
-                          watchlist.has(symbol.id) 
-                            ? 'fill-warning text-warning drop-shadow-sm' 
-                            : 'text-text-muted/40 group-hover:text-text-muted/60'
-                        )}
-                      />
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-sm font-bold text-text tracking-tight">{symbol.code}</span>
-                        <div className="h-1.5 w-1.5 rounded-full bg-accent shadow-sm shadow-accent/50"></div>
-                      </div>
-                      <PriceDisplay
-                        bid={symbol.numericPrice}
-                        ask={symbol.numericPrice2}
-                        bidFormatted={symbol.price}
-                        askFormatted={symbol.price2}
-                      />
+                  <div className="flex items-center gap-2 flex-1">
+                    <Skeleton className="h-3.5 w-3.5 rounded" variant="rectangular" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-16" variant="text" />
+                      <Skeleton className="h-3 w-20" variant="text" />
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className="text-xs font-semibold text-text/80">{symbol.value}</span>
-                    {(symbol.change24h || 0) !== 0 && (
-                      <div className={cn(
-                        "flex items-center gap-0.5 px-1.5 py-0.5 rounded",
-                        symbol.change24h >= 0 
-                          ? "text-success bg-success/10" 
-                          : "text-danger bg-danger/10"
-                      )}>
-                        {symbol.change24h >= 0 ? (
-                          <ArrowUp className="h-2.5 w-2.5" />
-                        ) : (
-                          <ArrowDown className="h-2.5 w-2.5" />
-                        )}
-                        <span className="text-[10px] font-bold">
-                          {symbol.change24h >= 0 ? '+' : ''}{symbol.change24h.toFixed(2)}%
-                        </span>
-                      </div>
-                    )}
+                  <div className="flex flex-col items-end gap-1.5">
+                    <Skeleton className="h-3 w-12" variant="text" />
+                    <Skeleton className="h-4 w-10 rounded" variant="rectangular" />
                   </div>
                 </div>
               </div>
             ))
-            )}
-          </div>
-        )}
+          ) : symbolsByCategory.length === 0 ? (
+            <div className="px-4 py-6 text-center text-xs text-muted">No symbols match.</div>
+          ) : (
+            symbolsByCategory.map((group) => (
+              <div key={group.key} className="border-b border-white/5 last:border-b-0">
+                <button
+                  type="button"
+                  onClick={() => toggleSection(group.key)}
+                  className="shrink-0 w-full px-4 py-2.5 flex items-center justify-between hover:bg-white/5 transition-all duration-200 group"
+                >
+                  <div className="text-[11px] font-bold text-text/70 uppercase tracking-widest text-left">
+                    {group.label}{' '}
+                    <span className="text-text-muted/60 font-semibold">({group.symbols.length})</span>
+                  </div>
+                  {isSectionOpen(group.key) ? (
+                    <ChevronUp className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors shrink-0" />
+                  )}
+                </button>
+                {isSectionOpen(group.key) &&
+                  group.symbols.map((symbol) => (
+                    <div
+                      key={symbol.id}
+                      onClick={() => setSelectedSymbol(symbol)}
+                      className={cn(
+                        'px-4 py-2.5 hover:bg-white/5 transition-all duration-200 cursor-pointer group relative',
+                        selectedSymbol?.id === symbol.id && 'bg-accent/10 border-l-2 border-accent'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleWatchlist(symbol.id)
+                              const nextIds = Array.from(useTerminalStore.getState().watchlist)
+                              updateTerminalPreferences({ favouriteSymbolIds: nextIds }).catch(() =>
+                                toast.error('Failed to save favourites')
+                              )
+                              toast.success(watchlist.has(symbol.id) ? 'Removed from favourites' : 'Added to favourites')
+                            }}
+                            className="p-1 hover:bg-white/10 rounded transition-all duration-200 hover:scale-110 active:scale-95 shrink-0 mt-0.5"
+                            aria-label={watchlist.has(symbol.id) ? 'Remove from favourites' : 'Add to favourites'}
+                          >
+                            <Star
+                              className={cn(
+                                'h-3.5 w-3.5 transition-all',
+                                watchlist.has(symbol.id)
+                                  ? 'fill-warning text-warning drop-shadow-sm'
+                                  : 'text-text-muted/40 group-hover:text-text-muted/60'
+                              )}
+                            />
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-bold text-text tracking-tight">{symbol.code}</span>
+                              <div className="h-1.5 w-1.5 rounded-full bg-accent shadow-sm shadow-accent/50"></div>
+                            </div>
+                            <PriceDisplay
+                              bid={symbol.numericPrice}
+                              ask={symbol.numericPrice2}
+                              bidFormatted={symbol.price}
+                              askFormatted={symbol.price2}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <span className="text-xs font-semibold text-text/80">{symbol.value}</span>
+                          {(symbol.change24h || 0) !== 0 && (
+                            <div
+                              className={cn(
+                                'flex items-center gap-0.5 px-1.5 py-0.5 rounded',
+                                symbol.change24h >= 0 ? 'text-success bg-success/10' : 'text-danger bg-danger/10'
+                              )}
+                            >
+                              {symbol.change24h >= 0 ? (
+                                <ArrowUp className="h-2.5 w-2.5" />
+                              ) : (
+                                <ArrowDown className="h-2.5 w-2.5" />
+                              )}
+                              <span className="text-[10px] font-bold">
+                                {symbol.change24h >= 0 ? '+' : ''}
+                                {symbol.change24h.toFixed(2)}%
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {/* Bottom Buttons */}

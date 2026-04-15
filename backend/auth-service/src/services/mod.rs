@@ -14,5 +14,7 @@ pub mod ledger_service;
 pub mod permission_profiles_service;
 pub mod email_config_service;
 pub mod email_templates_service;
+pub mod data_provider_integrations_service;
+pub mod binance_multiplex_ws_test;
 pub mod appointment_service;
 

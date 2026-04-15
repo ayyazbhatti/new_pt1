@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
-use crate::services::admin_symbols_service::AdminSymbolsService;
+use crate::services::admin_symbols_service::{AdminSymbolsService, SyncMmdpsResult};
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 
@@ -55,6 +55,30 @@ pub struct UpdateSymbolRequest {
     pub leverage_profile_id: Option<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncMmdpsRequest {
+    /// When true (default), imports Forex pairs that match the 6-letter pattern.
+    #[serde(default = "default_true")]
+    pub enable_forex: bool,
+    /// When true (default), imports Metals CFDs that match the 6-letter pattern.
+    #[serde(default = "default_true")]
+    pub enable_metals: bool,
+    /// When true (default), imports equities, indices, and any unknown category (catch-all).
+    #[serde(default = "default_true")]
+    pub enable_stocks: bool,
+    #[serde(default = "default_true")]
+    pub enable_crypto: bool,
+    /// When true: after import, set `is_enabled`/`trading_enabled` false for **Stocks** and **Indices**
+    /// rows whose `code` is not in the MMDPS `/feed/symbols` response. **Does not** change Crypto/Binance
+    /// or forex/metals/commodities rows.
+    #[serde(default)]
+    pub prune_stocks_not_in_mmdps_feed: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ListSymbolsQuery {
     pub search: Option<String>,
@@ -87,6 +111,7 @@ pub struct ErrorDetail {
 pub fn create_admin_symbols_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_symbols).post(create_symbol))
+        .route("/sync-mmdps", post(sync_mmdps))
         .route("/:id", get(get_symbol).put(update_symbol).delete(delete_symbol))
         .route("/:id/toggle-enabled", put(toggle_enabled))
         .layer(axum::middleware::from_fn(auth_middleware))
@@ -170,6 +195,8 @@ async fn list_symbols(
                 "trading_enabled": s.trading_enabled,
                 "leverage_profile_id": s.leverage_profile_id,
                 "leverage_profile_name": s.leverage_profile_name,
+                "mmdps_category": s.mmdps_category,
+                "provider_description": s.provider_description,
                 "created_at": s.created_at,
                 "updated_at": s.updated_at,
             })
@@ -182,6 +209,42 @@ async fn list_symbols(
         page_size: params.page_size.unwrap_or(20),
         total,
     }))
+}
+
+async fn sync_mmdps(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+    Json(payload): Json<SyncMmdpsRequest>,
+) -> Result<Json<SyncMmdpsResult>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "symbols:create")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let service = AdminSymbolsService::new(pool);
+    let result = service
+        .sync_from_mmdps(
+            payload.enable_forex,
+            payload.enable_metals,
+            payload.enable_stocks,
+            payload.enable_crypto,
+            payload.prune_stocks_not_in_mmdps_feed,
+        )
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            tracing::error!(error = %msg, "admin symbols MMDPS sync failed");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "SYNC_MMDPS_FAILED".to_string(),
+                        message: msg,
+                    },
+                }),
+            )
+        })?;
+
+    Ok(Json(result))
 }
 
 async fn get_symbol(
@@ -225,6 +288,8 @@ async fn get_symbol(
         "is_enabled": symbol.is_enabled,
         "trading_enabled": symbol.trading_enabled,
         "leverage_profile_id": symbol.leverage_profile_id,
+        "mmdps_category": symbol.mmdps_category,
+        "provider_description": symbol.provider_description,
         "created_at": symbol.created_at,
         "updated_at": symbol.updated_at,
     })))
@@ -298,6 +363,8 @@ async fn create_symbol(
         "is_enabled": symbol.is_enabled,
         "trading_enabled": symbol.trading_enabled,
         "leverage_profile_id": symbol.leverage_profile_id,
+        "mmdps_category": symbol.mmdps_category,
+        "provider_description": symbol.provider_description,
         "created_at": symbol.created_at,
         "updated_at": symbol.updated_at,
     })))
@@ -375,6 +442,8 @@ async fn update_symbol(
         "is_enabled": symbol.is_enabled,
         "trading_enabled": symbol.trading_enabled,
         "leverage_profile_id": symbol.leverage_profile_id,
+        "mmdps_category": symbol.mmdps_category,
+        "provider_description": symbol.provider_description,
         "created_at": symbol.created_at,
         "updated_at": symbol.updated_at,
     })))

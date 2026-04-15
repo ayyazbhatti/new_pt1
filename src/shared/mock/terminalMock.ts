@@ -1,3 +1,5 @@
+import type { AssetClass } from '@/features/symbols/types/symbol'
+
 export interface MockSymbol {
   id: string
   code: string
@@ -15,6 +17,12 @@ export interface MockSymbol {
   pricePrecision?: number
   /** Decimal places for volume (axes/tooltips); from symbol config */
   volumePrecision?: number
+  /** From catalog (e.g. FX vs Crypto) */
+  assetClass?: AssetClass | null
+  /** Raw bid string from WebSocket/API — preserves full decimal precision for forex */
+  bidQuote?: string
+  /** Raw ask string from WebSocket/API */
+  askQuote?: string
 }
 
 export interface MockPosition {

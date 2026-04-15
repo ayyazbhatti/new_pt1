@@ -36,11 +36,15 @@ export function getApiBaseUrl(): string {
 
 const REQUEST_TIMEOUT_MS = 30_000 // 30s — avoid indefinite hang if proxy/network stalls
 
-function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+export type HttpRequestOptions = RequestInit & { timeoutMs?: number }
+
+function fetchWithTimeout(url: string, options: HttpRequestOptions = {}): Promise<Response> {
+  const { timeoutMs, ...rest } = options
+  const ms = timeoutMs ?? REQUEST_TIMEOUT_MS
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeoutId = setTimeout(() => controller.abort(), ms)
   return fetch(url, {
-    ...options,
+    ...rest,
     signal: controller.signal,
   }).finally(() => clearTimeout(timeoutId))
 }
@@ -92,17 +96,18 @@ const SKIP_REFRESH_ON_401 = ['/api/auth/login', '/api/auth/register', '/api/auth
 
 export async function http<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: HttpRequestOptions = {}
 ): Promise<T> {
+  const { timeoutMs, ...requestInit } = options
   const state = useAuthStore.getState()
   const accessToken = state.accessToken
   const isAuthEndpoint = SKIP_REFRESH_ON_401.some((path) => endpoint.startsWith(path) || endpoint.endsWith(path))
 
   // Build headers (omit Content-Type for FormData so browser sets multipart boundary)
   const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string>),
+    ...(requestInit.headers as Record<string, string>),
   }
-  if (!(options.body instanceof FormData)) {
+  if (!(requestInit.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'
   }
 
@@ -115,8 +120,9 @@ export async function http<T>(
   let response: Response
   try {
     response = await fetchWithTimeout(`${API_BASE_URL}${endpoint}`, {
-      ...options,
+      ...requestInit,
       headers,
+      timeoutMs,
     })
   } catch (err: unknown) {
     const msg = err instanceof Error && err.name === 'AbortError'
@@ -134,8 +140,9 @@ export async function http<T>(
       // Retry original request
       try {
         response = await fetchWithTimeout(`${API_BASE_URL}${endpoint}`, {
-          ...options,
+          ...requestInit,
           headers,
+          timeoutMs,
         })
       } catch (retryErr: unknown) {
         const msg = retryErr instanceof Error && retryErr.name === 'AbortError'

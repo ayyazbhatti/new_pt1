@@ -27,7 +27,7 @@ pub async fn start_ws_server(
     broadcaster: Arc<Broadcaster>,
     validator: Arc<SymbolValidator>,
     rate_limiter: Arc<RateLimiter>,
-    feed: Option<Arc<crate::feeds::binance_feed::BinanceFeed>>,
+    feed: Option<Arc<crate::feeds::feed_router::FeedRouter>>,
     subscribed_symbols: Option<Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
@@ -64,7 +64,7 @@ async fn handle_connection(
     broadcaster: Arc<Broadcaster>,
     validator: Arc<SymbolValidator>,
     rate_limiter: Arc<RateLimiter>,
-    feed: Option<Arc<crate::feeds::binance_feed::BinanceFeed>>,
+    feed: Option<Arc<crate::feeds::feed_router::FeedRouter>>,
     global_subscribed_symbols: Option<Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>>,
 ) -> anyhow::Result<()> {
     info!("🔌 Accepting WebSocket connection...");
@@ -192,7 +192,7 @@ async fn handle_message(
     validator: &SymbolValidator,
     rate_limiter: &RateLimiter,
     default_group: &mut Option<String>,
-    feed: Option<&Arc<crate::feeds::binance_feed::BinanceFeed>>,
+    feed: Option<&Arc<crate::feeds::feed_router::FeedRouter>>,
     subscribed_symbols_global: Option<&Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>>,
 ) -> Result<Option<serde_json::Value>, String> {
     info!("🔍 Parsing subscription message: {}", text);
@@ -252,12 +252,12 @@ async fn handle_message(
                     if let Some(global_symbols) = subscribed_symbols_global {
                         let mut global = global_symbols.write().await;
                         if !global.contains(&symbol_upper) {
-                            info!("📡 Subscribing to Binance feed for new symbol: {}", symbol_upper);
+                            info!("📡 Subscribing upstream feed for new symbol: {}", symbol_upper);
                             if let Err(e) = feed_ref.subscribe_symbol(&symbol_upper).await {
-                                warn!("Failed to subscribe to Binance for {}: {}", symbol_upper, e);
+                                warn!("Failed to subscribe upstream for {}: {}", symbol_upper, e);
                             } else {
                                 global.insert(symbol_upper.clone());
-                                info!("✅ Successfully subscribed to Binance for: {}", symbol_upper);
+                                info!("✅ Successfully subscribed upstream for: {}", symbol_upper);
                             }
                         }
                     }
