@@ -21,6 +21,25 @@ import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
 import { groupSymbolsByAssetClass } from '../utils/symbolCategories'
 
+const TERMINAL_SIDEBAR_SECTIONS_KEY = 'terminal.sidebar.categorySections'
+
+function loadExpandedSectionsFromStorage(): Record<string, boolean> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = localStorage.getItem(TERMINAL_SIDEBAR_SECTIONS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, boolean> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'boolean') out[k] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 interface LeftSidebarProps {
   /** When provided, Deposit button opens parent's deposit modal and parent renders DepositModal. */
   onOpenDeposit?: () => void
@@ -51,8 +70,8 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
   const { balance, equity, margin_used, currency, isLoading: balanceLoading, setWalletData, setLoading } = useWalletStore()
-  /** Collapsible sections per asset class (key = FX, Crypto, …). Default expanded when key missing. */
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({})
+  /** Collapsible sections per asset class (key = FX, Crypto, …). Default expanded when key missing. Persisted in localStorage. */
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(loadExpandedSectionsFromStorage)
   const [isScrolling, setIsScrolling] = useState(false)
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
@@ -63,6 +82,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const wsState = useWebSocketState()
   const symbols = getFilteredSymbols()
   const symbolsByCategory = useMemo(() => groupSymbolsByAssetClass(symbols), [symbols])
+  const searchActive = Boolean(searchQuery.trim())
 
   const toggleSection = useCallback((key: string) => {
     setExpandedSections((prev) => {
@@ -72,9 +92,23 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   }, [])
 
   const isSectionOpen = useCallback(
-    (key: string) => expandedSections[key] !== false,
-    [expandedSections]
+    (key: string) => {
+      // While searching, expand any category that still has matches so symbols are visible.
+      if (searchActive) {
+        return symbolsByCategory.some((g) => g.key === key && g.symbols.length > 0)
+      }
+      return expandedSections[key] !== false
+    },
+    [expandedSections, searchActive, symbolsByCategory]
   )
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TERMINAL_SIDEBAR_SECTIONS_KEY, JSON.stringify(expandedSections))
+    } catch {
+      // ignore quota / private mode
+    }
+  }, [expandedSections])
 
   // Ensure WebSocket is connected when user is on terminal (so balance push is received)
   useEffect(() => {
@@ -501,8 +535,14 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               <div key={group.key} className="border-b border-white/5 last:border-b-0">
                 <button
                   type="button"
-                  onClick={() => toggleSection(group.key)}
-                  className="shrink-0 w-full px-4 py-2.5 flex items-center justify-between hover:bg-white/5 transition-all duration-200 group"
+                  onClick={() => {
+                    if (!searchActive) toggleSection(group.key)
+                  }}
+                  title={searchActive ? 'Clear search to collapse categories' : undefined}
+                  className={cn(
+                    'shrink-0 w-full px-4 py-2.5 flex items-center justify-between transition-all duration-200 group',
+                    searchActive ? 'cursor-default' : 'hover:bg-white/5 cursor-pointer'
+                  )}
                 >
                   <div className="text-[11px] font-bold text-text/70 uppercase tracking-widest text-left">
                     {group.label}{' '}

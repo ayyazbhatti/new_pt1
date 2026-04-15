@@ -51,6 +51,7 @@ interface TerminalStore {
 }
 
 const STORAGE_KEY_MOBILE_TAB = 'terminal.mobileTab'
+const STORAGE_KEY_SEARCH_QUERY = 'terminal.searchQuery'
 
 const STORAGE_KEY_SELECTED_SYMBOL = 'terminal.selectedSymbolId'
 const STORAGE_KEY_CHART_SHOW_ASK = 'terminal.chartShowAskPrice'
@@ -104,12 +105,25 @@ function getChartShowClosedPositionMarkerFromStorage(): boolean {
   return true
 }
 
+const MAX_SEARCH_QUERY_LEN = 256
+
+function getSearchQueryFromStorage(): string {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_SEARCH_QUERY)
+    if (v == null) return ''
+    if (typeof v !== 'string') return ''
+    return v.slice(0, MAX_SEARCH_QUERY_LEN)
+  } catch {
+    return ''
+  }
+}
+
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   selectedSymbol: null,
   symbols: [],
   isLoading: false,
   watchlist: new Set(),
-  searchQuery: '',
+  searchQuery: getSearchQueryFromStorage(),
   activeTab: 'all',
   setSymbols: (symbols) => {
     const state = get()
@@ -170,7 +184,17 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }
       return { watchlist: newWatchlist }
     }),
-  setSearchQuery: (query) => set({ searchQuery: query }),
+  setSearchQuery: (query) => {
+    const safe = typeof query === 'string' ? query.slice(0, MAX_SEARCH_QUERY_LEN) : ''
+    try {
+      if (safe) {
+        localStorage.setItem(STORAGE_KEY_SEARCH_QUERY, safe)
+      } else {
+        localStorage.removeItem(STORAGE_KEY_SEARCH_QUERY)
+      }
+    } catch {}
+    set({ searchQuery: safe })
+  },
   setActiveTab: (tab) => set({ activeTab: tab }),
   settingsPanelOpen: false,
   setSettingsPanelOpen: (open) => set({ settingsPanelOpen: open }),

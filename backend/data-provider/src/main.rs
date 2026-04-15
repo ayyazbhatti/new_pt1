@@ -17,8 +17,9 @@ use crate::pricing::markup_engine::MarkupEngine;
 use crate::stream::broadcaster::Broadcaster;
 use crate::health::health_routes::create_health_router;
 use crate::validation::symbol_validation::{RateLimiter, SymbolValidator};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use rust_decimal::Decimal;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -164,6 +165,10 @@ async fn main() -> anyhow::Result<()> {
     });
     let price_groups_for_markup = price_groups.clone();
     let redis_for_markup = redis.clone();
+    // Last raw feed (bid, ask) we published downstream; skip redundant 100ms republishes when unchanged.
+    let last_feed_published: Arc<RwLock<HashMap<String, (Decimal, Decimal)>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+    let last_feed_pub_markup = last_feed_published.clone();
     tokio::spawn(async move {
         use futures_util::StreamExt;
         let client = redis_for_markup.get_client();
@@ -177,6 +182,8 @@ async fn main() -> anyhow::Result<()> {
                         *g = ids.into_iter().collect();
                         tracing::debug!("Refreshed price groups from Redis (markup:update): {} groups", g.len());
                     }
+                    // Next loop pass republishes so markups apply without waiting for feed moves
+                    last_feed_pub_markup.write().await.clear();
                 }
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -334,6 +341,8 @@ async fn main() -> anyhow::Result<()> {
     let nats_for_ticks_clone = nats_for_ticks.clone();
     let redis_for_pubsub_clone = redis_for_pubsub.clone();
     let price_groups_loop = price_groups.clone();
+    let last_feed_dedup = last_feed_published.clone();
+    let last_group_fp = Arc::new(RwLock::new(String::new()));
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
         loop {
@@ -346,6 +355,18 @@ async fn main() -> anyhow::Result<()> {
                 price_groups_loop.read().await.iter().cloned().collect()
             };
 
+            // New/changed price groups → republish all symbols once (markup + NATS subjects change).
+            {
+                let mut sorted_g = group_ids.clone();
+                sorted_g.sort();
+                let fp = sorted_g.join("\x1c");
+                let mut prev = last_group_fp.write().await;
+                if *prev != fp {
+                    *prev = fp;
+                    last_feed_dedup.write().await.clear();
+                }
+            }
+
             for symbol in &symbols_to_broadcast {
                 if !subscribed_symbols_clone.read().await.contains(symbol) {
                     if let Err(e) = feed_clone.subscribe_symbol(symbol).await {
@@ -357,7 +378,17 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 if let Some(price_state) = feed_clone.get_price(symbol).await {
+                    let raw = (price_state.bid, price_state.ask);
+                    {
+                        let last = last_feed_dedup.read().await;
+                        if last.get(symbol).copied() == Some(raw) {
+                            continue;
+                        }
+                    }
+
                     let mut prices_by_group: Vec<serde_json::Value> = Vec::new();
+                    let mut per_group_ticks: Vec<(String, Decimal, Decimal)> =
+                        Vec::with_capacity(group_ids.len());
                     for group_id in &group_ids {
                         let (bid, ask) = match markup_engine_clone
                             .apply_markup(symbol, group_id, price_state.bid, price_state.ask)
@@ -366,6 +397,7 @@ async fn main() -> anyhow::Result<()> {
                             Some(p) => p,
                             None => (price_state.bid, price_state.ask),
                         };
+                        per_group_ticks.push((group_id.clone(), bid, ask));
                         prices_by_group.push(serde_json::json!({
                             "g": group_id,
                             "bid": bid.to_string(),
@@ -422,18 +454,11 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                         } else {
-                            for group_id in &group_ids {
-                                let (bid, ask) = match markup_engine_clone
-                                    .apply_markup(symbol, group_id, price_state.bid, price_state.ask)
-                                    .await
-                                {
-                                    Some(p) => p,
-                                    None => (price_state.bid, price_state.ask),
-                                };
+                            for (group_id, bid, ask) in &per_group_ticks {
                                 let tick_event = TickEvent {
                                     symbol: symbol.clone(),
-                                    bid,
-                                    ask,
+                                    bid: *bid,
+                                    ask: *ask,
                                     ts: Utc::now(),
                                     seq: ts as u64,
                                 };
@@ -446,6 +471,8 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                     }
+
+                    last_feed_dedup.write().await.insert(symbol.clone(), raw);
                 } else {
                     debug!("⚠️  No price data available for {}", symbol);
                 }

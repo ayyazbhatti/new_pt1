@@ -93,6 +93,16 @@ impl TickHandler {
     
     #[instrument(skip(self), fields(symbol = %tick.symbol))]
     async fn process_tick(&self, tick: Tick, group_id: Option<&str>) -> Result<()> {
+        // Duplicate NATS ticks (same bid/ask) with no pending orders: no Redis/SLTP work needed.
+        let pending_order_ids = self.cache.get_pending_orders(&tick.symbol);
+        if pending_order_ids.is_empty() {
+            if let Some(prev) = self.cache.get_last_tick(&tick.symbol, group_id) {
+                if prev.bid == tick.bid && prev.ask == tick.ask {
+                    return Ok(());
+                }
+            }
+        }
+
         let mut conn = self.redis.get_connection().await;
         let price_key = format!("prices:{}:{}", tick.symbol, group_id.unwrap_or(""));
         let price_json = serde_json::json!({
@@ -107,8 +117,6 @@ impl TickHandler {
         }
 
         self.cache.update_tick(tick.clone(), group_id);
-
-        let pending_order_ids = self.cache.get_pending_orders(&tick.symbol);
 
         if pending_order_ids.is_empty() {
             debug!("No pending orders for symbol {}", tick.symbol);
