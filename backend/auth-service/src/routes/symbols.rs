@@ -84,6 +84,8 @@ async fn list_symbols(
                 "symbol_code": s.symbol_code,
                 "provider_symbol": s.provider_symbol,
                 "asset_class": s.asset_class,
+                "mmdps_category": s.mmdps_category,
+                "provider_description": s.provider_description,
                 "base_currency": s.base_currency,
                 "quote_currency": s.quote_currency,
                 "price_precision": s.price_precision,

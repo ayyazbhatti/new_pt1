@@ -15,6 +15,8 @@ function toCamelCaseSymbol(obj: any): AdminSymbol {
     id: obj.id,
     symbolCode: obj.symbol_code,
     providerSymbol: obj.provider_symbol,
+    mmdpsCategory: obj.mmdps_category ?? null,
+    providerDescription: obj.provider_description ?? null,
     assetClass: obj.asset_class,
     baseCurrency: obj.base_currency,
     quoteCurrency: obj.quote_currency,

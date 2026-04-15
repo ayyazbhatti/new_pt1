@@ -19,6 +19,10 @@ export interface MockSymbol {
   volumePrecision?: number
   /** From catalog (e.g. FX vs Crypto) */
   assetClass?: AssetClass | null
+  /** Category from MMDPS catalog sync (Forex, Nasdaq, Metals, ...). */
+  mmdpsCategory?: string | null
+  /** Human description from provider catalog (e.g. "Euro vs US Dollar"). */
+  providerDescription?: string | null
   /** Raw bid string from WebSocket/API — preserves full decimal precision for forex */
   bidQuote?: string
   /** Raw ask string from WebSocket/API */

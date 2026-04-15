@@ -11,6 +11,8 @@ export interface AdminSymbol {
   /** Market/category - for compatibility */
   market?: string
   providerSymbol: string | null
+  mmdpsCategory?: string | null
+  providerDescription?: string | null
   assetClass: AssetClass | null
   baseCurrency: string
   quoteCurrency: string

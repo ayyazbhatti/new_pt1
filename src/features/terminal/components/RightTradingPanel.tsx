@@ -1587,6 +1587,20 @@ export function RightTradingPanel() {
             </button>
             {symbolDetailsOpen && selectedSymbol && (
               <div className="px-4 pb-4 space-y-3 text-xs bg-surface-2/20">
+                {selectedSymbol.providerDescription && (
+                  <div className="py-2 border-b border-white/5">
+                    <div className="text-muted/80 mb-1">Description</div>
+                    <div className="font-medium text-text leading-relaxed">
+                      {selectedSymbol.providerDescription}
+                    </div>
+                  </div>
+                )}
+                {selectedSymbol.mmdpsCategory && (
+                  <div className="flex justify-between items-center py-2 border-b border-white/5">
+                    <span className="text-muted/80">Category</span>
+                    <span className="font-semibold text-text">{selectedSymbol.mmdpsCategory}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center py-2 border-b border-white/5">
                   <span className="text-muted/80">Price</span>
                   <span className="font-semibold text-text">
