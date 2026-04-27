@@ -80,6 +80,12 @@ pub struct SyncMmdpsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct BulkToggleEnabledRequest {
+    pub ids: Vec<Uuid>,
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ListSymbolsQuery {
     pub search: Option<String>,
     pub asset_class: Option<String>,
@@ -112,6 +118,7 @@ pub fn create_admin_symbols_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_symbols).post(create_symbol))
         .route("/sync-mmdps", post(sync_mmdps))
+        .route("/bulk-toggle-enabled", put(bulk_toggle_enabled))
         .route("/:id", get(get_symbol).put(update_symbol).delete(delete_symbol))
         .route("/:id/toggle-enabled", put(toggle_enabled))
         .layer(axum::middleware::from_fn(auth_middleware))
@@ -472,6 +479,40 @@ async fn delete_symbol(
     })?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn bulk_toggle_enabled(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+    Json(payload): Json<BulkToggleEnabledRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "symbols:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let service = AdminSymbolsService::new(pool);
+    let rows = service
+        .bulk_toggle_enabled(&payload.ids, payload.is_enabled)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "BULK_TOGGLE_FAILED".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+
+    for (_, symbol_code, is_en) in &rows {
+        publish_symbol_status_update(symbol_code, *is_en).await;
+    }
+
+    Ok(Json(serde_json::json!({
+        "updated": rows.len(),
+    })))
 }
 
 async fn toggle_enabled(

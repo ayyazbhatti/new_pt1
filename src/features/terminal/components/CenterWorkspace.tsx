@@ -14,7 +14,7 @@ function getInitialToolbarState(): PersistedChartToolbar {
   if (!initialToolbarState) {
     initialToolbarState = loadChartToolbarState() ?? {
       chartType: 'candles',
-      timeframe: '1m',
+      timeframe: '15m',
       indicators: [],
       drawingTool: null,
       drawingMagnetMode: 'normal',

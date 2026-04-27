@@ -32,12 +32,14 @@ export function ChartTradingStrip() {
 
   const canPlaceOrder = tradingAccess !== 'disabled'
   const wsConnected = wsState === 'authenticated'
-  const price = selectedSymbol?.numericPrice ?? 0
+  const bid = selectedSymbol?.numericPrice ?? 0
+  const ask = selectedSymbol?.numericPrice2 ?? bid
+  const refPrice = ask !== bid ? (bid + ask) / 2 : bid
   const sizeNum = parseFloat(size) || 0
-  const quoteValue = sizeNum * price
+  const quoteValue = sizeNum * refPrice
   const freeMargin = accountSummary?.freeMargin ?? 0
 
-  // Est. Margin: same formula as Trade panel (RightTradingPanel costBreakdown.margin)
+  // Est. Margin: same logic as Trade panel (notional × mid, leverage from tiers)
   const estMargin = useMemo(() => {
     if (!selectedSymbol || quoteValue <= 0) return 0
     const effectiveLeverage = getEffectiveLeverage(
@@ -76,6 +78,12 @@ export function ChartTradingStrip() {
       toast.error('Enter a valid size')
       return
     }
+    if (insufficientFreeMargin) {
+      toast.error(
+        `Insufficient funds: required margin $${estMargin.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
+      )
+      return
+    }
     setIsSubmitting(true)
     try {
       const payload = {
@@ -92,8 +100,28 @@ export function ChartTradingStrip() {
       )
       setSize('0.01')
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: { message?: string }; message?: string } }; message?: string }
-      const msg = e?.response?.data?.error?.message ?? e?.response?.data?.message ?? (e?.message ?? 'Failed to place order')
+      const e = err as {
+        response?: {
+          data?: {
+            error?: string | { code?: string; message?: string }
+            message?: string
+            required_margin?: string
+            free_margin?: string
+          }
+        }
+        message?: string
+      }
+      const data = e?.response?.data
+      const insufficientCode =
+        data?.error === 'INSUFFICIENT_FREE_MARGIN' ||
+        (typeof data?.error === 'object' && data?.error?.code === 'INSUFFICIENT_FREE_MARGIN')
+      const required = Number(data?.required_margin)
+      const free = Number(data?.free_margin)
+      const msg = insufficientCode
+        ? (Number.isFinite(required) && Number.isFinite(free)
+          ? `Insufficient funds: required margin $${required.toFixed(2)}, free margin $${free.toFixed(2)}`
+          : 'Insufficient funds/margin to place this order')
+        : (typeof data?.error === 'object' && data?.error?.message) || data?.message || (e?.message ?? 'Failed to place order')
       toast.error(msg)
     } finally {
       setIsSubmitting(false)

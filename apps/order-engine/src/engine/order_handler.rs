@@ -107,19 +107,45 @@ impl OrderHandler {
             info!("✅ New order, proceeding with processing");
         }
         
+        let market_price_hint = if cmd.order_type == contracts::enums::OrderType::Market {
+            self.cache
+                .get_last_tick(&cmd.symbol, cmd.group_id.as_deref())
+                .or_else(|| self.cache.get_last_tick(&cmd.symbol, None))
+                .map(|tick| match cmd.side {
+                    contracts::enums::Side::Buy => tick.ask,
+                    contracts::enums::Side::Sell => tick.bid,
+                })
+        } else {
+            None
+        };
+
         // Convert to internal command format
         let order_cmd = OrderCommand {
             user_id: cmd.user_id,
             symbol: cmd.symbol.clone(),
+            group_id: cmd.group_id.clone(),
             side: cmd.side,
             order_type: cmd.order_type,
             size: cmd.size,
             limit_price: cmd.limit_price,
+            market_price_hint,
             stop_loss: cmd.sl,
             take_profit: cmd.tp,
             time_in_force: cmd.tif,
             client_order_id: cmd.client_order_id.clone(),
             idempotency_key: cmd.idempotency_key.clone(),
+            min_leverage: cmd.min_leverage,
+            max_leverage: cmd.max_leverage,
+            leverage_tiers: cmd.leverage_tiers.as_ref().map(|tiers| {
+                tiers
+                    .iter()
+                    .map(|t| crate::models::LeverageTier {
+                        notional_from: t.notional_from.clone(),
+                        notional_to: t.notional_to.clone(),
+                        max_leverage: t.max_leverage,
+                    })
+                    .collect()
+            }),
             correlation_id: correlation_id.clone(),
             ts: cmd.ts,
         };
@@ -234,15 +260,15 @@ impl OrderHandler {
                         info!("🚀 Executing market order {} immediately at price {}", order_id, fill_price);
                         
                         let notional = fill_price * order.size;
-                        let effective_lev = crate::leverage::effective_leverage(
+                        if let Some(eff) = crate::leverage::effective_leverage(
                             notional,
                             order.min_leverage,
                             order.max_leverage,
                             order.leverage_tiers.as_deref(),
-                            100.0,
-                        );
+                        ) {
+                        if eff > Decimal::ZERO {
                         let mut conn = self.redis.get_connection().await;
-                        match self.lua.atomic_fill_order(&mut conn, &order_id, fill_price, order.size, effective_lev).await {
+                        match self.lua.atomic_fill_order(&mut conn, &order_id, fill_price, order.size, eff).await {
                             Ok(result) => {
                                 if result.get("error").is_some() {
                                     let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -325,6 +351,7 @@ impl OrderHandler {
                                     // Position opened (created or flipped)
                                     if let Some(pos_id) = position_id {
                                         if fill_action == "created" {
+                                            let margin_used = (order.size * fill_price) / eff;
                                             let pos_event = crate::models::PositionOpenedEvent {
                                                 position_id: pos_id,
                                                 user_id: cmd.user_id,
@@ -332,8 +359,8 @@ impl OrderHandler {
                                                 side: match cmd.side { contracts::enums::Side::Buy => contracts::enums::PositionSide::Long, contracts::enums::Side::Sell => contracts::enums::PositionSide::Short },
                                                 size: order.size,
                                                 entry_price: fill_price,
-                                                leverage: Decimal::from(100),
-                                                margin_used: Decimal::ZERO,
+                                                leverage: eff,
+                                                margin_used,
                                                 correlation_id: correlation_id.clone(),
                                                 ts: now(),
                                             };
@@ -345,6 +372,14 @@ impl OrderHandler {
                                             let entry = raw.get("entry_price").or(raw.get("avg_price")).and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(fill_price);
                                             let side_str = raw.get("side").map(|s| s.as_str()).unwrap_or("LONG");
                                             let pos_side = if side_str == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+                                            let lev = raw
+                                                .get("leverage")
+                                                .and_then(|s| Decimal::from_str_exact(s).ok())
+                                                .unwrap_or(eff);
+                                            let margin_used = raw
+                                                .get("margin")
+                                                .and_then(|s| Decimal::from_str_exact(s).ok())
+                                                .unwrap_or((size * entry) / lev);
                                             let pos_event = crate::models::PositionOpenedEvent {
                                                 position_id: pos_id,
                                                 user_id: cmd.user_id,
@@ -352,8 +387,8 @@ impl OrderHandler {
                                                 side: pos_side,
                                                 size,
                                                 entry_price: entry,
-                                                leverage: Decimal::from(100),
-                                                margin_used: Decimal::ZERO,
+                                                leverage: lev,
+                                                margin_used,
                                                 correlation_id: correlation_id.clone(),
                                                 ts: now(),
                                             };
@@ -376,6 +411,15 @@ impl OrderHandler {
                                 // Order will be processed on next tick
                             }
                         }
+                        } else {
+                            warn!(order_id = %order_id, "Effective leverage not positive; skipping immediate fill");
+                        }
+                        } else {
+                            warn!(
+                                order_id = %order_id,
+                                "Cannot resolve effective leverage for immediate market fill; order will use tick path"
+                            );
+                        }
                     } else {
                         debug!("Market order {} accepted, waiting for first tick", order_id);
                     }
@@ -396,6 +440,20 @@ impl OrderHandler {
                 };
                 
                 self.nats.publish_event(nats_subjects::EVENT_ORDER_REJECTED, &rejected_event).await?;
+                // Also publish unified order-updated event so persistence listeners
+                // can transition DB state out of pending deterministically.
+                self.nats.publish_event(
+                    nats_subjects::EVENT_ORDER_UPDATED,
+                    &contracts::events::OrderUpdatedEvent {
+                        order_id,
+                        user_id: cmd.user_id,
+                        status: contracts::enums::OrderStatus::Rejected,
+                        filled_size: Decimal::ZERO,
+                        avg_fill_price: None,
+                        reason: Some(rejection_reason.clone()),
+                        ts: now(),
+                    },
+                ).await?;
                 self.metrics.inc_orders_rejected();
                 
                 error!(

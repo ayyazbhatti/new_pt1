@@ -8,7 +8,19 @@ local fill_price = ARGV[2]
 local fill_size = ARGV[3]
 local timestamp_ms = ARGV[4]
 local position_uuid = ARGV[5]
-local effective_leverage = tonumber(ARGV[6]) or 100.0
+local el = tonumber(ARGV[6])
+if not el or el <= 0 then
+    return '{"error":"missing_effective_leverage"}'
+end
+local effective_leverage = el
+-- Position hash may lack leverage (legacy); use this fill's rate as last resort (no hardcoded 100x).
+local function pos_lev_or_fill(hget_val, json_lev)
+    local v = tonumber(hget_val)
+    if v and v > 0 then return v end
+    v = tonumber(json_lev)
+    if v and v > 0 then return v end
+    return el
+end
 
 -- Get order
 local order_json = redis.call('GET', order_key)
@@ -102,7 +114,7 @@ for _, pos_id in ipairs(existing_positions) do
                 local new_entry_price = total_notional / total_size
                 
                 -- Calculate margin: (size * entry_price) / leverage
-                local pos_leverage = tonumber(redis.call('HGET', pos_key_new, 'leverage') or '100.0')
+                local pos_leverage = pos_lev_or_fill(redis.call('HGET', pos_key_new, 'leverage'), nil)
                 local new_margin = (total_size * new_entry_price) / pos_leverage
                 
                 redis.call('HSET', pos_key_new, 'size', tostring(total_size))
@@ -153,7 +165,7 @@ for _, pos_id in ipairs(existing_positions) do
                         -- Use UUID for new format
                         position_id = position_uuid
                         -- Calculate margin: (size * entry_price) / leverage
-                        local pos_leverage = tonumber(pos.leverage or "100.0")
+                        local pos_leverage = pos_lev_or_fill(nil, pos.leverage)
                         local new_margin = (total_size * new_entry_price) / pos_leverage
                         
                         local new_pos_key = 'pos:by_id:' .. position_id
@@ -203,7 +215,7 @@ for _, pos_id in ipairs(existing_positions) do
                         position_id = pos_id
                         local new_pos_key = 'pos:by_id:' .. position_id
                         -- Calculate margin: (size * entry_price) / leverage
-                        local pos_leverage = tonumber(redis.call('HGET', new_pos_key, 'leverage') or '100.0')
+                        local pos_leverage = pos_lev_or_fill(redis.call('HGET', new_pos_key, 'leverage'), nil)
                         local new_margin = (total_size * new_entry_price) / pos_leverage
                         
                         redis.call('HSET', new_pos_key, 'size', tostring(total_size))
@@ -267,7 +279,7 @@ if not position_id then
                         
                         -- Store in new format
                         -- Calculate margin: (size * entry_price) / leverage
-                        local pos_leverage = tonumber(pos.leverage or "100.0")
+                        local pos_leverage = pos_lev_or_fill(nil, pos.leverage)
                         local new_margin = (total_size * new_entry_price) / pos_leverage
                         
                         local new_pos_key = 'pos:by_id:' .. position_id
@@ -338,7 +350,7 @@ if not position_id and account_type == "netting" then
                     local pos_size = tonumber(redis.call('HGET', pos_key_new, 'size') or '0')
                     local pos_entry = tonumber(redis.call('HGET', pos_key_new, 'entry_price') or '0')
                     local pos_realized = tonumber(redis.call('HGET', pos_key_new, 'realized_pnl') or '0')
-                    local pos_leverage = tonumber(redis.call('HGET', pos_key_new, 'leverage') or '100.0')
+                    local pos_leverage = pos_lev_or_fill(redis.call('HGET', pos_key_new, 'leverage'), nil)
                     local close_size = math.min(pos_size, fill_size_num)
                     local new_size = pos_size - fill_size_num
                     -- PnL on closed portion

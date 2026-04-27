@@ -148,6 +148,16 @@ export async function toggleSymbolEnabled(id: string, isEnabled: boolean): Promi
   return toCamelCaseSymbol(response)
 }
 
+export async function bulkToggleSymbolsEnabled(
+  ids: string[],
+  isEnabled: boolean
+): Promise<{ updated: number }> {
+  return http<{ updated: number }>('/api/admin/symbols/bulk-toggle-enabled', {
+    method: 'PUT',
+    body: JSON.stringify({ ids, is_enabled: isEnabled }),
+  })
+}
+
 /** Bulk import from MMDPS `/feed/symbols` (auth-service; can take several minutes). */
 export type SyncMmdpsPayload = {
   enable_forex?: boolean

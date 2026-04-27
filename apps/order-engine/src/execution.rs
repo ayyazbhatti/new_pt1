@@ -9,7 +9,7 @@ use contracts::{
 use redis::AsyncCommands;
 use redis_model::keys::Keys;
 use redis_model::models::*;
-use risk::{calculate_margin, has_sufficient_margin};
+use risk::{calculate_margin, effective_leverage, has_sufficient_margin};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::str::FromStr;
@@ -83,8 +83,21 @@ pub async fn execute_place_order(cmd: PlaceOrderCommand, state: &AppState) -> Re
     // Store idempotency key
     let _: () = conn.set_ex(&idempotency_key, order_id.to_string(), 86400).await?; // 24h TTL
 
-    // Calculate margin requirement (simplified - use default leverage for now)
-    let leverage = dec!(100.0);
+    let notional = cmd.size * fill_price;
+    let leverage = effective_leverage(
+        notional,
+        cmd.min_leverage,
+        cmd.max_leverage,
+        cmd.leverage_tiers.as_deref(),
+    )
+    .ok_or_else(|| {
+        Box::<dyn std::error::Error + Send + Sync>::from(
+            "Cannot resolve effective leverage: assign a leverage profile to this symbol and set user min/max",
+        )
+    })?;
+    if leverage <= Decimal::ZERO {
+        return Err(Box::from("Invalid effective leverage"));
+    }
     let margin_required = calculate_margin(cmd.size, fill_price, leverage);
 
     // Check balance and reserve margin
@@ -187,6 +200,7 @@ pub async fn execute_place_order(cmd: PlaceOrderCommand, state: &AppState) -> Re
         },
         size: cmd.size,
         avg_price: fill_price,
+        leverage,
         unrealized_pnl: dec!(0), // Will be updated on next tick
         realized_pnl: dec!(0),
         sl: cmd.sl,

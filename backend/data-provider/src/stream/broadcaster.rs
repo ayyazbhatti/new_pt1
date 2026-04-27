@@ -110,4 +110,3 @@ impl Broadcaster {
         self.rooms.len()
     }
 }
-

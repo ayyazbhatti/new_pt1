@@ -499,6 +499,52 @@ The **Admin → System** page shows server stats (disk, memory, uptime, Docker c
 
 If the stats file is missing or invalid, the API returns 503 and the System page shows an error (e.g. "Stats not available" or "Run the stats script on the server").
 
+## Feed freshness watchdog (auto-recover stale live prices)
+
+If live prices stop updating while containers are still "up", enable the host watchdog script so stale feeds auto-restart.
+
+### What it does
+
+- Calls `http://127.0.0.1:8080/dp/health/fresh` (frontend nginx proxy to data-provider).
+- If freshness status is stale, force-recreates `data-provider` and `ws-gateway`.
+- Exits with non-zero only when endpoint is unreachable or restart fails.
+
+### One-time setup
+
+```bash
+chmod +x /opt/newpt/deploy/scripts/watch-feed-freshness.sh
+```
+
+### Manual run
+
+```bash
+/opt/newpt/deploy/scripts/watch-feed-freshness.sh
+```
+
+### Cron (every 2 minutes)
+
+```bash
+(crontab -l 2>/dev/null; echo "*/2 * * * * APP_DIR=/opt/newpt /opt/newpt/deploy/scripts/watch-feed-freshness.sh >> /var/log/newpt-feed-watchdog.log 2>&1") | crontab -
+```
+
+### Optional tuning via env
+
+You can tune thresholds in `deploy/.env.production`:
+
+```bash
+FEED_FRESHNESS_BINANCE_MAX_STALE_SECS=120
+FEED_FRESHNESS_MMDPS_MAX_STALE_SECS=180
+FEED_WATCHDOG_INTERVAL_SECS=20
+FEED_WATCHDOG_STALE_THRESHOLD=3
+```
+
+Then recreate `data-provider`:
+
+```bash
+cd /opt/newpt/deploy
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --force-recreate data-provider
+```
+
 ---
 
 ## Import local DB to server (clone all data)
@@ -511,10 +557,10 @@ To **replace** the server database with a full copy of your local DB (schema + d
 
 This will:
 
-1. Dump the local DB from Docker container `trading-postgres` (from `infra/docker-compose.yml`).
-2. Copy the dump to the server and restore it into the server’s Postgres container (`deploy-postgres-1`).
+1. Dump the local DB from Docker container **`newpt-postgres`** (see `scripts/ensure-docker-postgres.sh`; host port **5433**).
+2. Copy the dump to the server and restore it into the server’s Postgres container (`deploy-postgres-1`). The script stops **auth** and **core-api** first so `DROP DATABASE` can run.
 
-**Requirements:** Local Docker running with the `trading-postgres` container; SSH access to the server as `root`.
+**Requirements:** Local Docker running with `newpt-postgres`; SSH access to the server as `root`.
 
 **Override server or container:** `IMPORT_SERVER=1.2.3.4 ./scripts/import-local-db-to-server.sh` or `SERVER_POSTGRES_CONTAINER=my-postgres ./scripts/import-local-db-to-server.sh`.
 

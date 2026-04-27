@@ -8,6 +8,7 @@ import {
   getGroup,
   getGroupUsage,
   updateGroupPriceProfile,
+  updateGroupLeverageProfile,
 } from '../api/groups.api'
 import { ListGroupsParams, ListGroupsResponse, CreateGroupPayload, UpdateGroupPayload } from '../types/group'
 
@@ -91,6 +92,25 @@ export function useUpdateGroupPriceProfile() {
     },
     onError: (error: any) => {
       const message = error?.response?.data?.error?.message || error?.message || 'Failed to update price profile'
+      toast.error(message)
+    },
+  })
+}
+
+export function useUpdateGroupLeverageProfile() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ groupId, leverageProfileId }: { groupId: string; leverageProfileId: string | null }) =>
+      updateGroupLeverageProfile(groupId, leverageProfileId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ['adminGroups', 'groupSymbols'] })
+      toast.success('Default leverage profile updated')
+    },
+    onError: (error: any) => {
+      const message =
+        error?.response?.data?.error?.message || error?.message || 'Failed to update leverage profile'
       toast.error(message)
     },
   })

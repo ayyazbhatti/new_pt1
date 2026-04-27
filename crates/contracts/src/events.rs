@@ -32,6 +32,8 @@ pub struct PositionUpdatedEvent {
     pub side: PositionSide,
     pub size: Decimal,
     pub avg_price: Decimal,
+    /// Effective leverage stored on the position (tier + user clamp at open/fill).
+    pub leverage: Decimal,
     pub unrealized_pnl: Decimal,
     pub realized_pnl: Decimal,
     pub sl: Option<Decimal>,

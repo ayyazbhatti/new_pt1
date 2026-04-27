@@ -18,6 +18,22 @@ struct HealthResponse {
     timestamp: u64,
     region: String,
     uptime_secs: u64,
+    freshness: HealthFreshness,
+}
+
+#[derive(Serialize)]
+struct HealthFreshness {
+    binance_last_tick_ts: Option<u64>,
+    binance_tick_age_secs: Option<u64>,
+    mmdps_last_tick_ts: Option<u64>,
+    mmdps_tick_age_secs: Option<u64>,
+    stale_thresholds_secs: FreshnessThresholds,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct FreshnessThresholds {
+    binance: u64,
+    mmdps: u64,
 }
 
 #[derive(Serialize)]
@@ -57,18 +73,25 @@ pub fn create_health_router(
     start_time: SystemTime,
     mmdps_api_key: Option<String>,
     mmdps_history_base: String,
+    binance_max_stale_secs: u64,
+    mmdps_max_stale_secs: u64,
 ) -> Router {
     let hist = MmdpsHistoryState {
         api_key: mmdps_api_key,
         base_url: mmdps_history_base,
     };
+    let thresholds = FreshnessThresholds {
+        binance: binance_max_stale_secs,
+        mmdps: mmdps_max_stale_secs,
+    };
     Router::new()
         .route("/health", get(health_handler))
+        .route("/health/fresh", get(feed_freshness_handler))
         .route("/metrics", get(metrics_handler))
         .route("/feed/status", get(feed_status_handler))
         .route("/prices", get(prices_handler))
         .route("/feed/history", get(mmdps_history_handler))
-        .with_state((broadcaster, feed, region, start_time, hist))
+        .with_state((broadcaster, feed, region, start_time, hist, thresholds))
 }
 
 #[derive(Clone)]
@@ -78,12 +101,13 @@ struct MmdpsHistoryState {
 }
 
 async fn health_handler(
-    State((_, _, region, start_time, _)): State<(
+    State((_, feed, region, start_time, _, thresholds)): State<(
         Arc<Broadcaster>,
         Arc<FeedRouter>,
         String,
         SystemTime,
         MmdpsHistoryState,
+        FreshnessThresholds,
     )>,
 ) -> Result<Json<HealthResponse>, StatusCode> {
     let uptime = start_time
@@ -91,24 +115,61 @@ async fn health_handler(
         .unwrap_or(Duration::from_secs(0))
         .as_secs();
 
+    let freshness_diag = feed.freshness();
+    let stale = freshness_is_stale(&freshness_diag, thresholds);
+
     Ok(Json(HealthResponse {
-        status: "healthy".to_string(),
+        status: if stale { "degraded" } else { "healthy" }.to_string(),
         timestamp: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs(),
         region,
         uptime_secs: uptime,
+        freshness: HealthFreshness {
+            binance_last_tick_ts: freshness_diag.binance_last_tick_ts,
+            binance_tick_age_secs: freshness_diag.binance_tick_age_secs,
+            mmdps_last_tick_ts: freshness_diag.mmdps_last_tick_ts,
+            mmdps_tick_age_secs: freshness_diag.mmdps_tick_age_secs,
+            stale_thresholds_secs: thresholds,
+        },
     }))
 }
 
-async fn metrics_handler(
-    State((broadcaster, feed, _, _, _)): State<(
+async fn feed_freshness_handler(
+    State((_, feed, _, _, _, thresholds)): State<(
         Arc<Broadcaster>,
         Arc<FeedRouter>,
         String,
         SystemTime,
         MmdpsHistoryState,
+        FreshnessThresholds,
+    )>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let d = feed.freshness();
+    let stale = freshness_is_stale(&d, thresholds);
+    Ok(Json(serde_json::json!({
+        "status": if stale { "stale" } else { "fresh" },
+        "now_ms": d.now_ms,
+        "binance_last_tick_ts": d.binance_last_tick_ts,
+        "binance_tick_age_secs": d.binance_tick_age_secs,
+        "mmdps_last_tick_ts": d.mmdps_last_tick_ts,
+        "mmdps_tick_age_secs": d.mmdps_tick_age_secs,
+        "stale_thresholds_secs": {
+            "binance": thresholds.binance,
+            "mmdps": thresholds.mmdps
+        }
+    })))
+}
+
+async fn metrics_handler(
+    State((broadcaster, feed, _, _, _, _)): State<(
+        Arc<Broadcaster>,
+        Arc<FeedRouter>,
+        String,
+        SystemTime,
+        MmdpsHistoryState,
+        FreshnessThresholds,
     )>,
 ) -> Result<Json<MetricsResponse>, StatusCode> {
     let rooms = broadcaster.get_room_count();
@@ -128,12 +189,13 @@ async fn metrics_handler(
 }
 
 async fn feed_status_handler(
-    State((_, feed, _, _, _)): State<(
+    State((_, feed, _, _, _, _)): State<(
         Arc<Broadcaster>,
         Arc<FeedRouter>,
         String,
         SystemTime,
         MmdpsHistoryState,
+        FreshnessThresholds,
     )>,
 ) -> Result<Json<FeedStatusResponse>, StatusCode> {
     let diag = feed.diagnostics().await;
@@ -151,12 +213,13 @@ async fn feed_status_handler(
 }
 
 async fn prices_handler(
-    State((_, feed, _, _, _)): State<(
+    State((_, feed, _, _, _, _)): State<(
         Arc<Broadcaster>,
         Arc<FeedRouter>,
         String,
         SystemTime,
         MmdpsHistoryState,
+        FreshnessThresholds,
     )>,
     Query(query): Query<PricesQuery>,
 ) -> Result<Json<Vec<PriceItem>>, StatusCode> {
@@ -200,9 +263,7 @@ fn mmdps_timeframe_from_query(raw: &str) -> String {
         return "H1".to_string();
     }
     let upper = t.to_ascii_uppercase();
-    if upper.starts_with("MN")
-        && upper.len() > 2
-        && upper[2..].chars().all(|c| c.is_ascii_digit())
+    if upper.starts_with("MN") && upper.len() > 2 && upper[2..].chars().all(|c| c.is_ascii_digit())
     {
         return upper;
     }
@@ -242,12 +303,13 @@ fn mmdps_timeframe_from_query(raw: &str) -> String {
 
 /// Proxies MMDPS history REST so the browser never sees `MMDPS_API_KEY`.
 async fn mmdps_history_handler(
-    State((_, _, _, _, hist)): State<(
+    State((_, _, _, _, hist, _)): State<(
         Arc<Broadcaster>,
         Arc<FeedRouter>,
         String,
         SystemTime,
         MmdpsHistoryState,
+        FreshnessThresholds,
     )>,
     Query(q): Query<MmdpsHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -272,11 +334,23 @@ async fn mmdps_history_handler(
     if !resp.status().is_success() {
         return Err(StatusCode::BAD_GATEWAY);
     }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let json: serde_json::Value = resp.json().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(Json(json))
+}
+
+fn freshness_is_stale(
+    d: &crate::feeds::feed_router::FeedFreshnessDiagnostics,
+    thresholds: FreshnessThresholds,
+) -> bool {
+    let binance_stale = d
+        .binance_tick_age_secs
+        .map(|age| age > thresholds.binance)
+        .unwrap_or(true);
+    let mmdps_stale = d
+        .mmdps_tick_age_secs
+        .map(|age| age > thresholds.mmdps)
+        .unwrap_or(false);
+    binance_stale || mmdps_stale
 }
 
 #[cfg(test)]
@@ -302,4 +376,3 @@ mod mmdps_timeframe_tests {
         assert_eq!(mmdps_timeframe_from_query("MN1"), "MN1");
     }
 }
-

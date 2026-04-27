@@ -72,7 +72,7 @@ export function loadChartToolbarState(): PersistedChartToolbar | null {
     if (!data || typeof data !== 'object') return null
 
     const chartType = isChartType(data.chartType) ? data.chartType : 'candles'
-    const timeframe = isTimeframe(data.timeframe) ? data.timeframe : '1m'
+    const timeframe = isTimeframe(data.timeframe) ? data.timeframe : '15m'
     const drawingMagnetMode = isDrawingMagnetMode(data.drawingMagnetMode) ? data.drawingMagnetMode : 'normal'
     const drawingTool =
       data.drawingTool === null || (typeof data.drawingTool === 'string' && data.drawingTool.length > 0)

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use contracts::REDIS_KEY_ADMIN_INTEGRATIONS;
+use contracts::{REDIS_KEY_ADMIN_INTEGRATIONS, REDIS_KEY_DATA_PROVIDER_MMDPS_API_KEY};
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Client};
 use serde::{Deserialize, Serialize};
@@ -33,11 +33,7 @@ impl RedisClient {
         })
     }
 
-    pub async fn get_markup(
-        &self,
-        symbol: &str,
-        group: &str,
-    ) -> Result<Option<MarkupConfig>> {
+    pub async fn get_markup(&self, symbol: &str, group: &str) -> Result<Option<MarkupConfig>> {
         let key = format!("symbol:markup:{}:{}", symbol.to_uppercase(), group);
         let mut conn = self.connection.write().await;
 
@@ -78,7 +74,7 @@ impl RedisClient {
     {
         let client = self.client.clone();
         let mut pubsub = client.get_async_connection().await?.into_pubsub();
-        
+
         for channel in channels {
             pubsub.subscribe(&channel).await?;
         }
@@ -109,7 +105,20 @@ impl RedisClient {
         let v: Option<String> = conn.get(REDIS_KEY_ADMIN_INTEGRATIONS).await?;
         Ok(v)
     }
+
+    /// Admin UI MMDPS key (overrides `MMDPS_API_KEY` from env when set).
+    pub async fn get_mmdps_api_key_from_redis(&self) -> Result<Option<String>> {
+        let mut conn = self.connection.write().await;
+        let v: Option<String> = conn.get(REDIS_KEY_DATA_PROVIDER_MMDPS_API_KEY).await?;
+        Ok(v.and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }))
+    }
 }
 
 use futures_util::StreamExt;
-

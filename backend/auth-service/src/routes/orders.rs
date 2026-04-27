@@ -22,6 +22,7 @@ use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
+use risk::effective_leverage;
 
 #[derive(Clone)]
 pub struct OrdersState {
@@ -35,6 +36,8 @@ pub enum PlaceOrderError {
     InsufficientMargin { required_margin: String, free_margin: String },
     /// Trading access is not "full" (close_only or disabled) — return 403 with message.
     TradingRestricted { message: String },
+    /// No leverage profile / tiers, missing user min–max, or notional outside configured bands.
+    LeverageConfigurationInvalid { message: String },
 }
 
 impl IntoResponse for PlaceOrderError {
@@ -44,7 +47,9 @@ impl IntoResponse for PlaceOrderError {
             PlaceOrderError::InsufficientMargin { required_margin, free_margin } => {
                 let body = serde_json::json!({
                     "error": "INSUFFICIENT_FREE_MARGIN",
-                    "message": format!("Estimated margin ({}) exceeds free margin ({}).", required_margin, free_margin)
+                    "message": format!("Estimated margin ({}) exceeds free margin ({}).", required_margin, free_margin),
+                    "required_margin": required_margin,
+                    "free_margin": free_margin
                 });
                 (StatusCode::FORBIDDEN, Json(body)).into_response()
             }
@@ -54,37 +59,257 @@ impl IntoResponse for PlaceOrderError {
                 });
                 (StatusCode::FORBIDDEN, Json(body)).into_response()
             }
+            PlaceOrderError::LeverageConfigurationInvalid { message } => {
+                let body = serde_json::json!({
+                    "error": { "code": "LEVERAGE_CONFIGURATION", "message": message }
+                });
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
         }
     }
 }
 
-/// Effective leverage for a given notional: tier lookup then clamp to [user_min, user_max]. Default 50 if no tiers.
-fn effective_leverage_for_notional(
-    notional: Decimal,
-    tiers: Option<&[CmdLeverageTier]>,
-    user_min: Option<i32>,
-    user_max: Option<i32>,
-) -> Decimal {
-    const DEFAULT_LEVERAGE: i32 = 50;
-    let Some(tiers) = tiers else { return Decimal::from(DEFAULT_LEVERAGE); };
-    if tiers.is_empty() {
-        return Decimal::from(DEFAULT_LEVERAGE);
+// ============================================================================
+// Leverage profile resolution (user group + per-symbol, then platform default)
+// ============================================================================
+
+/// Resolves `COALESCE(gs, group default)`; if that row exists but the ID is null (neither
+/// per-symbol nor group default set), falls back to `leverage_profiles.is_default` so trading
+/// still works when a platform default profile is configured. If the main query returns no row
+/// (no group, or unknown symbol), returns `None` without fallback.
+async fn resolve_leverage_profile_id_for_user_symbol(
+    pool: &PgPool,
+    user_id: Uuid,
+    symbol: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct CoalesceRow {
+        leverage_profile_id: Option<Uuid>,
     }
-    let mut symbol_leverage = DEFAULT_LEVERAGE;
-    for t in tiers {
-        let from = Decimal::from_str(&t.notional_from).unwrap_or(Decimal::ZERO);
-        let to = t.notional_to.as_ref()
-            .and_then(|s| Decimal::from_str(s).ok())
-            .unwrap_or(Decimal::MAX);
-        if notional >= from && notional < to {
-            symbol_leverage = t.max_leverage;
-            break;
+    let row: Option<CoalesceRow> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id
+        FROM users u
+        INNER JOIN user_groups ug ON ug.id = u.group_id
+        INNER JOIN symbols s ON LOWER(TRIM(s.code)) = LOWER(TRIM($2))
+        LEFT JOIN group_symbols gs ON gs.symbol_id = s.id AND gs.group_id = ug.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(user_id)
+    .bind(symbol)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(r) = &row {
+        if let Some(id) = r.leverage_profile_id {
+            return Ok(Some(id));
         }
+        let fallback: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM leverage_profiles WHERE is_default = true LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await?;
+        if fallback.is_none() {
+            tracing::debug!(
+                %user_id,
+                symbol = %symbol,
+                "leverage: no per-group/symbol profile and no platform is_default row"
+            );
+        }
+        return Ok(fallback);
     }
-    let min_l = user_min.unwrap_or(1);
-    let max_l = user_max.unwrap_or(1000);
-    let clamped = symbol_leverage.clamp(min_l, max_l);
-    Decimal::from(clamped)
+    Ok(None)
+}
+
+/// Same notional, leverage, and required margin the server uses in `place_order` (DB tiers + Redis prices + `risk::effective_leverage`).
+#[derive(Debug, Clone)]
+pub struct OrderMarginDetails {
+    pub symbol_id: Uuid,
+    pub notional: Decimal,
+    pub effective_leverage: Decimal,
+    pub required_margin: Decimal,
+    pub execution_price: Decimal,
+    pub user_min_resolved: i32,
+    pub user_max_resolved: i32,
+    pub leverage_tiers: Option<Vec<CmdLeverageTier>>,
+    pub account_type: Option<String>,
+}
+
+/// Computes margin for an order using the same rules as `place_order` (no idempotency / free-margin check).
+pub async fn compute_order_margin_details(
+    pool: &PgPool,
+    redis: &crate::redis_pool::RedisPool,
+    user_id: Uuid,
+    group_id: Option<Uuid>,
+    symbol_code: &str,
+    side_upper: &str,
+    order_type_upper: &str,
+    size: Decimal,
+    limit_price: Option<Decimal>,
+    user_min_lev: Option<i32>,
+    user_max_lev: Option<i32>,
+    user_account_type: Option<String>,
+) -> Result<OrderMarginDetails, PlaceOrderError> {
+    let symbol_row = sqlx::query!(
+        r#"SELECT id FROM symbols WHERE code = $1 LIMIT 1"#,
+        symbol_code
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!(user_id = %user_id, symbol = %symbol_code, error = %e, "compute_order_margin_details symbol query failed");
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?
+    .ok_or_else(|| {
+        error!(user_id = %user_id, symbol = %symbol_code, "compute_order_margin_details symbol not found");
+        PlaceOrderError::Status(StatusCode::NOT_FOUND)
+    })?;
+
+    let symbol_id = symbol_row.id;
+
+    let resolved_profile_id = resolve_leverage_profile_id_for_user_symbol(pool, user_id, symbol_code)
+        .await
+        .map_err(|e| {
+            error!(user_id = %user_id, symbol = %symbol_code, error = %e, "compute_order_margin_details leverage profile query failed");
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+
+    let leverage_tiers: Option<Vec<CmdLeverageTier>> = match resolved_profile_id {
+        Some(pid) => {
+            let tiers: Vec<LeverageProfileTier> = sqlx::query_as(
+                r#"
+                SELECT id, profile_id, tier_index,
+                    notional_from::text AS notional_from, notional_to::text AS notional_to,
+                    max_leverage, initial_margin_percent::text AS initial_margin_percent,
+                    maintenance_margin_percent::text AS maintenance_margin_percent,
+                    created_at, updated_at
+                FROM leverage_profile_tiers WHERE profile_id = $1 ORDER BY tier_index ASC
+                "#,
+            )
+            .bind(pid)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| {
+                error!(user_id = %user_id, error = %e, "compute_order_margin_details fetch tiers failed");
+                PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
+            if tiers.is_empty() {
+                None
+            } else {
+                Some(
+                    tiers
+                        .into_iter()
+                        .map(|t| CmdLeverageTier {
+                            notional_from: t.notional_from,
+                            notional_to: t.notional_to,
+                            max_leverage: t.max_leverage,
+                        })
+                        .collect(),
+                )
+            }
+        }
+        None => None,
+    };
+
+    if resolved_profile_id.is_none() {
+        error!(user_id = %user_id, symbol = %symbol_code, "compute_order_margin_details no_leverage_profile");
+        return Err(PlaceOrderError::LeverageConfigurationInvalid {
+            message: "No leverage profile is assigned for this symbol. In Admin, set a default leverage profile on the user’s group (Groups) and/or set a per-symbol profile under group symbols, then add notional tiers to that profile.".to_string(),
+        });
+    }
+    if leverage_tiers.as_ref().map(|t| t.is_empty()).unwrap_or(true) {
+        error!(user_id = %user_id, symbol = %symbol_code, "compute_order_margin_details empty_tiers");
+        return Err(PlaceOrderError::LeverageConfigurationInvalid {
+            message: "The leverage profile for this symbol has no tiers. In Admin → Leverage profiles, open the profile and add at least one notional band (e.g. from 0 with an upper cap or open-ended) and a max leverage.".to_string(),
+        });
+    }
+
+    let user_min_resolved = user_min_lev.unwrap_or(1);
+    let user_max_resolved = user_max_lev.unwrap_or(500);
+    if user_min_resolved < 1 || user_max_resolved < 1 || user_min_resolved > user_max_resolved {
+        return Err(PlaceOrderError::LeverageConfigurationInvalid {
+            message: "User min/max leverage is invalid. Set min and max in Admin (user or group rules) to values between 1 and your platform cap, with min ≤ max.".to_string(),
+        });
+    }
+
+    let account_type = user_account_type
+        .as_ref()
+        .and_then(|s| {
+            let l = s.to_lowercase();
+            if l == "hedging" || l == "netting" {
+                Some(if l == "netting" {
+                    "netting".to_string()
+                } else {
+                    "hedging".to_string()
+                })
+            } else {
+                None
+            }
+        })
+        .or_else(|| Some("hedging".to_string()));
+
+    let order_type_upper_ref = order_type_upper;
+    let side_upper_ref = side_upper;
+    let execution_price = if order_type_upper_ref == "LIMIT" {
+        limit_price.ok_or_else(|| {
+            error!(user_id = %user_id, "compute_order_margin_details limit order missing limit_price");
+            PlaceOrderError::Status(StatusCode::BAD_REQUEST)
+        })?
+    } else {
+        let group_id_str = group_id.map(|u| u.to_string()).unwrap_or_default();
+        let (bid, ask) = get_price_from_redis(redis, symbol_code, &group_id_str)
+            .await
+            .ok_or_else(|| {
+                error!(user_id = %user_id, symbol = %symbol_code, group_id = %group_id_str, "compute_order_margin_details market_no_price");
+                PlaceOrderError::Status(StatusCode::BAD_REQUEST)
+            })?;
+        if side_upper_ref == "BUY" {
+            ask
+        } else {
+            bid
+        }
+    };
+
+    let notional = size * execution_price;
+    let eff_lev = effective_leverage(
+        notional,
+        Some(user_min_resolved),
+        Some(user_max_resolved),
+        leverage_tiers.as_deref(),
+    )
+    .ok_or_else(|| {
+        error!(
+            user_id = %user_id,
+            symbol = %symbol_code,
+            notional = %notional,
+            "compute_order_margin_details resolve_effective_leverage failed"
+        );
+        PlaceOrderError::LeverageConfigurationInvalid {
+            message: format!(
+                "Order notional {} does not match any configured leverage band for this symbol. In Admin → Leverage profiles, ensure tiers cover all exposure levels (contiguous bands, e.g. last band open-ended) with no gaps.",
+                notional
+            ),
+        }
+    })?;
+    if eff_lev <= Decimal::ZERO {
+        return Err(PlaceOrderError::LeverageConfigurationInvalid {
+            message: "Resolved effective leverage is not valid.".to_string(),
+        });
+    }
+    let required_margin = notional / eff_lev;
+
+    Ok(OrderMarginDetails {
+        symbol_id,
+        notional,
+        effective_leverage: eff_lev,
+        required_margin,
+        execution_price,
+        user_min_resolved,
+        user_max_resolved,
+        leverage_tiers,
+        account_type,
+    })
 }
 
 // ============================================================================
@@ -177,24 +402,6 @@ async fn place_order(
         return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
     }
 
-    // Get symbol_id from symbol code
-    let symbol_row = sqlx::query!(
-        r#"SELECT id FROM symbols WHERE code = $1 LIMIT 1"#,
-        req.symbol
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, error = %e, "place_order FAILED stage=fetch_symbol status=500");
-        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?
-    .ok_or_else(|| {
-        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "place_order FAILED stage=symbol_not_found status=404");
-        PlaceOrderError::Status(StatusCode::NOT_FOUND)
-    })?;
-
-    let symbol_id = symbol_row.id;
-
     // Fetch user leverage limits, account_type, and trading_access for order-engine
     #[derive(sqlx::FromRow)]
     struct UserLeverageRow { min_leverage: Option<i32>, max_leverage: Option<i32>, account_type: Option<String>, trading_access: Option<String> }
@@ -208,7 +415,7 @@ async fn place_order(
         error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=fetch_user_leverage status=500");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let (user_min_lev, user_max_lev, account_type, trading_access) = user_lev
+    let (user_min_lev, user_max_lev, _acct_raw, trading_access) = user_lev
         .as_ref()
         .map(|r| (r.min_leverage, r.max_leverage, r.account_type.clone(), r.trading_access.clone()))
         .unwrap_or((None, None, None, Some("full".to_string())));
@@ -219,62 +426,29 @@ async fn place_order(
             message: "Trading is disabled. You cannot open new positions.".to_string(),
         });
     }
-    let account_type = account_type
-        .filter(|s| s == "hedging" || s == "netting")
-        .or_else(|| Some("hedging".to_string()));
 
-    #[derive(sqlx::FromRow)]
-    struct ProfileRow { leverage_profile_id: Option<Uuid> }
-    let profile_row = sqlx::query_as::<_, ProfileRow>(
-        r#"
-        SELECT COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id
-        FROM users u
-        INNER JOIN user_groups ug ON ug.id = u.group_id
-        INNER JOIN symbols s ON LOWER(TRIM(s.code)) = LOWER(TRIM($2))
-        LEFT JOIN group_symbols gs ON gs.symbol_id = s.id AND gs.group_id = ug.id
-        WHERE u.id = $1
-        "#,
+    // Same notional, leverage, and required margin as enforced at insert (DB + Redis + risk)
+    let margin = compute_order_margin_details(
+        &pool,
+        orders_state.redis.as_ref(),
+        user_id,
+        claims.group_id,
+        &req.symbol,
+        &side_upper,
+        &order_type_upper,
+        size,
+        limit_price,
+        user_min_lev,
+        user_max_lev,
+        user_lev.as_ref().and_then(|r| r.account_type.clone()),
     )
-    .bind(user_id)
-    .bind(&req.symbol)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, error = %e, "place_order FAILED stage=fetch_symbol_leverage_profile status=500");
-        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
-
-    let leverage_tiers: Option<Vec<CmdLeverageTier>> = match profile_row.and_then(|r| r.leverage_profile_id) {
-        Some(pid) => {
-            let tiers: Vec<LeverageProfileTier> = sqlx::query_as(
-                r#"
-                SELECT id, profile_id, tier_index,
-                    notional_from::text AS notional_from, notional_to::text AS notional_to,
-                    max_leverage, initial_margin_percent::text AS initial_margin_percent,
-                    maintenance_margin_percent::text AS maintenance_margin_percent,
-                    created_at, updated_at
-                FROM leverage_profile_tiers WHERE profile_id = $1 ORDER BY tier_index ASC
-                "#,
-            )
-            .bind(pid)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| {
-                error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=fetch_leverage_tiers status=500");
-                PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-            })?;
-            if tiers.is_empty() {
-                None
-            } else {
-                Some(tiers.into_iter().map(|t| CmdLeverageTier {
-                    notional_from: t.notional_from,
-                    notional_to: t.notional_to,
-                    max_leverage: t.max_leverage,
-                }).collect())
-            }
-        }
-        None => None,
-    };
+    .await?;
+    let symbol_id = margin.symbol_id;
+    let user_min_resolved = margin.user_min_resolved;
+    let user_max_resolved = margin.user_max_resolved;
+    let leverage_tiers = margin.leverage_tiers;
+    let account_type = margin.account_type;
+    let required_margin = margin.required_margin;
 
     // Check idempotency
     let mut conn = orders_state.redis.get().await
@@ -336,33 +510,6 @@ async fn place_order(
         }
     };
 
-    let execution_price = if order_type_upper == "LIMIT" {
-        limit_price.ok_or_else(|| {
-            error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=limit_price_missing reason=limit order missing limit_price");
-            PlaceOrderError::Status(StatusCode::BAD_REQUEST)
-        })?
-    } else {
-        let group_id_str = claims.group_id.map(|u| u.to_string()).unwrap_or_default();
-        let (bid, ask) = get_price_from_redis(orders_state.redis.as_ref(), &req.symbol, &group_id_str).await
-            .ok_or_else(|| {
-                error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, group_id = %group_id_str, "place_order FAILED stage=market_no_price reason=no price in Redis");
-                PlaceOrderError::Status(StatusCode::BAD_REQUEST)
-            })?;
-        if side_upper == "BUY" { ask } else { bid }
-    };
-
-    let notional = size * execution_price;
-    let eff_lev = effective_leverage_for_notional(
-        notional,
-        leverage_tiers.as_deref(),
-        user_min_lev,
-        user_max_lev,
-    );
-    let required_margin = if eff_lev > Decimal::ZERO {
-        notional / eff_lev
-    } else {
-        notional * Decimal::from(2) / Decimal::from(100) // 2% fallback
-    };
     if required_margin > free_margin {
         error!(order_id = %order_id, user_id = %user_id, required = %required_margin, free = %free_margin, "place_order FAILED stage=insufficient_margin status=403");
         return Err(PlaceOrderError::InsufficientMargin {
@@ -442,8 +589,8 @@ async fn place_order(
         idempotency_key: req.idempotency_key.clone(),
         ts: now,
         group_id: claims.group_id.map(|u| u.to_string()),
-        min_leverage: user_min_lev,
-        max_leverage: user_max_lev,
+        min_leverage: Some(user_min_resolved),
+        max_leverage: Some(user_max_resolved),
         leverage_tiers: leverage_tiers,
         account_type: account_type.clone(),
     };
@@ -542,6 +689,110 @@ async fn place_order(
     Ok(Json(PlaceOrderResponse {
         order_id: order_id.to_string(),
         status: "PENDING".to_string(),
+    }))
+}
+
+// ============================================================================
+// ESTIMATE ORDER MARGIN (USER) — same math as place_order, for UI Cost Breakdown
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EstimateOrderMarginRequest {
+    pub symbol: String,
+    pub side: String,
+    pub order_type: String,
+    pub size: String,
+    pub limit_price: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EstimateOrderMarginResponse {
+    pub notional: String,
+    pub effective_leverage: String,
+    pub required_margin: String,
+    pub execution_price: String,
+}
+
+async fn estimate_order_margin(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Extension(orders_state): Extension<OrdersState>,
+    Json(req): Json<EstimateOrderMarginRequest>,
+) -> Result<Json<EstimateOrderMarginResponse>, PlaceOrderError> {
+    let user_id = claims.sub;
+    let order_type_upper = req.order_type.to_uppercase();
+    if order_type_upper != "MARKET" && order_type_upper != "LIMIT" {
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
+    }
+    let side_upper = req.side.to_uppercase();
+    if side_upper != "BUY" && side_upper != "SELL" {
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
+    }
+    let size = Decimal::from_str(&req.size).map_err(|_| {
+        error!(user_id = %user_id, "estimate_order_margin invalid size");
+        PlaceOrderError::Status(StatusCode::BAD_REQUEST)
+    })?;
+    if size <= Decimal::ZERO {
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
+    }
+    let limit_price = if let Some(s) = &req.limit_price {
+        Some(
+            Decimal::from_str(s).map_err(|_| {
+                error!(user_id = %user_id, "estimate_order_margin invalid limit_price");
+                PlaceOrderError::Status(StatusCode::BAD_REQUEST)
+            })?,
+        )
+    } else {
+        None
+    };
+    if order_type_upper == "LIMIT" && limit_price.is_none() {
+        return Err(PlaceOrderError::Status(StatusCode::BAD_REQUEST));
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct UserLevRow {
+        min_leverage: Option<i32>,
+        max_leverage: Option<i32>,
+        account_type: Option<String>,
+    }
+    let user_lev = sqlx::query_as::<_, UserLevRow>(
+        r#"SELECT min_leverage, max_leverage, account_type FROM users WHERE id = $1"#,
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!(user_id = %user_id, error = %e, "estimate_order_margin user query failed");
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+    let (u_min, u_max, acct) = user_lev
+        .as_ref()
+        .map(|r| (r.min_leverage, r.max_leverage, r.account_type.clone()))
+        .unwrap_or((None, None, None));
+
+    let m = compute_order_margin_details(
+        &pool,
+        orders_state.redis.as_ref(),
+        user_id,
+        claims.group_id,
+        &req.symbol,
+        &side_upper,
+        &order_type_upper,
+        size,
+        limit_price,
+        u_min,
+        u_max,
+        acct,
+    )
+    .await?;
+
+    Ok(Json(EstimateOrderMarginResponse {
+        notional: m.notional.to_string(),
+        effective_leverage: m.effective_leverage.to_string(),
+        required_margin: m.required_margin.to_string(),
+        execution_price: m.execution_price.to_string(),
     }))
 }
 
@@ -931,28 +1182,21 @@ async fn sync_pending_orders(
             .filter(|s| s == "hedging" || s == "netting")
             .or_else(|| Some("hedging".to_string()));
 
-        #[derive(sqlx::FromRow)]
-        struct ProfileIdRow {
-            leverage_profile_id: Option<Uuid>,
-        }
-        let profile_row: Option<ProfileIdRow> = sqlx::query_as(
-            r#"
-            SELECT COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id
-            FROM users u
-            INNER JOIN user_groups ug ON ug.id = u.group_id
-            INNER JOIN symbols s ON LOWER(TRIM(s.code)) = LOWER(TRIM($2))
-            LEFT JOIN group_symbols gs ON gs.symbol_id = s.id AND gs.group_id = ug.id
-            WHERE u.id = $1
-            "#,
+        let profile_id_resolved: Option<Uuid> = match resolve_leverage_profile_id_for_user_symbol(
+            &pool,
+            row.user_id,
+            &row.symbol_code,
         )
-        .bind(row.user_id)
-        .bind(&row.symbol_code)
-        .fetch_optional(&pool)
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Sync: leverage profile query failed for order {}: {}", row.id, e);
+                None
+            }
+        };
 
-        let leverage_tiers: Option<Vec<CmdLeverageTier>> = match profile_row.and_then(|r| r.leverage_profile_id) {
+        let leverage_tiers: Option<Vec<CmdLeverageTier>> = match profile_id_resolved {
             Some(pid) => {
                 let tiers: Vec<LeverageProfileTier> = sqlx::query_as(
                     r#"
@@ -1066,6 +1310,7 @@ pub fn create_orders_router(
 ) -> Router<PgPool> {
     Router::new()
         .route("/", get(list_orders).post(place_order))
+        .route("/estimate", post(estimate_order_margin))
         .route("/sync-pending", post(sync_pending_orders))
         .route("/:order_id/cancel", post(cancel_order))
         .layer(axum::middleware::from_fn_with_state(

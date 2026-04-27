@@ -2,6 +2,7 @@
 
 use contracts::{
     DataProvidersConfig, REDIS_CHANNEL_INTEGRATIONS_UPDATED, REDIS_KEY_ADMIN_INTEGRATIONS,
+    REDIS_KEY_DATA_PROVIDER_MMDPS_API_KEY,
 };
 use redis::AsyncCommands;
 use sqlx::PgPool;
@@ -40,12 +41,80 @@ impl DataProviderIntegrationsService {
         }
     }
 
+    /// Whether a non-empty MMDPS API key is stored (never returns the secret).
+    pub async fn mmdps_api_key_configured(&self) -> Result<bool, sqlx::Error> {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT mmdps_api_key FROM platform_data_provider_integrations WHERE singleton_id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row
+            .and_then(|(v,)| v)
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false))
+    }
+
+    /// Prefer DB key for MMDPS HTTP calls; fall back to `MMDPS_API_KEY` env.
+    pub async fn resolve_mmdps_api_key(pool: &sqlx::PgPool) -> Option<String> {
+        let row: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT mmdps_api_key FROM platform_data_provider_integrations WHERE singleton_id = 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        let from_db = row.flatten().and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        });
+        if from_db.is_some() {
+            return from_db;
+        }
+        std::env::var("MMDPS_API_KEY")
+            .ok()
+            .and_then(|s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            })
+    }
+
     pub async fn save(&self, cfg: &DataProvidersConfig) -> Result<(), sqlx::Error> {
         let json = serde_json::to_value(cfg).expect("DataProvidersConfig serializes to JSON");
         sqlx::query(
             r#"UPDATE platform_data_provider_integrations SET config_json = $1, updated_at = NOW() WHERE singleton_id = 1"#,
         )
         .bind(json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update stored MMDPS key when `mmdpsApiKey` was present in the request body.
+    /// `None` = leave DB unchanged; `Some(s)` = set to trimmed `s`, or NULL if `s` is empty (clear).
+    pub async fn apply_mmdps_api_key_from_request(&self, key: Option<String>) -> Result<(), sqlx::Error> {
+        let Some(raw) = key else {
+            return Ok(());
+        };
+        let sql_val: Option<&str> = {
+            let t = raw.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        };
+        sqlx::query(
+            r#"UPDATE platform_data_provider_integrations SET mmdps_api_key = $1, updated_at = NOW() WHERE singleton_id = 1"#,
+        )
+        .bind(sql_val)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -111,6 +180,31 @@ impl DataProviderIntegrationsService {
             .publish(REDIS_CHANNEL_INTEGRATIONS_UPDATED, "1")
             .await
             .map_err(|e| format!("Redis PUBLISH: {}", e))?;
+        Ok(())
+    }
+
+    /// Mirror DB MMDPS key to Redis for data-provider (overrides env at startup).
+    pub async fn sync_mmdps_key_to_redis(
+        redis: &RedisPool,
+        key: Option<&str>,
+    ) -> Result<(), String> {
+        let mut conn = redis
+            .get()
+            .await
+            .map_err(|_| "Redis unavailable".to_string())?;
+        let trimmed = key.map(str::trim).filter(|s| !s.is_empty());
+        match trimmed {
+            Some(s) => conn
+                .set::<_, _, ()>(REDIS_KEY_DATA_PROVIDER_MMDPS_API_KEY, s)
+                .await
+                .map_err(|e| format!("Redis SET mmdps key: {}", e))?,
+            None => {
+                let _: () = conn
+                    .del(REDIS_KEY_DATA_PROVIDER_MMDPS_API_KEY)
+                    .await
+                    .map_err(|e| format!("Redis DEL mmdps key: {}", e))?;
+            }
+        }
         Ok(())
     }
 }

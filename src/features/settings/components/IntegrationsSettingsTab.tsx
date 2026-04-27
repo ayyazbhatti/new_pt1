@@ -5,11 +5,12 @@ import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { Switch } from '@/shared/ui/Switch'
 import { toast } from '@/shared/components/common'
-import { Activity, Loader2, RefreshCw, Save, Lock } from 'lucide-react'
+import { Activity, Loader2, RefreshCw, Save, Lock, Eye, EyeOff, KeyRound } from 'lucide-react'
 import {
   getDataProvidersConfig,
   updateDataProvidersConfig,
   testDataProviderWsUrl,
+  type DataProvidersApiResponse,
   type DataProvidersConfig,
   type DataProviderEntry,
 } from '../api/dataProviders.api'
@@ -30,6 +31,11 @@ export function IntegrationsSettingsTab({
   })
 
   const [draft, setDraft] = useState<DataProvidersConfig | null>(null)
+  /** New key only — never pre-filled from API (secret is not returned). */
+  const [mmdpsApiKeyInput, setMmdpsApiKeyInput] = useState('')
+  const [showMmdpsKey, setShowMmdpsKey] = useState(false)
+  /** When true, next save sends mmdpsApiKey: "" to clear the stored key. */
+  const [clearMmdpsKeyPending, setClearMmdpsKeyPending] = useState(false)
 
   useEffect(() => {
     if (!query.data) return
@@ -39,10 +45,24 @@ export function IntegrationsSettingsTab({
   const binance = useMemo(() => providerById(draft?.providers ?? [], 'binance'), [draft])
 
   const saveMutation = useMutation({
-    mutationFn: updateDataProvidersConfig,
+    mutationFn: (params: {
+      config: DataProvidersConfig
+      mmdpsKeyAction: 'omit' | 'clear' | 'replace'
+      newKey?: string
+    }) => {
+      if (params.mmdpsKeyAction === 'clear') {
+        return updateDataProvidersConfig(params.config, { mmdpsApiKey: '' })
+      }
+      if (params.mmdpsKeyAction === 'replace' && params.newKey) {
+        return updateDataProvidersConfig(params.config, { mmdpsApiKey: params.newKey })
+      }
+      return updateDataProvidersConfig(params.config)
+    },
     onSuccess: (res) => {
-      queryClient.setQueryData(['admin', 'settings', 'data-providers'], res.config)
+      queryClient.setQueryData(['admin', 'settings', 'data-providers'], res.config as DataProvidersApiResponse)
       queryClient.invalidateQueries({ queryKey: ['admin', 'settings', 'data-providers'] })
+      setMmdpsApiKeyInput('')
+      setClearMmdpsKeyPending(false)
       toast.success(res.message ?? 'Data provider settings saved')
     },
     onError: (err: Error) => {
@@ -83,15 +103,31 @@ export function IntegrationsSettingsTab({
         p.type === 'binance' ? { ...p, enabled: true } : p
       ),
     }
-    saveMutation.mutate(next)
+    if (clearMmdpsKeyPending) {
+      saveMutation.mutate({ config: next, mmdpsKeyAction: 'clear' })
+      return
+    }
+    if (mmdpsApiKeyInput.trim() !== '') {
+      saveMutation.mutate({
+        config: next,
+        mmdpsKeyAction: 'replace',
+        newKey: mmdpsApiKeyInput.trim(),
+      })
+      return
+    }
+    saveMutation.mutate({ config: next, mmdpsKeyAction: 'omit' })
   }
 
   const handleReset = () => {
     if (query.data) {
       setDraft(structuredClone(query.data))
+      setMmdpsApiKeyInput('')
+      setClearMmdpsKeyPending(false)
       toast.success('Reverted to last saved configuration')
     }
   }
+
+  const mmdpsConfigured = Boolean((query.data as DataProvidersApiResponse | undefined)?.mmdpsApiKeyConfigured)
 
   if (query.isLoading || !draft) {
     return (
@@ -115,10 +151,95 @@ export function IntegrationsSettingsTab({
       <Card className="p-6">
         <h3 className="text-base font-semibold text-text">Market data providers</h3>
         <p className="mt-1 text-sm text-text-muted">
-          Configure upstream price feeds. Binance powers crypto symbols; forex and other non-spot instruments use
-          MMDPS when configured on the data-provider service (
-          <code className="rounded bg-surface-2 px-1 py-0.5 text-[0.7rem]">MMDPS_API_KEY</code>).
+          Configure upstream price feeds. Binance powers crypto symbols; forex and CFD symbols use MMDPS when an API
+          key is configured below or via the data-provider environment.
         </p>
+      </Card>
+
+      <Card className="p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-md bg-surface-2 p-2 text-accent">
+              <KeyRound className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-text">MMDPS API key</h3>
+              <p className="mt-1 text-sm text-text-muted max-w-xl">
+                Required for forex and non-Binance symbols: live WebSocket feed, chart history, and “Sync from MMDPS”
+                in Symbols. The key is stored server-side in the database and mirrored to Redis for the data-provider.
+                It is never returned to this screen after you save—only replaced or removed.
+              </p>
+              <p className="mt-2 text-xs text-text-muted">
+                You can still set <code className="rounded bg-surface-2 px-1 py-0.5 text-[0.65rem]">MMDPS_API_KEY</code>{' '}
+                on the server; a key saved here overrides the environment value for runtime services.
+              </p>
+            </div>
+          </div>
+          <div
+            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
+              mmdpsConfigured
+                ? 'border-success/40 bg-success/10 text-success'
+                : 'border-border bg-surface-2 text-text-muted'
+            }`}
+          >
+            {mmdpsConfigured ? 'Key stored' : 'Not configured'}
+          </div>
+        </div>
+
+        <div className="mt-6 space-y-3">
+          <label className="block text-sm font-medium text-text" htmlFor="mmdps-api-key-input">
+            API key
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <div className="relative min-w-0 flex-1">
+              <Input
+                id="mmdps-api-key-input"
+                className="pr-10 font-mono text-sm"
+                type={showMmdpsKey ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={mmdpsApiKeyInput}
+                onChange={(e) => {
+                  setMmdpsApiKeyInput(e.target.value)
+                  setClearMmdpsKeyPending(false)
+                }}
+                placeholder={mmdpsConfigured ? 'Enter a new key to replace the stored key' : 'Paste your MMDPS API key'}
+                disabled={!canEdit}
+              />
+              <button
+                type="button"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1.5 text-text-muted hover:bg-surface-2 hover:text-text"
+                aria-label={showMmdpsKey ? 'Hide key' : 'Show key'}
+                onClick={() => setShowMmdpsKey((v) => !v)}
+                tabIndex={-1}
+              >
+                {showMmdpsKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {canEdit && mmdpsConfigured && (
+              <Button
+                type="button"
+                variant="outline"
+                className="shrink-0"
+                disabled={saveMutation.isPending}
+                onClick={() => {
+                  setClearMmdpsKeyPending(true)
+                  setMmdpsApiKeyInput('')
+                }}
+              >
+                Remove stored key
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-text-muted">
+            Leave blank to keep the current key unchanged. Use <strong className="font-medium text-text">Remove stored key</strong>{' '}
+            to clear it (services may fall back to environment variables after you restart the data-provider).
+          </p>
+          {clearMmdpsKeyPending && (
+            <p className="text-xs text-warning">
+              Removal pending—click “Save integrations” to apply.
+            </p>
+          )}
+        </div>
       </Card>
 
       <Card className="p-6">

@@ -30,6 +30,11 @@ interface DataTableProps<TData> {
   rowClickTitle?: string
   /** When true, all rows are shown and the pagination UI is hidden */
   disablePagination?: boolean
+  /**
+   * When row content depends on state outside `row.original` (e.g. bulk selection),
+   * pass a value that changes when that state changes so memoized rows re-render.
+   */
+  rowMemoExtra?: string | number
   pagination?: {
     page: number
     pageSize: number
@@ -58,6 +63,8 @@ const TableCell = memo(({ cell, onRowClick, dense, compact }: { cell: any; onRow
 }, (prev, next) => {
   // For price cells, cells with controlled inputs (e.g. Select), and tags dropdown (open state), allow re-renders
   const isLiveOrInteractiveCell =
+    prev.cell.column.id === 'bulkSelect' ||
+    next.cell.column.id === 'bulkSelect' ||
     prev.cell.column.id === 'livePrice' ||
     next.cell.column.id === 'livePrice' ||
     prev.cell.column.id === 'leverageProfileName' ||
@@ -104,12 +111,14 @@ const TableRow = memo(({
   dense,
   compact,
   rowClickTitle,
+  rowMemoExtra,
 }: {
   row: Row<any>
   onRowClick?: (row: any) => void
   dense?: boolean
   compact?: boolean
   rowClickTitle?: string
+  rowMemoExtra?: string | number
 }) => {
   const handleRowClick = (e: React.MouseEvent<HTMLTableRowElement>) => {
     const target = e.target as HTMLElement
@@ -139,6 +148,9 @@ const TableRow = memo(({
     </tr>
   )
 }, (prev, next) => {
+  if (prev.rowMemoExtra !== next.rowMemoExtra) {
+    return false
+  }
   const rowDataChanged = prev.row.original !== next.row.original
   const rowIdChanged = prev.row.id !== next.row.id
   const onRowClickChanged = prev.onRowClick !== next.onRowClick
@@ -153,7 +165,20 @@ const TableRow = memo(({
 
 TableRow.displayName = 'TableRow'
 
-export function DataTable<TData>({ data, columns, className, tableClassName, dense, compact, bordered = true, onRowClick, rowClickTitle, disablePagination, pagination }: DataTableProps<TData>) {
+export function DataTable<TData>({
+  data,
+  columns,
+  className,
+  tableClassName,
+  dense,
+  compact,
+  bordered = true,
+  onRowClick,
+  rowClickTitle,
+  disablePagination,
+  rowMemoExtra,
+  pagination,
+}: DataTableProps<TData>) {
   const table = useReactTable({
     data,
     columns,
@@ -206,7 +231,15 @@ export function DataTable<TData>({ data, columns, className, tableClassName, den
             <tbody className="divide-y divide-border">
               {table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id} row={row} onRowClick={onRowClick} rowClickTitle={rowClickTitle} dense={dense} compact={compact} />
+                  <TableRow
+                    key={row.id}
+                    row={row}
+                    onRowClick={onRowClick}
+                    rowClickTitle={rowClickTitle}
+                    dense={dense}
+                    compact={compact}
+                    rowMemoExtra={rowMemoExtra}
+                  />
                 ))
               ) : (
                 <tr>

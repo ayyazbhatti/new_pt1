@@ -7,6 +7,7 @@ import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Card } from '@/shared/ui/card'
 import { useGroupsList } from '../hooks/useGroups'
+import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { useMarkupProfiles } from '@/features/adminMarkup/hooks/useMarkup'
 import { useQuery } from '@tanstack/react-query'
 import { listTags } from '@/features/tags/api/tags.api'
@@ -59,9 +60,18 @@ export function GroupsPage() {
 
   // Price profile dropdown: use list from groups API, or fallback to markup profiles (same source as Markup page)
   const { data: markupProfiles } = useMarkupProfiles()
+  const { data: leverageProfilesData } = useLeverageProfilesList({ page_size: 500 })
   const normalizeId = (id: string) => (id == null || id === '' ? '' : String(id).toLowerCase())
   const availablePriceProfiles =
     (data?.availablePriceProfiles?.length ? data.availablePriceProfiles : (markupProfiles ?? []).map((p) => ({ id: normalizeId(p.id), name: p.name }))) ?? []
+  const availableLeverageProfiles = useMemo(
+    () =>
+      (leverageProfilesData?.items ?? []).map((p) => ({
+        id: String(p.id).toLowerCase(),
+        name: p.name ?? '',
+      })),
+    [leverageProfilesData?.items]
+  )
 
   // Local state for groups list; always sync from API so filters (search, status, sort) show correct data
   const [groupsState, setGroupsState] = useState<UserGroup[]>([])
@@ -74,7 +84,9 @@ export function GroupsPage() {
 
   const handleGroupUpdate = (
     groupId: string,
-    updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'tagIds'>>
+    updates: Partial<
+      Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'leverageProfileId' | 'leverageProfile' | 'tagIds'>
+    >
   ) => {
     setGroupsState((prev) =>
       prev.map((g) => (g.id === groupId ? { ...g, ...updates } : g))
@@ -300,6 +312,7 @@ export function GroupsPage() {
           <GroupsTable
             groups={displayGroups}
             availablePriceProfiles={availablePriceProfiles}
+            availableLeverageProfiles={availableLeverageProfiles}
             allTags={allTags}
             onGroupUpdate={handleGroupUpdate}
             onRefresh={() => refetch()}

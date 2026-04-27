@@ -5,7 +5,6 @@ use contracts::enums::{PositionSide, PositionStatus};
 use contracts::events::PositionUpdatedEvent;
 use redis::aio::ConnectionManager;
 use std::collections::HashMap;
-use std::str::FromStr;
 use tracing::error;
 use uuid::Uuid;
 use rust_decimal::Decimal;
@@ -49,6 +48,10 @@ pub async fn publish_position_updated(
     };
     let sl = raw.get("sl").and_then(|s| Decimal::from_str_exact(s).ok()).filter(|d| *d != Decimal::ZERO);
     let tp = raw.get("tp").and_then(|s| Decimal::from_str_exact(s).ok()).filter(|d| *d != Decimal::ZERO);
+    let leverage = raw
+        .get("leverage")
+        .and_then(|s| Decimal::from_str_exact(s).ok())
+        .ok_or_else(|| anyhow::anyhow!("pos:by_id missing leverage field for {}", position_id))?;
     let ev = PositionUpdatedEvent {
         position_id,
         user_id,
@@ -56,6 +59,7 @@ pub async fn publish_position_updated(
         side,
         size,
         avg_price,
+        leverage,
         unrealized_pnl,
         realized_pnl,
         sl,

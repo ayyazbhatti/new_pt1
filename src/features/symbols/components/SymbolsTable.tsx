@@ -8,15 +8,19 @@ import { AdminSymbol } from '../types/symbol'
 import { useModalStore } from '@/app/store'
 import { EditSymbolModal } from '../modals/EditSymbolModal'
 import { SymbolGroupMarkupsModal } from '../modals/SymbolGroupMarkupsModal'
-import { Eye, Edit, Trash2, TrendingUp, Info } from 'lucide-react'
-import { useToggleSymbolEnabled, useDeleteSymbol } from '../hooks/useSymbols'
+import { Eye, Edit, Trash2, TrendingUp, Info, Loader2 } from 'lucide-react'
+import { useToggleSymbolEnabled, useBulkToggleSymbolsEnabled, useDeleteSymbol } from '../hooks/useSymbols'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { useUpdateSymbol } from '../hooks/useSymbols'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { PriceCell } from './PriceCell'
 import { usePriceStreamConnection } from '../hooks/usePriceStream'
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useState, useEffect } from 'react'
+import { Checkbox } from '@/shared/ui/Checkbox'
+import { normalizeSymbolKey } from '@/shared/utils/symbolKeyNormalize'
+
+const BULK_TOGGLE_MAX = 500
 
 interface SymbolsTableProps {
   symbols: AdminSymbol[]
@@ -48,6 +52,7 @@ export function SymbolsTable({
   const canEdit = useCanAccess('symbols:edit')
   const canDelete = useCanAccess('symbols:delete')
   const toggleEnabled = useToggleSymbolEnabled()
+  const bulkToggleEnabled = useBulkToggleSymbolsEnabled()
   const deleteSymbol = useDeleteSymbol()
   const updateSymbol = useUpdateSymbol()
   const { data: leverageProfiles, isLoading: leverageProfilesLoading } = useLeverageProfilesList({ page_size: 500 })
@@ -55,12 +60,68 @@ export function SymbolsTable({
   // Get all symbol codes for price streaming (use provider symbol or symbol code, uppercase)
   const symbolCodes = useMemo(() => {
     return symbols
-      .map((s) => (s.providerSymbol || s.symbolCode).toUpperCase())
+      .map((s) => normalizeSymbolKey((s.providerSymbol || s.symbolCode).toUpperCase()))
       .filter((code) => code && code.length > 0)
   }, [symbols])
 
   // Subscribe to price stream (connection only – no state on tick, so table doesn't re-render when prices change)
   const { isConnected } = usePriceStreamConnection(symbolCodes)
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const rowIdsKey = useMemo(() => symbols.map((s) => s.id).join(','), [symbols])
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [page, rowIdsKey])
+
+  /** Drives DataTable row re-renders when bulk selection changes (row memo skips if only `row.original` is stable). */
+  const selectionRowMemoExtra = useMemo(() => [...selectedIds].sort().join(','), [selectedIds])
+
+  const selectedOnPageCount = useMemo(
+    () => symbols.filter((s) => selectedIds.has(s.id)).length,
+    [symbols, selectedIds]
+  )
+  const allOnPageSelected = symbols.length > 0 && symbols.every((s) => selectedIds.has(s.id))
+  const someOnPageSelected = symbols.some((s) => selectedIds.has(s.id))
+
+  const toggleSelectAllOnPage = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allOnPageSelected) {
+        symbols.forEach((s) => next.delete(s.id))
+      } else {
+        symbols.forEach((s) => next.add(s.id))
+      }
+      return next
+    })
+  }, [symbols, allOnPageSelected])
+
+  const toggleRowSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const handleBulkSetEnabled = useCallback(
+    async (isEnabled: boolean) => {
+      const ids = symbols.filter((s) => selectedIds.has(s.id)).map((s) => s.id)
+      if (ids.length === 0) return
+      if (ids.length > BULK_TOGGLE_MAX) {
+        toast.error(`Select at most ${BULK_TOGGLE_MAX} symbols per bulk action`)
+        return
+      }
+      if (!isEnabled && !confirm(`Disable ${ids.length} symbol(s)?`)) return
+      try {
+        await bulkToggleEnabled.mutateAsync({ ids, isEnabled })
+        setSelectedIds(new Set())
+      } catch {
+        /* toast in hook */
+      }
+    },
+    [symbols, selectedIds, bulkToggleEnabled]
+  )
 
   // Memoize handlers to prevent re-renders on price updates
   const handleView = useCallback((symbol: AdminSymbol) => {
@@ -132,6 +193,36 @@ export function SymbolsTable({
   // Memoize columns to prevent re-renders when only prices change
   const columns = useMemo(() => [
     {
+      id: 'bulkSelect',
+      size: 40,
+      header: () =>
+        canEdit ? (
+          <span data-no-row-click className="inline-flex pl-1" onClick={(e) => e.stopPropagation()}>
+            <Checkbox
+              checked={allOnPageSelected}
+              indeterminate={someOnPageSelected && !allOnPageSelected}
+              onChange={toggleSelectAllOnPage}
+              aria-label="Select all on this page"
+            />
+          </span>
+        ) : (
+          <span className="w-4" />
+        ),
+      cell: ({ row }) => {
+        const symbol = row.original
+        return (
+          <span data-no-row-click className="inline-flex pl-1" onClick={(e) => e.stopPropagation()}>
+            <Checkbox
+              checked={selectedIds.has(symbol.id)}
+              onChange={() => toggleRowSelected(symbol.id)}
+              disabled={!canEdit || bulkToggleEnabled.isPending || toggleEnabled.isPending}
+              aria-label={`Select ${symbol.symbolCode}`}
+            />
+          </span>
+        )
+      },
+    },
+    {
       accessorKey: 'symbolCode',
       header: 'Symbol',
       cell: ({ row }) => {
@@ -181,7 +272,7 @@ export function SymbolsTable({
       ),
       cell: ({ row }) => {
         const symbol = row.original
-        const symbolCode = (symbol.providerSymbol || symbol.symbolCode).toUpperCase()
+        const symbolCode = normalizeSymbolKey((symbol.providerSymbol || symbol.symbolCode).toUpperCase())
         return <PriceCell symbol={symbolCode} variant="bid" />
       },
       enableSorting: false,
@@ -191,7 +282,7 @@ export function SymbolsTable({
       header: 'Ask',
       cell: ({ row }) => {
         const symbol = row.original
-        const symbolCode = (symbol.providerSymbol || symbol.symbolCode).toUpperCase()
+        const symbolCode = normalizeSymbolKey((symbol.providerSymbol || symbol.symbolCode).toUpperCase())
         return <PriceCell symbol={symbolCode} variant="ask" />
       },
       enableSorting: false,
@@ -467,12 +558,54 @@ export function SymbolsTable({
     leverageProfilesLoading,
     updateSymbol.isPending,
     toggleEnabled.isPending,
+    bulkToggleEnabled.isPending,
+    selectedIds,
+    allOnPageSelected,
+    someOnPageSelected,
+    toggleSelectAllOnPage,
+    toggleRowSelected,
   ]) as ColumnDef<AdminSymbol>[]
 
   return (
+    <div className="space-y-3">
+      {canEdit && selectedOnPageCount > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-2.5 text-sm"
+          data-no-row-click
+        >
+          <span className="text-text-muted font-medium">
+            {selectedOnPageCount} selected
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={bulkToggleEnabled.isPending}
+            onClick={() => handleBulkSetEnabled(true)}
+          >
+            {bulkToggleEnabled.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+            ) : null}
+            Enable
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={bulkToggleEnabled.isPending}
+            onClick={() => handleBulkSetEnabled(false)}
+          >
+            Disable
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
     <DataTable
       data={symbols}
       columns={columns}
+      rowMemoExtra={selectionRowMemoExtra}
       pagination={{
         page,
         pageSize,
@@ -481,5 +614,6 @@ export function SymbolsTable({
         onPageSizeChange,
       }}
     />
+    </div>
   )
 }

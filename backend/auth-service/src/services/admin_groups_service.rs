@@ -614,8 +614,17 @@ impl AdminGroupsService {
             SELECT
                 s.id AS symbol_id,
                 s.code AS symbol_code,
-                COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id) AS leverage_profile_id,
-                (SELECT lp2.name FROM leverage_profiles lp2 WHERE lp2.id = COALESCE(gs.leverage_profile_id, ug.default_leverage_profile_id)) AS leverage_profile_name,
+                COALESCE(
+                    gs.leverage_profile_id,
+                    ug.default_leverage_profile_id,
+                    (SELECT lpdef.id FROM leverage_profiles lpdef WHERE lpdef.is_default = true LIMIT 1)
+                ) AS leverage_profile_id,
+                (SELECT lp2.name FROM leverage_profiles lp2
+                 WHERE lp2.id = COALESCE(
+                    gs.leverage_profile_id,
+                    ug.default_leverage_profile_id,
+                    (SELECT lpdef2.id FROM leverage_profiles lpdef2 WHERE lpdef2.is_default = true LIMIT 1)
+                 )) AS leverage_profile_name,
                 COALESCE(gs.enabled, s.trading_enabled) AS enabled
             FROM symbols s
             CROSS JOIN user_groups ug

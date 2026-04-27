@@ -73,7 +73,7 @@ impl RateLimiter {
 
     pub fn check_rate_limit(&self, identifier: &str) -> bool {
         let now = Instant::now();
-        
+
         // Clean old entries
         self.requests.retain(|entry| {
             entry.0.as_str() == identifier && now.duration_since(entry.1) < self.window
@@ -94,4 +94,3 @@ impl RateLimiter {
         true
     }
 }
-

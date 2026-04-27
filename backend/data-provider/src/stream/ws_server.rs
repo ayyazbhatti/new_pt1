@@ -125,8 +125,8 @@ async fn handle_connection(
                     }
                     Some(Ok(Message::Close(close_frame))) => {
                         if let Some(frame) = close_frame {
-                            info!("🔌 WebSocket closed by client. Code: {:?}, Reason: {:?}", 
-                                frame.code, 
+                            info!("🔌 WebSocket closed by client. Code: {:?}, Reason: {:?}",
+                                frame.code,
                                 &frame.reason);
                         } else {
                             info!("🔌 WebSocket closed by client (no close frame)");
@@ -196,12 +196,14 @@ async fn handle_message(
     subscribed_symbols_global: Option<&Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>>,
 ) -> Result<Option<serde_json::Value>, String> {
     info!("🔍 Parsing subscription message: {}", text);
-    let msg: SubscribeMessage = serde_json::from_str(text)
-        .map_err(|e| {
-            warn!("❌ Failed to parse message: {} - Error: {}", text, e);
-            format!("Invalid message format: {}", e)
-        })?;
-    info!("✅ Parsed message - action: {}, symbols: {:?}", msg.action, msg.symbols);
+    let msg: SubscribeMessage = serde_json::from_str(text).map_err(|e| {
+        warn!("❌ Failed to parse message: {} - Error: {}", text, e);
+        format!("Invalid message format: {}", e)
+    })?;
+    info!(
+        "✅ Parsed message - action: {}, symbols: {:?}",
+        msg.action, msg.symbols
+    );
 
     match msg.action.as_str() {
         "subscribe" => {
@@ -229,30 +231,36 @@ async fn handle_message(
 
             for symbol in &msg.symbols {
                 let symbol_upper = symbol.to_uppercase();
-                
+
                 // Enable symbol in validator if not already enabled (allow dynamic enabling)
                 if !validator.is_symbol_enabled(&symbol_upper) {
                     info!("🔓 Enabling symbol in validator: {}", symbol_upper);
                     validator.enable_symbol(symbol_upper.clone());
                 }
-                
+
                 let room = if let Some(grp) = group_for_subscription {
                     format!("group:{}:symbol:{}", grp, symbol_upper)
                 } else {
                     format!("symbol:{}", symbol_upper)
                 };
 
-                info!("🔔 Client subscribing to room: '{}' for symbol: {}", room, symbol_upper);
+                info!(
+                    "🔔 Client subscribing to room: '{}' for symbol: {}",
+                    room, symbol_upper
+                );
                 let receiver = broadcaster.subscribe_room(room.clone());
                 receivers.push(receiver);
                 subscribed_symbols.insert(symbol_upper.clone());
-                
+
                 // Dynamically subscribe to Binance feed if not already subscribed
                 if let Some(feed_ref) = feed {
                     if let Some(global_symbols) = subscribed_symbols_global {
                         let mut global = global_symbols.write().await;
                         if !global.contains(&symbol_upper) {
-                            info!("📡 Subscribing upstream feed for new symbol: {}", symbol_upper);
+                            info!(
+                                "📡 Subscribing upstream feed for new symbol: {}",
+                                symbol_upper
+                            );
                             if let Err(e) = feed_ref.subscribe_symbol(&symbol_upper).await {
                                 warn!("Failed to subscribe upstream for {}: {}", symbol_upper, e);
                             } else {
@@ -264,8 +272,12 @@ async fn handle_message(
                 }
             }
 
-            info!("✅ Subscribed to {} symbols: {:?}", msg.symbols.len(), msg.symbols);
-            
+            info!(
+                "✅ Subscribed to {} symbols: {:?}",
+                msg.symbols.len(),
+                msg.symbols
+            );
+
             // Send confirmation response
             let response = serde_json::json!({
                 "type": "subscribed",

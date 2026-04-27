@@ -146,6 +146,19 @@ export async function updateGroupPriceProfile(groupId: string, priceProfileId: s
   })
 }
 
+/** Sets the group’s default leverage profile (used when a symbol has no per-symbol override). */
+export async function updateGroupLeverageProfile(
+  groupId: string,
+  leverageProfileId: string | null
+): Promise<void> {
+  await http(`/api/admin/groups/${groupId}/leverage-profile`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      leverage_profile_id: leverageProfileId,
+    }),
+  })
+}
+
 /** Get per-symbol settings for a group (all symbols with group defaults/overrides applied). */
 export async function getGroupSymbols(groupId: string): Promise<GroupSymbol[]> {
   const response = await http<{ items: any[] }>(`/api/admin/groups/${groupId}/symbols`, {

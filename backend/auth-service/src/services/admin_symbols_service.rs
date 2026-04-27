@@ -719,6 +719,35 @@ impl AdminSymbolsService {
         Ok(symbol)
     }
 
+    /// Enable/disable many symbols in one query. Returns `(id, symbol_code, is_enabled)` per updated row.
+    pub async fn bulk_toggle_enabled(
+        &self,
+        ids: &[Uuid],
+        is_enabled: bool,
+    ) -> Result<Vec<(Uuid, String, bool)>> {
+        const MAX_BULK: usize = 500;
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        if ids.len() > MAX_BULK {
+            return Err(anyhow::anyhow!("Too many symbols (max {MAX_BULK} per request)"));
+        }
+        let rows = sqlx::query_as::<_, (Uuid, String, bool)>(
+            r#"
+            UPDATE symbols
+            SET is_enabled = $2, updated_at = NOW()
+            WHERE id = ANY($1)
+            RETURNING id, code, is_enabled
+            "#,
+        )
+        .bind(ids)
+        .bind(is_enabled)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     /// Fetches `/feed/symbols` from MMDPS and upserts into `symbols`.
     /// Uses `MMDPS_API_KEY` and optional `MMDPS_SYMBOLS_URL` (default `https://api.mmdps.uk/feed/symbols`).
     /// New rows get `is_enabled` / `trading_enabled` from the mapped default; existing rows keep flags and leverage.
@@ -741,9 +770,13 @@ impl AdminSymbolsService {
             .query_pairs()
             .any(|(k, _)| k.eq_ignore_ascii_case("api_key"));
         if !has_api_key {
-            let api_key = std::env::var("MMDPS_API_KEY").map_err(|_| {
-                anyhow::anyhow!("Set MMDPS_API_KEY or include api_key= in MMDPS_SYMBOLS_URL")
-            })?;
+            let api_key = crate::services::data_provider_integrations_service::DataProviderIntegrationsService::resolve_mmdps_api_key(&self.pool)
+                .await
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Set the MMDPS API key in Admin → Settings → Integrations, or set MMDPS_API_KEY, or include api_key= in MMDPS_SYMBOLS_URL"
+                    )
+                })?;
             url.query_pairs_mut().append_pair("api_key", &api_key);
         }
 

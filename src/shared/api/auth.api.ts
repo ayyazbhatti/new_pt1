@@ -360,9 +360,83 @@ export interface SymbolLeverageResponse {
 }
 
 /**
- * Effective leverage for a given notional (exposure): find tier where
- * notional_from <= notional < notional_to, take tier's max_leverage, then clamp to [userMin, userMax].
- * Returns defaultLeverage if no tiers or missing limits.
+ * Matches `risk::effective_leverage` (tightest notional band, open-ended / sub-minimum fallbacks, then [userMin, userMax]).
+ * Returns `null` when tiers + limits cannot produce a value (callers may fall back to `defaultLeverage` for display).
+ */
+function effectiveLeverageFromTiers(
+  notional: number,
+  tiers: SymbolLeverageTier[],
+  userMin: number,
+  userMax: number
+): number | null {
+  if (!Number.isFinite(notional) || notional < 0) return null
+  if (userMin < 1 || userMax < 1 || userMin > userMax) return null
+  if (tiers.length === 0) return null
+  if (notional === 0) return null
+
+  const parseBound = (s: string) => {
+    const v = parseFloat(String(s).trim())
+    return Number.isFinite(v) ? v : Number.NaN
+  }
+
+  let bestLev: number | null = null
+  let bestFrom: number | null = null
+  for (const t of tiers) {
+    const from = parseBound(t.notional_from)
+    if (Number.isNaN(from) || notional < from) continue
+    const toRaw = t.notional_to
+    let inTier: boolean
+    if (toRaw == null || String(toRaw).trim() === '') {
+      inTier = true
+    } else {
+      const to = parseBound(String(toRaw))
+      if (Number.isNaN(to)) continue
+      inTier = notional < to
+    }
+    if (inTier) {
+      if (bestFrom == null || from > bestFrom) {
+        bestFrom = from
+        bestLev = t.max_leverage
+      }
+    }
+  }
+
+  let symbolLev = bestLev
+
+  if (symbolLev == null) {
+    for (let i = tiers.length - 1; i >= 0; i--) {
+      const t = tiers[i]
+      if (t.notional_to != null && String(t.notional_to).trim() !== '') continue
+      const from = parseBound(t.notional_from)
+      if (Number.isNaN(from)) continue
+      if (notional >= from) {
+        symbolLev = t.max_leverage
+        break
+      }
+    }
+  }
+
+  if (symbolLev == null && notional > 0) {
+    let bestFloor: { from: number; lev: number } | null = null
+    for (const t of tiers) {
+      const from = parseBound(t.notional_from)
+      if (Number.isNaN(from)) continue
+      if (bestFloor == null || from < bestFloor.from) {
+        bestFloor = { from, lev: t.max_leverage }
+      }
+    }
+    if (bestFloor != null && notional < bestFloor.from) {
+      symbolLev = bestFloor.lev
+    }
+  }
+
+  if (symbolLev == null || symbolLev < 1) return null
+  return Math.max(userMin, Math.min(userMax, symbolLev))
+}
+
+/**
+ * Effective leverage for a given notional: same rules as the order engine’s `effective_leverage`.
+ * If tiers are missing or the algorithm cannot resolve, returns `defaultLeverage` (for UI only).
  */
 export function getEffectiveLeverage(
   notional: number,
@@ -374,18 +448,12 @@ export function getEffectiveLeverage(
   if (!Number.isFinite(notional) || notional < 0) return defaultLeverage
   const t = tiers?.length ? tiers : null
   if (!t) return defaultLeverage
-  let symbolLeverage = defaultLeverage
-  for (const tier of t) {
-    const from = parseFloat(tier.notional_from) || 0
-    const to = tier.notional_to != null ? parseFloat(tier.notional_to) : Infinity
-    if (notional >= from && notional < to) {
-      symbolLeverage = tier.max_leverage
-      break
-    }
-  }
   const minL = userMin != null ? userMin : 1
-  const maxL = userMax != null ? userMax : 1000
-  return Math.max(minL, Math.min(maxL, symbolLeverage))
+  const maxL = userMax != null ? userMax : 500
+  const r = effectiveLeverageFromTiers(notional, t, minL, maxL)
+  if (r != null) return r
+  if (notional <= 0) return defaultLeverage
+  return defaultLeverage
 }
 
 /** Leverage profile applied to the given symbol for the current user's group (per-symbol or group default). */

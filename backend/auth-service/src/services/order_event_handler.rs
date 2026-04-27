@@ -58,12 +58,15 @@ impl OrderEventHandler {
                     event.order_id, event.status, event.filled_size, event.avg_fill_price
                 );
                 
-        // Only update database if order is filled
+        // Only update database for terminal states
         if matches!(event.status, OrderStatus::Filled) {
             self.update_order_in_database(&event).await?;
             compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
         } else if matches!(event.status, OrderStatus::Cancelled) {
             self.update_order_cancelled_in_database(&event).await?;
+            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+        } else if matches!(event.status, OrderStatus::Rejected) {
+            self.update_order_rejected_in_database(&event).await?;
             compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
         } else {
             info!("Order status is {:?}, skipping database update", event.status);
@@ -82,12 +85,15 @@ impl OrderEventHandler {
             event.order_id, event.status, event.filled_size, event.avg_fill_price
         );
 
-        // Only update database if order is filled
+        // Only update database for terminal states
         if matches!(event.status, OrderStatus::Filled) {
             self.update_order_in_database(&event).await?;
             compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
         } else if matches!(event.status, OrderStatus::Cancelled) {
             self.update_order_cancelled_in_database(&event).await?;
+            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+        } else if matches!(event.status, OrderStatus::Rejected) {
+            self.update_order_rejected_in_database(&event).await?;
             compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
         } else {
             info!("Order status is {:?}, skipping database update", event.status);
@@ -294,6 +300,37 @@ impl OrderEventHandler {
             info!("✅ Updated order {} in database: status=cancelled", order_id);
         } else {
             warn!("⚠️  Order {} not found in database, cannot update", order_id);
+        }
+
+        Ok(())
+    }
+
+    async fn update_order_rejected_in_database(&self, event: &OrderUpdatedEvent) -> Result<()> {
+        let order_id = event.order_id;
+        let rejected_at = event.ts;
+
+        let rows_affected = sqlx::query(
+            r#"
+            UPDATE orders
+            SET
+                status = 'rejected'::order_status,
+                updated_at = $1
+            WHERE id = $2
+            "#
+        )
+        .bind(rejected_at)
+        .bind(order_id)
+        .execute(&*self.pool)
+        .await
+        .context("Failed to update rejected order in database")?;
+
+        if rows_affected.rows_affected() > 0 {
+            info!(
+                "✅ Updated order {} in database: status=rejected, reason={:?}",
+                order_id, event.reason
+            );
+        } else {
+            warn!("⚠️  Order {} not found in database, cannot mark rejected", order_id);
         }
 
         Ok(())

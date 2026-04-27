@@ -38,8 +38,14 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
   })
   const { data: leverageProfilesData } = useLeverageProfilesList({ page_size: 500 })
   const leverageProfiles = leverageProfilesData?.items ?? []
-  const defaultLeverageProfile = leverageProfiles.find((p) => p.isDefault)
-  const defaultOptionLabel = defaultLeverageProfile ? `${defaultLeverageProfile.name} (default)` : 'Default (group)'
+  /** `__none__` = use group default (DB), not the platform “is default” profile name — that was misleading. */
+  const useGroupDefaultLabel = useMemo(() => {
+    const name = group.leverageProfile?.name?.trim()
+    if (name) {
+      return `Group default (${name})`
+    }
+    return 'No group default — set in Groups or pick a profile'
+  }, [group.leverageProfile?.name])
 
   const initialSymbols: GroupSymbol[] = useMemo(
     () => groupSymbolsData ?? [],
@@ -208,10 +214,10 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
             }
           >
             <SelectTrigger className="w-48 h-8">
-              <SelectValue placeholder="Default" />
+              <SelectValue placeholder="Group default" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__none__">{defaultOptionLabel}</SelectItem>
+              <SelectItem value="__none__">{useGroupDefaultLabel}</SelectItem>
               {leverageProfiles.map((p) => (
                 <SelectItem key={p.id} value={String(p.id).toLowerCase()}>
                   {p.name}
@@ -279,8 +285,9 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
         <div className="text-sm text-text-muted space-y-1">
         <p>
           Configure symbol-specific settings for <strong className="text-text">{group.name}</strong>.
-          Leverage profile and enable/disable per symbol. Markup is set in the{' '}
-          <strong>price stream profile</strong> assigned to this group.
+          Overriding leverage here is optional — the first option follows the group default from the Groups list
+          (and the platform default profile only when neither group nor per-symbol profile is set). Markup is set in
+          the <strong>price stream profile</strong> assigned to this group.
         </p>
         {leverageProfiles.length === 0 && (
           <p className="text-amber-600 dark:text-amber-400">
@@ -322,7 +329,7 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
               {transferSource ? (
                 <>
                   Apply <strong className="font-mono text-text">{transferSource.symbolCode}</strong>'s
-                  Leverage Profile ({transferSource.leverageProfileName ?? defaultOptionLabel}) and
+                  Leverage Profile ({transferSource.leverageProfileName ?? useGroupDefaultLabel}) and
                   Enabled ({transferSource.enabled ? 'On' : 'Off'}) to the symbols you select below.
                 </>
               ) : (
@@ -355,7 +362,7 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
                     />
                     <span className="font-mono text-sm">{s.symbolCode}</span>
                     <span className="text-xs text-text-muted">
-                      {s.leverageProfileName ?? 'Default'} · {s.enabled ? 'On' : 'Off'}
+                      {s.leverageProfileName ?? '—'} · {s.enabled ? 'On' : 'Off'}
                     </span>
                   </label>
                 ))}

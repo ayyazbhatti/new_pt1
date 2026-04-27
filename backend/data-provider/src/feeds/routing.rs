@@ -31,21 +31,21 @@ pub fn is_binance_spot_style(symbol_upper: &str) -> bool {
     if is_likely_classic_fx_or_metal_6(symbol_upper) {
         return false;
     }
-    const STABLE_QUOTE_SUFFIXES: &[&str] = &[
-        "USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDD", "DAI",
-    ];
-    if STABLE_QUOTE_SUFFIXES.iter().any(|s| {
-        symbol_upper.len() > s.len() && symbol_upper.ends_with(s)
-    }) {
+    const STABLE_QUOTE_SUFFIXES: &[&str] =
+        &["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDD", "DAI"];
+    if STABLE_QUOTE_SUFFIXES
+        .iter()
+        .any(|s| symbol_upper.len() > s.len() && symbol_upper.ends_with(s))
+    {
         return true;
     }
     const CRYPTO_QUOTE_SUFFIXES: &[&str] = &[
         "EUR", "TRY", "BRL", "BTC", "ETH", "BNB", "AUD", "GBP", "RUB", "ZAR", "MXN", "ARS", "PLN",
         "RON", "UAH", "NGN",
     ];
-    CRYPTO_QUOTE_SUFFIXES.iter().any(|s| {
-        symbol_upper.len() > s.len() && symbol_upper.ends_with(s)
-    })
+    CRYPTO_QUOTE_SUFFIXES
+        .iter()
+        .any(|s| symbol_upper.len() > s.len() && symbol_upper.ends_with(s))
 }
 
 /// Six-letter symbols like `EURUSD`, `USDZAR`, `XAUEUR` (forex / precious metals), not Binance spot.
@@ -73,11 +73,61 @@ fn is_likely_classic_fx_or_metal_6(symbol_upper: &str) -> bool {
 fn is_fiat3(code: &str) -> bool {
     matches!(
         code,
-        "USD" | "EUR" | "GBP" | "JPY" | "AUD" | "NZD" | "CAD" | "CHF" | "SEK" | "NOK" | "DKK"
-            | "MXN" | "ZAR" | "TRY" | "PLN" | "HUF" | "CZK" | "ILS" | "CNY" | "CNH" | "HKD" | "SGD"
-            | "RON" | "RUB" | "INR" | "IDR" | "THB" | "PHP" | "KRW" | "SAR" | "AED" | "COP" | "BRL"
-            | "ARS" | "CLP" | "PEN" | "BGN" | "HRK" | "ISK" | "MAD" | "TWD" | "MYR" | "VND" | "BHD"
-            | "JOD" | "KWD" | "OMR" | "QAR" | "EGP" | "NGN" | "GHS" | "KES" | "UGX" | "TZS" | "ZMW"
+        "USD"
+            | "EUR"
+            | "GBP"
+            | "JPY"
+            | "AUD"
+            | "NZD"
+            | "CAD"
+            | "CHF"
+            | "SEK"
+            | "NOK"
+            | "DKK"
+            | "MXN"
+            | "ZAR"
+            | "TRY"
+            | "PLN"
+            | "HUF"
+            | "CZK"
+            | "ILS"
+            | "CNY"
+            | "CNH"
+            | "HKD"
+            | "SGD"
+            | "RON"
+            | "RUB"
+            | "INR"
+            | "IDR"
+            | "THB"
+            | "PHP"
+            | "KRW"
+            | "SAR"
+            | "AED"
+            | "COP"
+            | "BRL"
+            | "ARS"
+            | "CLP"
+            | "PEN"
+            | "BGN"
+            | "HRK"
+            | "ISK"
+            | "MAD"
+            | "TWD"
+            | "MYR"
+            | "VND"
+            | "BHD"
+            | "JOD"
+            | "KWD"
+            | "OMR"
+            | "QAR"
+            | "EGP"
+            | "NGN"
+            | "GHS"
+            | "KES"
+            | "UGX"
+            | "TZS"
+            | "ZMW"
     )
 }
 
@@ -124,18 +174,9 @@ mod tests {
     #[test]
     fn forex_and_equities_mmdps_when_auto() {
         let empty: HashSet<String> = HashSet::new();
-        assert_eq!(
-            resolve_feed("EURUSD", true, true, &empty),
-            FeedKind::Mmdps
-        );
-        assert_eq!(
-            resolve_feed("XAUUSD", true, true, &empty),
-            FeedKind::Mmdps
-        );
-        assert_eq!(
-            resolve_feed("AAPL", true, true, &empty),
-            FeedKind::Mmdps
-        );
+        assert_eq!(resolve_feed("EURUSD", true, true, &empty), FeedKind::Mmdps);
+        assert_eq!(resolve_feed("XAUUSD", true, true, &empty), FeedKind::Mmdps);
+        assert_eq!(resolve_feed("AAPL", true, true, &empty), FeedKind::Mmdps);
     }
 
     /// Regressions: fiat quote codes overlap Binance quote assets — must not route FX/metals to Binance.
@@ -170,14 +211,8 @@ mod tests {
     fn explicit_list_only_when_auto_off() {
         let mut m = HashSet::new();
         m.insert("EURUSD".into());
-        assert_eq!(
-            resolve_feed("EURUSD", true, false, &m),
-            FeedKind::Mmdps
-        );
-        assert_eq!(
-            resolve_feed("GBPUSD", true, false, &m),
-            FeedKind::Binance
-        );
+        assert_eq!(resolve_feed("EURUSD", true, false, &m), FeedKind::Mmdps);
+        assert_eq!(resolve_feed("GBPUSD", true, false, &m), FeedKind::Binance);
     }
 
     #[test]

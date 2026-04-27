@@ -25,6 +25,37 @@ export async function placeOrder(payload: PlaceOrderRequest): Promise<PlaceOrder
   })
 }
 
+/** Same margin math as the server for place_order (POST /v1/orders) — for Cost Breakdown UI. */
+export interface EstimateOrderMarginRequest {
+  symbol: string
+  side: 'BUY' | 'SELL'
+  orderType: 'MARKET' | 'LIMIT'
+  size: string
+  limitPrice?: string
+}
+
+export interface EstimateOrderMarginResponse {
+  notional: string
+  effectiveLeverage: string
+  requiredMargin: string
+  executionPrice: string
+}
+
+export async function estimateOrderMargin(
+  payload: EstimateOrderMarginRequest
+): Promise<EstimateOrderMarginResponse> {
+  return http<EstimateOrderMarginResponse>('/v1/orders/estimate', {
+    method: 'POST',
+    body: JSON.stringify({
+      symbol: payload.symbol,
+      side: payload.side,
+      orderType: payload.orderType,
+      size: payload.size,
+      limitPrice: payload.limitPrice,
+    }),
+  })
+}
+
 export async function cancelOrder(orderId: string): Promise<void> {
   return http(`/v1/orders/${orderId}/cancel`, {
     method: 'POST',

@@ -59,6 +59,8 @@ pub struct BinanceFeed {
     /// Uppercase symbols we must maintain on the wire (dedup for `subscribe_symbol`).
     subscribed: Arc<DashSet<String>>,
     cmd_tx: std::sync::OnceLock<mpsc::UnboundedSender<String>>,
+    force_reconnect_tx: std::sync::OnceLock<mpsc::UnboundedSender<()>>,
+    latest_tick_ts: Arc<AtomicU64>,
 }
 
 impl BinanceFeed {
@@ -69,6 +71,8 @@ impl BinanceFeed {
             reconnect_delay: 5,
             subscribed: Arc::new(DashSet::new()),
             cmd_tx: std::sync::OnceLock::new(),
+            force_reconnect_tx: std::sync::OnceLock::new(),
+            latest_tick_ts: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -82,6 +86,18 @@ impl BinanceFeed {
         self.price_states.read().await.len()
     }
 
+    pub fn latest_tick_ts(&self) -> Option<u64> {
+        let ts = self.latest_tick_ts.load(Ordering::Relaxed);
+        (ts > 0).then_some(ts)
+    }
+
+    /// Ask the multiplex task to reconnect and resubscribe all symbols.
+    pub fn force_reconnect(&self) {
+        if let Some(tx) = self.force_reconnect_tx.get() {
+            let _ = tx.send(());
+        }
+    }
+
     /// Register a symbol on the shared Binance multiplex connection (no extra TCP socket per symbol).
     pub async fn subscribe_symbol(&self, symbol: &str) -> Result<()> {
         let u = symbol.to_uppercase();
@@ -91,12 +107,16 @@ impl BinanceFeed {
 
         let tx = self.cmd_tx.get_or_init(|| {
             let (tx, rx) = mpsc::unbounded_channel();
+            let (force_tx, force_rx) = mpsc::unbounded_channel();
             let url = self.multiplex_url.clone();
             let states = self.price_states.clone();
             let global = self.subscribed.clone();
             let delay = self.reconnect_delay;
+            let latest_tick_ts = self.latest_tick_ts.clone();
+            let _ = self.force_reconnect_tx.set(force_tx);
             tokio::spawn(async move {
-                multiplex_connection_loop(url, states, global, rx, delay).await;
+                multiplex_connection_loop(url, states, global, rx, force_rx, delay, latest_tick_ts)
+                    .await;
             });
             tx
         });
@@ -175,6 +195,7 @@ fn parse_book_ticker(text: &str) -> Result<BinanceBookTicker> {
 async fn apply_ticker(
     ticker: BinanceBookTicker,
     price_states: &Arc<RwLock<HashMap<String, PriceState>>>,
+    latest_tick_ts: &Arc<AtomicU64>,
 ) -> Result<()> {
     let sym_key = ticker.symbol.to_uppercase();
 
@@ -207,6 +228,7 @@ async fn apply_ticker(
         let mut states = price_states.write().await;
         states.insert(sym_key.clone(), price_state);
     }
+    latest_tick_ts.store(ts, Ordering::Relaxed);
     trace!(symbol = %sym_key, %bid, %ask, "bookTicker");
     Ok(())
 }
@@ -216,7 +238,9 @@ async fn multiplex_connection_loop(
     price_states: Arc<RwLock<HashMap<String, PriceState>>>,
     global_subscribed: Arc<DashSet<String>>,
     mut cmd_rx: mpsc::UnboundedReceiver<String>,
+    mut force_reconnect_rx: mpsc::UnboundedReceiver<()>,
     reconnect_delay_secs: u64,
+    latest_tick_ts: Arc<AtomicU64>,
 ) {
     let msg_id = AtomicU64::new(1);
     loop {
@@ -277,7 +301,7 @@ async fn multiplex_connection_loop(
                         Some(Ok(Message::Text(text))) => {
                             let t = text.to_string();
                             if let Ok(ticker) = parse_book_ticker(&t) {
-                                if let Err(e) = apply_ticker(ticker, &price_states).await {
+                                if let Err(e) = apply_ticker(ticker, &price_states, &latest_tick_ts).await {
                                     debug!("ticker apply: {}", e);
                                 }
                             } else {
@@ -327,6 +351,12 @@ async fn multiplex_connection_loop(
                             info!("Binance multiplex: command channel closed");
                             return;
                         }
+                    }
+                }
+                force = force_reconnect_rx.recv() => {
+                    if force.is_some() {
+                        warn!("Binance multiplex: forced reconnect requested");
+                        connection_ok = false;
                     }
                 }
             }

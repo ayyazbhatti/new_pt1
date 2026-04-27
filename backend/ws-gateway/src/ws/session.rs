@@ -1,7 +1,7 @@
 use crate::auth::jwt::{Claims, JwtAuth};
 use crate::state::call_registry::{CallRegistry, CallState, CallStatus};
 use crate::state::connection_registry::{Connection, ConnectionRegistry};
-use crate::validation::message_validation::MessageValidator;
+use crate::validation::message_validation::{MessageValidator, normalize_subscription_symbol};
 use crate::ws::protocol::{ClientMessage, ServerMessage};
 use crate::stream::broadcaster::{Broadcaster, WS_CONN_CHANNEL_CAP};
 use axum::extract::ws::{Message, WebSocket};
@@ -238,13 +238,19 @@ impl Session {
                             }
                             ClientMessage::Subscribe { symbols, channels } => {
                                 // Check if authenticated
-                                if let Some(conn) = registry.get(&conn_id) {
+                                if registry.get(&conn_id).is_some() {
+                                    let mut normalized_symbols: Vec<String> = Vec::with_capacity(symbols.len());
                                     for symbol in &symbols {
-                                        registry.subscribe_symbol(conn_id, symbol.clone(), channels.clone());
+                                        if let Some(normalized) = normalize_subscription_symbol(symbol) {
+                                            if !normalized_symbols.contains(&normalized) {
+                                                registry.subscribe_symbol(conn_id, normalized.clone(), channels.clone());
+                                                normalized_symbols.push(normalized);
+                                            }
+                                        }
                                     }
 
                                     let success_msg = ServerMessage::Subscribed {
-                                        symbols: symbols.clone(),
+                                        symbols: normalized_symbols,
                                     };
                                     if let Ok(json) = success_msg.to_json() {
                                         let _ = response_tx_clone.send(Message::Text(json));
@@ -262,12 +268,18 @@ impl Session {
                                 }
                             }
                             ClientMessage::Unsubscribe { symbols } => {
+                                let mut normalized_symbols: Vec<String> = Vec::with_capacity(symbols.len());
                                 for symbol in &symbols {
-                                    registry.unsubscribe_symbol(conn_id, symbol);
+                                    if let Some(normalized) = normalize_subscription_symbol(symbol) {
+                                        if !normalized_symbols.contains(&normalized) {
+                                            registry.unsubscribe_symbol(conn_id, &normalized);
+                                            normalized_symbols.push(normalized);
+                                        }
+                                    }
                                 }
 
                                 let success_msg = ServerMessage::Unsubscribed {
-                                    symbols: symbols.clone(),
+                                    symbols: normalized_symbols,
                                 };
                                 if let Ok(json) = success_msg.to_json() {
                                     let _ = response_tx_clone.send(Message::Text(json));

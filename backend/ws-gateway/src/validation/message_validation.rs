@@ -2,6 +2,22 @@ use crate::ws::protocol::ClientMessage;
 use crate::config::LimitsConfig;
 use anyhow::Result;
 
+/// Canonical symbol key used for WS subscriptions.
+/// Accept common separators from clients (`EUR/USD`, `EUR-USD`, `EUR_USD`, `EUR.USD`) and
+/// normalize to the registry/tick key format (`EURUSD`).
+pub fn normalize_subscription_symbol(raw: &str) -> Option<String> {
+    let normalized: String = raw
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(normalized)
+}
+
 pub struct MessageValidator {
     limits: LimitsConfig,
 }
@@ -36,9 +52,12 @@ impl MessageValidator {
                     }
                 }
 
-                // Validate symbol format (alphanumeric, max 20 chars)
+                // Validate symbol format after canonicalization so clients may send common separators.
                 for symbol in symbols {
-                    if symbol.len() > 20 || !symbol.chars().all(|c| c.is_alphanumeric()) {
+                    let Some(normalized) = normalize_subscription_symbol(symbol) else {
+                        return Err(anyhow::anyhow!("Invalid symbol format: {}", symbol));
+                    };
+                    if normalized.len() > 20 {
                         return Err(anyhow::anyhow!("Invalid symbol format: {}", symbol));
                     }
                 }

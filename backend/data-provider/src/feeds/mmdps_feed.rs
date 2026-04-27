@@ -4,13 +4,14 @@
 //! receive `{"type":"tick","symbol","bid","ask",...}`.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use dashmap::DashSet;
 use futures_util::{SinkExt, StreamExt};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -23,6 +24,7 @@ pub struct MmdpsFeed {
     ws_url: String,
     subscribed: Arc<DashSet<String>>,
     resync_tx: Mutex<Option<mpsc::UnboundedSender<()>>>,
+    latest_tick_ts: Arc<AtomicU64>,
 }
 
 impl MmdpsFeed {
@@ -32,6 +34,7 @@ impl MmdpsFeed {
             ws_url: ws_url_with_key,
             subscribed: Arc::new(DashSet::new()),
             resync_tx: Mutex::new(None),
+            latest_tick_ts: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -43,6 +46,18 @@ impl MmdpsFeed {
 
     pub fn tracked_symbol_count(&self) -> usize {
         self.subscribed.len()
+    }
+
+    pub fn latest_tick_ts(&self) -> Option<u64> {
+        let ts = self.latest_tick_ts.load(Ordering::Relaxed);
+        (ts > 0).then_some(ts)
+    }
+
+    /// Request resubscribe for all tracked symbols on the current socket.
+    pub fn force_resync(&self) {
+        if let Some(tx) = self.resync_tx.lock().expect("mmdps resync mutex").as_ref() {
+            let _ = tx.send(());
+        }
     }
 
     pub async fn subscribe_symbol(&self, symbol: &str) -> Result<()> {
@@ -58,8 +73,9 @@ impl MmdpsFeed {
             let url = self.ws_url.clone();
             let states = self.price_states.clone();
             let subs = self.subscribed.clone();
+            let latest_tick_ts = self.latest_tick_ts.clone();
             tokio::spawn(async move {
-                mmdps_connection_loop(url, states, subs, rx).await;
+                mmdps_connection_loop(url, states, subs, rx, latest_tick_ts).await;
             });
             let _ = tx.send(());
         } else if let Some(tx) = lock.as_ref() {
@@ -74,6 +90,7 @@ async fn mmdps_connection_loop(
     price_states: Arc<RwLock<HashMap<String, PriceState>>>,
     subscribed: Arc<DashSet<String>>,
     mut resync_rx: mpsc::UnboundedReceiver<()>,
+    latest_tick_ts: Arc<AtomicU64>,
 ) {
     const RECONNECT_SECS: u64 = 5;
     loop {
@@ -138,7 +155,7 @@ async fn mmdps_connection_loop(
                     match msg {
                         Some(Ok(Message::Text(text))) => {
                             let t = text.to_string();
-                            if let Err(e) = apply_mmdps_message(&t, &price_states).await {
+                            if let Err(e) = apply_mmdps_message(&t, &price_states, &latest_tick_ts).await {
                                 trace!("mmdps parse skip: {} ({})", e, t.chars().take(120).collect::<String>());
                             }
                         }
@@ -177,7 +194,11 @@ async fn mmdps_connection_loop(
     }
 }
 
-async fn apply_mmdps_message(text: &str, price_states: &Arc<RwLock<HashMap<String, PriceState>>>) -> Result<()> {
+async fn apply_mmdps_message(
+    text: &str,
+    price_states: &Arc<RwLock<HashMap<String, PriceState>>>,
+    latest_tick_ts: &Arc<AtomicU64>,
+) -> Result<()> {
     let v: serde_json::Value = serde_json::from_str(text)?;
     let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
     if typ != "tick" {
@@ -209,6 +230,7 @@ async fn apply_mmdps_message(text: &str, price_states: &Arc<RwLock<HashMap<Strin
         let mut states = price_states.write().await;
         states.insert(sym_key.clone(), price_state);
     }
+    latest_tick_ts.store(ts, Ordering::Relaxed);
     trace!(symbol = %sym_key, %bid, %ask, "mmdps tick");
     Ok(())
 }

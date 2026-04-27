@@ -113,6 +113,12 @@ export default defineConfig({
         target: 'ws://127.0.0.1:3003',
         ws: true,
       },
+      // data-provider HTTP (chart MMDPS history, /prices) — matches production nginx `/dp/`
+      '/dp': {
+        target: 'http://127.0.0.1:9004',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/dp/, '') || '/',
+      },
     },
   },
 })

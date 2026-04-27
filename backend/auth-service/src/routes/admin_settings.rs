@@ -96,7 +96,7 @@ async fn get_data_providers(
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_settings_permission(&pool, &claims, "settings:view").await?;
-    let svc = DataProviderIntegrationsService::new(pool);
+    let svc = DataProviderIntegrationsService::new(pool.clone());
     let cfg = svc.get().await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -104,30 +104,57 @@ async fn get_data_providers(
         )
     })?;
     let cfg = DataProviderIntegrationsService::merge_with_defaults(cfg);
-    Ok(Json(serde_json::to_value(cfg).unwrap()))
+    let mmdps_configured = svc.mmdps_api_key_configured().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+    Ok(Json(serde_json::json!({
+        "version": cfg.version,
+        "providers": cfg.providers,
+        "mmdpsApiKeyConfigured": mmdps_configured,
+    })))
+}
+
+#[derive(Deserialize)]
+struct PutDataProvidersBody {
+    #[serde(flatten)]
+    config: DataProvidersConfig,
+    /// Omitted = leave unchanged; empty string = remove stored key; non-empty = set.
+    #[serde(default, rename = "mmdpsApiKey")]
+    mmdps_api_key: Option<String>,
 }
 
 async fn put_data_providers(
     State(pool): State<PgPool>,
     Extension(redis): Extension<Arc<RedisPool>>,
     claims: axum::extract::Extension<Claims>,
-    axum::Json(body): axum::Json<DataProvidersConfig>,
+    axum::Json(body): axum::Json<PutDataProvidersBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_settings_permission(&pool, &claims, "settings:edit").await?;
-    let cfg = DataProviderIntegrationsService::merge_with_defaults(body);
+    let cfg = DataProviderIntegrationsService::merge_with_defaults(body.config);
     let normalized = DataProviderIntegrationsService::validate_and_normalize(cfg).map_err(|msg| {
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": msg })),
         )
     })?;
-    let svc = DataProviderIntegrationsService::new(pool);
+    let svc = DataProviderIntegrationsService::new(pool.clone());
     svc.save(&normalized).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
         )
     })?;
+    svc.apply_mmdps_api_key_from_request(body.mmdps_api_key)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
     DataProviderIntegrationsService::sync_to_redis(redis.as_ref(), &normalized)
         .await
         .map_err(|e| {
@@ -136,10 +163,47 @@ async fn put_data_providers(
                 Json(serde_json::json!({ "error": e })),
             )
         })?;
+    let key_raw: Option<String> = sqlx::query_scalar(
+        "SELECT mmdps_api_key FROM platform_data_provider_integrations WHERE singleton_id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+    let key_for_redis: Option<String> = key_raw.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    });
+    DataProviderIntegrationsService::sync_mmdps_key_to_redis(redis.as_ref(), key_for_redis.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+    let mmdps_configured = svc.mmdps_api_key_configured().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
     Ok(Json(serde_json::json!({
         "success": true,
-        "config": serde_json::to_value(&normalized).unwrap(),
-        "message": "Saved. Restart the data-provider process to apply WebSocket URL changes."
+        "config": {
+            "version": normalized.version,
+            "providers": normalized.providers,
+            "mmdpsApiKeyConfigured": mmdps_configured,
+        },
+        "message": "Saved. Restart the data-provider service to apply MMDPS API key or WebSocket URL changes."
     })))
 }
 

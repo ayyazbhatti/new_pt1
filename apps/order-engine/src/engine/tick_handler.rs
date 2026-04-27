@@ -235,14 +235,25 @@ impl TickHandler {
         fill_size: rust_decimal::Decimal,
     ) -> Result<()> {
         let notional = fill_price * fill_size;
-        let effective_lev = crate::leverage::effective_leverage(
+        let eff = crate::leverage::effective_leverage(
             notional,
             order.min_leverage,
             order.max_leverage,
             order.leverage_tiers.as_deref(),
-            100.0,
-        );
-        let result = self.lua.atomic_fill_order(conn, &order.id, fill_price, fill_size, effective_lev).await?;
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "effective_leverage missing: need user min/max, non-empty symbol tiers, and a matching notional band (order {})",
+                order.id
+            )
+        })?;
+        if eff <= Decimal::ZERO {
+            return Err(anyhow::anyhow!("effective leverage must be positive (order {})", order.id));
+        }
+        let result = self
+            .lua
+            .atomic_fill_order(conn, &order.id, fill_price, fill_size, eff)
+            .await?;
         
         if result.get("error").is_some() {
             let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -317,6 +328,7 @@ impl TickHandler {
         // Publish position opened only when a new position was created (not when adding to existing)
         if let Some(pos_id) = position_id {
             if fill_action == "created" {
+                let margin_used = (fill_size * fill_price) / eff;
                 let pos_event = crate::models::PositionOpenedEvent {
                     position_id: pos_id,
                     user_id: order.user_id,
@@ -327,8 +339,8 @@ impl TickHandler {
                     },
                     size: fill_size,
                     entry_price: fill_price,
-                    leverage: Decimal::from(100),
-                    margin_used: Decimal::ZERO,
+                    leverage: eff,
+                    margin_used,
                     correlation_id: order.idempotency_key.clone(),
                     ts: now(),
                 };
@@ -340,6 +352,14 @@ impl TickHandler {
                 let entry = raw.get("entry_price").or(raw.get("avg_price")).and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(fill_price);
                 let side_str = raw.get("side").map(|s| s.as_str()).unwrap_or("LONG");
                 let pos_side = if side_str == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+                let lev = raw
+                    .get("leverage")
+                    .and_then(|s| Decimal::from_str_exact(s).ok())
+                    .unwrap_or(eff);
+                let margin_used = raw
+                    .get("margin")
+                    .and_then(|s| Decimal::from_str_exact(s).ok())
+                    .unwrap_or((size * entry) / lev);
                 let pos_event = crate::models::PositionOpenedEvent {
                     position_id: pos_id,
                     user_id: order.user_id,
@@ -347,8 +367,8 @@ impl TickHandler {
                     side: pos_side,
                     size,
                     entry_price: entry,
-                    leverage: Decimal::from(100),
-                    margin_used: Decimal::ZERO,
+                    leverage: lev,
+                    margin_used,
                     correlation_id: order.idempotency_key.clone(),
                     ts: now(),
                 };

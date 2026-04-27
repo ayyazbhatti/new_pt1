@@ -8,8 +8,9 @@ RUN npm ci
 COPY index.html vite.config.ts tsconfig.json tsconfig.node.json tailwind.config.js postcss.config.js ./
 COPY src ./src
 
-# Build for production (API will be same origin via nginx proxy in production)
+# Build for production (API same origin via nginx). Chart MMDPS history uses same-origin `/dp` → data-provider (no host baked in).
 ENV VITE_API_URL=
+ENV VITE_DATA_PROVIDER_HTTP_PATH=/dp
 RUN npm run build
 
 # Serve with nginx

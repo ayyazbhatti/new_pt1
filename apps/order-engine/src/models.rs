@@ -13,12 +13,7 @@ pub struct Tick {
     pub seq: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LeverageTier {
-    pub notional_from: String,
-    pub notional_to: Option<String>,
-    pub max_leverage: i32,
-}
+pub use contracts::commands::LeverageTier;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
@@ -89,15 +84,25 @@ pub struct Balance {
 pub struct OrderCommand {
     pub user_id: Uuid,
     pub symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
     pub side: Side,
     pub order_type: OrderType,
     pub size: Decimal,
     pub limit_price: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_price_hint: Option<Decimal>,
     pub stop_loss: Option<Decimal>,
     pub take_profit: Option<Decimal>,
     pub time_in_force: TimeInForce,
     pub client_order_id: Option<String>,
     pub idempotency_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_leverage: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_leverage: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leverage_tiers: Option<Vec<LeverageTier>>,
     pub correlation_id: String,
     pub ts: DateTime<Utc>,
 }

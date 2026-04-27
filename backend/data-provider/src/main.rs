@@ -9,17 +9,17 @@ mod validation;
 
 use crate::cache::redis_client::RedisClient;
 use crate::config::Config;
-use contracts::DataProvidersConfig;
 use crate::feeds::binance_feed::BinanceFeed;
 use crate::feeds::feed_router::FeedRouter;
 use crate::feeds::mmdps_feed::MmdpsFeed;
+use crate::health::health_routes::create_health_router;
 use crate::pricing::markup_engine::MarkupEngine;
 use crate::stream::broadcaster::Broadcaster;
-use crate::health::health_routes::create_health_router;
 use crate::validation::symbol_validation::{RateLimiter, SymbolValidator};
+use contracts::DataProvidersConfig;
+use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use rust_decimal::Decimal;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -55,6 +55,10 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => warn!("Could not parse admin integrations JSON from Redis: {}", e),
         }
     }
+    if let Ok(Some(admin_mmdps_key)) = redis.get_mmdps_api_key_from_redis().await {
+        config.apply_mmdps_api_key_from_admin_redis(admin_mmdps_key);
+        info!("Applied MMDPS API key from Redis (Admin → Integrations)");
+    }
 
     let start_time = SystemTime::now();
 
@@ -63,11 +67,19 @@ async fn main() -> anyhow::Result<()> {
     info!("   WS Port: {}", config.ws_port);
     info!("   HTTP Port: {}", config.http_port);
     info!("   FEED_PROVIDER (label): {}", config.feed_provider);
+    info!(
+        "   Feed freshness thresholds: binance={}s, mmdps={}s; watchdog={}s x{}",
+        config.feed_freshness_binance_max_stale_secs,
+        config.feed_freshness_mmdps_max_stale_secs,
+        config.feed_watchdog_interval_secs,
+        config.feed_watchdog_stale_threshold
+    );
 
     let redis_for_pubsub = redis.clone();
 
     // Connect to NATS for order-engine
-    let nats_url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+    let nats_url =
+        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let nats = match async_nats::connect(&nats_url).await {
         Ok(client) => {
             info!("✅ Connected to NATS at {}", nats_url);
@@ -111,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     let rate_limiter = Arc::new(RateLimiter::new(60, 100));
 
     // Track subscribed symbols dynamically
-    let subscribed_symbols: Arc<tokio::sync::RwLock<std::collections::HashSet<String>>> = 
+    let subscribed_symbols: Arc<tokio::sync::RwLock<std::collections::HashSet<String>>> =
         Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
 
     // Per-group price stream: group_ids that receive ticks (from Redis price:groups)
@@ -136,7 +148,10 @@ async fn main() -> anyhow::Result<()> {
                 let mut g = price_groups_startup.write().await;
                 *g = ids.into_iter().collect();
                 if !g.is_empty() {
-                    tracing::info!("✅ Loaded {} price groups from Redis (startup retry)", g.len());
+                    tracing::info!(
+                        "✅ Loaded {} price groups from Redis (startup retry)",
+                        g.len()
+                    );
                     break;
                 }
             }
@@ -148,7 +163,9 @@ async fn main() -> anyhow::Result<()> {
     let price_groups_periodic = price_groups.clone();
     let redis_periodic = redis.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(PRICE_GROUPS_REFRESH_INTERVAL_SECS));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+            PRICE_GROUPS_REFRESH_INTERVAL_SECS,
+        ));
         interval.tick().await; // first tick completes immediately, skip so we don't double-read at startup
         loop {
             interval.tick().await;
@@ -180,7 +197,10 @@ async fn main() -> anyhow::Result<()> {
                     if let Ok(ids) = redis_for_markup.smembers_price_groups().await {
                         let mut g = price_groups_for_markup.write().await;
                         *g = ids.into_iter().collect();
-                        tracing::debug!("Refreshed price groups from Redis (markup:update): {} groups", g.len());
+                        tracing::debug!(
+                            "Refreshed price groups from Redis (markup:update): {} groups",
+                            g.len()
+                        );
                     }
                     // Next loop pass republishes so markups apply without waiting for feed moves
                     last_feed_pub_markup.write().await.clear();
@@ -198,31 +218,126 @@ async fn main() -> anyhow::Result<()> {
             .filter(|x| !x.is_empty())
             .collect(),
         _ => vec![
-            "BTCUSDT".into(), "ETHUSDT".into(), "BNBUSDT".into(), "SOLUSDT".into(), "XRPUSDT".into(),
-            "DOGEUSDT".into(), "ADAUSDT".into(), "SHIBUSDT".into(), "TONUSDT".into(), "TRXUSDT".into(),
-            "AVAXUSDT".into(), "DOTUSDT".into(), "LINKUSDT".into(), "MATICUSDT".into(), "LTCUSDT".into(),
-            "BCHUSDT".into(), "XMRUSDT".into(), "EOSUSDT".into(), "KASUSDT".into(), "EGLDUSDT".into(),
-            "UNIUSDT".into(), "ATOMUSDT".into(), "ETCUSDT".into(), "XLMUSDT".into(), "NEARUSDT".into(),
+            "BTCUSDT".into(),
+            "ETHUSDT".into(),
+            "BNBUSDT".into(),
+            "SOLUSDT".into(),
+            "XRPUSDT".into(),
+            "DOGEUSDT".into(),
+            "ADAUSDT".into(),
+            "SHIBUSDT".into(),
+            "TONUSDT".into(),
+            "TRXUSDT".into(),
+            "AVAXUSDT".into(),
+            "DOTUSDT".into(),
+            "LINKUSDT".into(),
+            "MATICUSDT".into(),
+            "LTCUSDT".into(),
+            "BCHUSDT".into(),
+            "XMRUSDT".into(),
+            "EOSUSDT".into(),
+            "KASUSDT".into(),
+            "EGLDUSDT".into(),
+            "UNIUSDT".into(),
+            "ATOMUSDT".into(),
+            "ETCUSDT".into(),
+            "XLMUSDT".into(),
+            "NEARUSDT".into(),
             "APTUSDT".into(),
-            "FILUSDT".into(), "INJUSDT".into(), "OPUSDT".into(), "ARBUSDT".into(), "IMXUSDT".into(),
-            "SUIUSDT".into(), "SEIUSDT".into(), "RENDERUSDT".into(), "PEPEUSDT".into(), "WIFUSDT".into(),
-            "FLOKIUSDT".into(), "BONKUSDT".into(), "FETUSDT".into(), "RUNEUSDT".into(), "GRTUSDT".into(),
-            "AAVEUSDT".into(), "ALGOUSDT".into(), "AXSUSDT".into(), "CRVUSDT".into(), "ENSUSDT".into(),
-            "GMTUSDT".into(), "MANAUSDT".into(), "SANDUSDT".into(), "APEUSDT".into(), "LDOUSDT".into(),
-            "MKRUSDT".into(), "SNXUSDT".into(), "STXUSDT".into(), "THETAUSDT".into(), "VETUSDT".into(),
-            "BLURUSDT".into(), "COMPUSDT".into(), "DYDXUSDT".into(), "GALAUSDT".into(), "HBARUSDT".into(),
-            "ICPUSDT".into(), "JASMYUSDT".into(), "KAVAUSDT".into(), "KSMUSDT".into(), "MANTAUSDT".into(),
-            "ORDIUSDT".into(), "PENDLEUSDT".into(), "PYTHUSDT".into(), "QNTUSDT".into(), "RDNTUSDT".into(),
-            "RPLUSDT".into(), "STRKUSDT".into(), "WLDUSDT".into(), "ZECUSDT".into(), "1INCHUSDT".into(),
-            "1000PEPEUSDT".into(), "1000SATSUSDT".into(), "AGIXUSDT".into(), "ARKMUSDT".into(), "ASTRUSDT".into(),
-            "BATUSDT".into(), "CELOUSDT".into(), "CFXUSDT".into(), "CHZUSDT".into(), "COTIUSDT".into(),
-            "DASHUSDT".into(), "DEFIUSDT".into(), "ENJUSDT".into(), "FLOWUSDT".into(), "FTMUSDT".into(),
-            "GASUSDT".into(), "HOTUSDT".into(), "ICXUSDT".into(), "KEYUSDT".into(), "KNCUSDT".into(),
-            "LQTYUSDT".into(), "MAGICUSDT".into(), "MINAUSDT".into(), "NMRUSDT".into(), "OCEANUSDT".into(),
-            "OMGUSDT".into(), "ONEUSDT".into(), "PHBUSDT".into(), "POLUSDT".into(), "PORTALUSDT".into(),
-            "POWRUSDT".into(), "QTUMUSDT".into(), "RSRUSDT".into(), "SKLUSDT".into(), "SSVUSDT".into(),
-            "STORJUSDT".into(), "TIAUSDT".into(), "TLMUSDT".into(), "TOKENUSDT".into(), "WOOUSDT".into(),
-            "XAIUSDT".into(), "YFIUSDT".into(), "ZILUSDT".into(), "ZROUSDT".into(),
+            "FILUSDT".into(),
+            "INJUSDT".into(),
+            "OPUSDT".into(),
+            "ARBUSDT".into(),
+            "IMXUSDT".into(),
+            "SUIUSDT".into(),
+            "SEIUSDT".into(),
+            "RENDERUSDT".into(),
+            "PEPEUSDT".into(),
+            "WIFUSDT".into(),
+            "FLOKIUSDT".into(),
+            "BONKUSDT".into(),
+            "FETUSDT".into(),
+            "RUNEUSDT".into(),
+            "GRTUSDT".into(),
+            "AAVEUSDT".into(),
+            "ALGOUSDT".into(),
+            "AXSUSDT".into(),
+            "CRVUSDT".into(),
+            "ENSUSDT".into(),
+            "GMTUSDT".into(),
+            "MANAUSDT".into(),
+            "SANDUSDT".into(),
+            "APEUSDT".into(),
+            "LDOUSDT".into(),
+            "MKRUSDT".into(),
+            "SNXUSDT".into(),
+            "STXUSDT".into(),
+            "THETAUSDT".into(),
+            "VETUSDT".into(),
+            "BLURUSDT".into(),
+            "COMPUSDT".into(),
+            "DYDXUSDT".into(),
+            "GALAUSDT".into(),
+            "HBARUSDT".into(),
+            "ICPUSDT".into(),
+            "JASMYUSDT".into(),
+            "KAVAUSDT".into(),
+            "KSMUSDT".into(),
+            "MANTAUSDT".into(),
+            "ORDIUSDT".into(),
+            "PENDLEUSDT".into(),
+            "PYTHUSDT".into(),
+            "QNTUSDT".into(),
+            "RDNTUSDT".into(),
+            "RPLUSDT".into(),
+            "STRKUSDT".into(),
+            "WLDUSDT".into(),
+            "ZECUSDT".into(),
+            "1INCHUSDT".into(),
+            "1000PEPEUSDT".into(),
+            "1000SATSUSDT".into(),
+            "AGIXUSDT".into(),
+            "ARKMUSDT".into(),
+            "ASTRUSDT".into(),
+            "BATUSDT".into(),
+            "CELOUSDT".into(),
+            "CFXUSDT".into(),
+            "CHZUSDT".into(),
+            "COTIUSDT".into(),
+            "DASHUSDT".into(),
+            "DEFIUSDT".into(),
+            "ENJUSDT".into(),
+            "FLOWUSDT".into(),
+            "FTMUSDT".into(),
+            "GASUSDT".into(),
+            "HOTUSDT".into(),
+            "ICXUSDT".into(),
+            "KEYUSDT".into(),
+            "KNCUSDT".into(),
+            "LQTYUSDT".into(),
+            "MAGICUSDT".into(),
+            "MINAUSDT".into(),
+            "NMRUSDT".into(),
+            "OCEANUSDT".into(),
+            "OMGUSDT".into(),
+            "ONEUSDT".into(),
+            "PHBUSDT".into(),
+            "POLUSDT".into(),
+            "PORTALUSDT".into(),
+            "POWRUSDT".into(),
+            "QTUMUSDT".into(),
+            "RSRUSDT".into(),
+            "SKLUSDT".into(),
+            "SSVUSDT".into(),
+            "STORJUSDT".into(),
+            "TIAUSDT".into(),
+            "TLMUSDT".into(),
+            "TOKENUSDT".into(),
+            "WOOUSDT".into(),
+            "XAIUSDT".into(),
+            "YFIUSDT".into(),
+            "ZILUSDT".into(),
+            "ZROUSDT".into(),
         ],
     };
     let mut bootstrap_symbols = initial_symbols.clone();
@@ -317,7 +432,10 @@ async fn main() -> anyhow::Result<()> {
                                         validator_c.enable_symbol(sym);
                                     }
                                     Err(e) => {
-                                        debug!("catalog refresh: upstream subscribe {} failed: {}", sym, e);
+                                        debug!(
+                                            "catalog refresh: upstream subscribe {} failed: {}",
+                                            sym, e
+                                        );
                                     }
                                 }
                             }
@@ -349,11 +467,15 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
 
             let symbols_to_broadcast: Vec<String> = {
-                subscribed_symbols_clone.read().await.iter().cloned().collect()
+                subscribed_symbols_clone
+                    .read()
+                    .await
+                    .iter()
+                    .cloned()
+                    .collect()
             };
-            let group_ids: Vec<String> = {
-                price_groups_loop.read().await.iter().cloned().collect()
-            };
+            let group_ids: Vec<String> =
+                { price_groups_loop.read().await.iter().cloned().collect() };
 
             // New/changed price groups → republish all symbols once (markup + NATS subjects change).
             {
@@ -373,7 +495,10 @@ async fn main() -> anyhow::Result<()> {
                         warn!("Failed to subscribe to symbol {}: {}", symbol, e);
                         continue;
                     }
-                    subscribed_symbols_clone.write().await.insert(symbol.clone());
+                    subscribed_symbols_clone
+                        .write()
+                        .await
+                        .insert(symbol.clone());
                     info!("📈 Subscribed to new symbol: {}", symbol);
                 }
 
@@ -432,12 +557,16 @@ async fn main() -> anyhow::Result<()> {
                     {
                         warn!("Failed to publish price to Redis: {}", e);
                     } else {
-                        debug!("✅ Published price tick to Redis for {} ({} groups)", symbol, prices_by_group.len());
+                        debug!(
+                            "✅ Published price tick to Redis for {} ({} groups)",
+                            symbol,
+                            prices_by_group.len()
+                        );
                     }
 
                     if let Some(nats_client) = &nats_for_ticks_clone {
-                        use contracts::{TickEvent, VersionedMessage};
                         use chrono::Utc;
+                        use contracts::{TickEvent, VersionedMessage};
                         if group_ids.is_empty() {
                             // No price groups: publish once per symbol so gateway-ws (ticks.>) can forward to frontend
                             let tick_event = TickEvent {
@@ -450,7 +579,8 @@ async fn main() -> anyhow::Result<()> {
                             let subject = format!("ticks.{}", symbol);
                             if let Ok(msg) = VersionedMessage::new("tick", &tick_event) {
                                 if let Ok(payload) = serde_json::to_vec(&msg) {
-                                    let _ = nats_client.publish(subject.clone(), payload.into()).await;
+                                    let _ =
+                                        nats_client.publish(subject.clone(), payload.into()).await;
                                 }
                             }
                         } else {
@@ -465,7 +595,9 @@ async fn main() -> anyhow::Result<()> {
                                 let subject = format!("ticks.{}.{}", symbol, group_id);
                                 if let Ok(msg) = VersionedMessage::new("tick", &tick_event) {
                                     if let Ok(payload) = serde_json::to_vec(&msg) {
-                                        let _ = nats_client.publish(subject.clone(), payload.into()).await;
+                                        let _ = nats_client
+                                            .publish(subject.clone(), payload.into())
+                                            .await;
                                     }
                                 }
                             }
@@ -479,6 +611,53 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // Watchdog: detect stale upstream ticks and force upstream resync/reconnect.
+    {
+        let feed_watchdog = feed.clone();
+        let watchdog_interval_secs = config.feed_watchdog_interval_secs.max(5);
+        let binance_max = config.feed_freshness_binance_max_stale_secs;
+        let mmdps_max = config.feed_freshness_mmdps_max_stale_secs;
+        let stale_threshold = config.feed_watchdog_stale_threshold.max(1);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(watchdog_interval_secs));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await;
+            let mut stale_count: u32 = 0;
+            loop {
+                interval.tick().await;
+                let d = feed_watchdog.freshness();
+                let binance_stale = d
+                    .binance_tick_age_secs
+                    .map(|age| age > binance_max)
+                    .unwrap_or(true);
+                let mmdps_stale = d
+                    .mmdps_tick_age_secs
+                    .map(|age| age > mmdps_max)
+                    .unwrap_or(false);
+                if binance_stale || mmdps_stale {
+                    stale_count = stale_count.saturating_add(1);
+                    warn!(
+                        "Feed watchdog: stale detected {}/{} (binance_age={:?}s mmdps_age={:?}s), thresholds=({}s, {}s)",
+                        stale_count,
+                        stale_threshold,
+                        d.binance_tick_age_secs,
+                        d.mmdps_tick_age_secs,
+                        binance_max,
+                        mmdps_max
+                    );
+                    if stale_count >= stale_threshold {
+                        warn!("Feed watchdog: forcing upstream resync/reconnect");
+                        feed_watchdog.force_resync_upstreams();
+                        stale_count = 0;
+                    }
+                } else {
+                    stale_count = 0;
+                }
+            }
+        });
+    }
 
     // Start WebSocket server
     let ws_addr = format!("0.0.0.0:{}", config.ws_port);
@@ -521,6 +700,8 @@ async fn main() -> anyhow::Result<()> {
         start_time,
         config.mmdps_api_key.clone(),
         config.mmdps_history_base.clone(),
+        config.feed_freshness_binance_max_stale_secs,
+        config.feed_freshness_mmdps_max_stale_secs,
     );
 
     // Start HTTP server
@@ -535,4 +716,3 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-

@@ -16,22 +16,32 @@ export interface DataProvidersConfig {
   providers: DataProviderEntry[]
 }
 
+/** GET /data-providers — secret is never returned; only this flag. */
+export interface DataProvidersApiResponse extends DataProvidersConfig {
+  mmdpsApiKeyConfigured?: boolean
+}
+
 export interface SaveDataProvidersResponse {
   success: boolean
-  config: DataProvidersConfig
+  config: DataProvidersConfig & { mmdpsApiKeyConfigured?: boolean }
   message?: string
 }
 
-export async function getDataProvidersConfig(): Promise<DataProvidersConfig> {
-  return http<DataProvidersConfig>('/api/admin/settings/data-providers', { method: 'GET' })
+export async function getDataProvidersConfig(): Promise<DataProvidersApiResponse> {
+  return http<DataProvidersApiResponse>('/api/admin/settings/data-providers', { method: 'GET' })
 }
 
 export async function updateDataProvidersConfig(
-  payload: DataProvidersConfig
+  payload: DataProvidersConfig,
+  options?: { mmdpsApiKey?: string }
 ): Promise<SaveDataProvidersResponse> {
+  const body: Record<string, unknown> = { ...payload }
+  if (options && 'mmdpsApiKey' in options) {
+    body.mmdpsApiKey = options.mmdpsApiKey ?? ''
+  }
   return http<SaveDataProvidersResponse>('/api/admin/settings/data-providers', {
     method: 'PUT',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   })
 }
 

@@ -15,7 +15,7 @@ import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { cn } from '@/shared/utils'
 import { formatDistanceToNow } from 'date-fns'
-import { useUpdateGroupPriceProfile, useUpdateGroup } from '../hooks/useGroups'
+import { useUpdateGroupPriceProfile, useUpdateGroupLeverageProfile, useUpdateGroup } from '../hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
 import { Checkbox } from '@/shared/ui/Checkbox'
 import { setGroupTags } from '../api/groups.api'
@@ -23,10 +23,12 @@ import { setGroupTags } from '../api/groups.api'
 interface GroupsTableProps {
   groups: UserGroup[]
   availablePriceProfiles?: ProfileRef[]
+  /** Leverage profile options (same source as Admin → Leverage profiles) */
+  availableLeverageProfiles?: ProfileRef[]
   /** Callback to update group in parent state (same pattern as Admin Users page) so dropdown updates immediately */
   onGroupUpdate?: (
     groupId: string,
-    updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'tagIds'>>
+    updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'leverageProfileId' | 'leverageProfile' | 'tagIds'>>
   ) => void
   onRefresh?: () => void
   /** All tags for the assign-tags dropdown */
@@ -39,6 +41,7 @@ const NONE_PROFILE_VALUE = '__none__'
 export function GroupsTable({
   groups,
   availablePriceProfiles = [],
+  availableLeverageProfiles = [],
   onGroupUpdate,
   onRefresh,
   allTags = [],
@@ -50,6 +53,7 @@ export function GroupsTable({
   const canPriceProfile = useCanAccess('groups:price_profile')
   const canTags = useCanAccess('groups:tags')
   const updatePriceProfile = useUpdateGroupPriceProfile()
+  const updateLeverageProfile = useUpdateGroupLeverageProfile()
   const updateGroup = useUpdateGroup()
   const [viewingGroup, setViewingGroup] = useState<UserGroup | null>(null)
   const [editingGroup, setEditingGroup] = useState<UserGroup | null>(null)
@@ -265,6 +269,67 @@ export function GroupsTable({
         )
       },
     },
+    {
+      id: 'leverageProfile',
+      header: 'Leverage profile',
+      cell: ({ row }) => {
+        const group = row.original
+        const rawId = group.leverageProfileId ?? group.leverageProfile?.id
+        const value = rawId != null && rawId !== '' ? String(rawId).toLowerCase() : NONE_PROFILE_VALUE
+        const isUpdating = updateLeverageProfile.isPending && updateLeverageProfile.variables?.groupId === group.id
+
+        const handleChange = (newValue: string) => {
+          if (!canEditGroups) return
+          const leverageProfileId = newValue === NONE_PROFILE_VALUE ? null : newValue
+          const profile =
+            leverageProfileId != null
+              ? availableLeverageProfiles.find((p) => String(p.id).toLowerCase() === leverageProfileId.toLowerCase())
+              : null
+
+          updateLeverageProfile.mutate(
+            { groupId: group.id, leverageProfileId },
+            {
+              onSuccess: () => {
+                onGroupUpdate?.(group.id, {
+                  leverageProfileId: leverageProfileId ?? undefined,
+                  leverageProfile: profile ? { id: profile.id, name: profile.name } : null,
+                })
+                onRefresh?.()
+              },
+              onError: () => {
+                onRefresh?.()
+              },
+            }
+          )
+        }
+
+        return (
+          <div onClick={(e) => e.stopPropagation()} className="w-[140px]">
+            <Select
+              value={value}
+              onValueChange={handleChange}
+              disabled={isUpdating || !canEditGroups}
+            >
+              <SelectTrigger
+                className="h-8 text-sm w-full"
+                title={!canEditGroups ? 'Requires edit groups permission' : 'Default for all symbols unless overridden per symbol'}
+              >
+                {isUpdating && <Spinner className="h-3.5 w-3.5 mr-2 shrink-0" />}
+                <SelectValue placeholder="None" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE_PROFILE_VALUE}>None</SelectItem>
+                {availableLeverageProfiles.map((p) => (
+                  <SelectItem key={p.id} value={String(p.id).toLowerCase()}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )
+      },
+    },
     ...(canTags
       ? [
           {
@@ -384,7 +449,7 @@ export function GroupsTable({
         )
       },
     },
-  ], [canTags, openTagsGroupId, updatingTagsGroupId, canEditGroups, canDeleteGroups, canSymbolSettings, canPriceProfile, groups, availablePriceProfiles, allTags, updateGroup])
+  ], [canTags, openTagsGroupId, updatingTagsGroupId, canEditGroups, canDeleteGroups, canSymbolSettings, canPriceProfile, groups, availablePriceProfiles, availableLeverageProfiles, allTags, updateGroup, updatePriceProfile, updateLeverageProfile, onGroupUpdate, onRefresh])
 
   const openTagsGroup = openTagsGroupId ? groups.find((g) => g.id === openTagsGroupId) : null
   const openTagsTagIds = openTagsGroup?.tagIds ?? []

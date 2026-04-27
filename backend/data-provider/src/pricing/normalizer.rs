@@ -50,4 +50,3 @@ pub fn validate_spread(bid: Decimal, ask: Decimal, max_spread_percent: Decimal) 
 
     spread_percent <= max_spread_percent
 }
-

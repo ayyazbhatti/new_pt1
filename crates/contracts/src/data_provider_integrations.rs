@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 pub const REDIS_KEY_ADMIN_INTEGRATIONS: &str = "data_provider:admin_integrations";
+/// Plaintext key for data-provider (same value as admin UI / optional env fallback).
+pub const REDIS_KEY_DATA_PROVIDER_MMDPS_API_KEY: &str = "data_provider:mmdps_api_key";
 pub const REDIS_CHANNEL_INTEGRATIONS_UPDATED: &str = "data_provider:integrations_updated";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

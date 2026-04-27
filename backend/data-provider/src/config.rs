@@ -28,6 +28,14 @@ pub struct Config {
     pub symbol_catalog_refresh_secs: u64,
     /// Safety cap for catalog-driven MMDPS symbols (after Binance-style filter).
     pub catalog_mmdps_max_symbols: usize,
+    /// Max allowed age for Binance ticks before health degrades.
+    pub feed_freshness_binance_max_stale_secs: u64,
+    /// Max allowed age for MMDPS ticks before health degrades.
+    pub feed_freshness_mmdps_max_stale_secs: u64,
+    /// Background watchdog interval (seconds) for auto-resync checks.
+    pub feed_watchdog_interval_secs: u64,
+    /// Consecutive stale checks before triggering forced resync.
+    pub feed_watchdog_stale_threshold: u32,
 }
 
 impl Config {
@@ -52,14 +60,12 @@ impl Config {
         let mmdps_auto_route = mmdps_api_key.is_some() && mmdps_auto_route_env;
 
         // Legacy: key + auto off + empty env list → default EURUSD,GBPUSD as explicit MMDPS set.
-        let mmdps_symbols: HashSet<String> = if mmdps_api_key.is_some()
-            && !mmdps_auto_route
-            && mmdps_symbols_from_env.is_empty()
-        {
-            ["EURUSD", "GBPUSD"].into_iter().map(String::from).collect()
-        } else {
-            mmdps_symbols_from_env
-        };
+        let mmdps_symbols: HashSet<String> =
+            if mmdps_api_key.is_some() && !mmdps_auto_route && mmdps_symbols_from_env.is_empty() {
+                ["EURUSD", "GBPUSD"].into_iter().map(String::from).collect()
+            } else {
+                mmdps_symbols_from_env
+            };
 
         let symbols_database_url = env::var("SYMBOLS_DATABASE_URL")
             .ok()
@@ -76,6 +82,27 @@ impl Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(25_000_usize);
+
+        let feed_freshness_binance_max_stale_secs =
+            env::var("FEED_FRESHNESS_BINANCE_MAX_STALE_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(120);
+
+        let feed_freshness_mmdps_max_stale_secs = env::var("FEED_FRESHNESS_MMDPS_MAX_STALE_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(180);
+
+        let feed_watchdog_interval_secs = env::var("FEED_WATCHDOG_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(20);
+
+        let feed_watchdog_stale_threshold = env::var("FEED_WATCHDOG_STALE_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3);
 
         Ok(Config {
             redis_url: env::var("REDIS_URL")
@@ -108,6 +135,10 @@ impl Config {
             symbols_database_url,
             symbol_catalog_refresh_secs,
             catalog_mmdps_max_symbols,
+            feed_freshness_binance_max_stale_secs,
+            feed_freshness_mmdps_max_stale_secs,
+            feed_watchdog_interval_secs,
+            feed_watchdog_stale_threshold,
         })
     }
 
@@ -134,5 +165,19 @@ impl Config {
                 }
             }
         }
+    }
+
+    /// Override `MMDPS_API_KEY` from Redis mirror (Settings → Integrations).
+    pub fn apply_mmdps_api_key_from_admin_redis(&mut self, key: String) {
+        let t = key.trim();
+        if t.is_empty() {
+            return;
+        }
+        self.mmdps_api_key = Some(t.to_string());
+        let mmdps_auto_route_env = match std::env::var("MMDPS_AUTO_ROUTE") {
+            Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => false,
+            _ => true,
+        };
+        self.mmdps_auto_route = self.mmdps_api_key.is_some() && mmdps_auto_route_env;
     }
 }

@@ -112,20 +112,23 @@ impl PositionEventHandler {
         let entry_price = event.avg_price;
         let mark_price = event.avg_price; // Will be updated by price ticks
 
-        // Calculate leverage (default to 100 if not available)
-        // This should come from the order/position data, but for now use default
-        let leverage = 100i32;
+        let leverage = event.leverage;
+        if leverage <= rust_decimal::Decimal::ZERO {
+            return Err(anyhow::anyhow!(
+                "Position {} update missing valid leverage in event",
+                event.position_id
+            ));
+        }
 
-        // Calculate margin_used: (size * entry_price) / leverage
-        let margin_used = (event.size * entry_price) / rust_decimal::Decimal::from(leverage);
+        // margin_used: (size * entry_price) / leverage
+        let margin_used = (event.size * entry_price) / leverage;
 
-        // Calculate liquidation price (simplified - should use proper risk calculation)
-        // For LONG: liquidation = entry_price * (1 - 1/leverage)
-        // For SHORT: liquidation = entry_price * (1 + 1/leverage)
+        // Liquidation (simplified): LONG entry * (1 - 1/L), SHORT entry * (1 + 1/L)
+        let one = rust_decimal::Decimal::ONE;
         let liquidation_price = if matches!(event.side, PositionSide::Long) {
-            entry_price * (rust_decimal::Decimal::ONE - rust_decimal::Decimal::ONE / rust_decimal::Decimal::from(leverage))
+            entry_price * (one - one / leverage)
         } else {
-            entry_price * (rust_decimal::Decimal::ONE + rust_decimal::Decimal::ONE / rust_decimal::Decimal::from(leverage))
+            entry_price * (one + one / leverage)
         };
 
         // Calculate PnL
@@ -166,7 +169,7 @@ impl PositionEventHandler {
         .bind(event.size)
         .bind(entry_price)
         .bind(mark_price)
-        .bind(leverage)
+        .bind(leverage) // NUMERIC in DB
         .bind(margin_used)
         .bind(liquidation_price)
         .bind(pnl)
@@ -226,7 +229,7 @@ impl PositionEventHandler {
         .bind(event.size)
         .bind(entry_price)
         .bind(mark_price)
-        .bind(leverage)
+        .bind(leverage) // NUMERIC in DB
         .bind(margin_used)
         .bind(liquidation_price)
         .bind(pnl)

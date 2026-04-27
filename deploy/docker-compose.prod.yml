@@ -113,13 +113,17 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.backend
     image: newpt-auth:latest
+    env_file: .env.production
     command: ["/app/data-provider"]
     environment:
       WS_PORT: 9003
       HTTP_PORT: 9004
       REDIS_URL: redis://redis:6379
       NATS_URL: nats://nats:4222
+      # Same DB as auth-service so MMDPS symbol catalog merge (`symbols` table) works in production.
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/newpt
     depends_on:
+      postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       nats: { condition: service_started }
     restart: unless-stopped
@@ -182,6 +186,7 @@ services:
     depends_on:
       - auth
       - ws-gateway
+      - data-provider
     restart: unless-stopped
 
 volumes:

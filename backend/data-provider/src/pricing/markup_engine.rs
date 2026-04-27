@@ -1,6 +1,6 @@
 use crate::cache::redis_client::{MarkupConfig, RedisClient};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
+use rust_decimal::Decimal;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
@@ -52,4 +52,3 @@ fn decimal_from_f64(f: f64) -> Option<Decimal> {
     use rust_decimal::prelude::*;
     Decimal::from_f64(f)
 }
-

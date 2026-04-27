@@ -9,6 +9,7 @@ import {
   updateSymbol,
   deleteSymbol,
   toggleSymbolEnabled,
+  bulkToggleSymbolsEnabled,
   syncMmdpsSymbols,
   CreateSymbolPayload,
   UpdateSymbolPayload,
@@ -166,6 +167,29 @@ export function useToggleSymbolEnabled() {
     },
     onError: (error: any) => {
       const message = error?.response?.data?.error?.message || error?.message || 'Failed to toggle symbol'
+      toast.error(message)
+    },
+  })
+}
+
+export function useBulkToggleSymbolsEnabled() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ ids, isEnabled }: { ids: string[]; isEnabled: boolean }) =>
+      bulkToggleSymbolsEnabled(ids, isEnabled),
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminLists() })
+      variables.ids.forEach((id) => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.detail(id) })
+      })
+      toast.success(
+        `${data.updated} symbol${data.updated === 1 ? '' : 's'} ${variables.isEnabled ? 'enabled' : 'disabled'}`
+      )
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.error?.message || error?.message || 'Bulk update failed'
       toast.error(message)
     },
   })

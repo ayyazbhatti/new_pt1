@@ -1,3 +1,22 @@
+import { normalizeSymbolKey } from '@/shared/utils/symbolKeyNormalize'
+
+/**
+ * ws-gateway only accepts alphanumeric symbols. MMDPS rows often use `EUR/USD` — normalize to `EURUSD`
+ * so subscribe succeeds and ticks match `notifySubscribers` / PriceCell keys.
+ */
+function normalizeWsSubscribeSymbols(symbols: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of symbols) {
+    if (!raw?.trim()) continue
+    const k = normalizeSymbolKey(raw)
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    out.push(k)
+  }
+  return out
+}
+
 /**
  * Gateway WebSocket URL (per-group marked-up prices via JWT group_id).
  * Use this when the user is authenticated so they receive their group's markup.
@@ -69,7 +88,7 @@ function priceWsUrlsMatch(openWsUrl: string, targetUrl: string): boolean {
 /** Interval (ms) for sending ping to gateway to keep connection from being marked stale (server timeout default 300s). */
 const PING_INTERVAL_MS = 60_000
 
-/** HTTP base URL for data-provider (e.g. http://localhost:3001) for GET /prices snapshot. Empty if using gateway. */
+/** HTTP base URL for data-provider (e.g. http://localhost:9004) for GET /prices and MMDPS `GET /feed/history`. */
 export function getDataProviderPricesBaseUrl(): string {
   const env = typeof import.meta !== 'undefined' && (import.meta as any).env
   const httpUrl = env?.VITE_DATA_PROVIDER_HTTP_URL
@@ -86,6 +105,21 @@ export function getDataProviderPricesBaseUrl(): string {
     } catch {
       return 'http://localhost:3001'
     }
+  }
+  // Same-origin path: production nginx and Vite dev proxy `/dp` → data-provider HTTP (see deploy/nginx-default.conf).
+  const pathRaw = env?.VITE_DATA_PROVIDER_HTTP_PATH
+  if (pathRaw === '') return ''
+  const subpath = (
+    typeof pathRaw === 'string' && pathRaw.trim() !== '' ? pathRaw.trim() : '/dp'
+  ).replace(/\/+$/, '')
+  if (
+    typeof globalThis !== 'undefined' &&
+    'location' in globalThis &&
+    globalThis.location &&
+    typeof (globalThis.location as Location).origin === 'string'
+  ) {
+    const origin = (globalThis.location as Location).origin
+    return `${origin}${subpath.startsWith('/') ? subpath : `/${subpath}`}`
   }
   return ''
 }
@@ -205,7 +239,7 @@ class PriceStreamClient {
           void this.sendGatewayAuthWithFreshToken()
         } else if (!gatewayMode) {
           // Re-subscribe all symbols so we get ticks after reconnect (server-side connection stays in sync)
-          const all = [...new Set([...this.subscribedSymbols, ...this.pendingSymbols])]
+          const all = normalizeWsSubscribeSymbols([...new Set([...this.subscribedSymbols, ...this.pendingSymbols])])
           this.pendingSymbols = []
           if (all.length > 0) this.sendSubscribe(all)
         }
@@ -216,9 +250,9 @@ class PriceStreamClient {
           if (data.type === 'auth_success') {
             this.authenticated = true
             if (this.pendingSymbols.length > 0) {
-              const batch = [...this.pendingSymbols]
+              const batch = normalizeWsSubscribeSymbols([...this.pendingSymbols])
               this.pendingSymbols = []
-              this.sendSubscribe(batch)
+              if (batch.length > 0) this.sendSubscribe(batch)
             }
             if (isGatewayUrl(this.getEffectiveUrl())) {
               this.startPingLoop()
@@ -299,17 +333,17 @@ class PriceStreamClient {
       : JSON.stringify({ action: 'subscribe', symbols })
     if (this.ws?.readyState === WebSocket.OPEN && (gatewayMode ? this.authenticated : true)) {
       this.ws.send(payload)
-      symbols.forEach((s) => this.subscribedSymbols.add(s.toUpperCase()))
+      symbols.forEach((s) => this.subscribedSymbols.add(s))
     } else {
       this.pendingSymbols = [...new Set([...this.pendingSymbols, ...symbols])]
     }
   }
 
   subscribe(symbols: string[]): void {
-    const upper = symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0)
-    if (upper.length === 0) return
+    const normalized = normalizeWsSubscribeSymbols(symbols)
+    if (normalized.length === 0) return
     this.connect()
-    this.sendSubscribe(upper)
+    this.sendSubscribe(normalized)
   }
 
   /**
@@ -317,14 +351,14 @@ class PriceStreamClient {
    * Safe to call when the symbol list is unchanged (idempotent on server).
    */
   resyncSymbolSubscriptions(symbols: string[]): void {
-    const upper = symbols.map((s) => s.toUpperCase().trim()).filter((s) => s.length > 0)
-    if (upper.length === 0) return
+    const normalized = normalizeWsSubscribeSymbols(symbols)
+    if (normalized.length === 0) return
     this.connect()
-    this.sendSubscribe(upper)
+    this.sendSubscribe(normalized)
   }
 
   unsubscribe(symbols: string[]): void {
-    symbols.forEach((s) => this.subscribedSymbols.delete(s.toUpperCase()))
+    symbols.forEach((s) => this.subscribedSymbols.delete(normalizeSymbolKey(s)))
   }
 
   onTick(fn: TickListener): () => void {

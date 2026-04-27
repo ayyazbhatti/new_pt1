@@ -27,6 +27,15 @@ pub struct FeedRouterDiagnostics {
     pub mmdps_tracked_symbols: usize,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct FeedFreshnessDiagnostics {
+    pub now_ms: u64,
+    pub binance_last_tick_ts: Option<u64>,
+    pub binance_tick_age_secs: Option<u64>,
+    pub mmdps_last_tick_ts: Option<u64>,
+    pub mmdps_tick_age_secs: Option<u64>,
+}
+
 impl FeedRouter {
     pub fn new(
         binance: Arc<BinanceFeed>,
@@ -34,8 +43,10 @@ impl FeedRouter {
         mmdps_auto_route: bool,
         mmdps_symbols: HashSet<String>,
     ) -> Self {
-        let upper_mmdps: HashSet<String> =
-            mmdps_symbols.into_iter().map(|s| s.to_uppercase()).collect();
+        let upper_mmdps: HashSet<String> = mmdps_symbols
+            .into_iter()
+            .map(|s| s.to_uppercase())
+            .collect();
         Self {
             binance,
             mmdps,
@@ -68,16 +79,32 @@ impl FeedRouter {
         }
     }
 
+    pub fn freshness(&self) -> FeedFreshnessDiagnostics {
+        let now_ms = current_time_ms();
+        let binance_last_tick_ts = self.binance.latest_tick_ts();
+        let mmdps_last_tick_ts = self.mmdps.as_ref().and_then(|m| m.latest_tick_ts());
+        FeedFreshnessDiagnostics {
+            now_ms,
+            binance_tick_age_secs: binance_last_tick_ts
+                .map(|ts| (now_ms.saturating_sub(ts)) / 1000),
+            binance_last_tick_ts,
+            mmdps_tick_age_secs: mmdps_last_tick_ts.map(|ts| (now_ms.saturating_sub(ts)) / 1000),
+            mmdps_last_tick_ts,
+        }
+    }
+
+    pub fn force_resync_upstreams(&self) {
+        self.binance.force_reconnect();
+        if let Some(mmdps) = &self.mmdps {
+            mmdps.force_resync();
+        }
+    }
+
     #[inline]
     pub async fn get_price(&self, symbol: &str) -> Option<PriceState> {
         let u = symbol.to_uppercase();
         let mmdps_on = self.mmdps.is_some();
-        match resolve_feed(
-            &u,
-            mmdps_on,
-            self.mmdps_auto_route,
-            &self.mmdps_symbols,
-        ) {
+        match resolve_feed(&u, mmdps_on, self.mmdps_auto_route, &self.mmdps_symbols) {
             FeedKind::Binance => self.binance.get_price(&u).await,
             FeedKind::Mmdps => {
                 let m = self.mmdps.as_ref()?;
@@ -90,12 +117,7 @@ impl FeedRouter {
     pub async fn subscribe_symbol(&self, symbol: &str) -> Result<()> {
         let u = symbol.to_uppercase();
         let mmdps_on = self.mmdps.is_some();
-        match resolve_feed(
-            &u,
-            mmdps_on,
-            self.mmdps_auto_route,
-            &self.mmdps_symbols,
-        ) {
+        match resolve_feed(&u, mmdps_on, self.mmdps_auto_route, &self.mmdps_symbols) {
             FeedKind::Binance => self.binance.subscribe_symbol(&u).await,
             FeedKind::Mmdps => {
                 let m = self.mmdps.as_ref().context("MMDPS feed not initialized")?;
@@ -103,4 +125,12 @@ impl FeedRouter {
             }
         }
     }
+}
+
+fn current_time_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

@@ -1,7 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rust_decimal::Decimal;
 use std::str::FromStr;
-use uuid::Uuid;
 use redis::aio::ConnectionManager;
 use crate::engine::cache::normalize_symbol;
 use crate::models::OrderCommand;
@@ -88,16 +87,48 @@ impl Validator {
         
         if let Some(bal_json) = balance_json {
             let balance: serde_json::Value = serde_json::from_str(&bal_json)?;
+            let free_margin: Decimal = balance
+                .get("free_margin")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Decimal::from_str_exact(s).ok())
+                .or_else(|| {
+                    balance
+                        .get("available")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                })
+                .unwrap_or(Decimal::ZERO);
+
             let available: Decimal = balance
                 .get("available")
                 .and_then(|v| v.as_str())
                 .and_then(|s| Decimal::from_str_exact(s).ok())
                 .unwrap_or(Decimal::ZERO);
-            
-            // For market orders, estimate required margin
-            let estimated_margin = cmd.size * Decimal::from(100); // Simplified
-            if available < estimated_margin {
-                return Err(anyhow::anyhow!("Insufficient balance"));
+
+            let fill_price = match cmd.order_type {
+                contracts::enums::OrderType::Limit => cmd.limit_price,
+                contracts::enums::OrderType::Market => cmd.market_price_hint,
+            };
+
+            if let Some(price) = fill_price {
+                let notional = cmd.size * price;
+                let Some(eff) = crate::leverage::effective_leverage(
+                    notional,
+                    cmd.min_leverage,
+                    cmd.max_leverage,
+                    cmd.leverage_tiers.as_deref(),
+                ) else {
+                    return Err(anyhow::anyhow!(
+                        "Leverage could not be resolved: require user min/max, symbol tiers, and a matching notional band"
+                    ));
+                };
+                if eff <= Decimal::ZERO {
+                    return Err(anyhow::anyhow!("Invalid effective leverage"));
+                }
+                let required_margin = notional / eff;
+                if free_margin < required_margin && available < required_margin {
+                    return Err(anyhow::anyhow!("Insufficient balance"));
+                }
             }
         }
         

@@ -126,11 +126,12 @@ async fn persist_order(db: &PgPool, event: &OrderUpdatedEvent, redis: &redis::Cl
 async fn persist_position(db: &PgPool, event: &PositionUpdatedEvent) -> Result<(), Box<dyn std::error::Error>> {
     sqlx::query(
         r#"
-        INSERT INTO positions (id, user_id, symbol, side, size, avg_price, unrealized_pnl, realized_pnl, status, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO positions (id, user_id, symbol, side, size, avg_price, leverage, unrealized_pnl, realized_pnl, status, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         ON CONFLICT (id) DO UPDATE SET
             size = EXCLUDED.size,
             avg_price = EXCLUDED.avg_price,
+            leverage = EXCLUDED.leverage,
             unrealized_pnl = EXCLUDED.unrealized_pnl,
             realized_pnl = EXCLUDED.realized_pnl,
             status = EXCLUDED.status,
@@ -143,6 +144,7 @@ async fn persist_position(db: &PgPool, event: &PositionUpdatedEvent) -> Result<(
     .bind(format!("{:?}", event.side))
     .bind(event.size.to_string())
     .bind(event.avg_price.to_string())
+    .bind(event.leverage.to_string())
     .bind(event.unrealized_pnl.to_string())
     .bind(event.realized_pnl.to_string())
     .bind(format!("{:?}", event.status))

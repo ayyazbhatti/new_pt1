@@ -43,8 +43,11 @@ redis.call('HSET', pos_key, 'entry_price', new_entry)
 redis.call('HSET', pos_key, 'avg_price', new_entry)
 redis.call('HSET', pos_key, 'updated_at', timestamp_ms)
 
--- Recalculate margin: (size * entry_price) / leverage
-local leverage = tonumber(redis.call('HGET', pos_key, 'leverage') or '100')
+-- Recalculate margin: (size * entry_price) / leverage (no default leverage)
+local leverage = tonumber(redis.call('HGET', pos_key, 'leverage'))
+if not leverage or leverage <= 0 then
+    return '{"error":"position_missing_leverage"}'
+end
 local margin = (tonumber(new_size) * tonumber(new_entry)) / leverage
 redis.call('HSET', pos_key, 'margin', tostring(margin))
 

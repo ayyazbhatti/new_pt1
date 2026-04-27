@@ -8,7 +8,7 @@ import { cn } from '@/shared/utils'
 import { useTerminalStore } from '../store'
 import { toast } from '@/shared/components/common'
 import { SinglePriceDisplay } from './SinglePriceDisplay'
-import { placeOrder, PlaceOrderRequest } from '../api/orders.api'
+import { placeOrder, PlaceOrderRequest, estimateOrderMargin } from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useQuery } from '@tanstack/react-query'
 import { me, getSymbolLeverage, getEffectiveLeverage } from '@/shared/api/auth.api'
@@ -36,6 +36,9 @@ const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
 
 /** When true, only Units size mode is shown; Lots and Pip Position are hidden (set to false to show them again). */
 const SHOW_ONLY_UNITS_SIZE_MODE = true
+const WS_WARNING_INITIAL_GRACE_MS = 5000
+const WS_WARNING_STABLE_MS = 2000
+type WsConnectionState = 'disconnected' | 'connecting' | 'connected' | 'authenticated'
 
 interface TradingPanelState {
   orderType: string
@@ -400,9 +403,35 @@ export function RightTradingPanel() {
     setSizeMode(newMode)
   }, [sizeMode, sizeCalculations, selectedSymbol, getSymbolForCalculations])
 
-  // Calculate costs based on size and selected symbol
-  // Size is always stored in the current currency mode (base or quote)
-  // We need to convert to base currency for calculations
+  /** Server-side margin (same as place_order). Uses Redis execution price + risk::effective_leverage. */
+  const canEstimateServerMargin =
+    !!selectedSymbol &&
+    sizeCalculations.currentUnits > 0 &&
+    (orderType === 'market' || (orderType === 'limit' && limitPrice.trim() !== ''))
+
+  const { data: serverMarginEstimate, isFetching: isEstimatingServerMargin } = useQuery({
+    queryKey: [
+      'v1',
+      'orderMarginEstimate',
+      selectedSymbol?.code,
+      sizeCalculations.currentUnits,
+      orderType,
+      limitPrice,
+    ],
+    queryFn: () =>
+      estimateOrderMargin({
+        symbol: selectedSymbol!.code,
+        // Buy uses ask for market (same as place_order); show consistent with long preview
+        side: 'BUY',
+        orderType: orderType === 'limit' ? 'LIMIT' : 'MARKET',
+        size: String(sizeCalculations.currentUnits),
+        limitPrice: orderType === 'limit' && limitPrice.trim() ? limitPrice : undefined,
+      }),
+    enabled: canEstimateServerMargin,
+    staleTime: 2000,
+  })
+
+  // Calculate costs from the same base-units path as place order (units / lots / pip), not raw `size` only
   const costBreakdown = useMemo(() => {
     if (!selectedSymbol) {
       return {
@@ -416,24 +445,14 @@ export function RightTradingPanel() {
       }
     }
 
-    const sizeNum = parseFloat(size) || 0
-    const price = selectedSymbol.numericPrice || 0
-    const askPrice = selectedSymbol.numericPrice2 || price
-    
-    // Convert size to base currency for calculations
-    let baseSize = sizeNum
-    let quoteValue = sizeNum * price
-    
-    if (currency === selectedSymbol.quoteCurrency && price > 0) {
-      // Size is in quote currency, convert to base
-      baseSize = sizeNum / price
-      quoteValue = sizeNum
-    } else {
-      // Size is in base currency
-      quoteValue = sizeNum * price
-    }
-    
-    const spread = Math.abs(askPrice - price)
+    const bid = selectedSymbol.numericPrice || 0
+    const ask = selectedSymbol.numericPrice2 || bid
+    const refPrice = ask !== bid ? (bid + ask) / 2 : bid
+
+    const baseSize = sizeCalculations.currentUnits
+    const quoteValue = refPrice > 0 ? baseSize * refPrice : 0
+
+    const spread = Math.abs(ask - bid)
     const fees = 0
     const effectiveLeverage = getEffectiveLeverage(
       quoteValue,
@@ -454,17 +473,23 @@ export function RightTradingPanel() {
       baseSize: baseSize.toFixed(8),
       quoteValue: quoteValue.toFixed(2),
     }
-  }, [size, selectedSymbol, currency, meData?.minLeverage, meData?.maxLeverage, symbolLeverage?.tiers])
+  }, [
+    selectedSymbol,
+    sizeCalculations.currentUnits,
+    meData?.minLeverage,
+    meData?.maxLeverage,
+    symbolLeverage?.tiers,
+  ])
 
-  // Current order notional (exposure) for "active tier" indicator in Leverage card
+  // Current order notional (exposure) for "active tier" indicator in Leverage card (matches cost breakdown)
   const currentOrderNotional = useMemo(() => {
     if (!selectedSymbol) return 0
-    const sizeNum = parseFloat(size) || 0
-    const price = selectedSymbol.numericPrice || 0
-    if (price <= 0) return 0
-    if (currency === selectedSymbol.quoteCurrency) return sizeNum
-    return sizeNum * price
-  }, [size, currency, selectedSymbol])
+    const bid = selectedSymbol.numericPrice || 0
+    const ask = selectedSymbol.numericPrice2 || bid
+    const refPrice = ask !== bid ? (bid + ask) / 2 : bid
+    if (refPrice <= 0) return 0
+    return sizeCalculations.currentUnits * refPrice
+  }, [selectedSymbol, sizeCalculations.currentUnits])
 
   // Effective leverage for current order (used to show "active" on user min/max when clamped)
   const effectiveLeverageForCard = useMemo(
@@ -476,8 +501,17 @@ export function RightTradingPanel() {
     ((meData.minLeverage != null && effectiveLeverageForCard === meData.minLeverage) ||
       (meData.maxLeverage != null && effectiveLeverageForCard === meData.maxLeverage))
 
+  const estMarginDollars = (() => {
+    const s = serverMarginEstimate?.requiredMargin
+    if (s != null && s !== '') {
+      const n = parseFloat(s)
+      if (Number.isFinite(n)) return n
+    }
+    return parseFloat(costBreakdown.margin) || 0
+  })()
+
   // Block Buy/Sell when estimated margin exceeds free margin (server also enforces)
-  const insufficientFreeMargin = (parseFloat(costBreakdown.margin) || 0) > (accountSummary?.freeMargin ?? 0)
+  const insufficientFreeMargin = estMarginDollars > (accountSummary?.freeMargin ?? 0)
 
   // Format live price for limit price placeholder
   const livePricePlaceholder = useMemo(() => {
@@ -577,6 +611,9 @@ export function RightTradingPanel() {
 
   // Use shared WebSocket client for order updates
   const [wsConnected, setWsConnected] = useState(false)
+  const [wsState, setWsState] = useState<WsConnectionState>(wsClient.getState() as WsConnectionState)
+  const [showWsDisconnectedWarning, setShowWsDisconnectedWarning] = useState(false)
+  const wsWarningSuppressedUntilRef = useRef<number>(Date.now() + WS_WARNING_INITIAL_GRACE_MS)
   // Real-time ping (RTT to WS server health endpoint)
   const [pingMs, setPingMs] = useState<number | null>(null)
   // Promo carousel: fetch once on mount (no polling)
@@ -677,13 +714,15 @@ export function RightTradingPanel() {
     
     // Update connection status
     const updateStatus = () => {
-      const state = wsClient.getState()
+      const state = wsClient.getState() as WsConnectionState
+      setWsState(state)
       setWsConnected(state === 'authenticated')
     }
     updateStatus()
     
     // Subscribe to state changes
     const unsubscribeState = wsClient.onStateChange((state) => {
+      setWsState(state as WsConnectionState)
       setWsConnected(state === 'authenticated')
     })
 
@@ -721,6 +760,25 @@ export function RightTradingPanel() {
       unsubscribeState()
     }
   }, [pendingOrders])
+
+  // Professional WS banner behavior:
+  // - hide warning while connection is in progress
+  // - only show disconnected warning after brief stability delay + initial grace
+  useEffect(() => {
+    if (wsState === 'authenticated' || wsState === 'connecting' || wsState === 'connected') {
+      setShowWsDisconnectedWarning(false)
+      return
+    }
+
+    setShowWsDisconnectedWarning(false)
+    const now = Date.now()
+    const remainingGrace = Math.max(0, wsWarningSuppressedUntilRef.current - now)
+    const timer = window.setTimeout(() => {
+      setShowWsDisconnectedWarning(true)
+    }, remainingGrace + WS_WARNING_STABLE_MS)
+
+    return () => window.clearTimeout(timer)
+  }, [wsState])
 
   const handlePlaceOrder = async (side: 'BUY' | 'SELL') => {
     if (!selectedSymbol) {
@@ -787,6 +845,15 @@ export function RightTradingPanel() {
       return
     }
 
+    if (insufficientFreeMargin) {
+      const estMargin = estMarginDollars
+      const freeMargin = accountSummary?.freeMargin ?? 0
+      toast.error(
+        `Insufficient funds: required margin $${estMargin.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
+      )
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
@@ -839,12 +906,22 @@ export function RightTradingPanel() {
       const apiMessage = typeof data?.error === 'object' && data?.error?.message
         ? data.error.message
         : data?.message ?? (typeof data?.error === 'object' ? (data.error as { message?: string }).message : undefined)
+      const insufficientCode =
+        data?.error === 'INSUFFICIENT_FREE_MARGIN' ||
+        (typeof data?.error === 'object' && data?.error?.code === 'INSUFFICIENT_FREE_MARGIN')
+      const required = Number((data as { required_margin?: string })?.required_margin)
+      const free = Number((data as { free_margin?: string })?.free_margin)
+      const insufficientMessage =
+        Number.isFinite(required) && Number.isFinite(free)
+          ? `Insufficient funds: required margin $${required.toFixed(2)}, free margin $${free.toFixed(2)}`
+          : 'Insufficient funds/margin to place this order'
       const is403 = status === 403 || (typeof err?.message === 'string' && err.message.includes('403'))
       const errorMessage =
+        (insufficientCode ? insufficientMessage : null) ||
         apiMessage ||
         (is403 ? 'Trading is disabled. You cannot open new positions.' : null) ||
         (error instanceof Error ? error.message : 'Failed to place order')
-      const showPlain = data?.error === 'INSUFFICIENT_FREE_MARGIN' || is403 || apiMessage
+      const showPlain = insufficientCode || is403 || apiMessage
       toast.error(showPlain ? errorMessage : `Order failed: ${errorMessage}`)
       console.error('Order placement error:', error)
     } finally {
@@ -1400,7 +1477,12 @@ export function RightTradingPanel() {
               </div>
               <div className="flex justify-between items-center py-1 border-b border-white/5">
                 <span className="text-muted/80">Est. Margin</span>
-                <span className="font-semibold text-accent">${costBreakdown.margin}</span>
+                <span className="font-semibold text-accent inline-flex items-center gap-1.5">
+                  {isEstimatingServerMargin && canEstimateServerMargin && !serverMarginEstimate ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted shrink-0" />
+                  ) : null}
+                  ${estMarginDollars.toFixed(2)}
+                </span>
               </div>
               <div className="flex justify-between items-center py-1">
                 <span className="text-muted/80">Est. Liquidation</span>
@@ -1449,12 +1531,17 @@ export function RightTradingPanel() {
               </div>
             </Button>
           </div>
-          {insufficientFreeMargin && (parseFloat(costBreakdown.margin) || 0) > 0 && (
+          {insufficientFreeMargin && estMarginDollars > 0 && (
             <div className="mt-2 text-xs text-danger text-center">
               Insufficient free margin (Est. margin &gt; Free margin)
             </div>
           )}
-          {!wsConnected && (
+          {!wsConnected && (wsState === 'connecting' || wsState === 'connected') && (
+            <div className="mt-2 text-xs text-muted text-center">
+              Connecting to live updates...
+            </div>
+          )}
+          {showWsDisconnectedWarning && (
             <div className="mt-2 text-xs text-warning text-center">
               ⚠️ WebSocket disconnected - order updates may be delayed
             </div>
