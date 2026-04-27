@@ -176,6 +176,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   }, [])
 
   // Fetch positions from API. When silent is true, no loading state (no skeleton flash).
+  // Returns the fetched list so callers (e.g. polling) can compare counts without stale closure.
   const fetchPositions = useCallback(async (silent?: boolean) => {
     if (!silent) setIsLoading(true)
     try {
@@ -183,25 +184,27 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       setPositions(data)
       const openCount = data.filter(p => p.status === 'OPEN').length
       lastPositionCountRef.current = openCount
+      return data
     } catch (error: any) {
       console.error('❌ Failed to fetch positions:', error)
       if (!silent) toast.error('Failed to load positions')
+      return null
     } finally {
       if (!silent) setIsLoading(false)
     }
   }, [])
 
-  // Fetch orders from API
-  const fetchOrders = useCallback(async () => {
-    setIsLoading(true)
+  // Fetch orders from API. `silent` avoids loading overlay (use after WS events / polling).
+  const fetchOrders = useCallback(async (silent?: boolean) => {
+    if (!silent) setIsLoading(true)
     try {
       const data = await listOrders({ status: 'pending', limit: 100 })
       setOrders(data.items)
     } catch (error: any) {
       console.error('Failed to fetch orders:', error)
-      toast.error('Failed to load orders')
+      if (!silent) toast.error('Failed to load orders')
     } finally {
-      setIsLoading(false)
+      if (!silent) setIsLoading(false)
     }
   }, [])
 
@@ -257,19 +260,26 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     }
   }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
-  // Polling fallback: silent refresh every 2s when on positions tab
+  // Polling: positions tab = sync positions + when open count changes also sync pending.
+  // Orders tab = pending list refetched every 2s (WS order_update is often missing until backend publishes Redis).
   useEffect(() => {
     if (activeTab === 'positions') {
       pollingIntervalRef.current = setInterval(() => {
-        fetchPositions(true).then(() => {
-          const currentCount = positions.filter(p => p.status === 'OPEN').length
+        void fetchPositions(true).then((data) => {
+          if (!data) return
+          const currentCount = data.filter((p) => p.status === 'OPEN').length
           if (currentCount !== lastPositionCountRef.current) {
             lastPositionCountRef.current = currentCount
+            void fetchOrders(true)
           }
         })
       }, 2000)
+    } else if (activeTab === 'orders') {
+      void fetchOrders(true)
+      pollingIntervalRef.current = setInterval(() => {
+        void fetchOrders(true)
+      }, 2000)
     } else {
-      // Clear polling when not on positions tab
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current)
         pollingIntervalRef.current = null
@@ -282,7 +292,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         pollingIntervalRef.current = null
       }
     }
-  }, [activeTab, fetchPositions, positions.length])
+  }, [activeTab, fetchPositions, fetchOrders])
 
   // WebSocket for real-time position/order updates with reconnection (no polling)
   useEffect(() => {
@@ -421,7 +431,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   updated_at: Date.now(),
                   closed_at: undefined,
                 }
-                setTimeout(() => fetchPositions(true), 500)
+                setTimeout(() => {
+                  void fetchPositions(true)
+                  void fetchOrders(true)
+                }, 500)
                 return [...prev, newPosition]
               }
               if (positionStatus === 'CLOSED' || positionStatus === 'LIQUIDATED') {
@@ -444,43 +457,65 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
             }
           }
 
-          if (data.type === 'order_update' && data.payload) {
-            const orderUpdate = data.payload
-            setOrders(prev => {
-              const existing = prev.findIndex(o => o.id === orderUpdate.order_id)
-              if (existing >= 0) {
-                const updated = [...prev]
-                updated[existing] = {
-                  ...updated[existing],
-                  status: orderUpdate.status?.toLowerCase() || updated[existing].status,
-                  filled_size: orderUpdate.filled_size?.toString() || updated[existing].filled_size,
-                  avg_fill_price: orderUpdate.avg_fill_price?.toString() || updated[existing].avg_fill_price,
-                }
-                if (orderUpdate.status === 'FILLED' || orderUpdate.status === 'CANCELLED') {
-                  if (orderUpdate.status === 'FILLED') {
-                    fetchPositions(true)
-                    fetchFilledOrders()
-                    setTimeout(() => fetchPositions(true), 600)
+          if (data.type === 'order_update') {
+            // ws-gateway sends flat: { type, order_id, status, symbol, side, quantity, price, ts } (no payload)
+            // Some paths may still nest in payload — support both
+            const raw: Record<string, unknown> = data.payload && typeof data.payload === 'object'
+              ? (data.payload as Record<string, unknown>)
+              : (data as Record<string, unknown>)
+            const orderId = String(
+              (raw.order_id as string) ?? (raw.orderId as string) ?? ''
+            ).trim()
+            if (orderId) {
+              const stRaw = (raw.status as string) || ''
+              const st = stRaw.toUpperCase()
+              setOrders((prev) => {
+                const existing = prev.findIndex((o) => o.id === orderId)
+                if (existing >= 0) {
+                  if (st === 'FILLED' || st === 'CANCELLED' || st === 'REJECTED') {
+                    if (st === 'FILLED') {
+                      void fetchPositions(true)
+                      void fetchFilledOrders()
+                      setTimeout(() => void fetchPositions(true), 600)
+                    }
+                    return prev.filter((_, i) => i !== existing)
                   }
-                  return updated.filter((_, i) => i !== existing)
+                  const updated = [...prev]
+                  const qty = String(raw.quantity ?? (raw as { filled_size?: string }).filled_size ?? '')
+                  const px =
+                    (raw.price as string) ?? (raw as { avg_fill_price?: string }).avg_fill_price
+                  updated[existing] = {
+                    ...updated[existing],
+                    status: stRaw.toLowerCase() || updated[existing].status,
+                    filled_size: qty || updated[existing].filled_size,
+                    avg_fill_price:
+                      (typeof px === 'string' ? px : px != null ? String(px) : undefined) ||
+                      updated[existing].avg_fill_price,
+                  } as Order
+                  return updated
                 }
-                return updated
+                if (st === 'PENDING') {
+                  return [
+                    ...prev,
+                    {
+                      id: orderId,
+                      symbol: (raw.symbol as string) || 'UNKNOWN',
+                      side: (raw.side as string) || 'BUY',
+                      order_type: 'MARKET',
+                      size: String((raw as { quantity?: string }).quantity || '0'),
+                      price: (raw as { price?: string }).price,
+                      status: 'pending',
+                      created_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString(),
+                    } as Order,
+                  ]
+                }
+                return prev
+              })
+              if (st === 'FILLED' || st === 'CANCELLED' || st === 'REJECTED') {
+                void fetchOrders(true)
               }
-              if (orderUpdate.status === 'PENDING') {
-                return [...prev, {
-                  id: orderUpdate.order_id,
-                  symbol: orderUpdate.symbol || 'UNKNOWN',
-                  side: orderUpdate.side || 'BUY',
-                  order_type: 'MARKET',
-                  size: orderUpdate.quantity || '0',
-                  price: orderUpdate.price,
-                  status: 'pending',
-                  created_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString(),
-                } as Order]
-              }
-              return prev
-            })
+            }
           }
         } catch (error) {
           console.error('Error parsing WebSocket message:', error)
@@ -510,7 +545,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         wsRef.current = null
       }
     }
-  }, [])
+  }, [fetchPositions, fetchOrders, fetchFilledOrders])
 
   const tabForContent = effectiveTab ?? activeTab
 
