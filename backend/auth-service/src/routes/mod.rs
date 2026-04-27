@@ -15,6 +15,7 @@ pub mod admin_leads;
 pub mod deposits;
 pub mod withdrawals;
 pub mod orders;
+pub mod terminal_prices;
 pub mod admin_trading;
 pub mod admin_positions;
 pub mod admin_audit;

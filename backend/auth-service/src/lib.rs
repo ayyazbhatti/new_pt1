@@ -323,6 +323,13 @@ pub async fn run() -> anyhow::Result<()> {
         .nest("/api/admin/chat", create_admin_chat_router(pool.clone(), deposits_state.clone()))
         .nest("/api/orders", create_orders_router(pool.clone(), orders_state.clone()))
         .nest("/v1/orders", create_orders_router(pool.clone(), orders_state.clone())) // Keep v1 for backward compatibility
+        .nest(
+            "/v1/terminal",
+            routes::terminal_prices::create_terminal_prices_router(
+                pool.clone(),
+                orders_state.clone(),
+            ),
+        )
         .layer(NormalizePathLayer::trim_trailing_slash())
         .layer(cors)
         .layer(TraceLayer::new_for_http())

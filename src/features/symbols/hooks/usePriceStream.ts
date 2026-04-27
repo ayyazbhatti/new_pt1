@@ -192,6 +192,31 @@ export function usePriceStream(symbols: string[]) {
     }
   }, [symbolsKey, accessToken])
 
+  // Logged in: group-marked prices from auth (same Redis keys the gateway uses). Fills the map on
+  // full page reload before the WebSocket finishes auth + subscribe (browsers cannot keep WS open across refresh).
+  useEffect(() => {
+    if (!accessToken) return
+    if (symbols.length === 0) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const { fetchTerminalPricesSnapshot } = await import(
+          '@/features/terminal/api/terminalPrices.api'
+        )
+        const list = await fetchTerminalPricesSnapshot(symbols)
+        if (cancelled) return
+        for (const item of list) {
+          notifySubscribers(item.symbol, { bid: item.bid, ask: item.ask, ts: item.ts })
+        }
+      } catch {
+        // WebSocket will catch up
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [symbolsKey, accessToken])
+
   // Subscribe when symbols change; re-push subscribe when access token appears/changes so gateway streams are not stuck after login
   useEffect(() => {
     if (symbols.length === 0) return
@@ -322,6 +347,29 @@ export function usePriceStreamConnection(symbols: string[]) {
         })
       })
       .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [symbolsKey, accessToken])
+
+  useEffect(() => {
+    if (!accessToken) return
+    if (symbols.length === 0) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const { fetchTerminalPricesSnapshot } = await import(
+          '@/features/terminal/api/terminalPrices.api'
+        )
+        const list = await fetchTerminalPricesSnapshot(symbols)
+        if (cancelled) return
+        for (const item of list) {
+          notifySubscribers(item.symbol, { bid: item.bid, ask: item.ask, ts: item.ts })
+        }
+      } catch {
+        // WebSocket will catch up
+      }
+    })()
     return () => {
       cancelled = true
     }
