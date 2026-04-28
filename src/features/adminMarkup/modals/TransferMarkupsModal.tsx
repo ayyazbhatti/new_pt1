@@ -58,10 +58,12 @@ export function TransferMarkupsModal({
     try {
       const bid = sourceSymbol.bidMarkup ?? '0'
       const ask = sourceSymbol.askMarkup ?? '0'
+      let successCount = 0
+      let failedCount = 0
       // Batch requests so "Apply to all" doesn't fire 100+ parallel requests
       for (let i = 0; i < selectedTargets.length; i += BATCH_SIZE) {
         const chunk = selectedTargets.slice(i, i + BATCH_SIZE)
-        await Promise.all(
+        const results = await Promise.allSettled(
           chunk.map((s) =>
             upsertOverride.mutateAsync({
               profileId: stream.id,
@@ -71,10 +73,24 @@ export function TransferMarkupsModal({
             })
           )
         )
+        for (const result of results) {
+          if (result.status === 'fulfilled') successCount += 1
+          else failedCount += 1
+        }
       }
-      queryClient.invalidateQueries({ queryKey: ['markup'] })
-      toast.success(`Transferred markups to ${selectedTargets.length} symbol(s)`)
-      onClose()
+      if (successCount > 0) {
+        queryClient.invalidateQueries({ queryKey: ['markup'] })
+      }
+      if (successCount > 0 && failedCount === 0) {
+        toast.success(`Transferred markups to ${successCount} symbol(s)`)
+        onClose()
+      } else if (successCount > 0 && failedCount > 0) {
+        toast.error(
+          `Transferred to ${successCount} symbol(s), but ${failedCount} failed. Please retry.`
+        )
+      } else {
+        toast.error('Transfer failed for all selected symbols')
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Transfer failed')
     } finally {

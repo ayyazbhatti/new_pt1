@@ -426,7 +426,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
             }
           }
 
-          if (data.type === 'order_update') {
+          if (data.type === 'order_update' || data.type === 'order.update' || data.type === 'order_updated') {
             // ws-gateway sends flat: { type, order_id, status, symbol, side, quantity, price, ts } (no payload)
             // Some paths may still nest in payload — support both
             const raw: Record<string, unknown> = data.payload && typeof data.payload === 'object'
@@ -436,7 +436,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
               (raw.order_id as string) ?? (raw.orderId as string) ?? ''
             ).trim()
             if (orderId) {
-              const stRaw = (raw.status as string) || ''
+              const stRaw = ((raw.status as string) || '').trim()
               const st = stRaw.toUpperCase()
               setOrders((prev) => {
                 const existing = prev.findIndex((o) => o.id === orderId)
@@ -482,6 +482,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 }
                 return prev
               })
+            } else {
+              // Safety fallback: if an order update arrives without usable id, reconcile pending once.
+              void fetchOrders(true)
             }
           }
         } catch (error) {
@@ -1145,6 +1148,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   {orders.filter(o => o.status === 'pending').map((order, index) => {
                     const createdDate = new Date(order.created_at)
                     const timeStr = createdDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                    const isPendingOrder = (order.status || '').trim().toLowerCase() === 'pending'
                     
                     return (
                     <tr 
@@ -1184,10 +1188,14 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       <td className="px-4 py-3 text-text font-medium">{timeStr}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          {order.status === 'pending' && (
+                          {isPendingOrder && (
                             <>
                               <button
                                 onClick={() => {
+                                  if (!isPendingOrder) {
+                                    toast.error('Order is already processed and cannot be edited')
+                                    return
+                                  }
                                   setEditItem({ type: 'order', id: order.id })
                                   setEditDialogOpen(true)
                                 }}
@@ -1921,10 +1929,16 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     } catch (error: any) {
                       toast.error(`Failed to update position: ${error.message}`)
                     }
-                  } else {
-                  toast.success(`${editItem?.type === 'position' ? 'Position' : 'Order'} ${editItem?.id} updated successfully`)
-                  setEditDialogOpen(false)
-                  setEditItem(null)
+                  } else if (editItem?.type === 'order' && editItem.id) {
+                    const targetOrder = orders.find((o) => o.id === editItem.id)
+                    const currentStatus = (targetOrder?.status || '').trim().toLowerCase()
+                    if (currentStatus && currentStatus !== 'pending') {
+                      toast.error(`Order is already ${currentStatus} and cannot be edited`)
+                    } else {
+                      toast.error('Order editing is not available for executed/terminal order states')
+                    }
+                    setEditDialogOpen(false)
+                    setEditItem(null)
                     setEditSl('')
                     setEditTp('')
                     setEditSlAmount('')

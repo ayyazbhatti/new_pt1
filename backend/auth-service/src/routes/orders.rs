@@ -1052,43 +1052,42 @@ async fn cancel_order(
     let user_id = claims.sub;
     let now = Utc::now();
 
-    // Check if order exists and belongs to user
-    let status_row: Option<(Uuid, String)> = sqlx::query_as(
-        r#"SELECT id, status::text as status FROM orders WHERE id = $1 AND user_id = $2"#,
-    )
-    .bind(order_id)
-    .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        error!("Failed to fetch order: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let (_, status_str) = status_row.ok_or(StatusCode::NOT_FOUND)?;
-
-    // Check if order can be cancelled
-    if status_str != "pending" {
-        error!("Order {} cannot be cancelled, status: {}", order_id, status_str);
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    // Update order status
-    sqlx::query(
+    // Atomic server-side guard: only pending orders can be cancelled.
+    // This prevents race conditions where an order transitions to terminal
+    // state between a read and an update.
+    let result = sqlx::query(
         r#"
         UPDATE orders
         SET status = 'cancelled'::order_status, cancelled_at = $1, updated_at = $1
-        WHERE id = $2
+        WHERE id = $2 AND user_id = $3 AND status = 'pending'::order_status
         "#,
     )
     .bind(now)
     .bind(order_id)
+    .bind(user_id)
     .execute(&pool)
     .await
     .map_err(|e| {
         error!("Failed to cancel order: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    if result.rows_affected() == 0 {
+        let exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM orders WHERE id = $1 AND user_id = $2")
+            .bind(order_id)
+            .bind(user_id)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                error!("Failed to check order existence: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        if exists.is_none() {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        error!("Order {} cannot be cancelled because it is not pending", order_id);
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     // Publish to NATS
     let cancel_event = serde_json::json!({

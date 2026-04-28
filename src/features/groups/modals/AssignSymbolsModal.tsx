@@ -19,7 +19,7 @@ import { ColumnDef } from '@tanstack/react-table'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { Skeleton } from '@/shared/ui/loading'
-import { Copy, ArrowRightLeft } from 'lucide-react'
+import { Copy, ArrowRightLeft, Search } from 'lucide-react'
 import { getGroupSymbols, updateGroupSymbols } from '../api/groups.api'
 import { groupsQueryKeys } from '../hooks/useGroups'
 
@@ -56,8 +56,14 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
   const populatedForGroupIdRef = useRef<string | null>(null)
   const [transferSource, setTransferSource] = useState<GroupSymbol | null>(null)
   const [transferSelectedIds, setTransferSelectedIds] = useState<Set<string>>(new Set())
+  const [symbolSearch, setSymbolSearch] = useState('')
 
   const displaySymbolsList = symbols.length > 0 ? symbols : initialSymbols
+  const filteredSymbolsList = useMemo(() => {
+    const term = symbolSearch.trim().toLowerCase()
+    if (!term) return displaySymbolsList
+    return displaySymbolsList.filter((s) => s.symbolCode.toLowerCase().includes(term))
+  }, [displaySymbolsList, symbolSearch])
 
   useEffect(() => {
     if (group.id !== populatedForGroupIdRef.current && initialSymbols.length > 0) {
@@ -295,17 +301,27 @@ export function AssignSymbolsModal({ group }: AssignSymbolsModalProps) {
           </p>
         )}
         </div>
+        <div className="relative max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted" />
+          <input
+            type="text"
+            value={symbolSearch}
+            onChange={(e) => setSymbolSearch(e.target.value)}
+            placeholder="Search symbol..."
+            className="w-full rounded-lg border border-border bg-surface-2 pl-9 pr-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+        </div>
         {symbolsLoading ? (
         <div className="space-y-2">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-10 w-full" />
         </div>
-      ) : displaySymbolsList.length === 0 ? (
+      ) : filteredSymbolsList.length === 0 ? (
         <p className="text-sm text-text-muted py-4">No symbols found.</p>
       ) : (
         <div className="border border-border rounded-lg overflow-hidden">
-          <DataTable data={displaySymbolsList} columns={columns} disablePagination />
+          <DataTable data={filteredSymbolsList} columns={columns} disablePagination />
         </div>
       )}
       </div>
