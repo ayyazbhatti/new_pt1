@@ -78,8 +78,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const setMobileTab = useTerminalStore((s) => s.setMobileTab)
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const lastPositionCountRef = useRef<number>(0)
+  // Prevent eventual-consistency flicker: once terminal says an order is terminal, don't re-show it as pending.
+  const terminalOrderTombstonesRef = useRef<Map<string, number>>(new Map())
   const [positionsSearchQuery, setPositionsSearchQuery] = useState('')
   const [positionsSearchOpen, setPositionsSearchOpen] = useState(false)
   const positionsSearchInputRef = useRef<HTMLInputElement>(null)
@@ -176,14 +176,12 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   }, [])
 
   // Fetch positions from API. When silent is true, no loading state (no skeleton flash).
-  // Returns the fetched list so callers (e.g. polling) can compare counts without stale closure.
+  // Returns fetched data so event handlers can chain follow-up updates.
   const fetchPositions = useCallback(async (silent?: boolean) => {
     if (!silent) setIsLoading(true)
     try {
       const data = await getPositions()
       setPositions(data)
-      const openCount = data.filter(p => p.status === 'OPEN').length
-      lastPositionCountRef.current = openCount
       return data
     } catch (error: any) {
       console.error('❌ Failed to fetch positions:', error)
@@ -194,12 +192,18 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     }
   }, [])
 
-  // Fetch orders from API. `silent` avoids loading overlay (use after WS events / polling).
+  // Fetch orders from API. `silent` avoids loading overlay (use after WS/on-demand events).
   const fetchOrders = useCallback(async (silent?: boolean) => {
     if (!silent) setIsLoading(true)
     try {
       const data = await listOrders({ status: 'pending', limit: 100 })
-      setOrders(data.items)
+      const now = Date.now()
+      const tombstones = terminalOrderTombstonesRef.current
+      // Keep tombstones bounded and self-cleaning.
+      for (const [orderId, ts] of tombstones.entries()) {
+        if (now - ts > 10 * 60 * 1000) tombstones.delete(orderId)
+      }
+      setOrders(data.items.filter((o) => !tombstones.has(o.id)))
     } catch (error: any) {
       console.error('Failed to fetch orders:', error)
       if (!silent) toast.error('Failed to load orders')
@@ -239,11 +243,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
   // Initial fetch on mount - show loading on first load only
   useEffect(() => {
-    fetchPositions().then(() => {
-      setTimeout(() => {
-        lastPositionCountRef.current = positions.length
-      }, 100)
-    })
+    fetchPositions()
     fetchOrders()
   }, [fetchPositions, fetchOrders])
 
@@ -260,40 +260,6 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     }
   }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
-  // Polling: positions tab = sync positions + when open count changes also sync pending.
-  // Orders tab = pending list refetched every 2s (WS order_update is often missing until backend publishes Redis).
-  useEffect(() => {
-    if (activeTab === 'positions') {
-      pollingIntervalRef.current = setInterval(() => {
-        void fetchPositions(true).then((data) => {
-          if (!data) return
-          const currentCount = data.filter((p) => p.status === 'OPEN').length
-          if (currentCount !== lastPositionCountRef.current) {
-            lastPositionCountRef.current = currentCount
-            void fetchOrders(true)
-          }
-        })
-      }, 2000)
-    } else if (activeTab === 'orders') {
-      void fetchOrders(true)
-      pollingIntervalRef.current = setInterval(() => {
-        void fetchOrders(true)
-      }, 2000)
-    } else {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current)
-        pollingIntervalRef.current = null
-      }
-    }
-
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current)
-        pollingIntervalRef.current = null
-      }
-    }
-  }, [activeTab, fetchPositions, fetchOrders])
-
   // WebSocket for real-time position/order updates with reconnection (no polling)
   useEffect(() => {
     const wsUrl =
@@ -305,6 +271,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     const maxReconnectAttempts = 30
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
     let mounted = true
+    let authHandledForCurrentSocket = false
 
     function scheduleReconnect() {
       if (!mounted || reconnectAttempts >= maxReconnectAttempts) return
@@ -344,11 +311,13 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
           if (data.type === 'auth_success') {
             if (!mounted || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return
-            setTimeout(() => {
-              if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'subscribe', symbols: [], channels: ['positions', 'orders', 'balances', 'wallet'] }))
-              }
-            }, 500)
+            if (authHandledForCurrentSocket) return
+            authHandledForCurrentSocket = true
+            ws.send(JSON.stringify({ type: 'subscribe', symbols: [], channels: ['positions', 'orders', 'balances', 'wallet'] }))
+            // One-shot reconcile after reconnect/auth to recover any missed WS events.
+            void fetchOrders(true)
+            void fetchPositions(true)
+            void fetchFilledOrders()
           } else if (data.type === 'wallet.balance.updated') {
             const payload = data.payload
             if (payload && typeof payload === 'object') {
@@ -473,6 +442,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 const existing = prev.findIndex((o) => o.id === orderId)
                 if (existing >= 0) {
                   if (st === 'FILLED' || st === 'CANCELLED' || st === 'REJECTED') {
+                    terminalOrderTombstonesRef.current.set(orderId, Date.now())
                     if (st === 'FILLED') {
                       void fetchPositions(true)
                       void fetchFilledOrders()
@@ -512,9 +482,6 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 }
                 return prev
               })
-              if (st === 'FILLED' || st === 'CANCELLED' || st === 'REJECTED') {
-                void fetchOrders(true)
-              }
             }
           }
         } catch (error) {

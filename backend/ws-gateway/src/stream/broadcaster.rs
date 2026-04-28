@@ -281,53 +281,64 @@ impl Broadcaster {
         connection_txs: &DashMap<Uuid, mpsc::Sender<ServerMessage>>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
-        let user_id = payload
+        // Accept both flat payloads and wrapped payloads:
+        // { "type": "order.update", "payload": { ... } }
+        let raw = payload
+            .get("payload")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .map(serde_json::Value::Object)
+            .unwrap_or(payload);
+
+        let user_id = raw
             .get("user_id")
+            .or_else(|| raw.get("userId"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing user_id in order update"))?;
 
-        let order_id = payload
+        let order_id = raw
             .get("order_id")
-            .or_else(|| payload.get("id"))
+            .or_else(|| raw.get("orderId"))
+            .or_else(|| raw.get("id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow::anyhow!("Missing order_id"))?;
 
-        let status = payload
+        let status = raw
             .get("status")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let symbol = payload
+        let symbol = raw
             .get("symbol")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default();
 
-        let side = payload
+        let side = raw
             .get("side")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default();
 
-        let quantity = payload
+        let quantity = raw
             .get("quantity")
-            .or_else(|| payload.get("volume"))
+            .or_else(|| raw.get("volume"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .or_else(|| payload.get("quantity").and_then(|v| v.as_f64()).map(|f| f.to_string()))
+            .or_else(|| raw.get("quantity").and_then(|v| v.as_f64()).map(|f| f.to_string()))
             .unwrap_or_default();
 
-        let price = payload
+        let price = raw
             .get("price")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .or_else(|| payload.get("price").and_then(|v| v.as_f64()).map(|f| f.to_string()));
+            .or_else(|| raw.get("price").and_then(|v| v.as_f64()).map(|f| f.to_string()));
 
-        let ts = payload
+        let ts = raw
             .get("ts")
-            .or_else(|| payload.get("timestamp"))
+            .or_else(|| raw.get("timestamp"))
             .and_then(|v| v.as_i64())
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 

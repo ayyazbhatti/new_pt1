@@ -108,6 +108,7 @@ impl Session {
         let nats_clone = self.nats.clone();
 
         let mut recv_task = tokio::spawn(async move {
+            let mut is_authenticated = false;
             while let Some(Ok(msg)) = receiver.next().await {
                 match msg {
                     Message::Text(text) => {
@@ -159,6 +160,10 @@ impl Session {
                         // Handle message
                         match client_msg {
                             ClientMessage::Auth { token } => {
+                                if is_authenticated {
+                                    // Ignore duplicate auth attempts on an already authenticated socket.
+                                    continue;
+                                }
                                 info!("Auth message received from connection {}, validating token...", conn_id);
                                 // Strip "Bearer " prefix if frontend sent it; trim whitespace
                                 let token = token.trim().strip_prefix("Bearer ").unwrap_or(token.trim());
@@ -189,6 +194,7 @@ impl Session {
                                             last_heartbeat: std::time::Instant::now(),
                                         };
                                         registry.register(conn);
+                                        is_authenticated = true;
                                         info!("✅ Connection {} registered with user_id: {}", conn_id, claims.sub);
 
                                         // Send auth success

@@ -60,14 +60,35 @@ impl OrderEventHandler {
                 
         // Only update database for terminal states
         if matches!(event.status, OrderStatus::Filled) {
-            self.update_order_in_database(&event).await?;
-            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+            if self.update_order_in_database(&event).await? {
+                self.publish_order_update_to_redis(&event).await;
+                let pool = Arc::clone(&self.pool);
+                let redis = Arc::clone(&self.redis);
+                let user_id = event.user_id;
+                tokio::spawn(async move {
+                    compute_and_cache_account_summary(&*pool, &redis, user_id).await;
+                });
+            }
         } else if matches!(event.status, OrderStatus::Cancelled) {
-            self.update_order_cancelled_in_database(&event).await?;
-            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+            if self.update_order_cancelled_in_database(&event).await? {
+                self.publish_order_update_to_redis(&event).await;
+                let pool = Arc::clone(&self.pool);
+                let redis = Arc::clone(&self.redis);
+                let user_id = event.user_id;
+                tokio::spawn(async move {
+                    compute_and_cache_account_summary(&*pool, &redis, user_id).await;
+                });
+            }
         } else if matches!(event.status, OrderStatus::Rejected) {
-            self.update_order_rejected_in_database(&event).await?;
-            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+            if self.update_order_rejected_in_database(&event).await? {
+                self.publish_order_update_to_redis(&event).await;
+                let pool = Arc::clone(&self.pool);
+                let redis = Arc::clone(&self.redis);
+                let user_id = event.user_id;
+                tokio::spawn(async move {
+                    compute_and_cache_account_summary(&*pool, &redis, user_id).await;
+                });
+            }
         } else {
             info!("Order status is {:?}, skipping database update", event.status);
         }
@@ -87,14 +108,35 @@ impl OrderEventHandler {
 
         // Only update database for terminal states
         if matches!(event.status, OrderStatus::Filled) {
-            self.update_order_in_database(&event).await?;
-            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+            if self.update_order_in_database(&event).await? {
+                self.publish_order_update_to_redis(&event).await;
+                let pool = Arc::clone(&self.pool);
+                let redis = Arc::clone(&self.redis);
+                let user_id = event.user_id;
+                tokio::spawn(async move {
+                    compute_and_cache_account_summary(&*pool, &redis, user_id).await;
+                });
+            }
         } else if matches!(event.status, OrderStatus::Cancelled) {
-            self.update_order_cancelled_in_database(&event).await?;
-            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+            if self.update_order_cancelled_in_database(&event).await? {
+                self.publish_order_update_to_redis(&event).await;
+                let pool = Arc::clone(&self.pool);
+                let redis = Arc::clone(&self.redis);
+                let user_id = event.user_id;
+                tokio::spawn(async move {
+                    compute_and_cache_account_summary(&*pool, &redis, user_id).await;
+                });
+            }
         } else if matches!(event.status, OrderStatus::Rejected) {
-            self.update_order_rejected_in_database(&event).await?;
-            compute_and_cache_account_summary(&*self.pool, &self.redis, event.user_id).await;
+            if self.update_order_rejected_in_database(&event).await? {
+                self.publish_order_update_to_redis(&event).await;
+                let pool = Arc::clone(&self.pool);
+                let redis = Arc::clone(&self.redis);
+                let user_id = event.user_id;
+                tokio::spawn(async move {
+                    compute_and_cache_account_summary(&*pool, &redis, user_id).await;
+                });
+            }
         } else {
             info!("Order status is {:?}, skipping database update", event.status);
         }
@@ -102,7 +144,7 @@ impl OrderEventHandler {
         Ok(())
     }
 
-    async fn update_order_in_database(&self, event: &OrderUpdatedEvent) -> Result<()> {
+    async fn update_order_in_database(&self, event: &OrderUpdatedEvent) -> Result<bool> {
         let order_id = event.order_id;
         let filled_size = event.filled_size;
         let avg_fill_price = event.avg_fill_price;
@@ -121,7 +163,7 @@ impl OrderEventHandler {
                 average_price = $2,
                 filled_at = $3,
                 updated_at = $3
-            WHERE id = $4
+            WHERE id = $4 AND status <> 'filled'::order_status
             "#
         )
         .bind(filled_size)
@@ -137,7 +179,7 @@ impl OrderEventHandler {
                 "✅ Updated order {} in database: status=filled, filled_size={}, avg_price={:?}",
                 order_id, filled_size, avg_fill_price
             );
-            return Ok(());
+            return Ok(true);
         }
 
         // Order doesn't exist, try to create it from Redis data
@@ -148,7 +190,7 @@ impl OrderEventHandler {
 
         self.create_order_from_redis(order_id, filled_size, avg_fill_price, filled_at_ts).await?;
 
-        Ok(())
+        Ok(true)
     }
 
     async fn create_order_from_redis(
@@ -276,7 +318,7 @@ impl OrderEventHandler {
         Ok(())
     }
 
-    async fn update_order_cancelled_in_database(&self, event: &OrderUpdatedEvent) -> Result<()> {
+    async fn update_order_cancelled_in_database(&self, event: &OrderUpdatedEvent) -> Result<bool> {
         let order_id = event.order_id;
         let cancelled_at = event.ts;
 
@@ -287,7 +329,7 @@ impl OrderEventHandler {
                 status = 'cancelled'::order_status,
                 cancelled_at = $1,
                 updated_at = $1
-            WHERE id = $2
+            WHERE id = $2 AND status <> 'cancelled'::order_status
             "#
         )
         .bind(cancelled_at)
@@ -298,14 +340,14 @@ impl OrderEventHandler {
 
         if rows_affected.rows_affected() > 0 {
             info!("✅ Updated order {} in database: status=cancelled", order_id);
+            Ok(true)
         } else {
-            warn!("⚠️  Order {} not found in database, cannot update", order_id);
+            info!("Order {} already cancelled or not found; skipping duplicate event", order_id);
+            Ok(false)
         }
-
-        Ok(())
     }
 
-    async fn update_order_rejected_in_database(&self, event: &OrderUpdatedEvent) -> Result<()> {
+    async fn update_order_rejected_in_database(&self, event: &OrderUpdatedEvent) -> Result<bool> {
         let order_id = event.order_id;
         let rejected_at = event.ts;
 
@@ -315,7 +357,7 @@ impl OrderEventHandler {
             SET
                 status = 'rejected'::order_status,
                 updated_at = $1
-            WHERE id = $2
+            WHERE id = $2 AND status <> 'rejected'::order_status
             "#
         )
         .bind(rejected_at)
@@ -329,11 +371,59 @@ impl OrderEventHandler {
                 "✅ Updated order {} in database: status=rejected, reason={:?}",
                 order_id, event.reason
             );
+            Ok(true)
         } else {
-            warn!("⚠️  Order {} not found in database, cannot mark rejected", order_id);
+            info!("Order {} already rejected or not found; skipping duplicate event", order_id);
+            Ok(false)
         }
+    }
 
-        Ok(())
+    async fn publish_order_update_to_redis(&self, event: &OrderUpdatedEvent) {
+        let status = format!("{:?}", event.status).to_uppercase();
+        let nested_status = status.clone();
+        let payload = serde_json::json!({
+            "type": "order.update",
+            "user_id": event.user_id.to_string(),
+            "order_id": event.order_id.to_string(),
+            "status": status,
+            "quantity": event.filled_size.to_string(),
+            "price": event.avg_fill_price.map(|p| p.to_string()),
+            "ts": event.ts.timestamp_millis(),
+            "payload": {
+                "user_id": event.user_id.to_string(),
+                "order_id": event.order_id.to_string(),
+                "status": nested_status,
+                "quantity": event.filled_size.to_string(),
+                "price": event.avg_fill_price.map(|p| p.to_string()),
+                "ts": event.ts.timestamp_millis(),
+            }
+        });
+
+        match self.redis.get().await {
+            Ok(mut conn) => {
+                let publish_result: redis::RedisResult<i64> = redis::cmd("PUBLISH")
+                    .arg("orders:updates")
+                    .arg(payload.to_string())
+                    .query_async(&mut conn)
+                    .await;
+                if let Err(e) = publish_result {
+                    warn!(
+                        order_id = %event.order_id,
+                        user_id = %event.user_id,
+                        error = %e,
+                        "Failed to publish order update to Redis"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    order_id = %event.order_id,
+                    user_id = %event.user_id,
+                    error = %e,
+                    "Redis unavailable while publishing order update"
+                );
+            }
+        }
     }
 }
 

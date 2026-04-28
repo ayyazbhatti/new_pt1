@@ -633,8 +633,8 @@ async fn place_order(
         }
     }
     
-    // Try JetStream first, but ALWAYS also publish to basic pub/sub
-    // This ensures order-engine receives messages even if JetStream consumer fails
+    // Try JetStream first; fall back to basic pub/sub only if JetStream publish fails.
+    // Publishing to both causes duplicate cmd.order.place processing.
     let js_context = async_nats::jetstream::new((*orders_state.nats).clone());
     let jetstream_result = js_context.publish("cmd.order.place".to_string(), payload.clone().into()).await;
     
@@ -644,22 +644,29 @@ async fn place_order(
         }
         Err(e) => {
             warn!("JetStream publish failed: {}", e);
+            // Fallback to basic pub/sub to avoid dropping orders when JS is unavailable.
+            orders_state.nats.publish("cmd.order.place".to_string(), payload.into()).await
+                .map_err(|pub_err| {
+                    error!(order_id = %order_id, user_id = %user_id, error = %pub_err, "place_order FAILED stage=nats_publish_fallback status=500");
+                    PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+                })?;
+            info!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "✅ Published to NATS fallback (basic pub/sub): cmd.order.place");
         }
     }
-    
-    // ALWAYS also publish to basic pub/sub to ensure delivery
-    // This is a safety net in case JetStream consumer isn't working
-    orders_state.nats.publish("cmd.order.place".to_string(), payload.into()).await
-        .map_err(|e| {
-            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=nats_publish status=500");
-            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
-    info!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "✅ Published to NATS (basic pub/sub): cmd.order.place");
 
     // Also publish to Redis for ws-gateway
     let redis_payload = serde_json::json!({
         "type": "order.update",
+        "user_id": user_id.to_string(),
+        "order_id": order_id.to_string(),
+        "status": "PENDING",
+        "symbol": req.symbol,
+        "side": side_upper,
+        "quantity": req.size,
+        "price": limit_price.map(|p| p.to_string()),
+        "ts": now.timestamp_millis(),
         "payload": {
+            "user_id": user_id.to_string(),
             "order_id": order_id.to_string(),
             "status": "PENDING",
             "symbol": req.symbol,
@@ -833,6 +840,7 @@ pub struct ListOrdersResponse {
 
 async fn list_orders(
     State(pool): State<PgPool>,
+    Extension(orders_state): Extension<OrdersState>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListOrdersQuery>,
 ) -> Result<Json<ListOrdersResponse>, StatusCode> {
@@ -937,7 +945,76 @@ async fn list_orders(
         (orders, total)
     };
 
-    let items: Vec<OrderResponse> = orders
+    let is_pending_filter = params
+        .status
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("pending"))
+        .unwrap_or(false);
+
+    // Reconcile stale DB pending orders against Redis source-of-truth.
+    // If Redis already has terminal status, hide order from pending response immediately
+    // and self-heal DB state to reduce future inconsistency windows.
+    let mut reconciled_orders = orders;
+    let mut reconciled_total = total;
+    if is_pending_filter && !reconciled_orders.is_empty() {
+        if let Ok(mut conn) = orders_state.redis.get().await {
+            let mut terminal_in_page: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+            for (id, ..) in &reconciled_orders {
+                let redis_key = format!("order:{}", id);
+                let redis_order_json: Option<String> = conn.get(&redis_key).await.unwrap_or(None);
+                let Some(json_str) = redis_order_json else {
+                    continue;
+                };
+                let Ok(redis_obj) = serde_json::from_str::<serde_json::Value>(&json_str) else {
+                    continue;
+                };
+                let Some(redis_status) = redis_obj.get("status").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+
+                let normalized = redis_status.to_ascii_lowercase();
+                if normalized == "filled" || normalized == "cancelled" || normalized == "rejected" {
+                    terminal_in_page.insert(*id);
+
+                    let db_status = match normalized.as_str() {
+                        "filled" => "filled",
+                        "cancelled" => "cancelled",
+                        _ => "rejected",
+                    };
+                    // Opportunistic DB self-heal; ignore failures to keep list API resilient.
+                    let _ = sqlx::query(
+                        r#"
+                        UPDATE orders
+                        SET
+                            status = $1::order_status,
+                            updated_at = NOW(),
+                            filled_at = CASE WHEN $1 = 'filled' THEN COALESCE(filled_at, NOW()) ELSE filled_at END,
+                            cancelled_at = CASE WHEN $1 = 'cancelled' THEN COALESCE(cancelled_at, NOW()) ELSE cancelled_at END
+                        WHERE id = $2 AND user_id = $3 AND status = 'pending'::order_status
+                        "#,
+                    )
+                    .bind(db_status)
+                    .bind(*id)
+                    .bind(user_id)
+                    .execute(&pool)
+                    .await;
+                }
+            }
+
+            if !terminal_in_page.is_empty() {
+                reconciled_orders.retain(|(id, ..)| !terminal_in_page.contains(id));
+                reconciled_total = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM orders WHERE user_id = $1 AND status::text = 'pending'",
+                )
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|_| (reconciled_orders.len() as i64).max(0));
+            }
+        }
+    }
+
+    let items: Vec<OrderResponse> = reconciled_orders
         .into_iter()
         .map(|(id, _, symbol_code, side, order_type, size, price, stop_price, filled_size, average_price, status, created_at, updated_at, filled_at, cancelled_at)| {
             OrderResponse {
@@ -959,7 +1036,7 @@ async fn list_orders(
         })
         .collect();
 
-    Ok(Json(ListOrdersResponse { items, total }))
+    Ok(Json(ListOrdersResponse { items, total: reconciled_total }))
 }
 
 // ============================================================================
@@ -1031,7 +1108,12 @@ async fn cancel_order(
     // Also publish to Redis for ws-gateway
     let redis_payload = serde_json::json!({
         "type": "order.update",
+        "user_id": user_id.to_string(),
+        "order_id": order_id.to_string(),
+        "status": "CANCELLED",
+        "ts": now.timestamp_millis(),
         "payload": {
+            "user_id": user_id.to_string(),
             "order_id": order_id.to_string(),
             "status": "CANCELLED",
             "ts": now.timestamp_millis(),

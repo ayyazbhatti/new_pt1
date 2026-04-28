@@ -46,6 +46,66 @@ impl OrderHandler {
             lua,
         }
     }
+
+    async fn resolve_market_fill_price(
+        &self,
+        symbol: &str,
+        group_id: Option<&str>,
+        side: contracts::enums::Side,
+    ) -> Option<Decimal> {
+        if let Some(tick) = self
+            .cache
+            .get_last_tick(symbol, group_id)
+            .or_else(|| self.cache.get_last_tick(symbol, None))
+        {
+            return Some(match side {
+                contracts::enums::Side::Buy => tick.ask,
+                contracts::enums::Side::Sell => tick.bid,
+            });
+        }
+
+        // Fallback: use latest Redis cached quote for this symbol/group.
+        let mut conn = self.redis.get_connection().await;
+        let mut keys: Vec<String> = Vec::new();
+        if let Some(gid) = group_id {
+            keys.push(format!("prices:{}:{}", symbol, gid));
+        }
+        keys.push(format!("prices:{}:", symbol));
+
+        for key in keys {
+            let raw: Option<String> = conn.get(&key).await.ok().flatten();
+            let Some(raw) = raw else {
+                continue;
+            };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            let ask = json
+                .get("ask")
+                .and_then(|v| {
+                    v.as_str()
+                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                        .or_else(|| Decimal::from_str_exact(&v.to_string().trim_matches('"').to_string()).ok())
+                });
+            let bid = json
+                .get("bid")
+                .and_then(|v| {
+                    v.as_str()
+                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                        .or_else(|| Decimal::from_str_exact(&v.to_string().trim_matches('"').to_string()).ok())
+                });
+
+            let price = match side {
+                contracts::enums::Side::Buy => ask,
+                contracts::enums::Side::Sell => bid,
+            };
+            if let Some(fill_price) = price {
+                return Some(fill_price);
+            }
+        }
+
+        None
+    }
     
     #[instrument(skip(self, msg))]
     pub async fn handle_place_order(&self, msg: Message) -> Result<()> {
@@ -247,15 +307,12 @@ impl OrderHandler {
                     "ORDER_ACCEPTED"
                 );
                 
-                // For market orders, try immediate execution if tick exists (exact group, or global tick as fallback)
+                // For market orders, try immediate execution from in-memory tick first, then Redis quote fallback.
                 if cmd.order_type == contracts::enums::OrderType::Market {
-                    let tick = self.cache.get_last_tick(&cmd.symbol, cmd.group_id.as_deref())
-                        .or_else(|| self.cache.get_last_tick(&cmd.symbol, None));
-                    if let Some(tick) = tick {
-                        let fill_price = match cmd.side {
-                            contracts::enums::Side::Buy => tick.ask,
-                            contracts::enums::Side::Sell => tick.bid,
-                        };
+                    if let Some(fill_price) = self
+                        .resolve_market_fill_price(&cmd.symbol, cmd.group_id.as_deref(), cmd.side)
+                        .await
+                    {
                         
                         info!("🚀 Executing market order {} immediately at price {}", order_id, fill_price);
                         
@@ -421,7 +478,10 @@ impl OrderHandler {
                             );
                         }
                     } else {
-                        debug!("Market order {} accepted, waiting for first tick", order_id);
+                        debug!(
+                            "Market order {} accepted, waiting for first tick (no cache tick or Redis quote)",
+                            order_id
+                        );
                     }
                 }
             }
