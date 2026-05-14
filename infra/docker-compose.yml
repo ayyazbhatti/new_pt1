@@ -1,6 +1,24 @@
 version: '3.8'
 
 services:
+  # Dev DB for newpt (host 5434 avoids clashes with other Postgres on 5432/5433).
+  postgres:
+    image: postgres:16-alpine
+    container_name: newpt-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: newpt
+    ports:
+      - "5434:5432"
+    volumes:
+      - newpt_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d newpt"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     container_name: trading-redis
@@ -30,4 +48,5 @@ services:
 
 volumes:
   redis_data:
+  newpt_postgres_data:
 

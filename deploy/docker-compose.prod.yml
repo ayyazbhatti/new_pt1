@@ -101,6 +101,12 @@ services:
     depends_on:
       redis: { condition: service_healthy }
       nats: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf --max-time 3 http://127.0.0.1:9002/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 90s
     restart: unless-stopped
     logging:
       driver: json-file
@@ -184,9 +190,9 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - auth
-      - ws-gateway
-      - data-provider
+      auth: { condition: service_started }
+      ws-gateway: { condition: service_healthy }
+      data-provider: { condition: service_started }
     restart: unless-stopped
 
 volumes:

@@ -197,6 +197,10 @@ Create (or replace) the default site, e.g.:
 
 ```bash
 cat > /etc/nginx/sites-available/ptf << 'EOF'
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
 server {
     listen 80;
     server_name ptf.interwarepvt.com;
@@ -214,6 +218,19 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /ws {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 86400s;
+        proxy_read_timeout 86400s;
     }
 }
 EOF
@@ -257,6 +274,7 @@ You can add a renew hook so nginx reloads automatically (e.g. in `/etc/letsencry
 - **https://ptf.interwarepvt.com** serves the app over SSL.
 - **http://ptf.interwarepvt.com** redirects to HTTPS.
 - Login and API work with the HTTPS origin once it’s in `CORS_ORIGINS`.
+- **WebSockets** (`/ws`) require the **Docker `ws-gateway` service to be healthy** (see `deploy/docker-compose.prod.yml` healthcheck). After changing backend or nginx config, rebuild and recreate: `docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build ws-gateway frontend`.
 
 ### Multiple domains
 
@@ -557,7 +575,7 @@ To **replace** the server database with a full copy of your local DB (schema + d
 
 This will:
 
-1. Dump the local DB from Docker container **`newpt-postgres`** (see `scripts/ensure-docker-postgres.sh`; host port **5433**).
+1. Dump the local DB from Docker container **`newpt-postgres`** (see `scripts/ensure-docker-postgres.sh`; host port **5434**).
 2. Copy the dump to the server and restore it into the server’s Postgres container (`deploy-postgres-1`). The script stops **auth** and **core-api** first so `DROP DATABASE` can run.
 
 **Requirements:** Local Docker running with `newpt-postgres`; SSH access to the server as `root`.

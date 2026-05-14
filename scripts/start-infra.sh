@@ -23,8 +23,8 @@ echo ""
 cd "$(dirname "$0")/../infra" || exit 1
 
 # Start services
-echo "Starting Redis and NATS (Postgres is external: newpt-postgres on 5433)..."
-docker-compose up -d redis nats
+echo "Starting Redis, NATS, and Postgres (newpt-postgres → localhost:5434)..."
+(docker compose up -d redis nats postgres 2>/dev/null || docker-compose up -d redis nats postgres)
 
 # Wait for services to be ready
 echo ""
@@ -34,13 +34,13 @@ sleep 3
 # Check service status
 echo ""
 echo "=== Service Status ==="
-docker-compose ps
+(docker compose ps 2>/dev/null || docker-compose ps)
 
 echo ""
 echo "✅ Infrastructure services started!"
 echo ""
 echo "Services:"
-echo "  - Postgres: localhost:5433 (newpt-postgres container)"
+echo "  - Postgres: localhost:5434 (newpt-postgres container)"
 echo "  - Redis: localhost:6379"
 echo "  - NATS: localhost:4222"
 echo "  - NATS Monitoring: http://localhost:8222"

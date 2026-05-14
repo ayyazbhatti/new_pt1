@@ -208,16 +208,12 @@ fi
 print_info "Step 1: Starting Infrastructure Services..."
 cd "$REPO_ROOT/infra" || exit 1
 
-if docker-compose ps | grep -q "Up"; then
-    print_warning "Infrastructure services are already running"
+# Idempotent: brings up Redis, NATS, and newpt-postgres (host DB port 5434).
+if docker compose up -d redis nats postgres 2>/dev/null || docker-compose up -d redis nats postgres; then
+    print_status "Infrastructure services (redis, nats, postgres) ensured"
+    sleep 3
 else
-    # DB is managed by newpt-postgres on 5433; only start redis/nats here.
-    if docker-compose up -d redis nats; then
-        print_status "Infrastructure services started"
-        sleep 3  # Wait for services to initialize
-    else
-        print_warning "docker-compose up failed (ports may be in use). Continuing if Redis/NATS/Postgres are already available."
-    fi
+    print_warning "docker compose up failed (ports may be in use). Continuing if Redis/NATS/Postgres are already available."
 fi
 
 cd "$REPO_ROOT" || exit 1
@@ -228,7 +224,7 @@ if [ -d "$REPO_ROOT/infra/migrations" ]; then
     shopt -s nullglob 2>/dev/null || true
     for f in "$REPO_ROOT"/infra/migrations/*.sql; do
         print_info "  Applying $(basename "$f")..."
-        PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -p 5433 -U postgres -d newpt -f "$f" || true
+        PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -p 5434 -U postgres -d newpt -f "$f" || true
     done
     shopt -u nullglob 2>/dev/null || true
 else
@@ -249,10 +245,10 @@ else
     print_warning "Redis is not running on port 6379"
 fi
 
-if check_port 5433; then
-    print_status "Postgres is running on port 5433"
+if check_port 5434; then
+    print_status "Postgres (newpt) is listening on port 5434"
 else
-    print_warning "Postgres is not running on port 5433"
+    print_warning "Postgres is not running on port 5434"
 fi
 
 echo ""
@@ -260,16 +256,14 @@ echo ""
 # Step 2: Start Backend Services
 print_info "Step 2: Starting Backend Services..."
 
-# Ensure Docker PostgreSQL is running (not local PostgreSQL)
-# Check if local PostgreSQL is running and warn
-if pg_isready -h localhost -p 5433 -U postgres -d newpt >/dev/null 2>&1 && ! docker ps --format "{{.Names}}" | grep -q "^newpt-postgres$"; then
-    print_warning "Local PostgreSQL detected on port 5433"
-    print_warning "This project uses Docker PostgreSQL. Please stop local PostgreSQL or use a different port."
-    print_info "To stop local PostgreSQL: brew services stop postgresql@14 (or your version)"
+# Warn if something other than our container is bound to the newpt DB port
+if check_port 5434 && ! docker ps --format "{{.Names}}" | grep -q "^newpt-postgres$"; then
+    print_warning "Port 5434 is in use but Docker container newpt-postgres is not running."
+    print_info "Free port 5434 or set DATABASE_URL in .env to your Postgres."
 fi
 
-# Set common environment variables - Using Docker PostgreSQL
-export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/newpt}"
+# Set common environment variables - Docker newpt-postgres (see infra/docker-compose.yml)
+export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5434/newpt}"
 print_info "Using Docker PostgreSQL: ${DATABASE_URL}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export NATS_URL="${NATS_URL:-nats://localhost:4222}"
@@ -282,7 +276,10 @@ fi
 export PORT=$AUTH_SERVICE_PORT
 export JWT_SECRET="${JWT_SECRET:-dev-jwt-secret-key-change-in-production-minimum-32-characters-long}"
 export JWT_ISSUER="${JWT_ISSUER:-newpt}"
+# Avoid compile-time DB verification (schema may differ from live DB during migrations).
+export SQLX_OFFLINE=true
 start_service "Auth Service" "cargo run --bin auth-service" $AUTH_SERVICE_PORT "http://localhost:$AUTH_SERVICE_PORT/health" || true
+unset SQLX_OFFLINE
 cd "$REPO_ROOT" || exit 1
 
 # Start Data Provider (WS 9003, HTTP 9004) - use backend/data-provider (Redis price:ticks + markup)
@@ -345,7 +342,7 @@ echo ""
 echo "  Infrastructure:"
 echo "    - NATS:        nats://localhost:4222"
 echo "    - Redis:       redis://localhost:6379"
-echo "    - Postgres:    postgresql://localhost:5433"
+echo "    - Postgres:    postgresql://localhost:5434 (container newpt-postgres)"
 echo ""
 echo "  Backend Services:"
 echo "    - Auth Service:    http://localhost:$AUTH_SERVICE_PORT"

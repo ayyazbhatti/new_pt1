@@ -34,6 +34,8 @@ export interface BottomDockProps {
 }
 
 export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProps = {}) {
+  const WS_HEARTBEAT_INTERVAL_MS = 10_000
+  const WS_STALE_TIMEOUT_MS = 30_000
   // Valid tab IDs
   const validTabs = ['positions', 'orders', 'order-history', 'position-history']
   const effectiveTab = standaloneTab ?? null
@@ -48,7 +50,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     }
     return 'positions'
   })
-  const [isLoading, setIsLoading] = useState(false)
+  /** Per-tab loading so Orders fetch never hides Positions (shared flag caused skeleton stuck on tab switch). */
+  const [positionsLoading, setPositionsLoading] = useState(false)
+  const [ordersLoading, setOrdersLoading] = useState(false)
+  const [orderHistoryLoading, setOrderHistoryLoading] = useState(false)
   const [closeAllDialogOpen, setCloseAllDialogOpen] = useState(false)
   const [closeAllLoading, setCloseAllLoading] = useState(false)
   const [closePositionDialogOpen, setClosePositionDialogOpen] = useState(false)
@@ -75,9 +80,13 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const [actionMenuPositionId, setActionMenuPositionId] = useState<string | null>(null)
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressHandledRef = useRef(false)
+  /** For fetchFilledOrders error toast: matches visible tab (handles standaloneTab). */
+  const visibleDockTabRef = useRef(effectiveTab ?? activeTab)
+  visibleDockTabRef.current = effectiveTab ?? activeTab
   const setMobileTab = useTerminalStore((s) => s.setMobileTab)
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  const lastWsMessageAtRef = useRef<number>(Date.now())
   // Prevent eventual-consistency flicker: once terminal says an order is terminal, don't re-show it as pending.
   const terminalOrderTombstonesRef = useRef<Map<string, number>>(new Map())
   const [positionsSearchQuery, setPositionsSearchQuery] = useState('')
@@ -178,7 +187,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   // Fetch positions from API. When silent is true, no loading state (no skeleton flash).
   // Returns fetched data so event handlers can chain follow-up updates.
   const fetchPositions = useCallback(async (silent?: boolean) => {
-    if (!silent) setIsLoading(true)
+    if (!silent) setPositionsLoading(true)
     try {
       const data = await getPositions()
       setPositions(data)
@@ -188,13 +197,13 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       if (!silent) toast.error('Failed to load positions')
       return null
     } finally {
-      if (!silent) setIsLoading(false)
+      if (!silent) setPositionsLoading(false)
     }
   }, [])
 
   // Fetch orders from API. `silent` avoids loading overlay (use after WS/on-demand events).
   const fetchOrders = useCallback(async (silent?: boolean) => {
-    if (!silent) setIsLoading(true)
+    if (!silent) setOrdersLoading(true)
     try {
       const data = await listOrders({ status: 'pending', limit: 100 })
       const now = Date.now()
@@ -208,7 +217,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       console.error('Failed to fetch orders:', error)
       if (!silent) toast.error('Failed to load orders')
     } finally {
-      if (!silent) setIsLoading(false)
+      if (!silent) setOrdersLoading(false)
     }
   }, [])
 
@@ -234,31 +243,17 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       }
     } catch (error: any) {
       console.error('❌ Failed to fetch filled orders:', error)
-      // Only show error toast if we're on the order-history tab
-      if (activeTab === 'order-history') {
+      if (visibleDockTabRef.current === 'order-history') {
         toast.error('Failed to load order history')
+      }
     }
-    }
-  }, [activeTab])
+  }, [])
 
   // Initial fetch on mount - show loading on first load only
   useEffect(() => {
     fetchPositions()
     fetchOrders()
   }, [fetchPositions, fetchOrders])
-
-  // Fetch data when tab changes - silent refresh so table doesn't flash
-  useEffect(() => {
-    if (activeTab === 'positions') {
-      fetchPositions(true)
-      fetchFilledOrders()
-    } else if (activeTab === 'orders') {
-      // Refresh orders when switching to orders tab
-      fetchOrders()
-    } else if (activeTab === 'order-history') {
-      fetchFilledOrders() // Fetch filled orders for order history tab
-    }
-  }, [activeTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
   // WebSocket for real-time position/order updates with reconnection (no polling)
   useEffect(() => {
@@ -270,6 +265,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     let reconnectAttempts = 0
     const maxReconnectAttempts = 30
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+    let heartbeatInterval: ReturnType<typeof setInterval> | null = null
     let mounted = true
     let authHandledForCurrentSocket = false
 
@@ -288,6 +284,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         return
       }
 
+      // This guard is per-socket; reset on every new connection/reconnect.
+      authHandledForCurrentSocket = false
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
@@ -295,6 +293,26 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         if (!mounted || wsRef.current !== ws) return
         reconnectAttempts = 0
         setWsConnected(true)
+        lastWsMessageAtRef.current = Date.now()
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval)
+          heartbeatInterval = null
+        }
+        heartbeatInterval = setInterval(() => {
+          if (!mounted || wsRef.current !== ws) return
+          if (ws.readyState !== WebSocket.OPEN) return
+          const now = Date.now()
+          if (now - lastWsMessageAtRef.current > WS_STALE_TIMEOUT_MS) {
+            console.warn('WebSocket stale in BottomDock; forcing reconnect')
+            ws.close()
+            return
+          }
+          try {
+            ws.send(JSON.stringify({ type: 'ping' }))
+          } catch (error) {
+            console.warn('Failed to send BottomDock WebSocket ping:', error)
+          }
+        }, WS_HEARTBEAT_INTERVAL_MS)
         try {
           ws.send(JSON.stringify({ type: 'auth', token: accessToken }))
         } catch (error) {
@@ -304,6 +322,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
       ws.onmessage = (event) => {
         try {
+          lastWsMessageAtRef.current = Date.now()
           const data = JSON.parse(event.data)
           if (data.type !== 'pong' && data.type !== 'tick') {
             console.log('📨 [BottomDock] WebSocket message:', data.type, data)
@@ -435,9 +454,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
             const orderId = String(
               (raw.order_id as string) ?? (raw.orderId as string) ?? ''
             ).trim()
+            const stRaw = ((raw.status as string) || '').trim()
+            const st = stRaw.toUpperCase()
             if (orderId) {
-              const stRaw = ((raw.status as string) || '').trim()
-              const st = stRaw.toUpperCase()
               setOrders((prev) => {
                 const existing = prev.findIndex((o) => o.id === orderId)
                 if (existing >= 0) {
@@ -482,6 +501,16 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 }
                 return prev
               })
+              // Reconcile positions/orders even when terminal update arrives for an order
+              // that is not currently present in local pending state.
+              if (st === 'FILLED' || st === 'CANCELLED' || st === 'REJECTED') {
+                void fetchOrders(true)
+                if (st === 'FILLED') {
+                  void fetchPositions(true)
+                  void fetchFilledOrders()
+                  setTimeout(() => void fetchPositions(true), 600)
+                }
+              }
             } else {
               // Safety fallback: if an order update arrives without usable id, reconcile pending once.
               void fetchOrders(true)
@@ -500,6 +529,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       }
 
       ws.onclose = () => {
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval)
+          heartbeatInterval = null
+        }
         if (wsRef.current === ws) wsRef.current = null
         setWsConnected(false)
         if (mounted) scheduleReconnect()
@@ -510,6 +543,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     return () => {
       mounted = false
       if (reconnectTimeout) clearTimeout(reconnectTimeout)
+      if (heartbeatInterval) clearInterval(heartbeatInterval)
       if (wsRef.current) {
         wsRef.current.close()
         wsRef.current = null
@@ -519,18 +553,19 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
   const tabForContent = effectiveTab ?? activeTab
 
-  // Fetch data when tab changes - silent for positions so no skeleton flash
+  // Single tab-change handler: per-tab loading + silent position refresh when returning to Positions
   useEffect(() => {
     const tab = effectiveTab ?? activeTab
     if (tab === 'positions') {
-      fetchPositions(true)
+      void fetchPositions(true)
+      void fetchFilledOrders()
     } else if (tab === 'orders') {
-      fetchOrders()
+      void fetchOrders()
     } else if (tab === 'order-history') {
-      setIsLoading(true)
-      fetchFilledOrders().finally(() => setIsLoading(false))
+      setOrderHistoryLoading(true)
+      void fetchFilledOrders().finally(() => setOrderHistoryLoading(false))
     } else if (tab === 'position-history') {
-      fetchPositions(true)
+      void fetchPositions(true)
     }
   }, [activeTab, effectiveTab, fetchPositions, fetchOrders, fetchFilledOrders])
 
@@ -615,7 +650,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       <div className="flex-1 min-h-0 overflow-auto scrollbar-thin">
         {tabForContent === 'positions' && (
           <>
-            {isLoading ? (
+            {positionsLoading ? (
               <div className="p-4 space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="flex items-center gap-4">
@@ -1105,7 +1140,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
         {tabForContent === 'orders' && (
           <>
-            {isLoading ? (
+            {ordersLoading ? (
               <div className="p-4 space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="flex items-center gap-4">
@@ -1233,7 +1268,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
         {tabForContent === 'order-history' && (
           <>
-            {isLoading ? (
+            {orderHistoryLoading ? (
               <div className="p-4 space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="flex items-center gap-4">

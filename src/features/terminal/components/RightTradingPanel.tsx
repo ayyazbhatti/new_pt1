@@ -38,6 +38,7 @@ const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
 const SHOW_ONLY_UNITS_SIZE_MODE = true
 const WS_WARNING_INITIAL_GRACE_MS = 5000
 const WS_WARNING_STABLE_MS = 2000
+const MIN_EST_MARGIN_DOLLARS = 10
 type WsConnectionState = 'disconnected' | 'connecting' | 'connected' | 'authenticated'
 
 interface TradingPanelState {
@@ -48,7 +49,6 @@ interface TradingPanelState {
   pipPosition: string
   pipPositionCurrency: string
   currency: string
-  marginPercent: number
   useSlTp: boolean
   stopLoss: string
   takeProfit: string
@@ -172,7 +172,6 @@ export function RightTradingPanel() {
   const [pipPosition, setPipPosition] = useState(() => loadTradingPanelState().pipPosition || '5')
   const [pipPositionCurrency, setPipPositionCurrency] = useState(() => loadTradingPanelState().pipPositionCurrency || 'USD')
   const [currency, setCurrency] = useState<string>(() => loadTradingPanelState().currency || '')
-  const [marginPercent, setMarginPercent] = useState(() => loadTradingPanelState().marginPercent ?? 1.0)
   const [useSlTp, setUseSlTp] = useState(() => loadTradingPanelState().useSlTp || false)
   const [stopLoss, setStopLoss] = useState(() => loadTradingPanelState().stopLoss || '')
   const [takeProfit, setTakeProfit] = useState(() => loadTradingPanelState().takeProfit || '')
@@ -186,6 +185,7 @@ export function RightTradingPanel() {
   const [symbolDropdownOpen, setSymbolDropdownOpen] = useState(false)
   const [symbolSearchQuery, setSymbolSearchQuery] = useState('')
   const symbolDropdownRef = useRef<HTMLDivElement>(null)
+  const autoSizeSeedKeyRef = useRef('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
 
@@ -226,7 +226,6 @@ export function RightTradingPanel() {
       pipPosition,
       pipPositionCurrency,
       currency,
-      marginPercent,
       useSlTp,
       stopLoss,
       takeProfit,
@@ -236,7 +235,7 @@ export function RightTradingPanel() {
       leverageDetailsOpen,
       selectedSymbolCode: selectedSymbol?.code ?? '',
     })
-  }, [orderType, sizeMode, size, lotSize, pipPosition, pipPositionCurrency, currency, marginPercent, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen, userDetailsOpen, leverageDetailsOpen, selectedSymbol?.code])
+  }, [orderType, sizeMode, size, lotSize, pipPosition, pipPositionCurrency, currency, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen, userDetailsOpen, leverageDetailsOpen, selectedSymbol?.code])
 
   // Restore selected symbol by code on load when store has symbols but no selection (e.g. after reload)
   useEffect(() => {
@@ -326,57 +325,18 @@ export function RightTradingPanel() {
       currentUnits = calculateUnitsFromLots(currentLotSize, symbolForCalc)
     }
 
+    const safePipValuePerLot = Number.isFinite(pipValuePerLot) ? pipValuePerLot : 0
+    const safeCurrentLotSize = Number.isFinite(currentLotSize) ? currentLotSize : 0
+    const safeCurrentUnits = Number.isFinite(currentUnits) ? currentUnits : 0
+    const safeCurrentPipPosition = Number.isFinite(currentPipPosition) ? currentPipPosition : 0
+
     return {
-      pipValuePerLot,
-      currentLotSize,
-      currentUnits,
-      currentPipPosition,
+      pipValuePerLot: safePipValuePerLot,
+      currentLotSize: safeCurrentLotSize,
+      currentUnits: safeCurrentUnits,
+      currentPipPosition: safeCurrentPipPosition,
     }
   }, [sizeMode, size, lotSize, pipPosition, selectedSymbol, currency, pipPositionCurrency, getSymbolForCalculations])
-
-  // Target est. margin from Free Margin slider: (marginPercent / 100) * freeMargin (for display)
-  const targetMarginFromSlider = useMemo(() => {
-    const free = accountSummary?.freeMargin ?? 0
-    return (marginPercent / 100) * free
-  }, [marginPercent, accountSummary?.freeMargin])
-
-  // When Free Margin slider moves: set size (Units mode) so est. margin equals target % of free margin
-  const handleFreeMarginSliderChange = useCallback(
-    (newPercent: number) => {
-      setMarginPercent(newPercent)
-      const freeMargin = accountSummary?.freeMargin ?? 0
-      if (freeMargin <= 0 || !selectedSymbol) return
-      const price = selectedSymbol.numericPrice || 0
-      if (price <= 0) return
-      const targetMargin = (newPercent / 100) * freeMargin
-      const guessNotional = targetMargin * 50
-      const leverage = getEffectiveLeverage(
-        guessNotional,
-        symbolLeverage?.tiers ?? null,
-        meData?.minLeverage,
-        meData?.maxLeverage,
-        50
-      )
-      const notional = targetMargin * leverage
-      const symbolForCalc = getSymbolForCalculations()
-      const volPrecision = symbolForCalc?.volumePrecision ?? 8
-      setSizeMode('units')
-      if (currency === selectedSymbol.quoteCurrency) {
-        setSize(notional.toFixed(2))
-      } else {
-        setSize((notional / price).toFixed(volPrecision))
-      }
-    },
-    [
-      accountSummary?.freeMargin,
-      selectedSymbol,
-      currency,
-      symbolLeverage?.tiers,
-      meData?.minLeverage,
-      meData?.maxLeverage,
-      getSymbolForCalculations,
-    ]
-  )
 
   // Handle size mode change with conversion
   const handleSizeModeChange = useCallback((newMode: 'units' | 'lots' | 'pipPosition') => {
@@ -403,9 +363,67 @@ export function RightTradingPanel() {
     setSizeMode(newMode)
   }, [sizeMode, sizeCalculations, selectedSymbol, getSymbolForCalculations])
 
+  // Compute a default units size so estimated margin targets minimum threshold.
+  const getDefaultSizeForMinMargin = useCallback((): string | null => {
+    if (!selectedSymbol) return null
+    const marketPrice = selectedSymbol.numericPrice2 || selectedSymbol.numericPrice || 0
+    const limitPriceNum = parseFloat(limitPrice)
+    const executionPrice =
+      orderType === 'limit' && Number.isFinite(limitPriceNum) && limitPriceNum > 0
+        ? limitPriceNum
+        : marketPrice
+    if (executionPrice <= 0) return null
+
+    let notional = MIN_EST_MARGIN_DOLLARS * 50
+    for (let i = 0; i < 5; i += 1) {
+      const leverage = getEffectiveLeverage(
+        notional,
+        symbolLeverage?.tiers ?? null,
+        meData?.minLeverage,
+        meData?.maxLeverage,
+        50
+      )
+      if (!Number.isFinite(leverage) || leverage <= 0) break
+      notional = MIN_EST_MARGIN_DOLLARS * leverage
+    }
+    if (!Number.isFinite(notional) || notional <= 0) return null
+
+    const symbolForCalc = getSymbolForCalculations()
+    const volPrecision = symbolForCalc?.volumePrecision ?? 8
+    if (currency === selectedSymbol.quoteCurrency) {
+      return notional.toFixed(2)
+    }
+    return (notional / executionPrice).toFixed(volPrecision)
+  }, [
+    selectedSymbol,
+    limitPrice,
+    orderType,
+    symbolLeverage?.tiers,
+    meData?.minLeverage,
+    meData?.maxLeverage,
+    getSymbolForCalculations,
+    currency,
+  ])
+
+  // Auto-seed default size once per context, so initial value meets min estimated margin target.
+  useEffect(() => {
+    if (!(SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units') || !selectedSymbol || !currency) return
+    if (orderType === 'limit' && !limitPrice.trim()) return
+
+    const seedKey = `${selectedSymbol.code}|${currency}|${orderType}|${orderType === 'limit' ? limitPrice.trim() : 'market'}`
+    if (autoSizeSeedKeyRef.current === seedKey) return
+
+    const nextSize = getDefaultSizeForMinMargin()
+    if (!nextSize) return
+
+    autoSizeSeedKeyRef.current = seedKey
+    setSize(nextSize)
+  }, [selectedSymbol, currency, orderType, limitPrice, sizeMode, getDefaultSizeForMinMargin])
+
   /** Server-side margin (same as place_order). Uses Redis execution price + risk::effective_leverage. */
   const canEstimateServerMargin =
     !!selectedSymbol &&
+    Number.isFinite(sizeCalculations.currentUnits) &&
     sizeCalculations.currentUnits > 0 &&
     (orderType === 'market' || (orderType === 'limit' && limitPrice.trim() !== ''))
 
@@ -512,6 +530,8 @@ export function RightTradingPanel() {
 
   // Block Buy/Sell when estimated margin exceeds free margin (server also enforces)
   const insufficientFreeMargin = estMarginDollars > (accountSummary?.freeMargin ?? 0)
+  const minRequiredMarginDollars = MIN_EST_MARGIN_DOLLARS
+  const belowMinRequiredMargin = estMarginDollars > 0 && estMarginDollars < minRequiredMarginDollars
 
   // Format live price for limit price placeholder
   const livePricePlaceholder = useMemo(() => {
@@ -835,7 +855,7 @@ export function RightTradingPanel() {
       displaySize = `$${pipPosNum.toFixed(2)}/pip (${formatLotSize(calculatedLots, symbolForCalc)} lots, ${formatUnits(baseSize, symbolForCalc)} units)`
     }
 
-    if (baseSize <= 0) {
+    if (!Number.isFinite(baseSize) || baseSize <= 0) {
       toast.error('Invalid position size')
       return
     }
@@ -851,6 +871,10 @@ export function RightTradingPanel() {
       toast.error(
         `Insufficient funds: required margin $${estMargin.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
       )
+      return
+    }
+    if (belowMinRequiredMargin) {
+      toast.error(`Estimated margin must be at least $${minRequiredMarginDollars.toFixed(2)} to open a position`)
       return
     }
 
@@ -889,7 +913,8 @@ export function RightTradingPanel() {
       // Reset form for market orders (keep limit orders for potential modifications)
       if (orderType === 'market') {
         if (effectiveSizeMode === 'units') {
-          setSize('0.003457')
+          const nextDefaultSize = getDefaultSizeForMinMargin()
+          setSize(nextDefaultSize ?? '0.003457')
         } else if (effectiveSizeMode === 'lots') {
           setLotSize('0.5')
         } else if (effectiveSizeMode === 'pipPosition') {
@@ -909,19 +934,28 @@ export function RightTradingPanel() {
       const insufficientCode =
         data?.error === 'INSUFFICIENT_FREE_MARGIN' ||
         (typeof data?.error === 'object' && data?.error?.code === 'INSUFFICIENT_FREE_MARGIN')
+      const minRequiredMarginCode =
+        data?.error === 'MIN_REQUIRED_MARGIN_NOT_MET' ||
+        (typeof data?.error === 'object' && data?.error?.code === 'MIN_REQUIRED_MARGIN_NOT_MET')
       const required = Number((data as { required_margin?: string })?.required_margin)
       const free = Number((data as { free_margin?: string })?.free_margin)
+      const minRequired = Number((data as { min_required_margin?: string })?.min_required_margin)
       const insufficientMessage =
         Number.isFinite(required) && Number.isFinite(free)
           ? `Insufficient funds: required margin $${required.toFixed(2)}, free margin $${free.toFixed(2)}`
           : 'Insufficient funds/margin to place this order'
+      const minRequiredMessage =
+        Number.isFinite(minRequired)
+          ? `Estimated margin must be at least $${minRequired.toFixed(2)} to open a position`
+          : `Estimated margin must be at least $${minRequiredMarginDollars.toFixed(2)} to open a position`
       const is403 = status === 403 || (typeof err?.message === 'string' && err.message.includes('403'))
       const errorMessage =
+        (minRequiredMarginCode ? minRequiredMessage : null) ||
         (insufficientCode ? insufficientMessage : null) ||
         apiMessage ||
         (is403 ? 'Trading is disabled. You cannot open new positions.' : null) ||
         (error instanceof Error ? error.message : 'Failed to place order')
-      const showPlain = insufficientCode || is403 || apiMessage
+      const showPlain = minRequiredMarginCode || insufficientCode || is403 || apiMessage
       toast.error(showPlain ? errorMessage : `Order failed: ${errorMessage}`)
       console.error('Order placement error:', error)
     } finally {
@@ -1179,16 +1213,6 @@ export function RightTradingPanel() {
                   ) : (
                     <>≈ 0.00 USD</>
                   )}
-                  {sizeCalculations.currentLotSize > 0 && (
-                    <span className="ml-2">
-                      • {formatLotSize(sizeCalculations.currentLotSize, getSymbolForCalculations() || {} as AdminSymbol)} lots
-                    </span>
-                  )}
-                  {sizeCalculations.currentPipPosition > 0 && (
-                    <span className="ml-2">
-                      • ${sizeCalculations.currentPipPosition.toFixed(2)}/pip
-                    </span>
-                  )}
                 </div>
               </>
             )}
@@ -1270,36 +1294,6 @@ export function RightTradingPanel() {
                 </div>
               </>
             )}
-          </div>
-
-          {/* Free Margin */}
-          <div className="mb-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold text-muted uppercase tracking-wider">Free Margin: {marginPercent.toFixed(1)}%</span>
-              <span className="text-xs font-bold text-text">
-                {accountSummary?.freeMargin != null ? `$${targetMarginFromSlider.toFixed(2)}` : '—'}
-              </span>
-            </div>
-            <div className="relative">
-              <input
-                type="range"
-                min="0.1"
-                max="100"
-                step="0.1"
-                value={marginPercent}
-                onChange={(e) => handleFreeMarginSliderChange(Number(e.target.value))}
-                className="w-full h-2 bg-surface-2 rounded-lg appearance-none cursor-pointer accent-accent
-                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
-                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer
-                  [&::-webkit-slider-thumb]:shadow [&::-webkit-slider-thumb]:border-0
-                  [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:rounded-full
-                  [&::-moz-range-thumb]:bg-accent [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer"
-              />
-              <div className="flex justify-between text-xs text-muted mt-1">
-                <span>0.1%</span>
-                <span>100%</span>
-              </div>
-            </div>
           </div>
 
           {/* Stop Loss / Take Profit - Price and Amount (same as Edit Position popup) */}
@@ -1504,7 +1498,7 @@ export function RightTradingPanel() {
               variant="success" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-success/20 hover:shadow-success/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleBuy}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || !canPlaceOrder}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || belowMinRequiredMargin || !canPlaceOrder}
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (
@@ -1519,7 +1513,7 @@ export function RightTradingPanel() {
               variant="danger" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-danger/20 hover:shadow-danger/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleSell}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || !canPlaceOrder}
+              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || belowMinRequiredMargin || !canPlaceOrder}
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (
@@ -1534,6 +1528,11 @@ export function RightTradingPanel() {
           {insufficientFreeMargin && estMarginDollars > 0 && (
             <div className="mt-2 text-xs text-danger text-center">
               Insufficient free margin (Est. margin &gt; Free margin)
+            </div>
+          )}
+          {belowMinRequiredMargin && (
+            <div className="mt-2 text-xs text-warning text-center">
+              Minimum estimated margin is ${minRequiredMarginDollars.toFixed(2)}
             </div>
           )}
           {!wsConnected && (wsState === 'connecting' || wsState === 'connected') && (

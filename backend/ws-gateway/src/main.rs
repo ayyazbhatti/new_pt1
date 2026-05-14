@@ -9,6 +9,7 @@ mod metrics;
 mod health;
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info};
@@ -61,15 +62,45 @@ async fn main() -> Result<()> {
         "account:summary:updated".to_string(),
     ];
 
-    // Create Redis subscriber
-    let redis_subscriber = Arc::new(
-        RedisSubscriber::new(
+    // Redis must be up before we bind WS/HTTP ports; retry so brief compose races don't exit the process.
+    const REDIS_INIT_MAX_ATTEMPTS: u32 = 90;
+    let mut redis_subscriber_opt = None;
+    for attempt in 1..=REDIS_INIT_MAX_ATTEMPTS {
+        match RedisSubscriber::new(
             &config.redis.url,
             redis_channels.clone(),
             config.redis.reconnect_interval_secs,
         )
-        .await?,
-    );
+        .await
+        {
+            Ok(s) => {
+                redis_subscriber_opt = Some(Arc::new(s));
+                break;
+            }
+            Err(e) if attempt == REDIS_INIT_MAX_ATTEMPTS => {
+                return Err(anyhow::anyhow!(
+                    "RedisSubscriber: failed after {REDIS_INIT_MAX_ATTEMPTS} attempts (~{}s): {}",
+                    REDIS_INIT_MAX_ATTEMPTS * 2,
+                    e
+                ));
+            }
+            Err(e) => {
+                error!(
+                    "RedisSubscriber init failed ({}/{}): {}; retrying in 2s",
+                    attempt, REDIS_INIT_MAX_ATTEMPTS, e
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+    let redis_subscriber = match redis_subscriber_opt {
+        Some(s) => s,
+        None => {
+            return Err(anyhow::anyhow!(
+                "RedisSubscriber: internal error (no subscriber after retry loop)"
+            ));
+        }
+    };
 
     // Create message channel
     let (message_tx, message_rx) = mpsc::channel(10000);

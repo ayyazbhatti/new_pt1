@@ -36,15 +36,28 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Replace container if it was created with a different host port (e.g. legacy 5433).
+if docker ps -a --format "{{.Names}}" | grep -q "^newpt-postgres$"; then
+    host_port="$(docker inspect newpt-postgres --format '{{if index .HostConfig.PortBindings "5432/tcp"}}{{with index (index .HostConfig.PortBindings "5432/tcp") 0}}{{.HostPort}}{{end}}{{end}}' 2>/dev/null || true)"
+    if [ "$host_port" != "5434" ]; then
+        print_warning "Removing newpt-postgres (host port was '${host_port:-unset}', expected 5434)..."
+        docker rm -f newpt-postgres >/dev/null 2>&1 || true
+    fi
+fi
+
 # Start Docker PostgreSQL if not running
 if ! docker ps --format "{{.Names}}" | grep -q "^newpt-postgres$"; then
     if docker ps -a --format "{{.Names}}" | grep -q "^newpt-postgres$"; then
         print_info "Starting Docker PostgreSQL container (newpt-postgres)..."
         docker start newpt-postgres >/dev/null
     else
-        print_error "Container 'newpt-postgres' was not found."
-        print_info "Please create/start newpt-postgres (host port 5433) and rerun."
-        exit 1
+        print_info "Creating newpt-postgres from infra/docker-compose.yml (host port 5434)..."
+        (cd "$REPO_ROOT/infra" && (docker compose up -d postgres 2>/dev/null || docker-compose up -d postgres)) || {
+            print_error "Failed to start Postgres (is host port 5434 already in use?)."
+            exit 1
+        }
     fi
 
     print_info "Waiting for PostgreSQL to be ready..."
@@ -69,11 +82,11 @@ if docker exec newpt-postgres psql -U postgres -d newpt -c "SELECT 1;" >/dev/nul
     echo ""
     print_info "Connection details:"
     echo "  Host: localhost"
-    echo "  Port: 5433"
+    echo "  Port: 5434"
     echo "  Database: newpt"
     echo "  User: postgres"
     echo "  Password: postgres"
-    echo "  Connection String: postgresql://postgres:postgres@localhost:5433/newpt"
+    echo "  Connection String: postgresql://postgres:postgres@localhost:5434/newpt"
     echo ""
     print_success "✅ Docker PostgreSQL is ready!"
 else

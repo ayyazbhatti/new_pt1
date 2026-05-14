@@ -24,6 +24,8 @@ use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
 use risk::effective_leverage;
 
+const MIN_REQUIRED_MARGIN_USD: i64 = 10;
+
 #[derive(Clone)]
 pub struct OrdersState {
     pub redis: Arc<crate::redis_pool::RedisPool>,
@@ -34,6 +36,7 @@ pub struct OrdersState {
 pub enum PlaceOrderError {
     Status(StatusCode),
     InsufficientMargin { required_margin: String, free_margin: String },
+    MinimumMarginNotMet { required_margin: String, min_required_margin: String },
     /// Trading access is not "full" (close_only or disabled) — return 403 with message.
     TradingRestricted { message: String },
     /// No leverage profile / tiers, missing user min–max, or notional outside configured bands.
@@ -52,6 +55,15 @@ impl IntoResponse for PlaceOrderError {
                     "free_margin": free_margin
                 });
                 (StatusCode::FORBIDDEN, Json(body)).into_response()
+            }
+            PlaceOrderError::MinimumMarginNotMet { required_margin, min_required_margin } => {
+                let body = serde_json::json!({
+                    "error": "MIN_REQUIRED_MARGIN_NOT_MET",
+                    "message": format!("Estimated margin ({}) must be at least ({}).", required_margin, min_required_margin),
+                    "required_margin": required_margin,
+                    "min_required_margin": min_required_margin
+                });
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
             PlaceOrderError::TradingRestricted { message } => {
                 let body = serde_json::json!({
@@ -449,6 +461,21 @@ async fn place_order(
     let leverage_tiers = margin.leverage_tiers;
     let account_type = margin.account_type;
     let required_margin = margin.required_margin;
+    let min_required_margin = Decimal::from(MIN_REQUIRED_MARGIN_USD);
+
+    if required_margin < min_required_margin {
+        error!(
+            order_id = %order_id,
+            user_id = %user_id,
+            required = %required_margin,
+            min_required = %min_required_margin,
+            "place_order FAILED stage=min_required_margin status=400"
+        );
+        return Err(PlaceOrderError::MinimumMarginNotMet {
+            required_margin: required_margin.to_string(),
+            min_required_margin: min_required_margin.to_string(),
+        });
+    }
 
     // Check idempotency
     let mut conn = orders_state.redis.get().await

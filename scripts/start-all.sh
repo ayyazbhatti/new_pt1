@@ -9,7 +9,7 @@ cd "$REPO_ROOT"
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 
 # Default env for services
-export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/newpt}"
+export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5434/newpt}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export NATS_URL="${NATS_URL:-nats://localhost:4222}"
 export JWT_SECRET="${JWT_SECRET:-dev-jwt-secret-key-change-in-production-minimum-32-characters-long}"
@@ -21,7 +21,7 @@ cd "$REPO_ROOT"
 
 echo "==> Waiting for Postgres..."
 for i in {1..30}; do
-  if PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -U postgres -d newpt -c "SELECT 1" >/dev/null 2>&1; then
+  if PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -p 5434 -U postgres -d newpt -c "SELECT 1" >/dev/null 2>&1; then
     break
   fi
   if [ "$i" -eq 30 ]; then echo "Postgres did not become ready."; exit 1; fi
@@ -33,7 +33,7 @@ if [ -d "infra/migrations" ]; then
   shopt -s nullglob 2>/dev/null || true
   for f in infra/migrations/*.sql; do
     echo "  Applying $(basename "$f")..."
-    PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -U postgres -d newpt -f "$f" || true
+    PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql -h localhost -p 5434 -U postgres -d newpt -f "$f" || true
   done
   shopt -u nullglob 2>/dev/null || true
 else
@@ -41,7 +41,7 @@ else
 fi
 
 echo "==> Starting auth-service (port 3000)..."
-(cd "$REPO_ROOT/backend/auth-service" && cargo run --bin auth-service) &
+(cd "$REPO_ROOT/backend/auth-service" && SQLX_OFFLINE=true cargo run --bin auth-service) &
 AUTH_PID=$!
 
 echo "==> Starting ws-gateway (WS 3003, health 9002)..."
