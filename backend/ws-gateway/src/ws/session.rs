@@ -9,7 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use anyhow::Result;
 use redis::Client as RedisClient;
 use redis::AsyncCommands;
@@ -112,7 +112,11 @@ impl Session {
             while let Some(Ok(msg)) = receiver.next().await {
                 match msg {
                     Message::Text(text) => {
-                        info!("Received message from connection {}: {}", conn_id, text);
+                        if !text.contains("\"type\":\"auth\"") && !text.contains("\"type\": \"auth\"") {
+                            debug!("Received message from connection {}: {}", conn_id, text);
+                        } else {
+                            debug!("Received auth message from connection {} (body suppressed)", conn_id);
+                        }
                         // Validate message size
                         if let Err(e) = validator.validate_message_size(text.len()) {
                             warn!("Message too large from connection {}: {}", conn_id, e);
@@ -129,7 +133,17 @@ impl Session {
                         // Parse message
                         let client_msg: ClientMessage = match serde_json::from_str(&text) {
                             Ok(msg) => {
-                                info!("Parsed message from connection {}: {:?}", conn_id, msg);
+                                match &msg {
+                                    ClientMessage::Auth { .. } => {
+                                        debug!(
+                                            "Parsed auth message from connection {} (token suppressed)",
+                                            conn_id
+                                        );
+                                    }
+                                    other => {
+                                        debug!("Parsed message from connection {}: {:?}", conn_id, other);
+                                    }
+                                }
                                 msg
                             },
                             Err(e) => {

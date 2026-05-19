@@ -124,13 +124,16 @@ impl ConnectionRegistry {
             .unwrap_or_default()
     }
 
-    /// Connection IDs for all connections with role "admin" or "super_admin" (case-insensitive). Used for chat.support routing.
+    /// Connection IDs for finance/admin event recipients: admin, super_admin, and manager (case-insensitive).
+    /// Used for deposit broadcasts, chat.support routing, and similar admin-only fan-out.
     pub fn get_admin_connection_ids(&self) -> Vec<Uuid> {
         self.connections
             .iter()
             .filter(|entry| {
                 let r = entry.value().role.as_str();
-                r.eq_ignore_ascii_case("admin") || r.eq_ignore_ascii_case("super_admin")
+                r.eq_ignore_ascii_case("admin")
+                    || r.eq_ignore_ascii_case("super_admin")
+                    || r.eq_ignore_ascii_case("manager")
             })
             .map(|entry| entry.conn_id)
             .collect()
