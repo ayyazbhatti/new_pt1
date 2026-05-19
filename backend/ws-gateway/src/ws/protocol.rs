@@ -167,6 +167,11 @@ pub enum ServerMessage {
     ChatMessage {
         payload: serde_json::Value,
     },
+    // AI chat streaming: payload from auth-service NATS ai.chat.user.{user_id} (delta, done, message, error)
+    #[serde(rename = "ai.chat.delta")]
+    AiChatDelta {
+        payload: serde_json::Value,
+    },
 }
 
 impl ServerMessage {

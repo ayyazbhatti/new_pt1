@@ -89,8 +89,11 @@ async-nats = "0.32"
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 futures-util = "0.3"
 
-# HTTP client (Voiso Click2Call proxy)
-reqwest = { version = "0.11", features = ["json"] }
+# HTTP client (Voiso Click2Call proxy, Anthropic streaming)
+reqwest = { version = "0.11", features = ["json", "stream"] }
+
+# Async trait for AI provider abstraction
+async-trait = "0.1"
 
 # Decimal
 rust_decimal = { version = "1.33", features = ["serde-float"] }

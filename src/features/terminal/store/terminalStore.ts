@@ -12,6 +12,8 @@ interface TerminalStore {
   notificationPanelOpen: boolean
   paymentPanelOpen: boolean
   chatPanelOpen: boolean
+  /** Support vs AI Assistant tab (persisted in localStorage). */
+  chatPanelTab: 'support' | 'ai'
   /** Mobile: left sidebar / menu overlay open (hamburger). */
   mobileMenuOpen: boolean
   setMobileMenuOpen: (open: boolean) => void
@@ -42,6 +44,7 @@ interface TerminalStore {
   setNotificationPanelOpen: (open: boolean) => void
   setPaymentPanelOpen: (open: boolean) => void
   setChatPanelOpen: (open: boolean) => void
+  setChatPanelTab: (tab: 'support' | 'ai') => void
   setChartShowAskPrice: (show: boolean) => void
   setChartShowPositionMarker: (show: boolean) => void
   setChartShowClosedPositionMarker: (show: boolean) => void
@@ -59,6 +62,24 @@ const STORAGE_KEY_CHART_SHOW_POSITION_MARKER = 'terminal.chartShowPositionMarker
 const STORAGE_KEY_CHART_SHOW_CLOSED_POSITION_MARKER = 'terminal.chartShowClosedPositionMarker'
 const STORAGE_KEY_ENABLE_LIQUIDATION_EMAIL = 'terminal.enableLiquidationEmail'
 const STORAGE_KEY_ENABLE_SLTP_EMAIL = 'terminal.enableSlTpEmail'
+const STORAGE_KEY_CHAT_PANEL_OPEN = 'terminal.chatPanelOpen'
+const STORAGE_KEY_CHAT_PANEL_TAB = 'terminal.chatPanelTab'
+
+function getChatPanelOpenFromStorage(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY_CHAT_PANEL_OPEN) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function getChatPanelTabFromStorage(): 'support' | 'ai' {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_CHAT_PANEL_TAB)
+    if (v === 'ai' || v === 'support') return v
+  } catch {}
+  return 'support'
+}
 
 function getEnableLiquidationEmailFromStorage(): boolean {
   try {
@@ -202,8 +223,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   setNotificationPanelOpen: (open) => set({ notificationPanelOpen: open }),
   paymentPanelOpen: false,
   setPaymentPanelOpen: (open) => set({ paymentPanelOpen: open }),
-  chatPanelOpen: false,
-  setChatPanelOpen: (open) => set({ chatPanelOpen: open }),
+  chatPanelOpen: getChatPanelOpenFromStorage(),
+  chatPanelTab: getChatPanelTabFromStorage(),
+  setChatPanelOpen: (open) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CHAT_PANEL_OPEN, String(open))
+    } catch {}
+    set({ chatPanelOpen: open })
+  },
+  setChatPanelTab: (tab) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CHAT_PANEL_TAB, tab)
+    } catch {}
+    set({ chatPanelTab: tab })
+  },
   mobileMenuOpen: false,
   setMobileMenuOpen: (open) => set({ mobileMenuOpen: open }),
   mobileSymbolPanelOpen: false,

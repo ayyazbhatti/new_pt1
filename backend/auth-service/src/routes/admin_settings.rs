@@ -20,6 +20,8 @@ use crate::services::data_provider_integrations_service::DataProviderIntegration
 use crate::services::email_config_service::{
     send_test_email_sync, EmailConfigService, UpdateEmailConfigRequest,
 };
+use crate::services::ai::config_service::{AiConfigService, UpdatePlatformAiConfig};
+use crate::services::ai::AnthropicProvider;
 use crate::services::email_templates_service::{EmailTemplatesService, UpdateEmailTemplateRequest};
 use crate::utils::jwt::Claims;
 use tracing::error;
@@ -30,7 +32,7 @@ async fn check_settings_permission(
     claims: &Claims,
     permission: &str,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if claims.role == "admin" {
+    if claims.role == "admin" || claims.role == "super_admin" {
         return Ok(());
     }
     let profile_id: Option<uuid::Uuid> = sqlx::query_scalar(
@@ -92,6 +94,8 @@ pub fn create_admin_settings_router(pool: PgPool) -> Router<PgPool> {
         )
         .route("/data-providers/test-ws", post(post_test_data_providers_ws))
         .route("/voiso", get(get_voiso_config).put(put_voiso_config))
+        .route("/ai", get(get_ai_config).put(put_ai_config))
+        .route("/ai/test", post(post_test_ai_config))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
@@ -238,6 +242,219 @@ async fn put_voiso_config(
         )
     })?;
     get_voiso_config(State(pool), claims).await
+}
+
+fn ai_config_to_json(config: &crate::services::ai::config_service::PlatformAiConfig) -> serde_json::Value {
+    let stored_api_key_configured = config
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some();
+    let env_api_key_configured = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    serde_json::json!({
+        "provider": config.provider,
+        "model": config.model,
+        "apiKeyConfigured": stored_api_key_configured || env_api_key_configured,
+        "storedApiKeyConfigured": stored_api_key_configured,
+        "envApiKeyConfigured": env_api_key_configured,
+        "systemPrompt": config.system_prompt,
+        "enabled": config.enabled,
+        "maxTokensPerMessage": config.max_tokens_per_message,
+        "dailyTokenCapPerUser": config.daily_token_cap_per_user,
+        "rateLimitPerMinute": config.rate_limit_per_minute,
+        "includeUserContext": config.include_user_context,
+        "topicGuardEnabled": config.topic_guard_enabled,
+        "classifierModel": config.classifier_model,
+    })
+}
+
+async fn get_ai_config(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "ai_settings:view").await?;
+    let config = AiConfigService::get(&pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    Ok(Json(ai_config_to_json(&config)))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PutAiConfigBody {
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    clear_api_key: Option<bool>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    system_prompt: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_tokens_per_message: Option<i32>,
+    #[serde(default)]
+    daily_token_cap_per_user: Option<i32>,
+    #[serde(default)]
+    rate_limit_per_minute: Option<i32>,
+    #[serde(default)]
+    include_user_context: Option<bool>,
+    #[serde(default)]
+    topic_guard_enabled: Option<bool>,
+    #[serde(default)]
+    classifier_model: Option<String>,
+}
+
+async fn put_ai_config(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+    axum::Json(body): axum::Json<PutAiConfigBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "ai_settings:edit").await?;
+
+    if let Some(ref provider) = body.provider {
+        if provider.trim() != "anthropic" {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "Only the anthropic provider is supported in v1" }
+                })),
+            ));
+        }
+    }
+
+    if let Some(v) = body.max_tokens_per_message {
+        if !(256..=8192).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "maxTokensPerMessage must be between 256 and 8192" }
+                })),
+            ));
+        }
+    }
+    if let Some(v) = body.daily_token_cap_per_user {
+        if !(1000..=500_000).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "dailyTokenCapPerUser must be between 1000 and 500000" }
+                })),
+            ));
+        }
+    }
+    if let Some(v) = body.rate_limit_per_minute {
+        if !(1..=60).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "rateLimitPerMinute must be between 1 and 60" }
+                })),
+            ));
+        }
+    }
+
+    let clear_key = body.clear_api_key == Some(true)
+        || body.api_key.as_deref().map(str::trim) == Some("");
+
+    let api_key = if clear_key {
+        Some(String::new())
+    } else {
+        body.api_key.clone()
+    };
+
+    let updated = AiConfigService::update(
+        &pool,
+        UpdatePlatformAiConfig {
+            provider: body.provider,
+            model: body.model,
+            api_key,
+            system_prompt: body.system_prompt,
+            enabled: body.enabled,
+            max_tokens_per_message: body.max_tokens_per_message,
+            daily_token_cap_per_user: body.daily_token_cap_per_user,
+            rate_limit_per_minute: body.rate_limit_per_minute,
+            include_user_context: body.include_user_context,
+            topic_guard_enabled: body.topic_guard_enabled,
+            classifier_model: body.classifier_model,
+        },
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+
+    Ok(Json(ai_config_to_json(&updated)))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TestAiConfigBody {
+    #[serde(default)]
+    message: Option<String>,
+}
+
+async fn post_test_ai_config(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+    axum::Json(body): axum::Json<TestAiConfigBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "ai_settings:edit").await?;
+
+    let config = AiConfigService::get(&pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+
+    let api_key = AiConfigService::resolve_api_key(&config).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": { "code": "AI_NOT_CONFIGURED", "message": "Anthropic API key is not configured" }
+            })),
+        )
+    })?;
+
+    let test_message = body
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("What is leverage?");
+
+    let provider = AnthropicProvider::new(api_key, config.model.clone());
+    match provider
+        .complete(
+            "You are a helpful assistant for a trading platform. Answer briefly and accurately.",
+            test_message,
+            512,
+        )
+        .await
+    {
+        Ok(reply) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "reply": reply.trim(),
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": e.to_string(),
+        }))),
+    }
 }
 
 async fn get_data_providers(

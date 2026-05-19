@@ -285,6 +285,19 @@ export type WsInboundEvent =
       }
     }
   | {
+      type: 'ai.chat.delta'
+      payload: {
+        type: 'delta' | 'done' | 'error' | 'message'
+        conversationId: string
+        messageId: string
+        text?: string
+        content?: string
+        role?: 'assistant'
+        blockedReason?: string | null
+        detail?: string
+      }
+    }
+  | {
       type: 'error'
       message: string
     }

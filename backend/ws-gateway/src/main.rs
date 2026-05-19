@@ -154,13 +154,16 @@ async fn main() -> Result<()> {
         nats: nats_client.clone(),
     };
 
-    // NATS chat subscriber: forward chat.support and chat.user.* to the right WebSocket connections
+    // NATS chat + AI chat subscribers
     if let Some(nats) = nats_client {
+        let nats_chat = Arc::clone(&nats);
+        let nats_ai = Arc::clone(&nats);
+
         let registry_chat = registry.clone();
         let broadcaster_chat = broadcaster.clone();
         tokio::spawn(async move {
             use tracing::{error, info, warn};
-            let sub = match nats.subscribe("chat.>".to_string()).await {
+            let sub = match nats_chat.subscribe("chat.>".to_string()).await {
                 Ok(s) => {
                     info!("Subscribed to NATS chat.> for real-time support chat");
                     s
@@ -208,6 +211,47 @@ async fn main() -> Result<()> {
                 if !conn_ids.is_empty() {
                     broadcaster_chat.send_to_connections(&conn_ids, ws_msg);
                 }
+            }
+        });
+
+        // NATS AI chat subscriber: forward ai.chat.user.{user_id} to that user's connections only
+        let registry_ai = registry.clone();
+        let broadcaster_ai = broadcaster.clone();
+        tokio::spawn(async move {
+            use tracing::{error, info, warn};
+            let sub = match nats_ai.subscribe("ai.chat.>".to_string()).await {
+                Ok(s) => {
+                    info!("Subscribed to NATS ai.chat.> for real-time AI chat");
+                    s
+                }
+                Err(e) => {
+                    error!("Failed to subscribe to NATS ai.chat.>: {}", e);
+                    return;
+                }
+            };
+            let mut msgs = sub;
+            while let Some(msg) = msgs.next().await {
+                let subject = msg.subject.to_string();
+                let user_id = match subject.strip_prefix("ai.chat.user.") {
+                    Some(id) if !id.is_empty() => id.to_string(),
+                    _ => continue,
+                };
+                let payload: serde_json::Value = match std::str::from_utf8(&msg.payload) {
+                    Ok(s) => match serde_json::from_str(s) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("Invalid JSON on {}: {}", subject, e);
+                            continue;
+                        }
+                    },
+                    Err(_) => continue,
+                };
+                let conn_ids = registry_ai.get_user_connections(&user_id);
+                if conn_ids.is_empty() {
+                    continue;
+                }
+                let ws_msg = ServerMessage::AiChatDelta { payload };
+                broadcaster_ai.send_to_connections(&conn_ids, ws_msg);
             }
         });
     }

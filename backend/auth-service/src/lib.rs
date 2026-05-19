@@ -34,6 +34,7 @@ use routes::admin_permission_profiles::create_admin_permission_profiles_router;
 use routes::admin_affiliate::create_admin_affiliate_router;
 use routes::admin_tags::create_admin_tags_router;
 use routes::admin_leads::create_admin_leads_router;
+use routes::ai_chat::create_ai_chat_router;
 use routes::chat::{create_admin_chat_router, create_user_chat_router};
 use routes::deposits::create_deposits_router;
 use routes::withdrawals::create_withdrawals_router;
@@ -330,6 +331,7 @@ pub async fn run() -> anyhow::Result<()> {
                 .merge(create_user_chat_router(pool.clone(), deposits_state.clone())),
         )
         .nest("/api/admin/chat", create_admin_chat_router(pool.clone(), deposits_state.clone()))
+        .nest("/api/ai", create_ai_chat_router(pool.clone(), deposits_state.clone()))
         .nest("/api/orders", create_orders_router(pool.clone(), orders_state.clone()))
         .nest("/v1/orders", create_orders_router(pool.clone(), orders_state.clone())) // Keep v1 for backward compatibility
         .nest(

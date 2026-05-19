@@ -18,4 +18,5 @@ pub mod data_provider_integrations_service;
 pub mod binance_multiplex_ws_test;
 pub mod appointment_service;
 pub mod user_events_service;
+pub mod ai;
 

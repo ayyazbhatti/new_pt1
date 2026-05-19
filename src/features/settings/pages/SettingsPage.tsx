@@ -19,6 +19,7 @@ import {
   Mail,
   Plug,
   PhoneCall,
+  Sparkles,
   Shield,
   RefreshCw,
   Save,
@@ -38,6 +39,7 @@ import {
 import { getEmailTemplates, updateEmailTemplate } from '../api/emailTemplates.api'
 import { IntegrationsSettingsTab } from '../components/IntegrationsSettingsTab'
 import { VoisoSettingsTab } from '../components/VoisoSettingsTab'
+import { AiSettingsTab } from '../components/AiSettingsTab'
 
 const SETTINGS_TABS = [
   { id: 'general', label: 'General', icon: Settings },
@@ -46,6 +48,7 @@ const SETTINGS_TABS = [
   { id: 'email-templates', label: 'Email Templates', icon: Mail },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'voiso', label: 'Voiso', icon: PhoneCall },
+  { id: 'ai', label: 'AI Assistant', icon: Sparkles },
   { id: 'security', label: 'Security', icon: Shield },
 ] as const
 
@@ -267,6 +270,10 @@ export function SettingsPage() {
     'email-templates': { title: 'Email Templates', description: 'Customize email templates' },
     integrations: { title: 'Integrations', description: 'Third-party integrations' },
     voiso: { title: 'Voiso Integration', description: 'Configure Voiso Click2Call API and embedded agent panel' },
+    ai: {
+      title: 'AI Assistant',
+      description: 'Configure the AI chat assistant for traders.',
+    },
     security: { title: 'Security', description: 'Security settings' },
   }
   const currentMeta = tabMeta[tab] ?? tabMeta.general
@@ -711,6 +718,8 @@ export function SettingsPage() {
             <VoisoSettingsTab canEdit={canEditSettings} />
           )}
 
+          {tab === 'ai' && <AiSettingsTab canEdit={canEditSettings} />}
+
           {tab === 'email-templates' && (
             <div className="space-y-8">
               {templatesQuery.isLoading && (
@@ -863,7 +872,8 @@ export function SettingsPage() {
             tab !== 'email-config' &&
             tab !== 'email-templates' &&
             tab !== 'integrations' &&
-            tab !== 'voiso' && (
+            tab !== 'voiso' &&
+            tab !== 'ai' && (
               <Card className="p-8">
                 <p className="text-sm text-text-muted">
                   {SETTINGS_TABS.find((t) => t.id === tab)?.label} settings — coming soon.
