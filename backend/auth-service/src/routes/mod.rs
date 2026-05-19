@@ -19,6 +19,7 @@ pub mod terminal_prices;
 pub mod admin_trading;
 pub mod admin_positions;
 pub mod admin_audit;
+pub mod admin_user_events;
 pub mod admin_bulk;
 pub mod admin_call_records;
 pub mod admin_voiso;

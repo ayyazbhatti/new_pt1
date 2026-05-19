@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
 import { User } from '../types/users'
@@ -34,7 +35,9 @@ import {
   Check,
   AlertCircle,
   Eye,
+  History,
 } from 'lucide-react'
+import { useCanAccess } from '@/shared/utils/permissions'
 import { fetchTransactions, createDirectDeposit, type Transaction as ApiTransaction } from '@/features/adminFinance/api/finance.api'
 import type { Transaction as FinanceTransaction } from '@/features/adminFinance/types/finance'
 import { TransactionDetailsModal } from '@/features/adminFinance/modals/TransactionDetailsModal'
@@ -49,7 +52,6 @@ import { getPositionsByUserId, type Position } from '@/features/terminal/api/pos
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { Input } from '@/shared/ui'
 import { cn } from '@/shared/utils'
-import { useCanAccess } from '@/shared/utils/permissions'
 import {
   getAdminConversationMessages,
   sendAdminChatMessage,
@@ -187,9 +189,16 @@ interface UserDetailsModalProps {
 }
 
 export function UserDetailsModal({ user }: UserDetailsModalProps) {
+  const navigate = useNavigate()
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
+  const canViewUserEvents = useCanAccess('user_events:view')
   const [userState, setUserState] = useState(user)
+
+  const handleViewEventHistory = useCallback(() => {
+    closeModal(`user-details-${userState.id}`)
+    navigate(`/admin/user-events?userId=${encodeURIComponent(userState.id)}`)
+  }, [closeModal, navigate, userState.id])
 
   // Fetch account summary when modal opens so Balance/metrics show server data (not 0)
   const { data: accountSummary } = useQuery({
@@ -1132,9 +1141,21 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
           className="scrollbar-modal mt-3 min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden"
         >
           <div className="scrollbar-modal min-h-[420px] flex-1 overflow-y-auto p-3 sm:min-h-[520px] sm:p-4 md:p-6">
-            <h2 className="border-b border-slate-700 pb-3 text-base font-semibold text-white sm:pb-4 sm:text-lg">
-              User Information
-            </h2>
+            <div className="flex flex-col gap-3 border-b border-slate-700 pb-3 sm:flex-row sm:items-center sm:justify-between sm:pb-4">
+              <h2 className="text-base font-semibold text-white sm:text-lg">User Information</h2>
+              {canViewUserEvents ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleViewEventHistory}
+                  className="border-slate-600 bg-slate-700/50 text-slate-200 hover:bg-slate-700 hover:text-white"
+                >
+                  <History className="h-4 w-4 mr-2" />
+                  View event history
+                </Button>
+              ) : null}
+            </div>
             <div className="grid grid-cols-1 gap-3 pt-4 sm:gap-4 md:grid-cols-3">
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-300">
@@ -1222,10 +1243,12 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                 />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-slate-300">Online Status</label>
-                <span className={cn('text-sm font-medium', userState.lastLogin ? 'text-green-400' : 'text-red-400')}>
-                  {userState.lastLogin ? 'Online' : 'Offline'}
-                </span>
+                <label className="mb-2 block text-sm font-medium text-slate-300">Last login</label>
+                <input
+                  readOnly
+                  value={userState.lastLogin ? formatDateTime(userState.lastLogin) : 'Never'}
+                  className="w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
               </div>
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-300">Trading Enabled</label>

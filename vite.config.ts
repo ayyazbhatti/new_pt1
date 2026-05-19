@@ -11,6 +11,13 @@ dns.setDefaultResultOrder('ipv4first')
 const API_TARGET = 'http://127.0.0.1:3000'
 const PROXY_TIMEOUT_MS = 20_000
 
+/** Client IP for upstream when the browser does not send X-Forwarded-For (local dev). */
+function clientIpFromRequest(req: Connect.IncomingMessage): string | undefined {
+  const raw = req.socket?.remoteAddress
+  if (!raw) return undefined
+  return raw.replace(/^::ffff:/, '')
+}
+
 /**
  * Custom API proxy middleware using Node's http. Forwards /api and /v1 to auth-service.
  * Avoids the default proxy (which can leave requests pending in some environments).
@@ -29,6 +36,10 @@ function apiProxyMiddleware(): Connect.NextHandleFunction {
     const targetUrl = new URL(pathOnly + search, API_TARGET)
     const headers = { ...req.headers } as Record<string, string>
     headers.host = targetUrl.host
+    if (!headers['x-forwarded-for'] && !headers['X-Forwarded-For']) {
+      const clientIp = clientIpFromRequest(req)
+      if (clientIp) headers['x-forwarded-for'] = clientIp
+    }
 
     const proxyReq = http.request(
       {

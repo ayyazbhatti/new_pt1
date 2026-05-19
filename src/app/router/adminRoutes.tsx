@@ -26,6 +26,7 @@ import { AdminPromotionsPage } from '@/features/adminPromotions'
 import { AdminFundedProgramsPage, AdminFundedPlanDetailPage } from '@/features/adminFundedPrograms'
 import { AdminLeadsPage, AdminLeadDetailPage } from '@/features/adminLeads'
 import { AdminKycPage } from '@/features/kyc'
+import { AdminUserEventsPage } from '@/features/adminUserEvents'
 
 export const adminRoutes: RouteObject[] = [
   {
@@ -35,6 +36,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/users',
     element: <AdminUsersPage />,
+  },
+  {
+    path: '/admin/user-events',
+    element: <AdminUserEventsPage />,
   },
   {
     path: '/admin/bulk-operations',

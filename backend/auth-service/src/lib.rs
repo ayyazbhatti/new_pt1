@@ -255,16 +255,25 @@ pub async fn run() -> anyhow::Result<()> {
         .layer(axum::middleware::from_fn(middleware::auth_middleware))
         .with_state(pool.clone());
 
+    let user_events_routes = Router::new()
+        .route(
+            "/api/admin/user-events",
+            get(routes::admin_user_events::list_user_events),
+        )
+        .layer(axum::middleware::from_fn(middleware::auth_middleware))
+        .with_state(pool.clone());
+
     // Build application
     let app = Router::new()
         .route("/health", get(health_check))
         .merge(bulk_routes)
+        .merge(user_events_routes)
         .nest("/api/auth", create_auth_router(pool.clone(), redis_pool.clone()))
         .nest("/api/symbols", create_symbols_router(pool.clone())) // Public endpoint for all users
         .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/audit", create_admin_audit_router(pool.clone()))
-.nest("/api/admin/call-records", create_admin_call_records_router(pool.clone()))
+        .nest("/api/admin/call-records", create_admin_call_records_router(pool.clone()))
 .nest("/api/admin/voiso", create_admin_voiso_router(pool.clone()))
 .nest("/api/admin/system", create_admin_system_router(pool.clone()))
 .nest("/api/admin/groups", create_admin_groups_router(pool.clone()).layer(axum::extract::Extension(deposits_state.redis.clone())))
@@ -511,9 +520,11 @@ pub async fn run() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("✅ Server ready at http://{}", addr);
     
-    // Axum 0.7: Router with state implements IntoMakeService automatically
-    // Use serve directly - it should work now that router has state
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

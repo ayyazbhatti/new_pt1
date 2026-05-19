@@ -3,6 +3,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::user::{PublicUser, User, UserSession, UserStatus};
+use crate::services::user_events_service::{RecordUserEventInput, UserEventsService};
 use crate::utils::hash::{hash_password, hash_token, verify_password};
 use crate::utils::jwt::{generate_access_token, generate_refresh_token, Claims, get_refresh_token_ttl};
 
@@ -44,6 +45,8 @@ impl AuthService {
         country: Option<&str>,
         referral_code: Option<&str>,
         group_id: Option<Uuid>,
+        user_agent: Option<&str>,
+        ip: Option<&str>,
     ) -> anyhow::Result<(User, String, String)> {
         // Validate password
         if password.len() < 8 {
@@ -162,15 +165,30 @@ impl AuthService {
         .await?;
 
         // Create session
-        let (access_token, refresh_token) = self.create_session(&user).await?;
+        let (access_token, refresh_token) = self
+            .create_session_with_metadata(&user, user_agent, ip)
+            .await?;
 
-        // Log audit
-        self.log_audit(user.id, "auth.register", serde_json::json!({
+        let register_meta = serde_json::json!({
             "email": email_lower,
             "country": country,
             "referred_by": referred_by_user_id
-        }))
-        .await?;
+        });
+
+        // Log audit
+        self.log_audit(user.id, "auth.register", register_meta.clone())
+            .await?;
+
+        self.record_user_event(
+            user.id,
+            Some(user.id),
+            "auth.register",
+            "auth",
+            ip.map(|s| s.to_string()),
+            user_agent.map(|s| s.to_string()),
+            register_meta,
+        )
+        .await;
 
         Ok((user, access_token, refresh_token))
     }
@@ -303,13 +321,26 @@ impl AuthService {
         // Create session
         let (access_token, refresh_token) = self.create_session_with_metadata(&user, user_agent, ip).await?;
 
-        // Log audit
-        self.log_audit(user.id, "auth.login", serde_json::json!({
+        let login_meta = serde_json::json!({
             "email": email_lower,
             "ip": ip,
             "user_agent": user_agent
-        }))
-        .await?;
+        });
+
+        // Log audit
+        self.log_audit(user.id, "auth.login", login_meta.clone())
+            .await?;
+
+        self.record_user_event(
+            user.id,
+            Some(user.id),
+            "auth.login",
+            "auth",
+            ip.map(|s| s.to_string()),
+            user_agent.map(|s| s.to_string()),
+            login_meta,
+        )
+        .await;
 
         Ok((user, access_token, refresh_token))
     }
@@ -351,7 +382,13 @@ impl AuthService {
         Ok(access_token)
     }
 
-    pub async fn logout(&self, user_id: Uuid, refresh_token: &str) -> anyhow::Result<()> {
+    pub async fn logout(
+        &self,
+        user_id: Uuid,
+        refresh_token: &str,
+        user_agent: Option<&str>,
+        ip: Option<&str>,
+    ) -> anyhow::Result<()> {
         let token_hash = hash_token(refresh_token);
 
         // Revoke session
@@ -371,6 +408,17 @@ impl AuthService {
         self.log_audit(user_id, "auth.logout", serde_json::json!({}))
             .await?;
 
+        self.record_user_event(
+            user_id,
+            Some(user_id),
+            "auth.logout",
+            "auth",
+            ip.map(|s| s.to_string()),
+            user_agent.map(|s| s.to_string()),
+            serde_json::json!({}),
+        )
+        .await;
+
         Ok(())
     }
 
@@ -387,9 +435,26 @@ impl AuthService {
     }
 
     /// Create a session for the target user (for admin impersonation). Returns (access_token, refresh_token).
-    pub async fn impersonate(&self, target_user_id: Uuid) -> anyhow::Result<(String, String)> {
+    pub async fn impersonate(
+        &self,
+        actor_user_id: Uuid,
+        target_user_id: Uuid,
+        ip: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> anyhow::Result<(String, String)> {
         let user = self.get_user_by_id(target_user_id).await?;
-        self.create_session(&user).await
+        let tokens = self.create_session(&user).await?;
+        self.record_user_event(
+            target_user_id,
+            Some(actor_user_id),
+            "admin.impersonate",
+            "admin",
+            ip.map(|s| s.to_string()),
+            user_agent.map(|s| s.to_string()),
+            serde_json::json!({ "target_user_id": target_user_id }),
+        )
+        .await;
+        Ok(tokens)
     }
 
     async fn create_session(&self, user: &User) -> anyhow::Result<(String, String)> {
@@ -597,6 +662,30 @@ impl AuthService {
         };
 
         Ok((users, total))
+    }
+
+    async fn record_user_event(
+        &self,
+        subject_user_id: Uuid,
+        actor_user_id: Option<Uuid>,
+        event_type: &'static str,
+        category: &'static str,
+        ip: Option<String>,
+        user_agent: Option<String>,
+        meta: serde_json::Value,
+    ) {
+        let service = UserEventsService::new(self.pool.clone());
+        service
+            .record_fail_open(RecordUserEventInput {
+                subject_user_id,
+                actor_user_id,
+                event_type,
+                category,
+                ip,
+                user_agent,
+                meta,
+            })
+            .await;
     }
 
     async fn log_audit(

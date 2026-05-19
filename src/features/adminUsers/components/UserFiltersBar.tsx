@@ -1,6 +1,8 @@
+import { X } from 'lucide-react'
 import { Input } from '@/shared/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Button } from '@/shared/ui/button'
+import { cn } from '@/shared/utils'
 import type { UserFilters } from '../types/users'
 
 interface UserFiltersBarProps {
@@ -31,13 +33,25 @@ export function UserFiltersBar({ filters, onFilterChange, groups = [] }: UserFil
 
   return (
     <div className="flex items-center gap-4 flex-wrap mb-6">
-      <Input
-        type="search"
-        placeholder="Search name, email, or user ID..."
-        value={filters.search}
-        onChange={(e) => handleChange('search', e.target.value)}
-        className="flex-1 max-w-sm"
-      />
+      <div className="relative flex-1 max-w-sm">
+        <Input
+          type="search"
+          placeholder="Search name, email, or user ID..."
+          value={filters.search}
+          onChange={(e) => handleChange('search', e.target.value)}
+          className={cn('w-full', filters.search.trim() && 'pr-9')}
+        />
+        {filters.search.trim() ? (
+          <button
+            type="button"
+            onClick={() => handleChange('search', '')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text"
+            aria-label="Clear search"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
+      </div>
       <Select value={filters.status} onValueChange={(value) => handleChange('status', value)}>
         <SelectTrigger className="w-[150px]">
           <SelectValue placeholder="Status" />

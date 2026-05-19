@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post, put},
     Router,
     Extension,
 };
+use std::net::SocketAddr;
 use chrono::Utc;
 use contracts::VersionedMessage;
 use redis::AsyncCommands;
@@ -33,6 +34,7 @@ use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
 use crate::services::affiliate_commission_service;
+use crate::services::user_events_service::{extract_client_meta, record_user_event_fail_open};
 use crate::services::ledger_service;
 use crate::services::email_config_service::{send_email_html_sync, EmailConfigService};
 
@@ -2407,12 +2409,15 @@ async fn approve_deposit(
     State(pool): State<PgPool>,
     Extension(deposits_state): Extension<DepositsState>,
     Extension(claims): Extension<Claims>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(transaction_id): Path<Uuid>,
 ) -> Result<Json<ApproveDepositResponse>, StatusCode> {
     permission_check::check_permission(&pool, &claims, "deposits:approve")
         .await
         .map_err(|_| StatusCode::FORBIDDEN)?;
 
+    let (client_ip, client_ua) = extract_client_meta(&headers, Some(peer));
     let admin_id = claims.sub;
 
     let row = sqlx::query(
@@ -2721,6 +2726,22 @@ async fn approve_deposit(
     info!("Deposit approved: transaction_id={}, user_id={}, amount={}, new_balance={}", 
           transaction_id, user_id, amount, main_balance);
 
+    record_user_event_fail_open(
+        &pool,
+        user_id,
+        Some(admin_id),
+        "finance.deposit_approved",
+        "finance",
+        client_ip,
+        client_ua,
+        serde_json::json!({
+            "transaction_id": transaction_id,
+            "amount": amount.to_string(),
+            "currency": "USD",
+        }),
+    )
+    .await;
+
     Ok(Json(ApproveDepositResponse {
         status: "approved".to_string(),
         message: format!("Deposit request approved. New balance: ${:.2}", main_balance),
@@ -2746,6 +2767,8 @@ async fn reject_deposit(
     State(pool): State<PgPool>,
     Extension(deposits_state): Extension<DepositsState>,
     Extension(claims): Extension<Claims>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(transaction_id): Path<Uuid>,
     Json(req): Json<RejectDepositRequest>,
 ) -> Result<Json<RejectDepositResponse>, StatusCode> {
@@ -2753,6 +2776,7 @@ async fn reject_deposit(
         .await
         .map_err(|_| StatusCode::FORBIDDEN)?;
 
+    let (client_ip, client_ua) = extract_client_meta(&headers, Some(peer));
     let admin_id = claims.sub;
 
     let row = sqlx::query(
@@ -2889,6 +2913,23 @@ async fn reject_deposit(
 
     info!("Deposit rejected: transaction_id={}, user_id={}, amount={}, reason={:?}", 
           transaction_id, user_id, amount, req.reason);
+
+    record_user_event_fail_open(
+        &pool,
+        user_id,
+        Some(admin_id),
+        "finance.deposit_rejected",
+        "finance",
+        client_ip,
+        client_ua,
+        serde_json::json!({
+            "transaction_id": transaction_id,
+            "amount": amount.to_string(),
+            "currency": "USD",
+            "reason": req.reason,
+        }),
+    )
+    .await;
 
     Ok(Json(RejectDepositResponse {
         status: "rejected".to_string(),

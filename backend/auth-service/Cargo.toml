@@ -21,6 +21,14 @@ path = "src/bin/seed_admin.rs"
 name = "sync_mmdps"
 path = "src/bin/sync_mmdps.rs"
 
+[[bin]]
+name = "backfill_user_events"
+path = "src/bin/backfill_user_events.rs"
+
+[[bin]]
+name = "backfill_user_events_device"
+path = "src/bin/backfill_user_events_device.rs"
+
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["macros", "multipart", "tokio"] }

@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Json as JsonExt, Path, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Json as JsonExt, Path, State},
+    http::{HeaderMap, StatusCode},
     response::Json,
     routing::{get, post, put},
     Router,
     Extension,
 };
+use std::net::SocketAddr;
 use std::collections::HashMap;
 use chrono::Utc;
 use redis::AsyncCommands;
@@ -16,6 +17,7 @@ use uuid::Uuid;
 use crate::middleware::auth_middleware;
 use crate::routes::deposits::{get_account_summary_for_user, AccountSummary, DepositsState};
 use crate::services::auth_service::AuthService;
+use crate::services::user_events_service::extract_client_meta;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 
@@ -620,14 +622,25 @@ async fn create_user_note(
 
 async fn impersonate_user(
     State(pool): State<PgPool>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ImpersonateResponse>, (StatusCode, Json<ErrorResponse>)> {
     permission_check::check_permission(&pool, &claims, "users:edit")
         .await
         .map_err(permission_denied_to_response)?;
+    let (ip, user_agent) = extract_client_meta(&headers, Some(peer));
     let service = AuthService::new(pool);
-    let (access_token, refresh_token) = service.impersonate(user_id).await.map_err(|e| {
+    let (access_token, refresh_token) = service
+        .impersonate(
+            claims.sub,
+            user_id,
+            ip.as_deref(),
+            user_agent.as_deref(),
+        )
+        .await
+        .map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {

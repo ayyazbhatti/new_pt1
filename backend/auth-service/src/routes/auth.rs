@@ -1,10 +1,11 @@
 use axum::{
-    extract::{Extension, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Extension, Query, State},
+    http::{HeaderMap, StatusCode},
     response::Json,
     routing::{get, patch, post},
     Router,
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
 use chrono::Utc;
 use rand::Rng;
@@ -18,6 +19,7 @@ use crate::utils::hash::{hash_password, hash_token};
 use crate::models::leverage_profile::LeverageProfileTier;
 use crate::services::auth_service::AuthService;
 use crate::services::email_config_service::{send_email_html_sync, send_email_sync, EmailConfigService};
+use crate::services::user_events_service::extract_client_meta;
 use crate::utils::jwt::Claims;
 use rust_decimal::Decimal;
 
@@ -564,6 +566,8 @@ async fn password_reset_verify(
 
 async fn password_reset_confirm(
     State(pool): State<PgPool>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     axum::Json(payload): axum::Json<PasswordResetConfirmRequest>,
 ) -> Result<Json<PasswordResetGenericResponse>, (StatusCode, Json<PasswordResetGenericResponse>)> {
     if payload.new_password.len() < 8 {
@@ -646,6 +650,20 @@ async fn password_reset_confirm(
     .bind(&reset_token_hash)
     .execute(&pool)
     .await;
+
+    let (ip, user_agent) = extract_client_meta(&headers, Some(peer));
+    crate::services::user_events_service::record_user_event_fail_open(
+        &pool,
+        user_id,
+        Some(user_id),
+        "auth.password_reset",
+        "auth",
+        ip,
+        user_agent,
+        serde_json::json!({}),
+    )
+    .await;
+
     Ok(Json(PasswordResetGenericResponse {
         success: true,
         message: Some("Password updated successfully.".to_string()),
@@ -754,9 +772,12 @@ pub(crate) async fn send_welcome_email_after_signup(
 
 async fn register(
     State(pool): State<PgPool>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
     let service = AuthService::new(pool.clone());
+    let (ip, user_agent) = extract_client_meta(&headers, Some(peer));
 
     // Resolve ?ref=slug to group_id (takes precedence over group_id). Group signup link: ref = group's signup_slug.
     let mut group_id = if let Some(ref slug) = payload.signup_ref {
@@ -813,6 +834,8 @@ async fn register(
             payload.country.as_deref(),
             payload.referral_code.as_deref(),
             group_id,
+            user_agent.as_deref(),
+            ip.as_deref(),
         )
         .await
     {
@@ -884,22 +907,20 @@ async fn register(
 
 async fn login(
     State(pool): State<PgPool>,
-    headers: axum::http::HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
     let service = AuthService::new(pool.clone());
-
-    // Extract user agent and IP
-    let user_agent = headers
-        .get("user-agent")
-        .and_then(|h| h.to_str().ok());
-    let ip = headers
-        .get("x-forwarded-for")
-        .or_else(|| headers.get("x-real-ip"))
-        .and_then(|h| h.to_str().ok());
+    let (ip, user_agent) = extract_client_meta(&headers, Some(peer));
 
     match service
-        .login(&payload.email, &payload.password, user_agent, ip.as_deref())
+        .login(
+            &payload.email,
+            &payload.password,
+            user_agent.as_deref(),
+            ip.as_deref(),
+        )
         .await
     {
         Ok((user, access_token, refresh_token)) => {
@@ -983,13 +1004,23 @@ async fn refresh(
 
 async fn logout(
     State(pool): State<PgPool>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
     Json(payload): Json<LogoutRequest>,
 ) -> Result<axum::http::StatusCode, (StatusCode, Json<ErrorResponse>)> {
-
     let service = AuthService::new(pool);
+    let (ip, user_agent) = extract_client_meta(&headers, Some(peer));
 
-    match service.logout(claims.sub, &payload.refresh_token).await {
+    match service
+        .logout(
+            claims.sub,
+            &payload.refresh_token,
+            user_agent.as_deref(),
+            ip.as_deref(),
+        )
+        .await
+    {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => Err((
             StatusCode::BAD_REQUEST,
