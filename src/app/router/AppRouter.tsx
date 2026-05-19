@@ -18,7 +18,7 @@ const router = createBrowserRouter(
   [
     ...routes.map((route) => {
       // Auth pages and terminal page don't need AppShell (terminal has its own layout)
-      if (route.path === '/login' || route.path === '/register' || route.path === '/' || route.path === '/impersonate') {
+      if (route.path === '/login' || route.path === '/register' || route.path === '/forgot-password' || route.path === '/' || route.path === '/impersonate') {
         return route
       }
       // Protected routes get AppShell wrapper

@@ -289,8 +289,7 @@ async fn send_password_reset_otp_email(
         None => {
             tracing::warn!(
                 "Password reset email NOT sent: no row in platform_email_config. \
-                For testing, use OTP: {} (see server log above)",
-                otp
+                Configure SMTP in Admin → Settings → Email."
             );
             return Ok(());
         }
@@ -299,9 +298,7 @@ async fn send_password_reset_otp_email(
     if config.smtp_host.trim() == "smtp.example.com" && config.smtp_username.trim().is_empty() {
         tracing::warn!(
             "Password reset email NOT sent: SMTP is still the default (smtp.example.com). \
-            Save your real SMTP settings in Admin → Settings → Email (tab Email configuration). \
-            For testing, use OTP: {} (see server log above)",
-            otp
+            Save your real SMTP settings in Admin → Settings → Email (tab Email configuration)."
         );
         return Ok(());
     }
@@ -418,7 +415,10 @@ async fn password_reset_request(
             }),
         )
     })?;
-    tracing::info!("Password reset OTP for {} (user_id={}): {}", email, user_id, otp);
+    tracing::info!(
+        user_id = %user_id,
+        "Password reset OTP issued"
+    );
     // Send OTP by email (fire-and-forget; uses same SMTP/template config as admin settings)
     let pool_email = pool.clone();
     let email_to = email.clone();
@@ -428,10 +428,9 @@ async fn password_reset_request(
             Ok(()) => tracing::info!("Password reset OTP email sent to {}", email_to),
             Err(e) => {
                 tracing::warn!(
-                    "Password reset email FAILED for {}: {}. \
-                    Check Admin → Settings → Email (host, port, encryption, username/password). \
-                    OTP for testing: {}",
-                    email_to, e, otp_to_send
+                    email = %email_to,
+                    error = %e,
+                    "Password reset email failed; check Admin → Settings → Email (host, port, encryption, username/password)"
                 );
             }
         }

@@ -3,6 +3,7 @@ import { TerminalPage } from '@/features/terminal'
 import { TradingPage } from '@/features/trading'
 import { LoginPage } from '@/pages/auth/LoginPage'
 import { RegisterPage } from '@/pages/auth/RegisterPage'
+import { ForgotPasswordPage } from '@/pages/auth/ForgotPasswordPage'
 import { ImpersonatePage } from '@/pages/auth/ImpersonatePage'
 import { AuthGuard } from '@/shared/components/guards/AuthGuard'
 
@@ -14,6 +15,10 @@ export const routes: RouteObject[] = [
   {
     path: '/register',
     element: <RegisterPage />,
+  },
+  {
+    path: '/forgot-password',
+    element: <ForgotPasswordPage />,
   },
   {
     path: '/impersonate',
