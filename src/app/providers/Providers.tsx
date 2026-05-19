@@ -1,5 +1,6 @@
 import { ReactNode } from 'react'
 import { ToastProvider } from '@/shared/components/common'
+import { AiReportsWsProvider } from '@/features/aiReports/providers/AiReportsWsProvider'
 import { QueryProvider } from './QueryProvider'
 import { ThemeProvider } from './ThemeProvider'
 
@@ -12,7 +13,7 @@ export function Providers({ children }: ProvidersProps) {
     <ThemeProvider>
       <QueryProvider>
         <ToastProvider>
-          {children}
+          <AiReportsWsProvider>{children}</AiReportsWsProvider>
         </ToastProvider>
       </QueryProvider>
     </ThemeProvider>

@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
 use crate::routes::deposits::{get_account_summary_for_user, DepositsState};
+use crate::services::open_positions_redis;
 use crate::services::ai::{
     provider_from_key, AiConfigService, AiDelta, AiMessage, PlatformAiConfig,
 };
@@ -279,22 +280,8 @@ async fn build_user_context_json(
             })
         });
 
-    let open_positions: Vec<String> = sqlx::query_scalar(
-        r#"
-        SELECT s.code
-        FROM positions p
-        JOIN symbols s ON p.symbol_id = s.id
-        WHERE p.user_id = $1 AND p.status = 'open'::position_status
-        ORDER BY p.opened_at DESC NULLS LAST
-        LIMIT 10
-        "#,
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    let open_position_count = open_positions.len() as i32;
+    // Live open positions: Redis (same source as terminal GET /v1/users/:id/positions).
+    let open_positions = open_positions_redis::fetch_open_positions_json(redis, user_id, 10).await;
 
     let recent_orders = sqlx::query_as::<_, (String, String, String, String, String, DateTime<Utc>)>(
         r#"
@@ -338,10 +325,7 @@ async fn build_user_context_json(
             "tradingAccess": trading_access,
         },
         "accountSummary": account_summary,
-        "openPositions": {
-            "count": open_position_count,
-            "symbols": open_positions,
-        },
+        "openPositions": open_positions,
         "recentOrders": recent_orders_json,
     })
 }
@@ -833,6 +817,27 @@ async fn run_ai_completion(
     usage_in = usage.tokens_in;
     usage_out = usage.tokens_out;
 
+    if buffer.trim().is_empty() {
+        warn!(
+            user_id = %user_id,
+            tokens_in = usage_in,
+            tokens_out = usage_out,
+            "AI completion finished with empty text"
+        );
+        return handle_stream_failure(
+            &pool,
+            &nats,
+            user_id,
+            &conv_id,
+            &asst_id,
+            assistant_message_id,
+            &preview,
+            client_ip,
+            client_ua,
+        )
+        .await;
+    }
+
     sqlx::query(
         r#"
         UPDATE ai_messages
@@ -862,6 +867,19 @@ async fn run_ai_completion(
     .bind(usage_out as i32)
     .execute(&pool)
     .await?;
+
+    publish_ai_event(
+        &nats,
+        user_id,
+        serde_json::json!({
+            "type": "message",
+            "conversationId": conv_id,
+            "messageId": asst_id,
+            "role": "assistant",
+            "content": buffer,
+        }),
+    )
+    .await;
 
     publish_ai_event(
         &nats,

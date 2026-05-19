@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
@@ -11,6 +11,7 @@ import { CreateEditUserModal } from '../modals/CreateEditUserModal'
 import { RestrictUserModal } from '../modals/RestrictUserModal'
 import { SendNotificationModal } from '../modals/SendNotificationModal'
 import { Eye, Edit, Shield, X, LogIn, Bell } from 'lucide-react'
+import { Checkbox } from '@/shared/ui/Checkbox'
 import { toast } from '@/shared/components/common'
 import { formatDateTime, formatCurrency } from '../utils/formatters'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
@@ -27,9 +28,14 @@ interface UsersTableProps {
     onPageChange: (page: number) => void
     onPageSizeChange: (size: number) => void
   }
+  /** When set, renders bulk-select checkboxes (first column). */
+  bulkSelect?: {
+    selectedIds: Set<string>
+    onSelectedIdsChange: React.Dispatch<React.SetStateAction<Set<string>>>
+  }
 }
 
-export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps) {
+export function UsersTable({ users, onUserUpdate, pagination, bulkSelect }: UsersTableProps) {
   const openModal = useModalStore((state) => state.openModal)
   const canEditUser = useCanAccess('users:edit')
   const canEditGroup = useCanAccess('users:edit_group')
@@ -249,6 +255,43 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     return <Badge variant={variants[status] || 'neutral'}>{status}</Badge>
   }
 
+  const selectedIds = bulkSelect?.selectedIds ?? new Set<string>()
+  const setSelectedIds = bulkSelect?.onSelectedIdsChange
+
+  const allOnPageSelected = users.length > 0 && users.every((u) => selectedIds.has(u.id))
+  const someOnPageSelected = users.some((u) => selectedIds.has(u.id))
+
+  const toggleSelectAllOnPage = useCallback(() => {
+    if (!setSelectedIds) return
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allOnPageSelected) {
+        users.forEach((u) => next.delete(u.id))
+      } else {
+        users.forEach((u) => next.add(u.id))
+      }
+      return next
+    })
+  }, [users, allOnPageSelected, setSelectedIds])
+
+  const toggleRowSelected = useCallback(
+    (id: string) => {
+      if (!setSelectedIds) return
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
+    },
+    [setSelectedIds],
+  )
+
+  const selectionRowMemoExtra = useMemo(
+    () => (bulkSelect ? [...selectedIds].sort().join(',') : ''),
+    [bulkSelect, selectedIds],
+  )
+
   const getKYCBadge = (kycStatus: string) => {
     const variants: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
       verified: 'success',
@@ -265,7 +308,35 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
     return <Badge variant={variants[kycStatus] || 'neutral'}>{labels[kycStatus] || kycStatus}</Badge>
   }
 
-  const columns: ColumnDef<User>[] = [
+  const columns: ColumnDef<User>[] = useMemo(() => {
+    const bulkColumn: ColumnDef<User> | null = bulkSelect
+      ? {
+          id: 'bulkSelect',
+          size: 40,
+          header: () => (
+            <span data-no-row-click className="inline-flex pl-1" onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                checked={allOnPageSelected}
+                indeterminate={someOnPageSelected && !allOnPageSelected}
+                onChange={toggleSelectAllOnPage}
+                aria-label="Select all users on this page"
+              />
+            </span>
+          ),
+          cell: ({ row }) => (
+            <span data-no-row-click className="inline-flex pl-1" onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                checked={selectedIds.has(row.original.id)}
+                onChange={() => toggleRowSelected(row.original.id)}
+                aria-label={`Select ${row.original.email}`}
+              />
+            </span>
+          ),
+        }
+      : null
+
+    return [
+      ...(bulkColumn ? [bulkColumn] : []),
     {
       accessorKey: 'id',
       header: 'User ID',
@@ -634,6 +705,26 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
       },
     },
   ]
+  }, [
+    bulkSelect,
+    allOnPageSelected,
+    someOnPageSelected,
+    selectedIds,
+    toggleSelectAllOnPage,
+    toggleRowSelected,
+    canEditUser,
+    canEditGroup,
+    canEditAccountType,
+    canEditMargin,
+    canEditTradingAccess,
+    groups,
+    groupsLoading,
+    updatingGroups,
+    updatingAccountTypes,
+    updatingMarginCalculationTypes,
+    updatingTradingAccess,
+    loginLoading,
+  ])
 
   return (
     <DataTable
@@ -642,6 +733,7 @@ export function UsersTable({ users, onUserUpdate, pagination }: UsersTableProps)
       onRowClick={handleView}
       rowClickTitle="View user details"
       pagination={pagination}
+      rowMemoExtra={bulkSelect ? selectionRowMemoExtra : undefined}
     />
   )
 }

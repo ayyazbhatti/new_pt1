@@ -254,6 +254,48 @@ async fn main() -> Result<()> {
                 broadcaster_ai.send_to_connections(&conn_ids, ws_msg);
             }
         });
+
+        // NATS AI report subscriber: forward ai.report.admin.{admin_user_id} to that admin only
+        let nats_reports = Arc::clone(&nats);
+        let registry_reports = registry.clone();
+        let broadcaster_reports = broadcaster.clone();
+        tokio::spawn(async move {
+            use tracing::{error, info, warn};
+            let sub = match nats_reports.subscribe("ai.report.>".to_string()).await {
+                Ok(s) => {
+                    info!("Subscribed to NATS ai.report.> for admin AI report streaming");
+                    s
+                }
+                Err(e) => {
+                    error!("Failed to subscribe to NATS ai.report.>: {}", e);
+                    return;
+                }
+            };
+            let mut msgs = sub;
+            while let Some(msg) = msgs.next().await {
+                let subject = msg.subject.to_string();
+                let admin_id = match subject.strip_prefix("ai.report.admin.") {
+                    Some(id) if !id.is_empty() => id.to_string(),
+                    _ => continue,
+                };
+                let payload: serde_json::Value = match std::str::from_utf8(&msg.payload) {
+                    Ok(s) => match serde_json::from_str(s) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("Invalid JSON on {}: {}", subject, e);
+                            continue;
+                        }
+                    },
+                    Err(_) => continue,
+                };
+                let conn_ids = registry_reports.get_user_connections(&admin_id);
+                if conn_ids.is_empty() {
+                    continue;
+                }
+                let ws_msg = ServerMessage::AiReportDelta { payload };
+                broadcaster_reports.send_to_connections(&conn_ids, ws_msg);
+            }
+        });
     }
 
     // Create WebSocket router

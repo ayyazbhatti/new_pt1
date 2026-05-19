@@ -4,9 +4,11 @@ import { useCanAccess } from '@/shared/utils/permissions'
 import { UserKPICards, UserFiltersBar, UsersTable } from '../components'
 import { useModalStore } from '@/app/store'
 import { CreateEditUserModal, MultiUserMetricsModal } from '../modals'
-import { Download, Plus, Activity } from 'lucide-react'
+import { Download, Plus, Activity, Sparkles } from 'lucide-react'
+import { getAiConfig } from '@/features/settings/api/aiConfig.api'
+import { GenerateReportModal } from '@/features/aiReports/modals/GenerateReportModal'
 import { toast } from '@/shared/components/common'
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { listUsers, UserResponse } from '@/shared/api/users.api'
 import { listGroups } from '@/features/groups/api/groups.api'
@@ -55,9 +57,13 @@ function mapUserResponse(user: UserResponse): User {
   }
 }
 
+const DEFAULT_BULK_REPORT_MAX = 20
+
 export function AdminUsersPage() {
   const openModal = useModalStore((state) => state.openModal)
   const canCreateUser = useCanAccess('users:create')
+  const canBulkGenerateReports = useCanAccess('ai_reports:bulk_generate')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const [filters, setFilters] = useState({
     search: '',
@@ -71,6 +77,14 @@ export function AdminUsersPage() {
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+
+  const { data: aiConfig } = useQuery({
+    queryKey: ['admin', 'settings', 'ai'],
+    queryFn: getAiConfig,
+    enabled: canBulkGenerateReports,
+    staleTime: 60_000,
+  })
+  const reportBulkMaxUsers = aiConfig?.reportBulkMaxUsers ?? DEFAULT_BULK_REPORT_MAX
 
   // Debounce search so we don't refetch on every keystroke (no blink, professional UX)
   const debouncedSearch = useDebouncedValue(filters.search, 400)
@@ -165,6 +179,44 @@ export function AdminUsersPage() {
     setPage(1)
   }, [filters.status, filters.group, filters.country, filters.kycStatus, filters.balanceMin, filters.balanceMax])
 
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [page, pageSize, debouncedSearch, filters.status, filters.group, filters.country])
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
+
+  const subjectLabelsForBulk = useMemo(() => {
+    const map: Record<string, { name?: string; email?: string }> = {}
+    for (const u of displayUsers) {
+      if (selectedIds.has(u.id)) {
+        map[u.id] = { name: u.name, email: u.email }
+      }
+    }
+    return map
+  }, [displayUsers, selectedIds])
+
+  const bulkOverLimit = selectedIds.size > reportBulkMaxUsers
+
+  const handleBulkGenerateReports = useCallback(() => {
+    if (selectedIds.size === 0 || bulkOverLimit) return
+    const ids = Array.from(selectedIds)
+    const modalKey = `generate-ai-report-bulk-${ids.length}`
+    openModal(
+      modalKey,
+      <GenerateReportModal
+        subjectUserIds={ids}
+        subjectLabel={`${ids.length} selected users`}
+        subjectLabels={subjectLabelsForBulk}
+        modalKey={modalKey}
+      />,
+      {
+        title: 'Generate AI Reports',
+        size: 'lg',
+        description: `Configure sections and optional focus for ${ids.length} selected users.`,
+      },
+    )
+  }, [selectedIds, bulkOverLimit, openModal, subjectLabelsForBulk])
+
   const handlePageChange = (newPage: number) => {
     setPage(Math.max(1, Math.min(newPage, totalPages)))
   }
@@ -257,9 +309,42 @@ export function AdminUsersPage() {
         )}
         <UserFiltersBar filters={filters} onFilterChange={setFilters} groups={groupsForFilter} />
       </div>
+
+      {canBulkGenerateReports && selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-1 px-4 py-3">
+          <span className="text-sm text-text-muted">
+            {selectedIds.size} user{selectedIds.size === 1 ? '' : 's'} selected
+          </span>
+          <Button type="button" variant="ghost" size="sm" onClick={clearSelection} className="text-text-muted">
+            Clear selection
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            disabled={bulkOverLimit}
+            title={
+              bulkOverLimit
+                ? `Max ${reportBulkMaxUsers} users per batch`
+                : 'Generate AI reports for selected users'
+            }
+            onClick={handleBulkGenerateReports}
+            className="ml-auto"
+          >
+            <Sparkles className="h-4 w-4 mr-1.5" />
+            Generate Reports
+          </Button>
+        </div>
+      )}
+
       <UsersTable
         users={filteredDisplayUsers}
         onUserUpdate={handleUserUpdate}
+        bulkSelect={
+          canBulkGenerateReports
+            ? { selectedIds, onSelectedIdsChange: setSelectedIds }
+            : undefined
+        }
         pagination={{
           page: currentPage,
           pageSize,

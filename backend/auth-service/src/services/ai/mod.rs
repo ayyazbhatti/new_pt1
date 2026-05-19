@@ -3,6 +3,7 @@
 pub mod anthropic;
 pub mod config_service;
 pub mod provider;
+pub mod reports;
 pub mod topic_guard;
 
 pub use anthropic::{provider_from_key, AnthropicProvider};

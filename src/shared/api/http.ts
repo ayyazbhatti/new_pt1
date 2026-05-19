@@ -15,7 +15,12 @@ export function getApiErrorMessage(err: unknown): string {
     if (inner != null && typeof inner === 'object' && typeof (inner as { message?: string }).message === 'string') {
       return (inner as { message: string }).message
     }
-    if (typeof inner === 'string') return inner
+    if (typeof inner === 'string') {
+      if (inner === 'reports_disabled') {
+        return 'AI reports are disabled. Enable them in Settings → AI → Enable AI reports.'
+      }
+      return inner
+    }
     const topLevel = (data as { message?: string }).message
     if (typeof topLevel === 'string') return topLevel
   }

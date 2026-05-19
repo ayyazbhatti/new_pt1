@@ -269,6 +269,14 @@ fn ai_config_to_json(config: &crate::services::ai::config_service::PlatformAiCon
         "includeUserContext": config.include_user_context,
         "topicGuardEnabled": config.topic_guard_enabled,
         "classifierModel": config.classifier_model,
+        "reportsEnabled": config.reports_enabled,
+        "reportModel": config.report_model,
+        "reportMaxTokens": config.report_max_tokens,
+        "reportDailyCapPerAdmin": config.report_daily_cap_per_admin,
+        "reportRateLimitPerMinute": config.report_rate_limit_per_minute,
+        "reportBulkMaxUsers": config.report_bulk_max_users,
+        "reportBulkConcurrency": config.report_bulk_concurrency,
+        "reportSystemPrompt": config.report_system_prompt,
     })
 }
 
@@ -313,6 +321,22 @@ struct PutAiConfigBody {
     topic_guard_enabled: Option<bool>,
     #[serde(default)]
     classifier_model: Option<String>,
+    #[serde(default)]
+    reports_enabled: Option<bool>,
+    #[serde(default)]
+    report_model: Option<String>,
+    #[serde(default)]
+    report_max_tokens: Option<i32>,
+    #[serde(default)]
+    report_daily_cap_per_admin: Option<i32>,
+    #[serde(default)]
+    report_rate_limit_per_minute: Option<i32>,
+    #[serde(default)]
+    report_bulk_max_users: Option<i32>,
+    #[serde(default)]
+    report_bulk_concurrency: Option<i32>,
+    #[serde(default)]
+    report_system_prompt: Option<String>,
 }
 
 async fn put_ai_config(
@@ -363,6 +387,56 @@ async fn put_ai_config(
             ));
         }
     }
+    if let Some(v) = body.report_max_tokens {
+        if !(1024..=8192).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "reportMaxTokens must be between 1024 and 8192" }
+                })),
+            ));
+        }
+    }
+    if let Some(v) = body.report_daily_cap_per_admin {
+        if !(1..=500).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "reportDailyCapPerAdmin must be between 1 and 500" }
+                })),
+            ));
+        }
+    }
+    if let Some(v) = body.report_rate_limit_per_minute {
+        if !(1..=30).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "reportRateLimitPerMinute must be between 1 and 30" }
+                })),
+            ));
+        }
+    }
+    if let Some(v) = body.report_bulk_max_users {
+        if !(1..=50).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "reportBulkMaxUsers must be between 1 and 50" }
+                })),
+            ));
+        }
+    }
+    if let Some(v) = body.report_bulk_concurrency {
+        if !(1..=5).contains(&v) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": { "code": "VALIDATION", "message": "reportBulkConcurrency must be between 1 and 5" }
+                })),
+            ));
+        }
+    }
 
     let clear_key = body.clear_api_key == Some(true)
         || body.api_key.as_deref().map(str::trim) == Some("");
@@ -387,6 +461,14 @@ async fn put_ai_config(
             include_user_context: body.include_user_context,
             topic_guard_enabled: body.topic_guard_enabled,
             classifier_model: body.classifier_model,
+            reports_enabled: body.reports_enabled,
+            report_model: body.report_model,
+            report_max_tokens: body.report_max_tokens,
+            report_daily_cap_per_admin: body.report_daily_cap_per_admin,
+            report_rate_limit_per_minute: body.report_rate_limit_per_minute,
+            report_bulk_max_users: body.report_bulk_max_users,
+            report_bulk_concurrency: body.report_bulk_concurrency,
+            report_system_prompt: body.report_system_prompt,
         },
     )
     .await

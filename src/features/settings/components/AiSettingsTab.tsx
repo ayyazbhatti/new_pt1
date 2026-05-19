@@ -30,6 +30,10 @@ const CHAT_MODELS = [
   { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
 ] as const
 
+const DEFAULT_REPORT_SYSTEM_PROMPT_PLACEHOLDER = `Optional override for admin user report generation.
+
+Leave empty to use the built-in default report system prompt on the server.`
+
 export function AiSettingsTab({ canEdit }: { canEdit: boolean }) {
   const queryClient = useQueryClient()
   const query = useQuery({
@@ -51,6 +55,14 @@ export function AiSettingsTab({ canEdit }: { canEdit: boolean }) {
   const [showApiKey, setShowApiKey] = useState(false)
   const [clearApiKeyPending, setClearApiKeyPending] = useState(false)
   const [testReply, setTestReply] = useState<string | null>(null)
+  const [reportsEnabled, setReportsEnabled] = useState(false)
+  const [reportModel, setReportModel] = useState('claude-opus-4-7')
+  const [reportMaxTokens, setReportMaxTokens] = useState('4096')
+  const [reportDailyCapPerAdmin, setReportDailyCapPerAdmin] = useState('50')
+  const [reportRateLimitPerMinute, setReportRateLimitPerMinute] = useState('5')
+  const [reportBulkMaxUsers, setReportBulkMaxUsers] = useState('20')
+  const [reportBulkConcurrency, setReportBulkConcurrency] = useState('3')
+  const [reportSystemPrompt, setReportSystemPrompt] = useState('')
 
   useEffect(() => {
     if (!query.data) return
@@ -65,6 +77,14 @@ export function AiSettingsTab({ canEdit }: { canEdit: boolean }) {
     setDailyTokenCapPerUser(String(d.dailyTokenCapPerUser))
     setRateLimitPerMinute(String(d.rateLimitPerMinute))
     setSystemPrompt(d.systemPrompt ?? '')
+    setReportsEnabled(d.reportsEnabled ?? false)
+    setReportModel(d.reportModel || 'claude-opus-4-7')
+    setReportMaxTokens(String(d.reportMaxTokens ?? 4096))
+    setReportDailyCapPerAdmin(String(d.reportDailyCapPerAdmin ?? 50))
+    setReportRateLimitPerMinute(String(d.reportRateLimitPerMinute ?? 5))
+    setReportBulkMaxUsers(String(d.reportBulkMaxUsers ?? 20))
+    setReportBulkConcurrency(String(d.reportBulkConcurrency ?? 3))
+    setReportSystemPrompt(d.reportSystemPrompt ?? '')
     setApiKeyInput('')
     setClearApiKeyPending(false)
     setTestReply(null)
@@ -84,6 +104,26 @@ export function AiSettingsTab({ canEdit }: { canEdit: boolean }) {
       if (Number.isNaN(rateLimit) || rateLimit < 1 || rateLimit > 60) {
         throw new Error('Rate limit must be between 1 and 60')
       }
+      const reportTokens = parseInt(reportMaxTokens, 10)
+      const reportDailyCap = parseInt(reportDailyCapPerAdmin, 10)
+      const reportRateLimit = parseInt(reportRateLimitPerMinute, 10)
+      const reportBulkMax = parseInt(reportBulkMaxUsers, 10)
+      const reportBulkConc = parseInt(reportBulkConcurrency, 10)
+      if (Number.isNaN(reportTokens) || reportTokens < 1024 || reportTokens > 8192) {
+        throw new Error('Report max tokens must be between 1024 and 8192')
+      }
+      if (Number.isNaN(reportDailyCap) || reportDailyCap < 1 || reportDailyCap > 500) {
+        throw new Error('Report daily cap per admin must be between 1 and 500')
+      }
+      if (Number.isNaN(reportRateLimit) || reportRateLimit < 1 || reportRateLimit > 30) {
+        throw new Error('Report rate limit must be between 1 and 30 per minute')
+      }
+      if (Number.isNaN(reportBulkMax) || reportBulkMax < 1 || reportBulkMax > 50) {
+        throw new Error('Report bulk max users must be between 1 and 50')
+      }
+      if (Number.isNaN(reportBulkConc) || reportBulkConc < 1 || reportBulkConc > 5) {
+        throw new Error('Report bulk concurrency must be between 1 and 5')
+      }
       return updateAiConfig({
         provider,
         model,
@@ -95,6 +135,14 @@ export function AiSettingsTab({ canEdit }: { canEdit: boolean }) {
         dailyTokenCapPerUser: dailyCap,
         rateLimitPerMinute: rateLimit,
         systemPrompt: systemPrompt.trim() || null,
+        reportsEnabled,
+        reportModel,
+        reportMaxTokens: reportTokens,
+        reportDailyCapPerAdmin: reportDailyCap,
+        reportRateLimitPerMinute: reportRateLimit,
+        reportBulkMaxUsers: reportBulkMax,
+        reportBulkConcurrency: reportBulkConc,
+        reportSystemPrompt: reportSystemPrompt.trim() || null,
         ...(clearApiKeyPending
           ? { apiKey: '' }
           : apiKeyInput.trim()
@@ -144,6 +192,14 @@ export function AiSettingsTab({ canEdit }: { canEdit: boolean }) {
     setDailyTokenCapPerUser(String(data.dailyTokenCapPerUser))
     setRateLimitPerMinute(String(data.rateLimitPerMinute))
     setSystemPrompt(data.systemPrompt ?? '')
+    setReportsEnabled(data.reportsEnabled ?? false)
+    setReportModel(data.reportModel || 'claude-opus-4-7')
+    setReportMaxTokens(String(data.reportMaxTokens ?? 4096))
+    setReportDailyCapPerAdmin(String(data.reportDailyCapPerAdmin ?? 50))
+    setReportRateLimitPerMinute(String(data.reportRateLimitPerMinute ?? 5))
+    setReportBulkMaxUsers(String(data.reportBulkMaxUsers ?? 20))
+    setReportBulkConcurrency(String(data.reportBulkConcurrency ?? 3))
+    setReportSystemPrompt(data.reportSystemPrompt ?? '')
     setApiKeyInput('')
     setClearApiKeyPending(false)
     setTestReply(null)
@@ -225,6 +281,29 @@ export function AiSettingsTab({ canEdit }: { canEdit: boolean }) {
           rows={12}
           placeholder={DEFAULT_SYSTEM_PROMPT_PLACEHOLDER}
           className="mt-4 flex w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent disabled:opacity-70 font-mono"
+        />
+      </Card>
+
+      <Card className="p-6">
+        <AiReportsSettingsSection
+          canEdit={canEdit}
+          chatEnabled={enabled}
+          reportsEnabled={reportsEnabled}
+          setReportsEnabled={setReportsEnabled}
+          reportModel={reportModel}
+          setReportModel={setReportModel}
+          reportMaxTokens={reportMaxTokens}
+          setReportMaxTokens={setReportMaxTokens}
+          reportDailyCapPerAdmin={reportDailyCapPerAdmin}
+          setReportDailyCapPerAdmin={setReportDailyCapPerAdmin}
+          reportRateLimitPerMinute={reportRateLimitPerMinute}
+          setReportRateLimitPerMinute={setReportRateLimitPerMinute}
+          reportBulkMaxUsers={reportBulkMaxUsers}
+          setReportBulkMaxUsers={setReportBulkMaxUsers}
+          reportBulkConcurrency={reportBulkConcurrency}
+          setReportBulkConcurrency={setReportBulkConcurrency}
+          reportSystemPrompt={reportSystemPrompt}
+          setReportSystemPrompt={setReportSystemPrompt}
         />
       </Card>
 
@@ -575,6 +654,160 @@ function AiRateLimitField({
         disabled={!canEdit}
       />
     </div>
+  )
+}
+
+function AiReportsSettingsSection({
+  canEdit,
+  chatEnabled,
+  reportsEnabled,
+  setReportsEnabled,
+  reportModel,
+  setReportModel,
+  reportMaxTokens,
+  setReportMaxTokens,
+  reportDailyCapPerAdmin,
+  setReportDailyCapPerAdmin,
+  reportRateLimitPerMinute,
+  setReportRateLimitPerMinute,
+  reportBulkMaxUsers,
+  setReportBulkMaxUsers,
+  reportBulkConcurrency,
+  setReportBulkConcurrency,
+  reportSystemPrompt,
+  setReportSystemPrompt,
+}: {
+  canEdit: boolean
+  chatEnabled: boolean
+  reportsEnabled: boolean
+  setReportsEnabled: (v: boolean) => void
+  reportModel: string
+  setReportModel: (v: string) => void
+  reportMaxTokens: string
+  setReportMaxTokens: (v: string) => void
+  reportDailyCapPerAdmin: string
+  setReportDailyCapPerAdmin: (v: string) => void
+  reportRateLimitPerMinute: string
+  setReportRateLimitPerMinute: (v: string) => void
+  reportBulkMaxUsers: string
+  setReportBulkMaxUsers: (v: string) => void
+  reportBulkConcurrency: string
+  setReportBulkConcurrency: (v: string) => void
+  reportSystemPrompt: string
+  setReportSystemPrompt: (v: string) => void
+}) {
+  const reportsToggleDisabled = !canEdit || !chatEnabled
+
+  return (
+    <>
+      <div className="border-t border-border pt-6">
+        <h3 className="text-base font-semibold text-text">AI Reports</h3>
+        <p className="mt-1 text-sm text-text-muted">
+          Admin user report generation from the users list and user detail drawer.
+        </p>
+      </div>
+
+      <div className="mt-6 flex items-center justify-between gap-4 rounded-md border border-border bg-surface-1 p-3">
+        <div>
+          <p className="text-sm font-medium text-text">Enable AI reports</p>
+          <p className="text-xs text-text-muted">
+            {chatEnabled
+              ? 'Allow admins to generate AI-powered user reports.'
+              : 'Requires AI Assistant to be enabled.'}
+          </p>
+        </div>
+        <Switch
+          checked={reportsEnabled}
+          onCheckedChange={setReportsEnabled}
+          disabled={reportsToggleDisabled}
+        />
+      </div>
+
+      <div className="mt-6 grid gap-5 sm:grid-cols-2">
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Report model</label>
+          <Select value={reportModel} onValueChange={setReportModel} disabled={!canEdit}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CHAT_MODELS.map((m) => (
+                <SelectItem key={m.value} value={m.value}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Report max tokens</label>
+          <Input
+            type="number"
+            min={1024}
+            max={8192}
+            value={reportMaxTokens}
+            onChange={(e) => setReportMaxTokens(e.target.value)}
+            disabled={!canEdit}
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Daily cap per admin</label>
+          <Input
+            type="number"
+            min={1}
+            max={500}
+            value={reportDailyCapPerAdmin}
+            onChange={(e) => setReportDailyCapPerAdmin(e.target.value)}
+            disabled={!canEdit}
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Rate limit per minute</label>
+          <Input
+            type="number"
+            min={1}
+            max={30}
+            value={reportRateLimitPerMinute}
+            onChange={(e) => setReportRateLimitPerMinute(e.target.value)}
+            disabled={!canEdit}
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Bulk max users</label>
+          <Input
+            type="number"
+            min={1}
+            max={50}
+            value={reportBulkMaxUsers}
+            onChange={(e) => setReportBulkMaxUsers(e.target.value)}
+            disabled={!canEdit}
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Bulk concurrency</label>
+          <Input
+            type="number"
+            min={1}
+            max={5}
+            value={reportBulkConcurrency}
+            onChange={(e) => setReportBulkConcurrency(e.target.value)}
+            disabled={!canEdit}
+          />
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <label className="mb-1.5 block text-sm font-medium text-text">Report system prompt (optional)</label>
+        <textarea
+          value={reportSystemPrompt}
+          onChange={(e) => setReportSystemPrompt(e.target.value)}
+          disabled={!canEdit}
+          rows={8}
+          placeholder={DEFAULT_REPORT_SYSTEM_PROMPT_PLACEHOLDER}
+          className="flex w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent disabled:opacity-70 font-mono"
+        />
+      </div>
+    </>
   )
 }
 

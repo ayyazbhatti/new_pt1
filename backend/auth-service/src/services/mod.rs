@@ -7,6 +7,7 @@ pub mod admin_symbols_service;
 pub mod admin_markup_service;
 pub mod admin_swap_service;
 pub mod call_record_handler;
+pub mod open_positions_redis;
 pub mod order_event_handler;
 pub mod position_event_handler;
 pub mod price_tick_summary_handler;

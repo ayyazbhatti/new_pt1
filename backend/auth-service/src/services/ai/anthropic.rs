@@ -8,7 +8,7 @@ use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc::Sender;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::provider::{AiDelta, AiMessage, AiProvider, AiUsage};
 
@@ -43,6 +43,7 @@ impl AnthropicProvider {
             "system": system,
             "messages": [{ "role": "user", "content": user_content }],
             "stream": false,
+            "thinking": { "type": "disabled" },
         });
 
         let mut headers = HeaderMap::new();
@@ -101,6 +102,7 @@ impl AnthropicProvider {
             "system": system,
             "messages": api_messages,
             "stream": true,
+            "thinking": { "type": "disabled" },
         });
 
         let mut headers = HeaderMap::new();
@@ -133,6 +135,7 @@ impl AnthropicProvider {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
         let mut saw_stop = false;
+        let mut saw_text = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -168,9 +171,19 @@ impl AnthropicProvider {
                             }
                         }
                         "content_block_delta" => {
-                            if let Some(text) = event.delta.and_then(|d| d.text).filter(|t| !t.is_empty())
+                            if let Some(text) = event
+                                .delta
+                                .as_ref()
+                                .and_then(|d| d.text.as_deref())
+                                .filter(|t| !t.is_empty())
                             {
-                                let _ = tx.send(AiDelta::Text(text)).await;
+                                saw_text = true;
+                                let _ = tx.send(AiDelta::Text(text.to_string())).await;
+                            } else if let Some(delta) = &event.delta {
+                                debug!(
+                                    delta_type = ?delta.delta_type,
+                                    "content_block_delta without text"
+                                );
                             }
                         }
                         "message_delta" => {
@@ -199,6 +212,15 @@ impl AnthropicProvider {
 
         if !saw_stop {
             let _ = tx.send(AiDelta::Done).await;
+        }
+
+        if saw_stop && !saw_text {
+            warn!("Anthropic stream ended with no text deltas");
+            let _ = tx
+                .send(AiDelta::Error(
+                    "Model returned no text content".to_string(),
+                ))
+                .await;
         }
 
         Ok(usage)
@@ -249,7 +271,10 @@ struct AnthropicStreamMessage {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicStreamDelta {
+    #[serde(rename = "type")]
+    delta_type: Option<String>,
     text: Option<String>,
+    thinking: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

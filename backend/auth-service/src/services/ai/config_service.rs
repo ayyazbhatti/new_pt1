@@ -17,6 +17,14 @@ pub struct PlatformAiConfig {
     pub include_user_context: bool,
     pub topic_guard_enabled: bool,
     pub classifier_model: String,
+    pub reports_enabled: bool,
+    pub report_model: String,
+    pub report_max_tokens: i32,
+    pub report_daily_cap_per_admin: i32,
+    pub report_rate_limit_per_minute: i32,
+    pub report_bulk_max_users: i32,
+    pub report_bulk_concurrency: i32,
+    pub report_system_prompt: Option<String>,
 }
 
 pub struct AiConfigService;
@@ -41,7 +49,10 @@ impl AiConfigService {
             r#"
             SELECT provider, model, api_key, system_prompt, enabled,
                    max_tokens_per_message, daily_token_cap_per_user, rate_limit_per_minute,
-                   include_user_context, topic_guard_enabled, classifier_model
+                   include_user_context, topic_guard_enabled, classifier_model,
+                   reports_enabled, report_model, report_max_tokens,
+                   report_daily_cap_per_admin, report_rate_limit_per_minute,
+                   report_bulk_max_users, report_bulk_concurrency, report_system_prompt
             FROM platform_ai_config
             WHERE singleton_id = 1
             "#,
@@ -104,6 +115,27 @@ impl AiConfigService {
             .topic_guard_enabled
             .unwrap_or(current.topic_guard_enabled);
         let classifier_model = req.classifier_model.unwrap_or(current.classifier_model);
+        let reports_enabled = req.reports_enabled.unwrap_or(current.reports_enabled);
+        let report_model = req.report_model.unwrap_or(current.report_model);
+        let report_max_tokens = req.report_max_tokens.unwrap_or(current.report_max_tokens);
+        let report_daily_cap_per_admin = req
+            .report_daily_cap_per_admin
+            .unwrap_or(current.report_daily_cap_per_admin);
+        let report_rate_limit_per_minute = req
+            .report_rate_limit_per_minute
+            .unwrap_or(current.report_rate_limit_per_minute);
+        let report_bulk_max_users = req.report_bulk_max_users.unwrap_or(current.report_bulk_max_users);
+        let report_bulk_concurrency = req
+            .report_bulk_concurrency
+            .unwrap_or(current.report_bulk_concurrency);
+        let mut report_system_prompt = current.report_system_prompt;
+        if let Some(s) = req.report_system_prompt {
+            report_system_prompt = if s.trim().is_empty() {
+                None
+            } else {
+                Some(s)
+            };
+        }
 
         match req.api_key.as_deref().map(str::trim) {
             Some("") => {
@@ -113,7 +145,11 @@ impl AiConfigService {
                       provider = $1, model = $2, api_key = NULL, system_prompt = $3,
                       enabled = $4, max_tokens_per_message = $5, daily_token_cap_per_user = $6,
                       rate_limit_per_minute = $7, include_user_context = $8,
-                      topic_guard_enabled = $9, classifier_model = $10, updated_at = NOW()
+                      topic_guard_enabled = $9, classifier_model = $10,
+                      reports_enabled = $11, report_model = $12, report_max_tokens = $13,
+                      report_daily_cap_per_admin = $14, report_rate_limit_per_minute = $15,
+                      report_bulk_max_users = $16, report_bulk_concurrency = $17,
+                      report_system_prompt = $18, updated_at = NOW()
                     WHERE singleton_id = 1
                     "#,
                 )
@@ -127,6 +163,14 @@ impl AiConfigService {
                 .bind(include_user_context)
                 .bind(topic_guard_enabled)
                 .bind(&classifier_model)
+                .bind(reports_enabled)
+                .bind(&report_model)
+                .bind(report_max_tokens)
+                .bind(report_daily_cap_per_admin)
+                .bind(report_rate_limit_per_minute)
+                .bind(report_bulk_max_users)
+                .bind(report_bulk_concurrency)
+                .bind(&report_system_prompt)
                 .execute(pool)
                 .await?;
             }
@@ -137,7 +181,11 @@ impl AiConfigService {
                       provider = $1, model = $2, api_key = $3, system_prompt = $4,
                       enabled = $5, max_tokens_per_message = $6, daily_token_cap_per_user = $7,
                       rate_limit_per_minute = $8, include_user_context = $9,
-                      topic_guard_enabled = $10, classifier_model = $11, updated_at = NOW()
+                      topic_guard_enabled = $10, classifier_model = $11,
+                      reports_enabled = $12, report_model = $13, report_max_tokens = $14,
+                      report_daily_cap_per_admin = $15, report_rate_limit_per_minute = $16,
+                      report_bulk_max_users = $17, report_bulk_concurrency = $18,
+                      report_system_prompt = $19, updated_at = NOW()
                     WHERE singleton_id = 1
                     "#,
                 )
@@ -152,6 +200,14 @@ impl AiConfigService {
                 .bind(include_user_context)
                 .bind(topic_guard_enabled)
                 .bind(&classifier_model)
+                .bind(reports_enabled)
+                .bind(&report_model)
+                .bind(report_max_tokens)
+                .bind(report_daily_cap_per_admin)
+                .bind(report_rate_limit_per_minute)
+                .bind(report_bulk_max_users)
+                .bind(report_bulk_concurrency)
+                .bind(&report_system_prompt)
                 .execute(pool)
                 .await?;
             }
@@ -162,7 +218,11 @@ impl AiConfigService {
                       provider = $1, model = $2, system_prompt = $3,
                       enabled = $4, max_tokens_per_message = $5, daily_token_cap_per_user = $6,
                       rate_limit_per_minute = $7, include_user_context = $8,
-                      topic_guard_enabled = $9, classifier_model = $10, updated_at = NOW()
+                      topic_guard_enabled = $9, classifier_model = $10,
+                      reports_enabled = $11, report_model = $12, report_max_tokens = $13,
+                      report_daily_cap_per_admin = $14, report_rate_limit_per_minute = $15,
+                      report_bulk_max_users = $16, report_bulk_concurrency = $17,
+                      report_system_prompt = $18, updated_at = NOW()
                     WHERE singleton_id = 1
                     "#,
                 )
@@ -176,6 +236,14 @@ impl AiConfigService {
                 .bind(include_user_context)
                 .bind(topic_guard_enabled)
                 .bind(&classifier_model)
+                .bind(reports_enabled)
+                .bind(&report_model)
+                .bind(report_max_tokens)
+                .bind(report_daily_cap_per_admin)
+                .bind(report_rate_limit_per_minute)
+                .bind(report_bulk_max_users)
+                .bind(report_bulk_concurrency)
+                .bind(&report_system_prompt)
                 .execute(pool)
                 .await?;
             }
@@ -200,6 +268,14 @@ pub struct UpdatePlatformAiConfig {
     pub include_user_context: Option<bool>,
     pub topic_guard_enabled: Option<bool>,
     pub classifier_model: Option<String>,
+    pub reports_enabled: Option<bool>,
+    pub report_model: Option<String>,
+    pub report_max_tokens: Option<i32>,
+    pub report_daily_cap_per_admin: Option<i32>,
+    pub report_rate_limit_per_minute: Option<i32>,
+    pub report_bulk_max_users: Option<i32>,
+    pub report_bulk_concurrency: Option<i32>,
+    pub report_system_prompt: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -215,6 +291,14 @@ struct PlatformAiConfigRow {
     include_user_context: bool,
     topic_guard_enabled: bool,
     classifier_model: String,
+    reports_enabled: bool,
+    report_model: String,
+    report_max_tokens: i32,
+    report_daily_cap_per_admin: i32,
+    report_rate_limit_per_minute: i32,
+    report_bulk_max_users: i32,
+    report_bulk_concurrency: i32,
+    report_system_prompt: Option<String>,
 }
 
 impl From<PlatformAiConfigRow> for PlatformAiConfig {
@@ -231,6 +315,14 @@ impl From<PlatformAiConfigRow> for PlatformAiConfig {
             include_user_context: r.include_user_context,
             topic_guard_enabled: r.topic_guard_enabled,
             classifier_model: r.classifier_model,
+            reports_enabled: r.reports_enabled,
+            report_model: r.report_model,
+            report_max_tokens: r.report_max_tokens,
+            report_daily_cap_per_admin: r.report_daily_cap_per_admin,
+            report_rate_limit_per_minute: r.report_rate_limit_per_minute,
+            report_bulk_max_users: r.report_bulk_max_users,
+            report_bulk_concurrency: r.report_bulk_concurrency,
+            report_system_prompt: r.report_system_prompt,
         }
     }
 }

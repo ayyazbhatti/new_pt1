@@ -36,7 +36,11 @@ import {
   AlertCircle,
   Eye,
   History,
+  Sparkles,
+  FileText,
 } from 'lucide-react'
+import { GenerateReportModal } from '@/features/aiReports/modals/GenerateReportModal'
+import { UserReportsListTab } from '@/features/aiReports/components/UserReportsListTab'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { fetchTransactions, createDirectDeposit, type Transaction as ApiTransaction } from '@/features/adminFinance/api/finance.api'
 import type { Transaction as FinanceTransaction } from '@/features/adminFinance/types/finance'
@@ -89,7 +93,15 @@ import { Loader2, RotateCcw, Pencil } from 'lucide-react'
 
 const USER_DETAILS_TAB_STORAGE_KEY = 'admin-user-details-modal-tab'
 const ORDERS_POSITIONS_SUBTAB_STORAGE_KEY = 'admin-user-details-orders-positions-subtab'
-const TAB_VALUES = ['overview', 'funding', 'appointments', 'orders-positions', 'notes', 'chat'] as const
+const TAB_VALUES = [
+  'overview',
+  'funding',
+  'appointments',
+  'orders-positions',
+  'notes',
+  'chat',
+  'reports',
+] as const
 const ORDERS_POSITIONS_SUBTAB_VALUES = ['positions', 'orders', 'pending', 'closed'] as const
 
 function getStoredOrdersPositionsSubTab(): (typeof ORDERS_POSITIONS_SUBTAB_VALUES)[number] {
@@ -193,6 +205,8 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
   const canViewUserEvents = useCanAccess('user_events:view')
+  const canGenerateAiReports = useCanAccess('ai_reports:generate')
+  const canViewAiReports = useCanAccess('ai_reports:view')
   const [userState, setUserState] = useState(user)
 
   const handleViewEventHistory = useCallback(() => {
@@ -226,6 +240,12 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
 
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<typeof TAB_VALUES[number]>(getStoredUserDetailsTab)
+
+  useEffect(() => {
+    if (activeTab === 'reports' && !canViewAiReports) {
+      setActiveTab('overview')
+    }
+  }, [activeTab, canViewAiReports])
   const [noteDraft, setNoteDraft] = useState('')
   const [isEditMode, setIsEditMode] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -983,6 +1003,25 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
 
   const handleClose = () => closeModal(`user-details-${user.id}`)
 
+  const handleOpenGenerateReport = useCallback(() => {
+    const label = userState.name?.trim() || userState.email || 'User'
+    const modalKey = `generate-ai-report-${userState.id}`
+    openModal(
+      modalKey,
+      <GenerateReportModal
+        subjectUserIds={[userState.id]}
+        subjectLabel={label}
+        subjectEmail={userState.email}
+        modalKey={modalKey}
+      />,
+      {
+        title: 'Generate AI Report',
+        size: 'lg',
+        description: `Configure sections and optional focus for ${label}.`,
+      },
+    )
+  }, [openModal, userState.id, userState.name, userState.email])
+
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`))
   }
@@ -1013,13 +1052,26 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            className="ml-2 flex-shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700 hover:text-white sm:p-2"
-          >
-            <X className="h-4 w-4 sm:h-5 sm:w-5" />
-          </button>
+          <div className="ml-2 flex shrink-0 items-center gap-2">
+            {canGenerateAiReports && (
+              <button
+                type="button"
+                onClick={handleOpenGenerateReport}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/30"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Generate AI Report</span>
+                <span className="sm:hidden">Report</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleClose}
+              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700 hover:text-white sm:p-2"
+            >
+              <X className="h-4 w-4 sm:h-5 sm:w-5" />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1103,14 +1155,26 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         className="flex min-h-0 w-full flex-1 flex-col"
       >
         <div className="flex flex-shrink-0 items-center space-x-1 overflow-x-auto border-t border-b border-slate-700 px-2 py-2 sm:space-x-2 sm:px-4 sm:py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {[
-            { value: 'overview' as const, label: 'Overview', shortLabel: 'Overview', icon: UserIcon },
-            { value: 'funding' as const, label: 'Funding History', shortLabel: 'Funding', icon: DollarSign },
-            { value: 'appointments' as const, label: 'Appointments', shortLabel: 'Appointments', icon: Calendar },
-            { value: 'orders-positions' as const, label: 'Orders & Positions', shortLabel: 'Orders', icon: ListOrdered },
-            { value: 'notes' as const, label: 'Notes & Timeline', shortLabel: 'Notes', icon: MessageSquare },
-            { value: 'chat' as const, label: 'Chat', shortLabel: 'Chat', icon: MessageCircle },
-          ].map(({ value, label, shortLabel, icon: Icon }) => (
+          {(
+            [
+              { value: 'overview' as const, label: 'Overview', shortLabel: 'Overview', icon: UserIcon },
+              { value: 'funding' as const, label: 'Funding History', shortLabel: 'Funding', icon: DollarSign },
+              { value: 'appointments' as const, label: 'Appointments', shortLabel: 'Appointments', icon: Calendar },
+              { value: 'orders-positions' as const, label: 'Orders & Positions', shortLabel: 'Orders', icon: ListOrdered },
+              { value: 'notes' as const, label: 'Notes & Timeline', shortLabel: 'Notes', icon: MessageSquare },
+              { value: 'chat' as const, label: 'Chat', shortLabel: 'Chat', icon: MessageCircle },
+              ...(canViewAiReports
+                ? [
+                    {
+                      value: 'reports' as const,
+                      label: 'AI Reports',
+                      shortLabel: 'Reports',
+                      icon: FileText,
+                    },
+                  ]
+                : []),
+            ] as const
+          ).map(({ value, label, shortLabel, icon: Icon }) => (
             <button
               key={value}
               type="button"
@@ -2275,6 +2339,22 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
             </div>
           </div>
         </TabsContent>
+
+        {canViewAiReports && (
+          <TabsContent
+            value="reports"
+            className="scrollbar-modal mt-3 min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden"
+          >
+            <div className="flex-shrink-0 px-3 pt-2 pb-1 sm:px-4">
+              <h2 className="text-base font-semibold text-white sm:text-lg">AI Reports</h2>
+            </div>
+            <UserReportsListTab
+              subjectUserId={userState.id}
+              subjectName={userState.name}
+              subjectEmail={userState.email}
+            />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Close position confirmation (admin) */}

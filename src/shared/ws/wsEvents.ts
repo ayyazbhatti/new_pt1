@@ -131,6 +131,37 @@ export type AdminAuditAppendedPayload = {
   log: any
 }
 
+/** NATS → ws-gateway → client payload for `ai.report.admin.{admin_user_id}` */
+export type AiReportStreamPayload =
+  | {
+      type: 'started'
+      reportId: string
+      subjectUserId: string
+      bulkBatchId?: string | null
+    }
+  | {
+      type: 'delta'
+      reportId: string
+      text: string
+    }
+  | {
+      type: 'done'
+      reportId: string
+      bulkBatchId?: string | null
+    }
+  | {
+      type: 'error'
+      reportId: string
+      message: string
+      bulkBatchId?: string | null
+    }
+  | {
+      type: 'batch_progress'
+      bulkBatchId: string
+      completed: number
+      total: number
+    }
+
 // Client → Server Events
 export type WsOutboundEvent =
   | {
@@ -296,6 +327,10 @@ export type WsInboundEvent =
         blockedReason?: string | null
         detail?: string
       }
+    }
+  | {
+      type: 'ai.report.delta'
+      payload: AiReportStreamPayload
     }
   | {
       type: 'error'

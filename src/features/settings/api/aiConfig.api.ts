@@ -14,6 +14,14 @@ export interface AiConfigDto {
   includeUserContext: boolean
   topicGuardEnabled: boolean
   classifierModel: string
+  reportsEnabled: boolean
+  reportModel: string
+  reportMaxTokens: number
+  reportDailyCapPerAdmin: number
+  reportRateLimitPerMinute: number
+  reportBulkMaxUsers: number
+  reportBulkConcurrency: number
+  reportSystemPrompt: string | null
 }
 
 export interface UpdateAiConfigPayload {
@@ -30,6 +38,14 @@ export interface UpdateAiConfigPayload {
   includeUserContext?: boolean
   topicGuardEnabled?: boolean
   classifierModel?: string
+  reportsEnabled?: boolean
+  reportModel?: string
+  reportMaxTokens?: number
+  reportDailyCapPerAdmin?: number
+  reportRateLimitPerMinute?: number
+  reportBulkMaxUsers?: number
+  reportBulkConcurrency?: number
+  reportSystemPrompt?: string | null
 }
 
 export interface TestAiConfigResponse {

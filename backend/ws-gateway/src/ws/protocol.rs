@@ -172,6 +172,11 @@ pub enum ServerMessage {
     AiChatDelta {
         payload: serde_json::Value,
     },
+    // AI admin report streaming: payload from auth-service NATS ai.report.admin.{admin_user_id}
+    #[serde(rename = "ai.report.delta")]
+    AiReportDelta {
+        payload: serde_json::Value,
+    },
 }
 
 impl ServerMessage {

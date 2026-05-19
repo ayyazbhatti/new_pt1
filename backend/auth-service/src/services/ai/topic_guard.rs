@@ -36,9 +36,9 @@ pub async fn is_on_topic(
             warn!(
                 classifier_response = %raw,
                 error = %e,
-                "Topic classifier returned unparseable JSON; treating as off-topic"
+                "Topic classifier returned unparseable JSON; allowing message"
             );
-            Ok(false)
+            Ok(true)
         }
     }
 }
