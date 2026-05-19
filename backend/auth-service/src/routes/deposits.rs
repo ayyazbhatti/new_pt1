@@ -3033,11 +3033,138 @@ pub struct PositionsResponse {
     pub positions: Vec<serde_json::Value>,
 }
 
+/// `status`: `open` | `closed` | `all` (default `all` for backward compatibility).
+/// `limit`: max rows when `status=closed` (default 200, cap 500); ignored for `open`/`all`.
+#[derive(Debug, Deserialize)]
+pub struct UserPositionsQuery {
+    pub status: Option<String>,
+    pub limit: Option<u32>,
+}
+
+fn position_status_filter(status_filter: &str) -> &'static str {
+    match status_filter.to_lowercase().as_str() {
+        "open" => "open",
+        "closed" => "closed",
+        _ => "all",
+    }
+}
+
+fn redis_status_matches_filter(filter: &str, status: &str) -> bool {
+    match filter {
+        "open" => status.eq_ignore_ascii_case("open"),
+        "closed" => {
+            status.eq_ignore_ascii_case("closed") || status.eq_ignore_ascii_case("liquidated")
+        }
+        _ => true,
+    }
+}
+
+fn position_sort_ts_ms(obj: &serde_json::Map<String, serde_json::Value>) -> i64 {
+    let closed = obj
+        .get("closed_at")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0);
+    if closed > 0 {
+        return if closed < 1_000_000_000_000 {
+            closed * 1000
+        } else {
+            closed
+        };
+    }
+    let updated = obj
+        .get("updated_at")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0);
+    if updated < 1_000_000_000_000 {
+        updated * 1000
+    } else {
+        updated
+    }
+}
+
+fn hash_to_position_json(
+    pos_id_str: &str,
+    pos_data: std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    let mut pos_json = serde_json::Map::new();
+    pos_json.insert(
+        "id".to_string(),
+        serde_json::Value::String(pos_id_str.to_string()),
+    );
+    for (k, v) in pos_data {
+        if let Ok(num) = v.parse::<f64>() {
+            pos_json.insert(
+                k,
+                serde_json::Value::Number(
+                    serde_json::Number::from_f64(num).unwrap_or(serde_json::Number::from(0)),
+                ),
+            );
+        } else if v == "null" || v.is_empty() {
+            pos_json.insert(k, serde_json::Value::Null);
+        } else {
+            pos_json.insert(k, serde_json::Value::String(v));
+        }
+    }
+    serde_json::Value::Object(pos_json)
+}
+
+async fn enrich_open_position_unrealized_pnl<C>(
+    conn: &mut C,
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+) where
+    C: redis::AsyncCommands + Send,
+{
+    let status = obj
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !status.eq_ignore_ascii_case("open") {
+        return;
+    }
+    let symbol = obj
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let group_id = obj
+        .get("group_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let size = obj
+        .get("size")
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0.0);
+    let avg_price = obj
+        .get("avg_price")
+        .or_else(|| obj.get("entry_price"))
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0.0);
+    let side = obj.get("side").and_then(|v| v.as_str()).unwrap_or("");
+    if symbol.is_empty() || size <= 0.0 || avg_price <= 0.0 {
+        return;
+    }
+    if let Some((bid, ask)) = get_price_from_redis_conn(conn, &symbol, &group_id).await {
+        let size_d = Decimal::from_str(&size.to_string()).unwrap_or(Decimal::ZERO);
+        let avg_d = Decimal::from_str(&avg_price.to_string()).unwrap_or(Decimal::ZERO);
+        let unrealized_pnl = match side {
+            "LONG" => (bid - avg_d) * size_d,
+            "SHORT" => (avg_d - ask) * size_d,
+            _ => Decimal::ZERO,
+        };
+        obj.insert(
+            "unrealized_pnl".to_string(),
+            serde_json::Value::String(unrealized_pnl.to_string()),
+        );
+    }
+}
+
 async fn get_user_positions(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Extension(deposits_state): Extension<DepositsState>,
     Path(user_id): Path<Uuid>,
+    Query(query): Query<UserPositionsQuery>,
 ) -> Result<Json<PositionsResponse>, StatusCode> {
     // Users can only see their own positions; admins or users with trading:view can see any
     let is_own_positions = claims.sub == user_id;
@@ -3046,6 +3173,9 @@ async fn get_user_positions(
             .await
             .map_err(|_| StatusCode::FORBIDDEN)?;
     }
+
+    let status_filter = position_status_filter(query.status.as_deref().unwrap_or("all"));
+    let closed_limit = query.limit.unwrap_or(200).clamp(1, 500) as usize;
 
     let mut conn = deposits_state.redis.get().await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
@@ -3063,83 +3193,58 @@ async fn get_user_positions(
         return Ok(Json(PositionsResponse { positions }));
     }
 
-    // Single connection for entire request: SMEMBERS already done above; now sequential HGETALL
-    // per position. Avoids N parallel connections (socket exhaustion under 10M+ users).
+    // HGET status before HGETALL when filtering — avoids loading full closed history for the open tab.
     for pos_id_str in position_ids {
-        if let Ok(pos_id) = Uuid::parse_str(&pos_id_str) {
-            let pos_key = Keys::position_by_id(pos_id);
-            let pos_data: std::collections::HashMap<String, String> = match conn.hgetall(&pos_key).await {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to get position {}: {}", pos_id, e);
-                    continue;
-                }
-            };
-            if pos_data.is_empty() {
+        let pos_id = match Uuid::parse_str(&pos_id_str) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+        let pos_key = Keys::position_by_id(pos_id);
+
+        if status_filter != "all" {
+            let status: Option<String> = conn.hget(&pos_key, "status").await.map_err(|e| {
+                error!("Failed to get position {} status: {}", pos_id, e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let status = status.as_deref().unwrap_or("");
+            if !redis_status_matches_filter(status_filter, status) {
                 continue;
             }
-            let mut pos_json = serde_json::Map::new();
-            pos_json.insert("id".to_string(), serde_json::Value::String(pos_id_str.clone()));
-            for (k, v) in pos_data {
-                if let Ok(num) = v.parse::<f64>() {
-                    pos_json.insert(k, serde_json::Value::Number(serde_json::Number::from_f64(num).unwrap_or(serde_json::Number::from(0))));
-                } else if v == "null" || v.is_empty() {
-                    pos_json.insert(k, serde_json::Value::Null);
-                } else {
-                    pos_json.insert(k, serde_json::Value::String(v));
-                }
-            }
-            positions.push(serde_json::Value::Object(pos_json));
         }
+
+        let pos_data: std::collections::HashMap<String, String> = match conn.hgetall(&pos_key).await {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to get position {}: {}", pos_id, e);
+                continue;
+            }
+        };
+        if pos_data.is_empty() {
+            continue;
+        }
+
+        positions.push(hash_to_position_json(&pos_id_str, pos_data));
     }
 
-    // Enrich open positions with server-computed unrealized PnL from Redis (reuse same conn)
-    for pos_value in positions.iter_mut() {
-        if let Some(obj) = pos_value.as_object_mut() {
-            let status = obj
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if !status.eq_ignore_ascii_case("open") {
-                continue;
-            }
-            let symbol = obj
-                .get("symbol")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let group_id = obj
-                .get("group_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let size = obj
-                .get("size")
-                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(0.0);
-            let avg_price = obj
-                .get("avg_price")
-                .or_else(|| obj.get("entry_price"))
-                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                .unwrap_or(0.0);
-            let side = obj.get("side").and_then(|v| v.as_str()).unwrap_or("");
-            if symbol.is_empty() || size <= 0.0 || avg_price <= 0.0 {
-                continue;
-            }
-            if let Some((bid, ask)) =
-                get_price_from_redis_conn(&mut conn, &symbol, &group_id).await
-            {
-                let size_d = Decimal::from_str(&size.to_string()).unwrap_or(Decimal::ZERO);
-                let avg_d = Decimal::from_str(&avg_price.to_string()).unwrap_or(Decimal::ZERO);
-                let unrealized_pnl = match side {
-                    "LONG" => (bid - avg_d) * size_d,
-                    "SHORT" => (avg_d - ask) * size_d,
-                    _ => Decimal::ZERO,
-                };
-                obj.insert(
-                    "unrealized_pnl".to_string(),
-                    serde_json::Value::String(unrealized_pnl.to_string()),
-                );
+    if status_filter == "closed" {
+        positions.sort_by(|a, b| {
+            let a_ts = a
+                .as_object()
+                .map(position_sort_ts_ms)
+                .unwrap_or(0);
+            let b_ts = b
+                .as_object()
+                .map(position_sort_ts_ms)
+                .unwrap_or(0);
+            b_ts.cmp(&a_ts)
+        });
+        positions.truncate(closed_limit);
+    }
+
+    if status_filter == "open" || status_filter == "all" {
+        for pos_value in positions.iter_mut() {
+            if let Some(obj) = pos_value.as_object_mut() {
+                enrich_open_position_unrealized_pnl(&mut conn, obj).await;
             }
         }
     }

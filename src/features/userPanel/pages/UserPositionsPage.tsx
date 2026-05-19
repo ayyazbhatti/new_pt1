@@ -29,7 +29,7 @@ import {
   Activity,
 } from 'lucide-react'
 import { cn } from '@/shared/utils'
-import { getPositions, Position } from '@/features/terminal/api/positions.api'
+import { getOpenPositions, getClosedPositions, Position } from '@/features/terminal/api/positions.api'
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 
 function StatCard({
@@ -234,19 +234,20 @@ export function UserPositionsPage() {
   const [filterSymbol, setFilterSymbol] = useState('')
   const [filterSide, setFilterSide] = useState<SideFilter>('all')
 
-  const { data: allPositions = [], isLoading, isError, error } = useQuery({
-    queryKey: ['user', 'positions'],
-    queryFn: getPositions,
+  const { data: openPositions = [], isLoading: openLoading, isError: openError, error: openErr } = useQuery({
+    queryKey: ['user', 'positions', 'open'],
+    queryFn: () => getOpenPositions(),
   })
 
-  const openPositions = useMemo(
-    () => allPositions.filter((p) => p.status === 'OPEN'),
-    [allPositions]
-  )
-  const closedPositions = useMemo(
-    () => allPositions.filter((p) => p.status === 'CLOSED').sort((a, b) => (b.closed_at ?? b.updated_at ?? 0) - (a.closed_at ?? a.updated_at ?? 0)),
-    [allPositions]
-  )
+  const { data: closedPositions = [], isLoading: closedLoading, isError: closedError, error: closedErr } = useQuery({
+    queryKey: ['user', 'positions', 'closed'],
+    queryFn: () => getClosedPositions({ limit: 200 }),
+    enabled: filterView === 'history',
+  })
+
+  const isLoading = filterView === 'open' ? openLoading : closedLoading
+  const isError = filterView === 'open' ? openError : closedError
+  const error = filterView === 'open' ? openErr : closedErr
 
   const basePositions = filterView === 'open' ? openPositions : closedPositions
 

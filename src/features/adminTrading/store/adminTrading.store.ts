@@ -1,12 +1,7 @@
 import { create } from 'zustand'
-import { AdminOrder, AdminPosition, AdminAuditLog, TradingFilters, LookupSymbol, LookupUser, LookupGroup } from '../types'
+import { AdminOrder, AdminPosition, AdminAuditLog, LookupSymbol, LookupUser, LookupGroup } from '../types'
 
 interface AdminTradingState {
-  // Filters
-  filters: TradingFilters
-  setFilters: (filters: Partial<TradingFilters>) => void
-  clearFilters: () => void
-
   // Orders
   orders: Map<string, AdminOrder>
   ordersCursor?: string
@@ -80,19 +75,7 @@ interface AdminTradingState {
   clearLiveMarks: () => void
 }
 
-const defaultFilters: TradingFilters = {
-  limit: 100,
-}
-
 export const useAdminTradingStore = create<AdminTradingState>((set, get) => ({
-  // Filters
-  filters: defaultFilters,
-  setFilters: (newFilters) =>
-    set((state) => ({
-      filters: { ...state.filters, ...newFilters },
-    })),
-  clearFilters: () => set({ filters: defaultFilters }),
-
   // Orders
   orders: new Map(),
   ordersCursor: undefined,

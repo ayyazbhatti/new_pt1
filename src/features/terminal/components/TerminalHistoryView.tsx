@@ -6,7 +6,7 @@ import { Search, Calendar, History, X } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
-import { getPositions, type Position } from '../api/positions.api'
+import { getClosedPositions, type Position } from '../api/positions.api'
 import { listOrders, type Order } from '../api/orders.api'
 import { Skeleton, Input } from '@/shared/ui'
 
@@ -38,7 +38,7 @@ export function TerminalHistoryView() {
   const fetchPositions = useCallback(async () => {
     setLoadingPositions(true)
     try {
-      const data = await getPositions()
+      const data = await getClosedPositions({ limit: 200 })
       setPositions(data)
     } catch (e) {
       console.error('Failed to fetch positions for history:', e)
@@ -67,12 +67,6 @@ export function TerminalHistoryView() {
   }, [fetchPositions, fetchOrders])
 
   const closedPositions = positions
-    .filter((p) => p.status === 'CLOSED' || p.status === 'LIQUIDATED')
-    .sort((a, b) => {
-      const aTime = a.closed_at ?? a.updated_at ?? 0
-      const bTime = b.closed_at ?? b.updated_at ?? 0
-      return (bTime < 1e12 ? bTime * 1000 : bTime) - (aTime < 1e12 ? aTime * 1000 : aTime)
-    })
 
   const q = searchQuery.trim().toLowerCase()
   const searchFilteredClosed = q

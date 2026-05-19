@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State, Extension},
+    extract::{Extension, Query, State},
     http::StatusCode,
     response::Json,
     routing::get,
@@ -8,12 +8,16 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-use crate::utils::jwt::Claims;
 use crate::middleware::auth_middleware;
+use crate::routes::admin_trading::{
+    AdminAuditLog, ErrorDetail, ErrorResponse, ListAuditQuery, PaginatedResponse,
+};
+use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
-use crate::routes::admin_trading::{AdminAuditLog, PaginatedResponse, ListAuditQuery, ErrorResponse, ErrorDetail};
 
-fn permission_denied_to_response(e: permission_check::PermissionDenied) -> (StatusCode, Json<ErrorResponse>) {
+fn permission_denied_to_response(
+    e: permission_check::PermissionDenied,
+) -> (StatusCode, Json<ErrorResponse>) {
     (
         e.status,
         Json(ErrorResponse {
@@ -41,6 +45,7 @@ async fn list_admin_audit(
         total: Some(0),
         total_margin_used: None,
         total_unrealized_pnl: None,
+        total_realized_pnl: None,
     }))
 }
 
@@ -50,4 +55,3 @@ pub fn create_admin_audit_router(pool: PgPool) -> Router<PgPool> {
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
 }
-

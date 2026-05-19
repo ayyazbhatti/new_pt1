@@ -33,7 +33,7 @@ if [[ "${NEWPT_LOCAL_AMD64:-}" == "1" ]]; then
 fi
 
 echo "Syncing code to server..."
-rsync -avz --exclude '.git' --exclude 'node_modules' --exclude 'target' --exclude '**/target' \
+rsync -avz --delete --exclude '.git' --exclude 'node_modules' --exclude 'target' --exclude '**/target' \
   --exclude 'deploy/.env.production' --exclude '.cursor' \
   "$REPO_ROOT/" "$NEWPT_SERVER:/opt/newpt/"
 

@@ -5,7 +5,13 @@ import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Input, Skeleton } from '@/shared/ui'
-import { getPositions, Position, updatePositionSltp, closePosition } from '../api/positions.api'
+import {
+  getOpenPositions,
+  getClosedPositions,
+  Position,
+  updatePositionSltp,
+  closePosition,
+} from '../api/positions.api'
 
 /** User-friendly message for close position errors (403 = trading disabled, else use API message). */
 function closePositionErrorMessage(err: unknown): string {
@@ -16,6 +22,13 @@ function closePositionErrorMessage(err: unknown): string {
     return 'Trading is disabled. You cannot close positions.'
   }
   return err instanceof Error ? err.message : 'Failed to close position'
+}
+
+function copyToClipboard(text: string, label: string) {
+  void navigator.clipboard.writeText(text).then(
+    () => toast.success(`${label} copied`),
+    () => toast.error('Failed to copy')
+  )
 }
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
@@ -51,7 +64,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     return 'positions'
   })
   /** Per-tab loading so Orders fetch never hides Positions (shared flag caused skeleton stuck on tab switch). */
-  const [positionsLoading, setPositionsLoading] = useState(false)
+  const [positionsLoading, setPositionsLoading] = useState(true)
+  const [closedPositionsLoading, setClosedPositionsLoading] = useState(false)
   const [ordersLoading, setOrdersLoading] = useState(false)
   const [orderHistoryLoading, setOrderHistoryLoading] = useState(false)
   const [closeAllDialogOpen, setCloseAllDialogOpen] = useState(false)
@@ -67,7 +81,11 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const [editSlAmount, setEditSlAmount] = useState<string>('') // SL dollar amount
   const [editTpAmount, setEditTpAmount] = useState<string>('') // TP dollar amount
   const [editingPosition, setEditingPosition] = useState<Position | null>(null) // Store position being edited
+  /** Open positions only (fast API path). */
   const [positions, setPositions] = useState<Position[]>([])
+  /** Closed/liquidated — loaded when Position History tab is opened. */
+  const [closedPositions, setClosedPositions] = useState<Position[]>([])
+  const closedPositionsLoadedRef = useRef(false)
   const [orders, setOrders] = useState<Order[]>([])
   const [isBottomDockFullscreen, setIsBottomDockFullscreen] = useState(false)
   const bottomDockRef = useRef<HTMLDivElement>(null)
@@ -184,20 +202,35 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     localStorage.setItem('bottomDockActiveTab', tabId)
   }, [])
 
-  // Fetch positions from API. When silent is true, no loading state (no skeleton flash).
-  // Returns fetched data so event handlers can chain follow-up updates.
-  const fetchPositions = useCallback(async (silent?: boolean) => {
+  // Fetch open positions only (fast path — skips closed history in Redis).
+  const fetchOpenPositions = useCallback(async (silent?: boolean) => {
     if (!silent) setPositionsLoading(true)
     try {
-      const data = await getPositions()
+      const data = await getOpenPositions()
       setPositions(data)
       return data
-    } catch (error: any) {
-      console.error('❌ Failed to fetch positions:', error)
+    } catch (error: unknown) {
+      console.error('❌ Failed to fetch open positions:', error)
       if (!silent) toast.error('Failed to load positions')
       return null
     } finally {
       if (!silent) setPositionsLoading(false)
+    }
+  }, [])
+
+  const fetchClosedPositions = useCallback(async (silent?: boolean) => {
+    if (!silent) setClosedPositionsLoading(true)
+    try {
+      const data = await getClosedPositions({ limit: 200 })
+      setClosedPositions(data)
+      closedPositionsLoadedRef.current = true
+      return data
+    } catch (error: unknown) {
+      console.error('❌ Failed to fetch position history:', error)
+      if (!silent) toast.error('Failed to load position history')
+      return null
+    } finally {
+      if (!silent) setClosedPositionsLoading(false)
     }
   }, [])
 
@@ -249,11 +282,11 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     }
   }, [])
 
-  // Initial fetch on mount - show loading on first load only
+  // Initial fetch on mount — open positions only; closed history loads when tab is opened.
   useEffect(() => {
-    fetchPositions()
-    fetchOrders()
-  }, [fetchPositions, fetchOrders])
+    void fetchOpenPositions()
+    void fetchOrders()
+  }, [fetchOpenPositions, fetchOrders])
 
   // WebSocket for real-time position/order updates with reconnection (no polling)
   useEffect(() => {
@@ -335,7 +368,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
             ws.send(JSON.stringify({ type: 'subscribe', symbols: [], channels: ['positions', 'orders', 'balances', 'wallet'] }))
             // One-shot reconcile after reconnect/auth to recover any missed WS events.
             void fetchOrders(true)
-            void fetchPositions(true)
+            void fetchOpenPositions(true)
             void fetchFilledOrders()
           } else if (data.type === 'wallet.balance.updated') {
             const payload = data.payload
@@ -420,7 +453,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   closed_at: undefined,
                 }
                 setTimeout(() => {
-                  void fetchPositions(true)
+                  void fetchOpenPositions(true)
                   void fetchOrders(true)
                 }, 500)
                 return [...prev, newPosition]
@@ -463,9 +496,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   if (st === 'FILLED' || st === 'CANCELLED' || st === 'REJECTED') {
                     terminalOrderTombstonesRef.current.set(orderId, Date.now())
                     if (st === 'FILLED') {
-                      void fetchPositions(true)
+                      void fetchOpenPositions(true)
                       void fetchFilledOrders()
-                      setTimeout(() => void fetchPositions(true), 600)
+                      setTimeout(() => void fetchOpenPositions(true), 600)
                     }
                     return prev.filter((_, i) => i !== existing)
                   }
@@ -506,9 +539,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
               if (st === 'FILLED' || st === 'CANCELLED' || st === 'REJECTED') {
                 void fetchOrders(true)
                 if (st === 'FILLED') {
-                  void fetchPositions(true)
+                  void fetchOpenPositions(true)
                   void fetchFilledOrders()
-                  setTimeout(() => void fetchPositions(true), 600)
+                  setTimeout(() => void fetchOpenPositions(true), 600)
                 }
               }
             } else {
@@ -549,25 +582,28 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         wsRef.current = null
       }
     }
-  }, [fetchPositions, fetchOrders, fetchFilledOrders])
+  }, [fetchOpenPositions, fetchOrders, fetchFilledOrders])
 
   const tabForContent = effectiveTab ?? activeTab
 
-  // Single tab-change handler: per-tab loading + silent position refresh when returning to Positions
+  // Per-tab data: open positions refresh when returning to Positions; history loads once per session.
   useEffect(() => {
     const tab = effectiveTab ?? activeTab
     if (tab === 'positions') {
-      void fetchPositions(true)
-      void fetchFilledOrders()
+      void fetchOpenPositions(true)
     } else if (tab === 'orders') {
       void fetchOrders()
     } else if (tab === 'order-history') {
       setOrderHistoryLoading(true)
       void fetchFilledOrders().finally(() => setOrderHistoryLoading(false))
     } else if (tab === 'position-history') {
-      void fetchPositions(true)
+      if (!closedPositionsLoadedRef.current) {
+        void fetchClosedPositions()
+      } else {
+        void fetchClosedPositions(true)
+      }
     }
-  }, [activeTab, effectiveTab, fetchPositions, fetchOrders, fetchFilledOrders])
+  }, [activeTab, effectiveTab, fetchOpenPositions, fetchClosedPositions, fetchOrders, fetchFilledOrders])
 
   // WebSocket handles real-time updates, no polling needed
 
@@ -1359,17 +1395,21 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
         {tabForContent === 'position-history' && (
           <>
-            {(() => {
-              const closedPositions = positions
-                .filter(p => p.status === 'CLOSED' || p.status === 'LIQUIDATED')
-                .sort((a, b) => {
-                  // Sort by closed_at timestamp (newest first)
-                  // Use updated_at as fallback if closed_at is not available
-                  const aTime = a.closed_at || a.updated_at || 0
-                  const bTime = b.closed_at || b.updated_at || 0
-                  return bTime - aTime // Descending order (newest first)
-                })
-              return closedPositions.length === 0 ? (
+            {closedPositionsLoading ? (
+              <div className="p-4 space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-4">
+                    <Skeleton className="h-4 w-8" variant="text" />
+                    <Skeleton className="h-4 w-20" variant="text" />
+                    <Skeleton className="h-4 w-16" variant="text" />
+                    <Skeleton className="h-4 w-12" variant="text" />
+                    <Skeleton className="h-4 w-16" variant="text" />
+                  </div>
+                ))}
+              </div>
+            ) : (() => {
+              const historyRows = closedPositions
+              return historyRows.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-muted">
                   <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
@@ -1393,7 +1433,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   </tr>
                 </thead>
                 <tbody>
-                    {closedPositions.map((pos, index) => {
+                    {historyRows.map((pos, index) => {
                       // Use original_size for closed/liquidated positions if available, otherwise use size
                       const sizeValue = (pos.status === 'CLOSED' || pos.status === 'LIQUIDATED') && pos.original_size
                         ? pos.original_size
@@ -1594,7 +1634,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       toast.error(closed === 0 ? detail : detail)
                     }
                     setCloseAllDialogOpen(false)
-                    fetchPositions(true)
+                    fetchOpenPositions(true)
                   } finally {
                     setCloseAllLoading(false)
                   }
@@ -1671,7 +1711,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       toast.error(closed === 0 ? detail : detail)
                     }
                     setCloseProfitableOnlyDialogOpen(false)
-                    fetchPositions(true)
+                    fetchOpenPositions(true)
                   } finally {
                     setCloseProfitableOnlyLoading(false)
                   }
@@ -1720,8 +1760,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     // Optimistic update: remove from list immediately so it disappears
                     setPositions((prev) => prev.filter((p) => p.id !== idToClose))
                     // Refetch after delay so order-engine has time to process and list stays in sync
-                    setTimeout(() => fetchPositions(true), 500)
-                    setTimeout(() => fetchPositions(true), 1200)
+                    setTimeout(() => fetchOpenPositions(true), 500)
+                    setTimeout(() => fetchOpenPositions(true), 1200)
                   } catch (error: unknown) {
                     toast.error(closePositionErrorMessage(error))
                   }
@@ -1774,8 +1814,25 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
           <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-surface border border-border rounded-lg p-6 z-50 w-full max-w-md">
-            <Dialog.Title className="text-lg font-semibold text-text mb-4">
-              Edit {editItem?.type === 'position' ? 'Position' : 'Order'} {editItem?.id}
+            <Dialog.Title className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-lg font-semibold text-text">
+              <span>
+                Edit {editItem?.type === 'position' ? 'Position' : 'Order'}
+              </span>
+              {editItem?.id ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    copyToClipboard(
+                      editItem.id,
+                      editItem.type === 'position' ? 'Position ID' : 'Order ID'
+                    )
+                  }
+                  className="max-w-full truncate font-mono text-sm font-normal text-accent hover:underline"
+                  title="Click to copy ID"
+                >
+                  {editItem.id}
+                </button>
+              ) : null}
             </Dialog.Title>
             <div className="space-y-4 mb-6">
               {editItem?.type === 'position' && editingPosition ? (
@@ -1960,7 +2017,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       setEditSlAmount('')
                       setEditTpAmount('')
                       setEditingPosition(null)
-                      fetchPositions(true)
+                      fetchOpenPositions(true)
                     } catch (error: any) {
                       toast.error(`Failed to update position: ${error.message}`)
                     }

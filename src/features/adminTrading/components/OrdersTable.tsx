@@ -3,8 +3,7 @@ import { ColumnDef } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AdminOrder } from '../types'
 import { Badge } from '@/shared/ui/badge'
-import { Button } from '@/shared/ui/button'
-import { MoreHorizontal, X, AlertTriangle } from 'lucide-react'
+import { TableRowActionsMenu } from './TableRowActionsMenu'
 import { format } from 'date-fns'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { cancelAdminOrder, forceCancelAdminOrder } from '../api/orders'
@@ -21,34 +20,24 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
   const { setSelectedOrderId, setOpenModal } = useAdminTradingStore()
   const canCancelOrder = useCanAccess('trading:cancel_order')
 
-  const handleCancel = useCallback(
-    async (order: AdminOrder, e: React.MouseEvent) => {
-      e.stopPropagation()
-      try {
-        await cancelAdminOrder(order.id)
-        // Wait for WS event to update status
-      } catch (error: any) {
-        toast.error(error?.response?.data?.error?.message || 'Failed to cancel order')
-      }
-    },
-    []
-  )
+  const handleCancel = useCallback(async (order: AdminOrder) => {
+    try {
+      await cancelAdminOrder(order.id)
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error?.message || 'Failed to cancel order')
+    }
+  }, [])
 
-  const handleForceCancel = useCallback(
-    async (order: AdminOrder, e: React.MouseEvent) => {
-      e.stopPropagation()
-      if (!confirm(`Force cancel order ${order.id.slice(0, 8)}...? This action cannot be undone.`)) {
-        return
-      }
-      try {
-        await forceCancelAdminOrder(order.id)
-        // Wait for WS event to update status
-      } catch (error: any) {
-        toast.error(error?.response?.data?.error?.message || 'Failed to force cancel order')
-      }
-    },
-    []
-  )
+  const handleForceCancel = useCallback(async (order: AdminOrder) => {
+    if (!confirm(`Force cancel order ${order.id.slice(0, 8)}...? This action cannot be undone.`)) {
+      return
+    }
+    try {
+      await forceCancelAdminOrder(order.id)
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error?.message || 'Failed to force cancel order')
+    }
+  }, [])
 
   const handleRowClick = useCallback(
     (order: AdminOrder) => {
@@ -163,38 +152,24 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
         header: 'Actions',
         cell: ({ row }) => {
           const order = row.original
-          const canCancel = order.status === 'pending' || order.status === 'open'
+          const canCancel =
+            canCancelOrder && (order.status === 'pending' || order.status === 'open')
+          const menuItems = [
+            { label: 'View details', onClick: () => handleRowClick(order) },
+            ...(canCancel
+              ? [
+                  { label: 'Cancel order', onClick: () => handleCancel(order) },
+                  {
+                    label: 'Force cancel',
+                    onClick: () => handleForceCancel(order),
+                    destructive: true,
+                  },
+                ]
+              : []),
+          ]
           return (
-            <div className="flex items-center gap-1">
-              {canCancel && canCancelOrder && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleCancel(order, e)}
-                    title="Cancel"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleForceCancel(order, e)}
-                    title="Force Cancel"
-                    className="text-danger hover:text-danger"
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </Button>
-                </>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleRowClick(order)}
-                title="Details"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
+            <div onClick={(e) => e.stopPropagation()}>
+              <TableRowActionsMenu items={menuItems} />
             </div>
           )
         },

@@ -18,6 +18,7 @@ import {
   Palette,
   Mail,
   Plug,
+  PhoneCall,
   Shield,
   RefreshCw,
   Save,
@@ -36,6 +37,7 @@ import {
 } from '../api/emailConfig.api'
 import { getEmailTemplates, updateEmailTemplate } from '../api/emailTemplates.api'
 import { IntegrationsSettingsTab } from '../components/IntegrationsSettingsTab'
+import { VoisoSettingsTab } from '../components/VoisoSettingsTab'
 
 const SETTINGS_TABS = [
   { id: 'general', label: 'General', icon: Settings },
@@ -43,6 +45,7 @@ const SETTINGS_TABS = [
   { id: 'email-config', label: 'Email Configuration', icon: Mail },
   { id: 'email-templates', label: 'Email Templates', icon: Mail },
   { id: 'integrations', label: 'Integrations', icon: Plug },
+  { id: 'voiso', label: 'Voiso', icon: PhoneCall },
   { id: 'security', label: 'Security', icon: Shield },
 ] as const
 
@@ -263,6 +266,7 @@ export function SettingsPage() {
     theme: { title: 'Theme', description: 'Appearance and theme' },
     'email-templates': { title: 'Email Templates', description: 'Customize email templates' },
     integrations: { title: 'Integrations', description: 'Third-party integrations' },
+    voiso: { title: 'Voiso Integration', description: 'Configure Voiso Click2Call API and embedded agent panel' },
     security: { title: 'Security', description: 'Security settings' },
   }
   const currentMeta = tabMeta[tab] ?? tabMeta.general
@@ -703,6 +707,10 @@ export function SettingsPage() {
             <IntegrationsSettingsTab canEdit={canEditSettings} />
           )}
 
+          {tab === 'voiso' && (
+            <VoisoSettingsTab canEdit={canEditSettings} />
+          )}
+
           {tab === 'email-templates' && (
             <div className="space-y-8">
               {templatesQuery.isLoading && (
@@ -854,13 +862,14 @@ export function SettingsPage() {
           {tab !== 'general' &&
             tab !== 'email-config' &&
             tab !== 'email-templates' &&
-            tab !== 'integrations' && (
-            <Card className="p-8">
-              <p className="text-sm text-text-muted">
-                {SETTINGS_TABS.find((t) => t.id === tab)?.label} settings — coming soon.
-              </p>
-            </Card>
-          )}
+            tab !== 'integrations' &&
+            tab !== 'voiso' && (
+              <Card className="p-8">
+                <p className="text-sm text-text-muted">
+                  {SETTINGS_TABS.find((t) => t.id === tab)?.label} settings — coming soon.
+                </p>
+              </Card>
+            )}
         </div>
       </div>
     </ContentShell>

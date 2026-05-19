@@ -7,6 +7,16 @@ export interface Click2CallRequest {
   number: string
 }
 
+export interface VoisoPanelConfig {
+  panelUrl: string
+  enabled: boolean
+}
+
+/** Load the panel URL configured in Settings -> Voiso. */
+export async function getVoisoPanelConfig(): Promise<VoisoPanelConfig> {
+  return http<VoisoPanelConfig>('/api/admin/voiso/config', { method: 'GET' })
+}
+
 /** Initiate a Voiso Click2Call. Requires call:view. API key is used server-side. */
 export async function click2call(body: Click2CallRequest): Promise<void> {
   await http<null>('/api/admin/voiso/click2call', {

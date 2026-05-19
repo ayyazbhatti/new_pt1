@@ -16,7 +16,7 @@ import type { ChartIndicator } from '../utils/indicatorParams'
 import { Spinner } from '@/shared/ui/loading'
 import { priceStreamClient } from '@/shared/ws/priceStreamClient'
 import { normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
-import { getPositions } from '../api/positions.api'
+import { getOpenPositions, getClosedPositions } from '../api/positions.api'
 import type { Position } from '../api/positions.api'
 import './chartAskPriceLineOverlay'
 import './chartPositionOpenMarkerOverlay'
@@ -277,16 +277,40 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     }
   }, [selectedSymbol?.id, selectedSymbol?.code, selectedSymbol?.quoteCurrency])
 
-  // Fetch positions when symbol changes (for position-open markers)
+  // Fetch open positions when symbol changes (for position-open markers)
   useEffect(() => {
     if (!selectedSymbol?.code) {
       setPositions([])
       return
     }
-    getPositions()
-      .then(setPositions)
-      .catch(() => setPositions([]))
+    getOpenPositions()
+      .then((open) => {
+        setPositions((prev) => {
+          const closed = prev.filter((p) => p.status !== 'OPEN')
+          return [...open, ...closed]
+        })
+      })
+      .catch(() => setPositions((prev) => prev.filter((p) => p.status !== 'OPEN')))
   }, [selectedSymbol?.code])
+
+  // Closed markers: load history only when the chart setting is enabled
+  useEffect(() => {
+    if (!chartShowClosedPositionMarker || !selectedSymbol?.code) {
+      return
+    }
+    getClosedPositions({ limit: 100 })
+      .then((closed) => {
+        setPositions((prev) => {
+          const openOnly = prev.filter((p) => p.status === 'OPEN')
+          const merged = [...openOnly]
+          for (const c of closed) {
+            if (!merged.some((p) => p.id === c.id)) merged.push(c)
+          }
+          return merged
+        })
+      })
+      .catch(() => {})
+  }, [chartShowClosedPositionMarker, selectedSymbol?.code])
 
   // When position markers are disabled, remove overlays immediately
   useEffect(() => {

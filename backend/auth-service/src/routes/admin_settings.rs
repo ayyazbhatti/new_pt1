@@ -1,5 +1,5 @@
 //! Admin settings routes: email configuration (GET/PUT), send test email (POST), email templates (GET/PUT),
-//! data provider integrations (GET/PUT).
+//! data provider integrations (GET/PUT), Voiso integration (GET/PUT).
 
 use axum::{
     extract::{Extension, Path, State},
@@ -13,18 +13,16 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
 
-use tracing::error;
 use crate::middleware::auth_middleware;
+use crate::redis_pool::RedisPool;
 use crate::routes::auth::send_welcome_email_after_signup;
+use crate::services::data_provider_integrations_service::DataProviderIntegrationsService;
 use crate::services::email_config_service::{
     send_test_email_sync, EmailConfigService, UpdateEmailConfigRequest,
 };
-use crate::services::data_provider_integrations_service::DataProviderIntegrationsService;
-use crate::services::email_templates_service::{
-    EmailTemplatesService, UpdateEmailTemplateRequest,
-};
-use crate::redis_pool::RedisPool;
+use crate::services::email_templates_service::{EmailTemplatesService, UpdateEmailTemplateRequest};
 use crate::utils::jwt::Claims;
+use tracing::error;
 
 /// Allow if role is admin or user has the given permission from their permission profile.
 async fn check_settings_permission(
@@ -35,21 +33,25 @@ async fn check_settings_permission(
     if claims.role == "admin" {
         return Ok(());
     }
-    let profile_id: Option<uuid::Uuid> = sqlx::query_scalar("SELECT permission_profile_id FROM users WHERE id = $1")
-        .bind(claims.sub)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            error!("Failed to get permission profile for settings check: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
-            )
-        })?;
+    let profile_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT permission_profile_id FROM users WHERE id = $1",
+    )
+    .bind(claims.sub)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to get permission profile for settings check: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
     let Some(pid) = profile_id else {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "No permission profile assigned" } })),
+            Json(
+                serde_json::json!({ "error": { "code": "FORBIDDEN", "message": "No permission profile assigned" } }),
+            ),
         ));
     };
     let has: bool = sqlx::query_scalar(
@@ -69,7 +71,9 @@ async fn check_settings_permission(
     if !has {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": { "code": "FORBIDDEN", "message": format!("Missing permission: {}", permission) } })),
+            Json(
+                serde_json::json!({ "error": { "code": "FORBIDDEN", "message": format!("Missing permission: {}", permission) } }),
+            ),
         ));
     }
     Ok(())
@@ -82,13 +86,158 @@ pub fn create_admin_settings_router(pool: PgPool) -> Router<PgPool> {
         .route("/email-templates", get(get_email_templates))
         .route("/email-templates/:id", put(put_email_template))
         .route("/resend-welcome-email", post(post_resend_welcome_email))
-        .route("/data-providers", get(get_data_providers).put(put_data_providers))
         .route(
-            "/data-providers/test-ws",
-            post(post_test_data_providers_ws),
+            "/data-providers",
+            get(get_data_providers).put(put_data_providers),
         )
+        .route("/data-providers/test-ws", post(post_test_data_providers_ws))
+        .route("/voiso", get(get_voiso_config).put(put_voiso_config))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+async fn ensure_voiso_config_row(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO platform_voiso_config (singleton_id)
+        VALUES (1)
+        ON CONFLICT (singleton_id) DO NOTHING
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PutVoisoConfigBody {
+    /// Omitted = leave unchanged; empty string = remove stored key; non-empty = set.
+    #[serde(default)]
+    api_key: Option<String>,
+    click2call_url: String,
+    panel_url: String,
+    enabled: bool,
+}
+
+async fn get_voiso_config(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "settings:view").await?;
+    ensure_voiso_config_row(&pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    let row: (Option<String>, String, String, bool) = sqlx::query_as(
+        r#"
+        SELECT api_key, click2call_url, panel_url, enabled
+        FROM platform_voiso_config
+        WHERE singleton_id = 1
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    let db_key_configured = row
+        .0
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some();
+    let env_key_configured = std::env::var("VOISO_API_KEY")
+        .ok()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    Ok(Json(serde_json::json!({
+        "apiKeyConfigured": db_key_configured || env_key_configured,
+        "storedApiKeyConfigured": db_key_configured,
+        "envApiKeyConfigured": env_key_configured,
+        "click2callUrl": row.1,
+        "panelUrl": row.2,
+        "enabled": row.3,
+    })))
+}
+
+async fn put_voiso_config(
+    State(pool): State<PgPool>,
+    claims: axum::extract::Extension<Claims>,
+    axum::Json(body): axum::Json<PutVoisoConfigBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
+    let click2call_url = body.click2call_url.trim().trim_end_matches('/').to_string();
+    let panel_url = body.panel_url.trim().to_string();
+    if click2call_url.is_empty() || panel_url.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": { "code": "VALIDATION", "message": "Click2Call URL and panel URL are required" }
+            })),
+        ));
+    }
+    if !(click2call_url.starts_with("https://") || click2call_url.starts_with("http://")) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": { "code": "VALIDATION", "message": "Click2Call URL must start with http:// or https://" }
+            })),
+        ));
+    }
+    if !(panel_url.starts_with("https://") || panel_url.starts_with("http://")) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": { "code": "VALIDATION", "message": "Panel URL must start with http:// or https://" }
+            })),
+        ));
+    }
+    ensure_voiso_config_row(&pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    match body.api_key.as_deref().map(str::trim) {
+        Some("") => sqlx::query(
+            "UPDATE platform_voiso_config SET api_key = NULL, click2call_url = $1, panel_url = $2, enabled = $3, updated_at = NOW() WHERE singleton_id = 1",
+        )
+        .bind(&click2call_url)
+        .bind(&panel_url)
+        .bind(body.enabled)
+        .execute(&pool)
+        .await,
+        Some(api_key) => sqlx::query(
+            "UPDATE platform_voiso_config SET api_key = $1, click2call_url = $2, panel_url = $3, enabled = $4, updated_at = NOW() WHERE singleton_id = 1",
+        )
+        .bind(api_key)
+        .bind(&click2call_url)
+        .bind(&panel_url)
+        .bind(body.enabled)
+        .execute(&pool)
+        .await,
+        None => sqlx::query(
+            "UPDATE platform_voiso_config SET click2call_url = $1, panel_url = $2, enabled = $3, updated_at = NOW() WHERE singleton_id = 1",
+        )
+        .bind(&click2call_url)
+        .bind(&panel_url)
+        .bind(body.enabled)
+        .execute(&pool)
+        .await,
+    }
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    get_voiso_config(State(pool), claims).await
 }
 
 async fn get_data_providers(
@@ -134,12 +283,13 @@ async fn put_data_providers(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     check_settings_permission(&pool, &claims, "settings:edit").await?;
     let cfg = DataProviderIntegrationsService::merge_with_defaults(body.config);
-    let normalized = DataProviderIntegrationsService::validate_and_normalize(cfg).map_err(|msg| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-    })?;
+    let normalized =
+        DataProviderIntegrationsService::validate_and_normalize(cfg).map_err(|msg| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+        })?;
     let svc = DataProviderIntegrationsService::new(pool.clone());
     svc.save(&normalized).await.map_err(|e| {
         (
@@ -182,14 +332,17 @@ async fn put_data_providers(
             Some(t.to_string())
         }
     });
-    DataProviderIntegrationsService::sync_mmdps_key_to_redis(redis.as_ref(), key_for_redis.as_deref())
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e })),
-            )
-        })?;
+    DataProviderIntegrationsService::sync_mmdps_key_to_redis(
+        redis.as_ref(),
+        key_for_redis.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
     let mmdps_configured = svc.mmdps_api_key_configured().await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -355,12 +508,15 @@ async fn put_email_template(
         ));
     }
     let service = EmailTemplatesService::new(pool);
-    let updated = service.upsert(id, &body.subject, &body.body).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
+    let updated = service
+        .upsert(id, &body.subject, &body.body)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
     Ok(Json(serde_json::to_value(updated).unwrap()))
 }
 

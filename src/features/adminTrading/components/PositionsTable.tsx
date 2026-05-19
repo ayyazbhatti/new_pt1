@@ -1,18 +1,17 @@
-import React, { useMemo, useCallback, useRef } from 'react'
+import React, { useMemo, useCallback, useRef, useState } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { flexRender } from '@tanstack/react-table'
 import { AdminPosition } from '../types'
 import { Badge } from '@/shared/ui/badge'
-import { Button } from '@/shared/ui/button'
-import { MoreHorizontal, X, Edit, AlertTriangle } from 'lucide-react'
+import { TableRowActionsMenu } from './TableRowActionsMenu'
+import { LivePnlAmountCell, LivePnlPercentCell } from './LivePnlCell'
 import { format } from 'date-fns'
 import { useAdminTradingStore } from '../store/adminTrading.store'
-import { closeAdminPosition, liquidatePosition } from '../api/positions'
+import { liquidatePosition } from '../api/positions'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
-import { computePositionPnl, computePnlPercent } from '../utils/pnl'
 
 /** Fixed column widths so header and body columns stay aligned when cells are empty */
 const COLUMN_WIDTHS = [
@@ -25,14 +24,15 @@ const COLUMN_WIDTHS = [
   '80px',  // Size
   '95px',  // Entry
   '90px',  // Mark
-  '100px', // Live PnL
+  '95px',  // Live PnL ($)
+  '80px',  // PnL %
   '90px',  // Margin
   '85px',  // SL
   '85px',  // TP
   '85px',  // Status
-  '160px', // Actions
+  '72px',  // Actions (⋮ menu only)
 ]
-const TABLE_MIN_WIDTH = 1420 // sum of COLUMN_WIDTHS for horizontal scroll
+const TABLE_MIN_WIDTH = 1407 // sum of COLUMN_WIDTHS for horizontal scroll
 const GRID_COLUMNS = COLUMN_WIDTHS.join(' ')
 
 interface PositionsTableProps {
@@ -43,47 +43,49 @@ interface PositionsTableProps {
 }
 
 export function PositionsTable({ positions, onPositionClick, readOnly }: PositionsTableProps) {
-  const { setSelectedPositionId, setOpenModal, liveMarkBySymbol } = useAdminTradingStore()
+  const { setSelectedPositionId, setOpenModal } = useAdminTradingStore()
+  const [openActionsMenuId, setOpenActionsMenuId] = useState<string | null>(null)
   const canClosePosition = useCanAccess('trading:close_position')
   const canLiquidate = useCanAccess('trading:liquidate')
 
   const handleClose = useCallback(
-    async (position: AdminPosition, e: React.MouseEvent) => {
-      e.stopPropagation()
+    (position: AdminPosition) => {
       setSelectedPositionId(position.id)
       setOpenModal('close-position')
     },
     [setSelectedPositionId, setOpenModal]
   )
 
+  const handleModifyPosition = useCallback(
+    (position: AdminPosition) => {
+      setSelectedPositionId(position.id)
+      setOpenModal('modify-position')
+    },
+    [setSelectedPositionId, setOpenModal]
+  )
+
   const handleModifySltp = useCallback(
-    async (position: AdminPosition, e: React.MouseEvent) => {
-      e.stopPropagation()
+    (position: AdminPosition) => {
       setSelectedPositionId(position.id)
       setOpenModal('modify-sltp')
     },
     [setSelectedPositionId, setOpenModal]
   )
 
-  const handleLiquidate = useCallback(
-    async (position: AdminPosition, e: React.MouseEvent) => {
-      e.stopPropagation()
-      if (
-        !confirm(
-          `Liquidate position ${position.id.slice(0, 8)}...? This is an emergency action and cannot be undone.`
-        )
-      ) {
-        return
-      }
-      try {
-        await liquidatePosition(position.id)
-        // Wait for WS event
-      } catch (error: any) {
-        toast.error(error?.response?.data?.error?.message || 'Failed to liquidate position')
-      }
-    },
-    []
-  )
+  const handleLiquidate = useCallback(async (position: AdminPosition) => {
+    if (
+      !confirm(
+        `Liquidate position ${position.id.slice(0, 8)}...? This is an emergency action and cannot be undone.`
+      )
+    ) {
+      return
+    }
+    try {
+      await liquidatePosition(position.id)
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error?.message || 'Failed to liquidate position')
+    }
+  }, [])
 
   const handleRowClick = useCallback(
     (position: AdminPosition) => {
@@ -165,31 +167,14 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
         ),
       },
       {
-        id: 'livePnl',
-        header: 'Live PnL',
-        cell: ({ row }) => {
-          const position = row.original
-          const liveMark = position.symbol ? liveMarkBySymbol[position.symbol.toUpperCase()] : undefined
-          const isLive = typeof liveMark === 'number' && Number.isFinite(liveMark)
-          const pnl = isLive
-            ? computePositionPnl(position.entryPrice, liveMark, position.size, position.side)
-            : position.pnl
-          const pnlPercent = isLive
-            ? computePnlPercent(pnl, position.marginUsed || 1)
-            : position.pnlPercent
-          const isPositive = pnl >= 0
-          return (
-            <div>
-              <div className={cn('text-sm font-mono', isPositive ? 'text-success' : 'text-danger')}>
-                {isPositive ? '+' : ''}${pnl.toFixed(2)}
-              </div>
-              <div className={cn('text-xs', isPositive ? 'text-success' : 'text-danger')}>
-                {isPositive ? '+' : ''}
-                {pnlPercent.toFixed(2)}%
-              </div>
-            </div>
-          )
-        },
+        id: 'livePnlAmount',
+        header: readOnly ? 'Realized PnL' : 'Live PnL',
+        cell: ({ row }) => <LivePnlAmountCell position={row.original} readOnly={readOnly} />,
+      },
+      {
+        id: 'livePnlPercent',
+        header: readOnly ? 'PnL %' : 'PnL %',
+        cell: ({ row }) => <LivePnlPercentCell position={row.original} readOnly={readOnly} />,
       },
       {
         accessorKey: 'marginUsed',
@@ -233,58 +218,55 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
         header: 'Actions',
         cell: ({ row }) => {
           const position = row.original
-          const isOpen = position.status === 'OPEN'
+          const isOpen = position.status === 'OPEN' || position.status === 'open'
+          const menuItems = [
+            { label: 'View details', onClick: () => handleRowClick(position) },
+            ...(isOpen && !readOnly
+              ? [
+                  ...(canClosePosition
+                    ? [
+                        { label: 'Close position', onClick: () => handleClose(position) },
+                        { label: 'Modify position', onClick: () => handleModifyPosition(position) },
+                        { label: 'Modify SL/TP', onClick: () => handleModifySltp(position) },
+                      ]
+                    : []),
+                  ...(canLiquidate
+                    ? [
+                        {
+                          label: 'Liquidate',
+                          onClick: () => handleLiquidate(position),
+                          destructive: true,
+                        },
+                      ]
+                    : []),
+                ]
+              : []),
+          ]
           return (
-            <div className="flex items-center gap-1">
-              {isOpen && !readOnly && (
-                <>
-                  {canClosePosition && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => handleClose(position, e)}
-                        title="Close"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => handleModifySltp(position, e)}
-                        title="Modify SL/TP"
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </>
-                  )}
-                  {canLiquidate && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => handleLiquidate(position, e)}
-                      title="Liquidate"
-                      className="text-danger hover:text-danger"
-                    >
-                      <AlertTriangle className="h-4 w-4" />
-                    </Button>
-                  )}
-                </>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleRowClick(position)}
-                title="Details"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
+            <div onClick={(e) => e.stopPropagation()}>
+              <TableRowActionsMenu
+                items={menuItems}
+                open={openActionsMenuId === position.id}
+                onOpenChange={(isOpen) =>
+                  setOpenActionsMenuId(isOpen ? position.id : null)
+                }
+              />
             </div>
           )
         },
       },
     ],
-    [handleClose, handleModifySltp, handleLiquidate, handleRowClick, canClosePosition, canLiquidate, liveMarkBySymbol, readOnly]
+    [
+      handleClose,
+      handleModifyPosition,
+      handleModifySltp,
+      handleLiquidate,
+      handleRowClick,
+      canClosePosition,
+      canLiquidate,
+      readOnly,
+      openActionsMenuId,
+    ]
   )
 
   const parentRef = useRef<HTMLDivElement>(null)

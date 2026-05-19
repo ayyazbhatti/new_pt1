@@ -11,6 +11,8 @@ COPY src ./src
 # Build for production (API same origin via nginx). Chart MMDPS history uses same-origin `/dp` → data-provider (no host baked in).
 ENV VITE_API_URL=
 ENV VITE_DATA_PROVIDER_HTTP_PATH=/dp
+ARG VITE_VOISO_PANEL_URL=https://cc-ams03.voiso.com/omnichannel/embedded
+ENV VITE_VOISO_PANEL_URL=${VITE_VOISO_PANEL_URL}
 RUN npm run build
 
 # Serve with nginx

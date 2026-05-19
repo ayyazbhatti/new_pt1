@@ -74,6 +74,18 @@ export interface AdminAuditLog {
   ipAddress?: string
 }
 
+/** Per-tab search/filter state (independent per tab on Admin Trading page). */
+export interface TabListQuery {
+  search?: string
+  symbol?: string
+  groupId?: string
+}
+
+export function tabListQueryKey(query: TabListQuery): string {
+  return `${query.symbol ?? ''}|${query.groupId ?? ''}|${query.search ?? ''}`
+}
+
+/** API query params for admin orders/positions list endpoints. */
 export interface TradingFilters {
   status?: string
   symbol?: string
@@ -82,6 +94,18 @@ export interface TradingFilters {
   search?: string
   limit?: number
   cursor?: string
+}
+
+export function toTradingFilters(
+  query: TabListQuery,
+  extra?: Pick<TradingFilters, 'status' | 'limit' | 'cursor'>
+): TradingFilters {
+  return {
+    ...extra,
+    search: query.search,
+    symbol: query.symbol,
+    groupId: query.groupId,
+  }
 }
 
 export interface PaginatedResponse<T> {
@@ -93,6 +117,8 @@ export interface PaginatedResponse<T> {
   totalMarginUsed?: number
   /** Open positions API: sum of unrealized PnL (Redis) across all matching positions */
   totalUnrealizedPnl?: number
+  /** Position history API: sum of realized PnL across all matching closed/liquidated positions */
+  totalRealizedPnl?: number
 }
 
 export interface LookupSymbol {
