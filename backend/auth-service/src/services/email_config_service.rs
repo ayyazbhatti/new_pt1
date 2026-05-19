@@ -1,5 +1,6 @@
 //! Service for platform email (SMTP) configuration. Single row in platform_email_config.
 
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,60 @@ use uuid::Uuid;
 
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{Message, SmtpTransport, Transport};
+
+const SMTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Production Docker often has no IPv6 default route; lettre may try AAAA first → os error 101.
+fn resolve_smtp_ipv4(host: &str, port: u16) -> Result<SocketAddr, anyhow::Error> {
+    let addrs: Vec<SocketAddr> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| anyhow::anyhow!("SMTP DNS lookup failed for {host}: {e}"))?
+        .filter(|a| a.is_ipv4())
+        .collect();
+    let addr = addrs
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No IPv4 address found for SMTP host {host}"))?;
+    tracing::debug!(smtp_host = %host, %addr, "SMTP connect via IPv4");
+    Ok(*addr)
+}
+
+fn build_smtp_transport(config: &EmailConfig) -> Result<SmtpTransport, anyhow::Error> {
+    let host = config.smtp_host.trim();
+    let port: u16 = config
+        .smtp_port
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Invalid SMTP port"))?;
+    let encryption = config.smtp_encryption.to_lowercase();
+    let addr = resolve_smtp_ipv4(host, port)?;
+    let connect_ip = addr.ip().to_string();
+    let tls_params = TlsParameters::new(host.to_string())
+        .map_err(|e| anyhow::anyhow!("SMTP TLS parameters: {e}"))?;
+
+    let mut builder = match encryption.as_str() {
+        "ssl" => SmtpTransport::builder_dangerous(&connect_ip)
+            .port(port)
+            .timeout(Some(SMTP_TIMEOUT))
+            .tls(Tls::Wrapper(tls_params)),
+        "tls" | "starttls" => SmtpTransport::builder_dangerous(&connect_ip)
+            .port(port)
+            .timeout(Some(SMTP_TIMEOUT))
+            .tls(Tls::Required(tls_params)),
+        _ => SmtpTransport::builder_dangerous(&connect_ip)
+            .port(port)
+            .timeout(Some(SMTP_TIMEOUT)),
+    };
+
+    if !config.smtp_username.is_empty() {
+        let password = config.smtp_password.as_deref().unwrap_or("");
+        builder = builder.credentials(Credentials::new(
+            config.smtp_username.clone(),
+            password.to_string(),
+        ));
+    }
+    Ok(builder.build())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
@@ -261,56 +315,7 @@ pub fn send_email_sync(
         .body(body.to_string())
         .map_err(|e| anyhow::anyhow!("Failed to build message: {}", e))?;
 
-    let port: u16 = config
-        .smtp_port
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("Invalid SMTP port"))?;
-    let host = config.smtp_host.as_str();
-    let encryption = config.smtp_encryption.to_lowercase();
-
-    // 30s timeout so slow/hung SMTP doesn't block the thread for minutes
-    const SMTP_TIMEOUT: Duration = Duration::from_secs(30);
-
-    let mailer = match encryption.as_str() {
-        "ssl" => {
-            let mut builder = SmtpTransport::relay(host).map_err(|e| anyhow::anyhow!("SMTP relay: {}", e))?;
-            builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
-            if !config.smtp_username.is_empty() {
-                let password = config.smtp_password.as_deref().unwrap_or("");
-                builder = builder.credentials(Credentials::new(
-                    config.smtp_username.clone(),
-                    password.to_string(),
-                ));
-            }
-            builder.build()
-        }
-        "tls" | "starttls" => {
-            let mut builder =
-                SmtpTransport::starttls_relay(host).map_err(|e| anyhow::anyhow!("SMTP STARTTLS: {}", e))?;
-            builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
-            if !config.smtp_username.is_empty() {
-                let password = config.smtp_password.as_deref().unwrap_or("");
-                builder = builder.credentials(Credentials::new(
-                    config.smtp_username.clone(),
-                    password.to_string(),
-                ));
-            }
-            builder.build()
-        }
-        _ => {
-            let mut builder = SmtpTransport::builder_dangerous(host)
-                .port(port)
-                .timeout(Some(SMTP_TIMEOUT));
-            if !config.smtp_username.is_empty() {
-                let password = config.smtp_password.as_deref().unwrap_or("");
-                builder = builder.credentials(Credentials::new(
-                    config.smtp_username.clone(),
-                    password.to_string(),
-                ));
-            }
-            builder.build()
-        }
-    };
+    let mailer = build_smtp_transport(config)?;
 
     mailer
         .send(&email)
@@ -347,55 +352,7 @@ pub fn send_email_html_sync(
         .body(body_html.to_string())
         .map_err(|e| anyhow::anyhow!("Failed to build message: {}", e))?;
 
-    let port: u16 = config
-        .smtp_port
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("Invalid SMTP port"))?;
-    let host = config.smtp_host.as_str();
-    let encryption = config.smtp_encryption.to_lowercase();
-
-    const SMTP_TIMEOUT: Duration = Duration::from_secs(30);
-
-    let mailer = match encryption.as_str() {
-        "ssl" => {
-            let mut builder = SmtpTransport::relay(host).map_err(|e| anyhow::anyhow!("SMTP relay: {}", e))?;
-            builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
-            if !config.smtp_username.is_empty() {
-                let password = config.smtp_password.as_deref().unwrap_or("");
-                builder = builder.credentials(Credentials::new(
-                    config.smtp_username.clone(),
-                    password.to_string(),
-                ));
-            }
-            builder.build()
-        }
-        "tls" | "starttls" => {
-            let mut builder =
-                SmtpTransport::starttls_relay(host).map_err(|e| anyhow::anyhow!("SMTP STARTTLS: {}", e))?;
-            builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
-            if !config.smtp_username.is_empty() {
-                let password = config.smtp_password.as_deref().unwrap_or("");
-                builder = builder.credentials(Credentials::new(
-                    config.smtp_username.clone(),
-                    password.to_string(),
-                ));
-            }
-            builder.build()
-        }
-        _ => {
-            let mut builder = SmtpTransport::builder_dangerous(host)
-                .port(port)
-                .timeout(Some(SMTP_TIMEOUT));
-            if !config.smtp_username.is_empty() {
-                let password = config.smtp_password.as_deref().unwrap_or("");
-                builder = builder.credentials(Credentials::new(
-                    config.smtp_username.clone(),
-                    password.to_string(),
-                ));
-            }
-            builder.build()
-        }
-    };
+    let mailer = build_smtp_transport(config)?;
 
     mailer
         .send(&email)

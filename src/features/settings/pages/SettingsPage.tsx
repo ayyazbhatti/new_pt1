@@ -28,6 +28,7 @@ import {
   Edit,
 } from 'lucide-react'
 import { DataTable, type ColumnDef } from '@/shared/ui/table'
+import { getApiErrorMessage } from '@/shared/api/http'
 import { ModalShell } from '@/shared/ui/modal'
 import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
@@ -221,8 +222,8 @@ export function SettingsPage() {
     onSuccess: (_, to) => {
       toast.success(`Test email sent to ${to}`)
     },
-    onError: (err: Error) => {
-      toast.error(err.message || 'Failed to send test email')
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err) || 'Failed to send test email')
     },
   })
 

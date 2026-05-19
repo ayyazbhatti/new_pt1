@@ -33,9 +33,13 @@ export async function updateEmailConfig(payload: UpdateEmailConfigPayload): Prom
   })
 }
 
+/** SMTP send runs server-side (up to ~30s); allow extra time for proxy + network. */
+const TEST_EMAIL_TIMEOUT_MS = 65_000
+
 export async function sendTestEmail(to: string): Promise<{ success: boolean; message?: string }> {
   return http<{ success: boolean; message?: string }>('/api/admin/settings/email-config/test', {
     method: 'POST',
     body: JSON.stringify({ to: to.trim() }),
+    timeoutMs: TEST_EMAIL_TIMEOUT_MS,
   })
 }

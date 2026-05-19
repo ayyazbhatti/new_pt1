@@ -130,9 +130,14 @@ export async function http<T>(
       timeoutMs,
     })
   } catch (err: unknown) {
-    const msg = err instanceof Error && err.name === 'AbortError'
-      ? 'Request timed out. Is the auth server running on port 3000?'
-      : err instanceof Error ? err.message : 'Network error'
+    const msg =
+      err instanceof Error && err.name === 'AbortError'
+        ? import.meta.env.DEV
+          ? 'Request timed out. Is the auth server running on port 3000?'
+          : 'Request timed out. The server may still be sending email—wait a moment and check your inbox, or try again.'
+        : err instanceof Error
+          ? err.message
+          : 'Network error'
     throw new Error(msg)
   }
 
@@ -150,9 +155,14 @@ export async function http<T>(
           timeoutMs,
         })
       } catch (retryErr: unknown) {
-        const msg = retryErr instanceof Error && retryErr.name === 'AbortError'
-          ? 'Request timed out. Is the auth server running on port 3000?'
-          : retryErr instanceof Error ? retryErr.message : 'Network error'
+        const msg =
+          retryErr instanceof Error && retryErr.name === 'AbortError'
+            ? import.meta.env.DEV
+              ? 'Request timed out. Is the auth server running on port 3000?'
+              : 'Request timed out. The server may still be sending email—wait a moment and check your inbox, or try again.'
+            : retryErr instanceof Error
+              ? retryErr.message
+              : 'Network error'
         throw new Error(msg)
       }
     } catch (error) {
@@ -181,7 +191,14 @@ export async function http<T>(
     }
     
     // Create error object with response data for better error handling
-    const errorObj = new Error(error.error.message || 'Request failed') as any
+    const inner = (error as { error?: unknown }).error
+    const message =
+      typeof inner === 'string'
+        ? inner
+        : inner != null && typeof inner === 'object' && typeof (inner as { message?: string }).message === 'string'
+          ? (inner as { message: string }).message
+          : 'Request failed'
+    const errorObj = new Error(message) as Error & { response?: { data: unknown; status: number } }
     errorObj.response = { data: error, status: response.status }
     throw errorObj
   }
