@@ -84,7 +84,7 @@ export function AiChatTab({ active }: AiChatTabProps) {
   const conversationIdRef = useRef<string | null>(null)
   const messageInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const syncTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([])
+  const syncTimeoutsRef = useRef<number[]>([])
 
   const clearSyncTimeouts = useCallback(() => {
     for (const id of syncTimeoutsRef.current) clearTimeout(id)
