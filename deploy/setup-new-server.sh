@@ -64,7 +64,7 @@ else
   systemctl start docker 2>/dev/null || true
 fi
 
-echo "=== 4. Create .env.production (same secrets as old server) ==="
+echo "=== 4. Create or update .env.production (secrets from environment only) ==="
 REPO_DIR="/opt/newpt"
 if [ ! -f "$REPO_DIR/deploy/docker-compose.prod.yml" ]; then
   echo "ERROR: Repo not found at $REPO_DIR. Copy the repo first, e.g.:"
@@ -72,20 +72,25 @@ if [ ! -f "$REPO_DIR/deploy/docker-compose.prod.yml" ]; then
   exit 1
 fi
 
+: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD before running this script}"
+: "${JWT_SECRET:?Set JWT_SECRET before running this script}"
+
 ENV_FILE="$REPO_DIR/deploy/.env.production"
 if [ ! -f "$ENV_FILE" ]; then
-  cat > "$ENV_FILE" << 'ENVEOF'
-POSTGRES_PASSWORD=GbAHSe6SM8MXkgUCKiiWWnTO3XiHHCxh
-JWT_SECRET=X/ll3fkr8u6BLDjarbsAHbbiNAI5AoeMpd3Fhdq9ocI=
-JWT_ISSUER=newpt
-CORS_ORIGINS=http://178.104.63.176
+  cat > "$ENV_FILE" << ENVEOF
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+JWT_ISSUER=${JWT_ISSUER:-newpt}
+CORS_ORIGINS=http://${NEW_IP}
 ENVEOF
-  echo "Created $ENV_FILE with CORS_ORIGINS=http://$NEW_IP"
+  chmod 600 "$ENV_FILE"
+  echo "Created $ENV_FILE (chmod 600)"
 else
   if ! grep -q "CORS_ORIGINS" "$ENV_FILE"; then
     echo "CORS_ORIGINS=http://$NEW_IP" >> "$ENV_FILE"
     echo "Appended CORS_ORIGINS to $ENV_FILE"
   fi
+  echo "NOTE: $ENV_FILE already exists — update POSTGRES_PASSWORD and JWT_SECRET manually, then chmod 600."
 fi
 
 echo "=== 5. Build and start the app ==="

@@ -12,10 +12,10 @@ This doc lists what we need from you (fresh Hetzner account) and the deployment 
 | **SSH** | `ssh root@178.104.63.176` |
 | **Root password** | *(set by you; or use SSH key)* |
 | **App URL (once running)** | http://178.104.63.176 |
-| **Postgres password (production)** | `GbAHSe6SM8MXkgUCKiiWWnTO3XiHHCxh` |
-| **JWT_SECRET (production)** | `X/ll3fkr8u6BLDjarbsAHbbiNAI5AoeMpd3Fhdq9ocI=` |
+| **Postgres password (production)** | `<REDACTED — stored only in server's deploy/.env.production>` |
+| **JWT_SECRET (production)** | `<REDACTED — stored only in server's deploy/.env.production>` |
 
-These are stored on the server in `/opt/newpt/deploy/.env.production`. **Revoke any Hetzner API token you shared in chat** and add your SSH key in the Hetzner Console so you can log in without the password.
+These live **only** on the server in `/opt/newpt/deploy/.env.production` (chmod 600). Never commit real values to git. **Revoke any Hetzner API token you shared in chat** and add your SSH key in the Hetzner Console so you can log in without the password.
 
 ---
 
