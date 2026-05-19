@@ -231,8 +231,7 @@ impl Session {
                                         info!("Connection {} authenticated as user {}", conn_id, claims.sub);
                                     }
                                     Err(e) => {
-                                        error!("❌ Token validation failed for connection {}: {}", conn_id, e);
-                                        error!("   Token (first 50 chars): {}", token.chars().take(50).collect::<String>());
+                                        error!("Token validation failed for connection {}: {}", conn_id, e);
                                         let error_msg = ServerMessage::AuthError {
                                             error: format!("Invalid token: {}", e),
                                         };

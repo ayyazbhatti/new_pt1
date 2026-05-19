@@ -505,10 +505,8 @@ impl Broadcaster {
             payload: payload.clone(),
         };
 
-        // Broadcast to all connections (admin should receive this)
-        // In production, filter by user role from registry
-        for entry in connection_txs.iter() {
-            let conn_id = *entry.key();
+        let admin_conn_ids = registry.get_admin_connection_ids();
+        for conn_id in admin_conn_ids {
             try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
@@ -536,10 +534,8 @@ impl Broadcaster {
             try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
-        // Also send to all admins (they should see the approval)
-        // For now, broadcast to all - in production filter by role
-        for entry in connection_txs.iter() {
-            let conn_id = *entry.key();
+        let admin_conn_ids = registry.get_admin_connection_ids();
+        for conn_id in admin_conn_ids {
             try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
         }
 
