@@ -73,6 +73,9 @@ pub async fn run() -> anyhow::Result<()> {
     // Load environment variables
     dotenv::dotenv().ok();
 
+    // Fail fast on missing/weak JWT_SECRET rather than discovering it on first request.
+    let _ = crate::utils::jwt::get_jwt_secret();
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(

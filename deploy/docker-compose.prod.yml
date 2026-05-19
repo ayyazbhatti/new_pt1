@@ -167,6 +167,8 @@ services:
       dockerfile: deploy/Dockerfile.backend
     image: newpt-auth:latest
     command: ["/app/core-api"]
+    env_file:
+      - .env.production
     environment:
       PORT: 3004
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/newpt

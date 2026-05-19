@@ -3,7 +3,6 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use std::env;
 use uuid::Uuid;
-use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -31,15 +30,21 @@ impl Claims {
     }
 }
 
-/// JWT secret for signing tokens. In production JWT_SECRET must be set.
-/// In development, falls back to a default so login does not return 500 when env is missing.
+/// JWT secret for signing tokens. JWT_SECRET must be set (≥32 chars) or the process panics.
 pub fn get_jwt_secret() -> String {
-    const DEV_FALLBACK: &str = "dev-jwt-secret-key-change-in-production-minimum-32-characters-long";
     match env::var("JWT_SECRET") {
-        Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
+        Ok(s) if s.trim().len() >= 32 => s.trim().to_string(),
+        Ok(s) if !s.trim().is_empty() => {
+            panic!(
+                "JWT_SECRET is set but too short ({} chars). Minimum 32 characters required for production use.",
+                s.trim().len()
+            );
+        }
         _ => {
-            warn!("JWT_SECRET not set; using dev fallback. Set JWT_SECRET in production.");
-            DEV_FALLBACK.to_string()
+            panic!(
+                "JWT_SECRET environment variable is not set. \
+                Generate with: openssl rand -base64 48"
+            );
         }
     }
 }
@@ -84,5 +89,40 @@ pub fn generate_refresh_token() -> String {
     let mut rng = rand::thread_rng();
     let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "JWT_SECRET environment variable is not set")]
+    fn get_jwt_secret_panics_when_unset() {
+        let saved = std::env::var("JWT_SECRET").ok();
+        std::env::remove_var("JWT_SECRET");
+        let result = std::panic::catch_unwind(|| get_jwt_secret());
+        if let Some(v) = saved {
+            std::env::set_var("JWT_SECRET", v);
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "too short")]
+    fn get_jwt_secret_panics_when_too_short() {
+        let saved = std::env::var("JWT_SECRET").ok();
+        std::env::set_var("JWT_SECRET", "short");
+        let result = std::panic::catch_unwind(|| get_jwt_secret());
+        if let Some(v) = saved {
+            std::env::set_var("JWT_SECRET", v);
+        } else {
+            std::env::remove_var("JWT_SECRET");
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
 }
 

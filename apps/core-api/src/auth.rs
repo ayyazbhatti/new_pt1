@@ -18,11 +18,23 @@ pub struct Claims {
     pub iat: i64,
 }
 
+/// JWT secret for signing/verifying tokens. JWT_SECRET must be set (>=32 chars) or the process panics.
 pub fn get_jwt_secret() -> String {
-    env::var("JWT_SECRET").unwrap_or_else(|_| {
-        // Default secret for development - should be set in production
-        "your-secret-key-change-in-production".to_string()
-    })
+    match env::var("JWT_SECRET") {
+        Ok(s) if s.trim().len() >= 32 => s.trim().to_string(),
+        Ok(s) if !s.trim().is_empty() => {
+            panic!(
+                "JWT_SECRET is set but too short ({} chars). Minimum 32 characters required for production use.",
+                s.trim().len()
+            );
+        }
+        _ => {
+            panic!(
+                "JWT_SECRET environment variable is not set. \
+                Generate with: openssl rand -base64 48"
+            );
+        }
+    }
 }
 
 pub fn verify_access_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {

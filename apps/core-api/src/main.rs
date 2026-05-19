@@ -31,6 +31,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = common::config::AppConfig::from_env()
         .map_err(|e| format!("Config error: {}", e))?;
 
+    // Fail fast on missing/weak JWT_SECRET rather than discovering it on first request.
+    let _ = auth::get_jwt_secret();
+
     info!("Connecting to database...");
     let db = PgPool::connect(&config.database_url).await?;
     info!("Connected to database");
