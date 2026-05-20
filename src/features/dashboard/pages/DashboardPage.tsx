@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { useAuthStore } from '@/shared/store/auth.store'
@@ -18,22 +17,7 @@ import {
 } from '../api/dashboard.api'
 import type { Transaction } from '@/features/adminFinance/api/finance.api'
 import { formatCurrency } from '@/features/adminFinance/utils/formatters'
-import {
-  Users,
-  Activity,
-  DollarSign,
-  AlertTriangle,
-  UserPlus,
-  CalendarDays,
-  Receipt,
-  Headphones,
-  ArrowRight,
-  TrendingUp,
-  TrendingDown,
-  Bell,
-  UserCheck,
-  Loader2,
-} from 'lucide-react'
+import { DollarSign, TrendingUp, Bell, UserCheck, Loader2 } from 'lucide-react'
 
 const CHART_DAYS = 30
 
@@ -112,20 +96,11 @@ function formatRelativeTime(dateString: string | null | undefined): string {
 }
 
 const STAT_CARD_KEYS = [
-  { key: 'users', label: 'Total Users', icon: Users, iconClassName: 'text-slate-400' },
-  { key: 'trades', label: 'Active Trades', icon: Activity, iconClassName: 'text-emerald-500' },
-  { key: 'revenue', label: 'Revenue', icon: DollarSign, iconClassName: 'text-blue-500' },
-  { key: 'risk', label: 'Pending Requests', icon: AlertTriangle, iconClassName: 'text-amber-500' },
+  { key: 'users', label: 'Total Users' },
+  { key: 'trades', label: 'Active Trades' },
+  { key: 'revenue', label: 'Revenue' },
+  { key: 'risk', label: 'Pending Requests' },
 ] as const
-
-const QUICK_ACTIONS = [
-  { label: 'Users', path: '/admin/users', icon: Users },
-  { label: 'Leads', path: '/admin/leads', icon: UserPlus },
-  { label: 'Appointments', path: '/admin/appointments', icon: CalendarDays },
-  { label: 'Trading', path: '/admin/trading', icon: Activity },
-  { label: 'Transactions', path: '/admin/transactions', icon: Receipt },
-  { label: 'Support', path: '/admin/support', icon: Headphones },
-]
 
 const PLATFORM_ALERTS_PLACEHOLDER = [
   { id: 1, text: '3 pending KYC reviews', variant: 'warning' as const },
@@ -199,25 +174,22 @@ export function DashboardPage() {
         }
       />
 
-      {/* Stats row */}
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Stats row — single horizontal line (scroll on narrow viewports) */}
+      <div className="mb-8 flex flex-nowrap gap-3 overflow-x-auto pb-2 lg:gap-4">
         {STAT_CARD_KEYS.map((card) => {
-          const Icon = card.icon
           const { value, change } = statValues[card.key] ?? { value: '—', change: null }
           const isPositive = change?.startsWith('+')
           const isNegative = change?.startsWith('-')
           return (
-            <Card key={card.key} className="flex items-start gap-3 p-4">
-              <div className={`rounded-lg bg-surface-2 p-2 shrink-0 ${card.iconClassName}`}>
-                {statsLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-                ) : (
-                  <Icon className="h-5 w-5" aria-hidden />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-text-muted">{card.label}</p>
-                <p className="mt-1 text-xl font-bold text-text">{statsLoading ? '—' : value}</p>
+            <Card
+              key={card.key}
+              className="min-w-[10.5rem] shrink-0 p-3 sm:min-w-[11.5rem] sm:p-4 lg:min-w-0 lg:flex-1 lg:basis-0"
+            >
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-text-muted sm:text-sm">{card.label}</p>
+                <p className="mt-0.5 truncate text-lg font-bold text-text sm:mt-1 sm:text-xl">
+                  {statsLoading ? '—' : value}
+                </p>
                 {change && (
                   <p
                     className={`mt-1 text-xs ${
@@ -231,88 +203,40 @@ export function DashboardPage() {
             </Card>
           )
         })}
-      </div>
-
-      {/* Today snapshot — finance overview */}
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card className="flex items-start gap-3 p-4">
-          <div className="rounded-lg bg-surface-2 p-2 shrink-0 text-success">
-            {financeLoading ? (
-              <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-            ) : (
-              <TrendingUp className="h-5 w-5" aria-hidden />
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-text-muted">Deposits today</p>
-            <p className="mt-1 text-xl font-bold text-text">
+        <Card className="min-w-[10.5rem] shrink-0 p-3 sm:min-w-[11.5rem] sm:p-4 lg:min-w-0 lg:flex-1 lg:basis-0">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-text-muted sm:text-sm">Deposits today</p>
+            <p className="mt-0.5 truncate text-lg font-bold text-text sm:mt-1 sm:text-xl">
               {financeLoading ? '—' : formatCurrency(depositsToday?.amount ?? 0, 'USD')}
             </p>
             {!financeLoading && depositsToday != null && (
-              <p className="mt-1 text-xs text-text-muted">
+              <p className="mt-0.5 text-xs text-text-muted sm:mt-1">
                 ({depositsToday.count} transaction{depositsToday.count !== 1 ? 's' : ''})
               </p>
             )}
           </div>
         </Card>
-        <Card className="flex items-start gap-3 p-4">
-          <div className="rounded-lg bg-surface-2 p-2 shrink-0 text-danger">
-            {financeLoading ? (
-              <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-            ) : (
-              <TrendingDown className="h-5 w-5" aria-hidden />
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-text-muted">Withdrawals today</p>
-            <p className="mt-1 text-xl font-bold text-text">
+        <Card className="min-w-[10.5rem] shrink-0 p-3 sm:min-w-[11.5rem] sm:p-4 lg:min-w-0 lg:flex-1 lg:basis-0">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-text-muted sm:text-sm">Withdrawals today</p>
+            <p className="mt-0.5 truncate text-lg font-bold text-text sm:mt-1 sm:text-xl">
               {financeLoading ? '—' : formatCurrency(withdrawalsToday?.amount ?? 0, 'USD')}
             </p>
             {!financeLoading && withdrawalsToday != null && (
-              <p className="mt-1 text-xs text-text-muted">
+              <p className="mt-0.5 text-xs text-text-muted sm:mt-1">
                 ({withdrawalsToday.count} transaction{withdrawalsToday.count !== 1 ? 's' : ''})
               </p>
             )}
           </div>
         </Card>
-        <Card className="flex items-start gap-3 p-4">
-          <div className="rounded-lg bg-surface-2 p-2 shrink-0 text-accent">
-            {financeLoading ? (
-              <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-            ) : (
-              <DollarSign className="h-5 w-5" aria-hidden />
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-text-muted">Net fees today</p>
-            <p className="mt-1 text-xl font-bold text-text">
+        <Card className="min-w-[10.5rem] shrink-0 p-3 sm:min-w-[11.5rem] sm:p-4 lg:min-w-0 lg:flex-1 lg:basis-0">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-text-muted sm:text-sm">Net fees today</p>
+            <p className="mt-0.5 truncate text-lg font-bold text-text sm:mt-1 sm:text-xl">
               {financeLoading ? '—' : formatCurrency(netFeesToday, 'USD')}
             </p>
           </div>
         </Card>
-      </div>
-
-      {/* Quick actions */}
-      <div className="mb-8">
-        <h2 className="text-sm font-semibold text-text mb-3">Quick actions</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {QUICK_ACTIONS.map((item) => {
-            const Icon = item.icon
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className="flex items-center gap-3 rounded-lg border border-border bg-surface-2 p-4 transition-colors hover:bg-surface-1 hover:border-border/80"
-              >
-                <div className="rounded-lg bg-surface-1 p-2 text-text-muted">
-                  <Icon className="h-5 w-5" />
-                </div>
-                <span className="text-sm font-medium text-text">{item.label}</span>
-                <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-text-muted" />
-              </Link>
-            )
-          })}
-        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">

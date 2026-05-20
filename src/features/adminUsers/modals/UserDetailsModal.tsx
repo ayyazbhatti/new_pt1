@@ -51,7 +51,13 @@ import { Badge } from '@/shared/ui/badge'
 import { Button } from '@/shared/ui/button'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { ColumnDef } from '@tanstack/react-table'
-import { fetchUserNotes, createUserNote, getAccountSummary, type UserNote } from '../api/users.api'
+import {
+  fetchUserNotes,
+  createUserNote,
+  getAccountSummary,
+  type UserNote,
+  type AdminAccountSummaryResponse,
+} from '../api/users.api'
 import { getPositionsByUserId, type Position } from '@/features/terminal/api/positions.api'
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { Input } from '@/shared/ui'
@@ -103,6 +109,48 @@ const TAB_VALUES = [
   'reports',
 ] as const
 const ORDERS_POSITIONS_SUBTAB_VALUES = ['positions', 'orders', 'pending', 'closed'] as const
+
+/** True if an admin trading WS event concerns `targetUserId` (modal subject). */
+function adminEventAffectsTargetUser(event: WsInboundEvent, targetUserId: string): boolean {
+  const t = String(targetUserId).trim()
+  switch (event.type) {
+    case 'admin.position.opened':
+    case 'admin.position.updated': {
+      const pos = (event.payload as { position?: { user_id?: string; userId?: string } }).position
+      if (!pos || typeof pos !== 'object') return false
+      const uid = String(
+        (pos as { user_id?: string; userId?: string }).userId ??
+          (pos as { user_id?: string; userId?: string }).user_id ??
+          ''
+      ).trim()
+      return uid === t
+    }
+    case 'admin.position.closed':
+    case 'admin.position.liquidated':
+    case 'admin.position.sltp.modified': {
+      const p = event.payload as { userId?: string; user_id?: string }
+      return String(p.userId ?? p.user_id ?? '').trim() === t
+    }
+    case 'admin.order.filled':
+    case 'admin.order.canceled':
+    case 'admin.order.rejected': {
+      const p = event.payload as { userId?: string; user_id?: string }
+      return String(p.userId ?? p.user_id ?? '').trim() === t
+    }
+    case 'admin.order.updated':
+    case 'admin.order.created': {
+      const order = (event.payload as { order?: { user_id?: string; userId?: string } }).order
+      if (!order || typeof order !== 'object') return false
+      return String(
+        (order as { user_id?: string; userId?: string }).userId ??
+          (order as { user_id?: string; userId?: string }).user_id ??
+          ''
+      ).trim() === t
+    }
+    default:
+      return false
+  }
+}
 
 function getStoredOrdersPositionsSubTab(): (typeof ORDERS_POSITIONS_SUBTAB_VALUES)[number] {
   if (typeof sessionStorage === 'undefined') return 'positions'
@@ -208,6 +256,9 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const canGenerateAiReports = useCanAccess('ai_reports:generate')
   const canViewAiReports = useCanAccess('ai_reports:view')
   const [userState, setUserState] = useState(user)
+  const queryClient = useQueryClient()
+  /** Same guard as useAccountSummary: ignore all-zero summary while reconnecting if we had positive equity. */
+  const lastTargetEquityRef = useRef<number | null>(null)
 
   const handleViewEventHistory = useCallback(() => {
     closeModal(`user-details-${userState.id}`)
@@ -215,19 +266,96 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   }, [closeModal, navigate, userState.id])
 
   // Fetch account summary when modal opens so Balance/metrics show server data (not 0)
+  const accountSummaryQueryKey = ['admin', 'user-account-summary', user.id] as const
+  const positionsQueryKey = ['user-positions', user.id] as const
+
   const { data: accountSummary } = useQuery({
-    queryKey: ['admin', 'user-account-summary', user.id],
+    queryKey: accountSummaryQueryKey,
     queryFn: () => getAccountSummary(user.id),
     enabled: !!user.id,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
   })
+
   useEffect(() => {
     if (accountSummary == null) return
+    lastTargetEquityRef.current = accountSummary.equity
     const marginLevel =
       accountSummary.marginLevel != null && accountSummary.marginLevel !== 'inf' && accountSummary.marginLevel !== 'Infinity'
         ? parseFloat(accountSummary.marginLevel) || 0
         : 0
     setUserState((prev) => ({ ...prev, balance: accountSummary.balance, marginLevel }))
   }, [accountSummary])
+
+  // WebSocket: patch admin account summary cache for the target user (no polling).
+  useEffect(() => {
+    if (!user.id) return
+    const targetUserId = String(user.id).trim()
+    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
+      if (event.type !== 'account.summary.updated') return
+      const raw = (event as { type: 'account.summary.updated'; payload: Record<string, unknown> }).payload
+      if (!raw || typeof raw !== 'object') return
+      const eventUserId = String((raw.userId ?? raw.user_id) ?? '').trim()
+      if (eventUserId !== targetUserId) return
+
+      const balance = Number(raw.balance ?? 0)
+      const equity = Number(raw.equity ?? 0)
+      const marginUsed = Number(raw.marginUsed ?? raw.margin_used ?? 0)
+      const freeMargin = Number(raw.freeMargin ?? raw.free_margin ?? 0)
+      const marginLevel = String(raw.marginLevel ?? raw.margin_level ?? '')
+      const realizedPnl = Number(raw.realizedPnl ?? raw.realized_pnl ?? 0)
+      const unrealizedPnl = Number(raw.unrealizedPnl ?? raw.unrealized_pnl ?? 0)
+      const updatedAt = String(raw.updatedAt ?? raw.updated_at ?? '')
+      const isZeros = balance === 0 && equity === 0 && marginUsed === 0
+      if (isZeros && lastTargetEquityRef.current != null && lastTargetEquityRef.current > 0) return
+      lastTargetEquityRef.current = equity
+
+      const marginCallLevelThreshold =
+        raw.marginCallLevelThreshold != null
+          ? Number(raw.marginCallLevelThreshold)
+          : raw.margin_call_level_threshold != null
+            ? Number(raw.margin_call_level_threshold)
+            : null
+      const stopOutLevelThreshold =
+        raw.stopOutLevelThreshold != null
+          ? Number(raw.stopOutLevelThreshold)
+          : raw.stop_out_level_threshold != null
+            ? Number(raw.stop_out_level_threshold)
+            : null
+
+      const patched: AdminAccountSummaryResponse = {
+        userId: eventUserId,
+        balance,
+        equity,
+        marginUsed,
+        freeMargin,
+        marginLevel: marginLevel || null,
+        realizedPnl,
+        unrealizedPnl,
+        updatedAt,
+        marginCallLevelThreshold,
+        stopOutLevelThreshold,
+      }
+      queryClient.setQueryData<AdminAccountSummaryResponse>(accountSummaryQueryKey, patched)
+      // User's position_update WS is not delivered to the admin socket; refresh positions when summary changes for this user.
+      void queryClient.invalidateQueries({ queryKey: positionsQueryKey })
+    })
+    return unsubscribe
+  }, [user.id, queryClient])
+
+  // Wallet balance updates may arrive without account.summary.updated; refetch summary for this user only.
+  useEffect(() => {
+    if (!user.id) return
+    const targetUserId = String(user.id).trim()
+    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
+      if (event.type !== 'wallet.balance.updated') return
+      const p = event.payload as { userId?: string; user_id?: string }
+      const uid = String(p.userId ?? p.user_id ?? '').trim()
+      if (uid !== targetUserId) return
+      void queryClient.invalidateQueries({ queryKey: accountSummaryQueryKey })
+    })
+    return unsubscribe
+  }, [user.id, queryClient])
 
   // Sync balance/marginLevel from parent when table summaries load after modal opened
   useEffect(() => {
@@ -237,8 +365,6 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       return { ...prev, balance: user.balance, marginLevel: user.marginLevel }
     })
   }, [user.id, user.balance, user.marginLevel])
-
-  const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<typeof TAB_VALUES[number]>(getStoredUserDetailsTab)
 
   useEffect(() => {
@@ -373,10 +499,11 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   )
 
   const { data: positionsData, isLoading: positionsLoading } = useQuery({
-    queryKey: ['user-positions', user.id],
+    queryKey: positionsQueryKey,
     queryFn: () => getPositionsByUserId(user.id),
     enabled: !!user.id,
-    staleTime: 15_000,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
   })
   const positions = positionsData ?? []
   const openPositions = useMemo(
@@ -390,6 +517,31 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
     () => Array.from(new Set(openPositions.map((p) => p.symbol.toUpperCase().trim()))),
     [openPositions]
   )
+
+  // WebSocket: refetch positions when admin trading events affect this user (no polling).
+  useEffect(() => {
+    if (!user.id) return
+    const targetUserId = String(user.id).trim()
+    const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
+      if (!adminEventAffectsTargetUser(event, targetUserId)) return
+      void queryClient.invalidateQueries({ queryKey: positionsQueryKey })
+    })
+    return unsubscribe
+  }, [user.id, queryClient])
+
+  // After WS reconnect (authenticated again), refetch summary + positions to catch missed events.
+  useEffect(() => {
+    if (!user.id) return
+    let previousState = wsClient.getState()
+    const unsub = wsClient.onStateChange((state) => {
+      const becameAuthenticated = state === 'authenticated' && previousState !== 'authenticated'
+      previousState = state
+      if (!becameAuthenticated) return
+      void queryClient.invalidateQueries({ queryKey: accountSummaryQueryKey })
+      void queryClient.invalidateQueries({ queryKey: positionsQueryKey })
+    })
+    return unsub
+  }, [user.id, queryClient])
 
   // Load symbols when create-order form is shown or when Modify & open modal opens
   useEffect(() => {
@@ -757,7 +909,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   }, [activeTab, chatMessages.length])
 
   const metrics = useMemo(() => {
-    const balance = userState.balance ?? 0
+    const balance = accountSummary?.balance ?? userState.balance ?? 0
     let totalMargin = 0
     let unrealizedPnl = 0
     openPositions.forEach((pos) => {
@@ -777,18 +929,33 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         unrealizedPnl += parseFloat(pos.unrealized_pnl || '0')
       }
     })
-    const equity = balance + unrealizedPnl
-    const freeMargin = equity - totalMargin
-    const marginLevel = totalMargin > 0 ? (equity / totalMargin) * 100 : 0
+    const clientEquityFallback = balance + unrealizedPnl
+    const equity = accountSummary?.equity ?? clientEquityFallback
+    const margin = accountSummary?.marginUsed ?? totalMargin
+    const freeMargin = accountSummary?.freeMargin ?? clientEquityFallback - totalMargin
+
+    let marginLevel = 0
+    if (
+      accountSummary?.marginLevel != null &&
+      accountSummary.marginLevel !== 'inf' &&
+      accountSummary.marginLevel !== 'Infinity'
+    ) {
+      marginLevel = parseFloat(accountSummary.marginLevel) || 0
+    } else if (accountSummary != null) {
+      marginLevel = 0
+    } else {
+      marginLevel = totalMargin > 0 ? (clientEquityFallback / totalMargin) * 100 : 0
+    }
+
     return {
       balance,
       equity,
-      margin: totalMargin,
+      margin,
       freeMargin,
       marginLevel,
       unrealizedPnl,
     }
-  }, [userState.balance, openPositions, livePrices])
+  }, [accountSummary, userState.balance, openPositions, livePrices])
 
   type TransactionRow = {
     id: string
@@ -1053,17 +1220,6 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
             </div>
           </div>
           <div className="ml-2 flex shrink-0 items-center gap-2">
-            {canGenerateAiReports && (
-              <button
-                type="button"
-                onClick={handleOpenGenerateReport}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/30"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Generate AI Report</span>
-                <span className="sm:hidden">Report</span>
-              </button>
-            )}
             <button
               type="button"
               onClick={handleClose}
@@ -2766,7 +2922,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         </Dialog.Portal>
       </Dialog.Root>
 
-      {/* Overview tab footer: Edit Profile & Reset Password */}
+      {/* Overview tab footer: Edit Profile, Reset Password, Generate AI Report */}
       {activeTab === 'overview' && (
         <div className="flex-shrink-0 border-t border-slate-700 px-3 py-3 sm:px-4 sm:py-4 bg-slate-800/80 flex flex-wrap items-center gap-3">
           {isEditMode ? (
@@ -2820,6 +2976,17 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                 <Key className="h-4 w-4" />
                 Reset Password
               </button>
+              {canGenerateAiReports && (
+                <button
+                  type="button"
+                  onClick={handleOpenGenerateReport}
+                  className="inline-flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/20 px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/30 sm:px-4 sm:text-base"
+                >
+                  <Sparkles className="h-4 w-4 shrink-0" />
+                  <span className="hidden sm:inline">Generate AI Report</span>
+                  <span className="sm:hidden">AI Report</span>
+                </button>
+              )}
             </>
           )}
         </div>

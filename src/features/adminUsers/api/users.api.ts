@@ -234,7 +234,9 @@ export async function createUserNote(
 
 // --- Admin account summaries (batch, for users table) ---
 
+/** Matches auth-service `AccountSummary` JSON (camelCase); optional fields may be absent on older responses. */
 export interface AdminAccountSummaryResponse {
+  userId?: string
   balance: number
   equity: number
   marginUsed: number
@@ -242,6 +244,9 @@ export interface AdminAccountSummaryResponse {
   marginLevel: string | null
   realizedPnl: number
   unrealizedPnl: number
+  updatedAt?: string
+  marginCallLevelThreshold?: number | null
+  stopOutLevelThreshold?: number | null
 }
 
 export interface GetAccountSummariesResponse {

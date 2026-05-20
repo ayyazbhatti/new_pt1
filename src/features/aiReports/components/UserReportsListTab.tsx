@@ -217,7 +217,7 @@ export function UserReportsListTab({
       <div className="flex flex-col items-center justify-center gap-3 py-16 px-4 text-center">
         <Sparkles className="h-10 w-10 text-accent/60" />
         <p className="text-sm text-slate-400 max-w-md">
-          No reports generated yet. Click &quot;Generate AI Report&quot; in the header to create one.
+          No reports generated yet. Click &quot;Generate AI Report&quot; in the user details footer (Overview tab) to create one.
         </p>
       </div>
     )
