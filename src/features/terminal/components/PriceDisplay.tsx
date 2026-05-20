@@ -90,7 +90,7 @@ export function PriceDisplay({ bid, ask, bidFormatted, askFormatted, className }
       >
         {bidFormatted}
       </span>
-      <span className="text-[10px] text-text-muted/50">/</span>
+      <span className="text-[10px] text-slate-500/90 dark:text-text-muted/50">/</span>
       <span
         className={cn(
           'text-xs font-medium transition-colors duration-200',

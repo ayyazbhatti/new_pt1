@@ -158,7 +158,7 @@ export function SystemPage() {
               <Cpu className="h-4 w-4 text-text-muted" />
               <h2 className="text-sm font-semibold text-text">Containers</h2>
             </div>
-            <div className="overflow-x-auto">
+            <div className="table-scroll">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-text-muted">

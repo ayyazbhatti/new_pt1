@@ -246,7 +246,7 @@ export function DashboardPage() {
             <h2 className="text-sm font-semibold text-text">Recent activity</h2>
             <p className="text-xs text-text-muted mt-0.5">Latest transactions</p>
           </div>
-          <div className="overflow-x-auto">
+          <div className="table-scroll">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-surface-2/50">
@@ -287,7 +287,7 @@ export function DashboardPage() {
             <h2 className="text-sm font-semibold text-text">Recent registrations</h2>
             <p className="text-xs text-text-muted mt-0.5">New user sign-ups</p>
           </div>
-          <div className="overflow-x-auto">
+          <div className="table-scroll">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-surface-2/50">

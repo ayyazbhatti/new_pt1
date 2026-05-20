@@ -547,7 +547,7 @@ export function PermissionsPage() {
             ) : permissionCategories.length === 0 ? (
               <p className="p-4 text-sm text-text-muted">No permission definitions in the database. Run migrations to seed them.</p>
             ) : (
-            <div className="overflow-x-auto">
+            <div className="table-scroll">
               <table className="w-full min-w-[600px]">
                 <thead className="bg-surface-2 border-b border-border">
                   <tr>

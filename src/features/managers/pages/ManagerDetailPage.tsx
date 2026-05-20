@@ -301,7 +301,7 @@ export function ManagerDetailPage() {
                 <h2 className="text-sm font-semibold text-text">Recent deposits</h2>
                 <p className="mt-0.5 text-xs text-text-muted">Latest deposit transactions</p>
               </div>
-              <div className="overflow-x-auto">
+              <div className="table-scroll">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-surface-2/50">
@@ -338,7 +338,7 @@ export function ManagerDetailPage() {
                 <h2 className="text-sm font-semibold text-text">Recent withdrawals</h2>
                 <p className="mt-0.5 text-xs text-text-muted">Latest withdrawal transactions</p>
               </div>
-              <div className="overflow-x-auto">
+              <div className="table-scroll">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-surface-2/50">
@@ -404,7 +404,7 @@ export function ManagerDetailPage() {
                   {stats.positions.openCount} open · {formatCurrency(stats.positions.totalExposure, 'USD')} exposure · {stats.positions.closedToday} closed today
                 </p>
               </div>
-              <div className="overflow-x-auto">
+              <div className="table-scroll">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-surface-2/50">
@@ -453,7 +453,7 @@ export function ManagerDetailPage() {
                   {stats.orders.activeCount} active · {stats.orders.filledToday} filled today · {stats.orders.cancelledToday} cancelled today
                 </p>
               </div>
-              <div className="overflow-x-auto">
+              <div className="table-scroll">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-surface-2/50">
@@ -500,7 +500,7 @@ export function ManagerDetailPage() {
                 </div>
                 <p className="mt-0.5 text-xs text-text-muted">Best performers by PnL (this manager&apos;s users)</p>
               </div>
-              <div className="overflow-x-auto">
+              <div className="table-scroll">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-surface-2/50">
@@ -542,7 +542,7 @@ export function ManagerDetailPage() {
                 </div>
                 <p className="mt-0.5 text-xs text-text-muted">Worst performers by PnL (this manager&apos;s users)</p>
               </div>
-              <div className="overflow-x-auto">
+              <div className="table-scroll">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-surface-2/50">

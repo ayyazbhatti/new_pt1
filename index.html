@@ -1,6 +1,22 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('newpt-theme')
+          var stored = raw ? JSON.parse(raw) : {}
+          var theme = stored && stored.state && stored.state.theme ? stored.state.theme : 'dark'
+          if (theme === 'dark') {
+            document.documentElement.classList.add('dark')
+          } else {
+            document.documentElement.classList.remove('dark')
+          }
+        } catch (e) {
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />

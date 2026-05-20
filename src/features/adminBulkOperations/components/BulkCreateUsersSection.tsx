@@ -87,7 +87,7 @@ export function BulkCreateUsersSection() {
         Add one or more users below. All fields in a row are required except Phone.
       </p>
 
-      <div className="overflow-x-auto">
+      <div className="table-scroll">
         <table className="w-full min-w-[900px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-border text-left text-text-muted">

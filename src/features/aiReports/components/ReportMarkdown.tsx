@@ -40,7 +40,7 @@ const components: Components = {
     </a>
   ),
   table: ({ children }) => (
-    <div className="my-4 overflow-x-auto rounded-lg border border-border">
+    <div className="my-4 table-scroll rounded-lg border border-border">
       <table className="w-full border-collapse text-xs">{children}</table>
     </div>
   ),
@@ -57,7 +57,7 @@ const components: Components = {
     const isBlock = className?.includes('language-')
     if (isBlock) {
       return (
-        <pre className="my-3 overflow-x-auto rounded-lg bg-surface-2 border border-border px-3 py-2">
+        <pre className="my-3 table-scroll rounded-lg bg-surface-2 border border-border px-3 py-2">
           <code className={cn('font-mono text-xs text-text', className)} {...props}>
             {children}
           </code>

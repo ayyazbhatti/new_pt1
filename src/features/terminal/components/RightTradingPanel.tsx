@@ -3,12 +3,18 @@ import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Segmented } from '@/shared/ui'
 import { Checkbox } from '@/shared/ui'
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef, useId, type ChangeEvent } from 'react'
 import { cn } from '@/shared/utils'
 import { useTerminalStore } from '../store'
 import { toast } from '@/shared/components/common'
 import { SinglePriceDisplay } from './SinglePriceDisplay'
-import { placeOrder, PlaceOrderRequest, estimateOrderMargin } from '../api/orders.api'
+import {
+  placeOrder,
+  PlaceOrderRequest,
+  estimateOrderMargin,
+  clientMarketFallbackMarginUsdOrNull,
+  resolveEffectiveLeverageFromTiersOrNull,
+} from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useQuery } from '@tanstack/react-query'
 import { me, getSymbolLeverage, getEffectiveLeverage } from '@/shared/api/auth.api'
@@ -188,6 +194,15 @@ export function RightTradingPanel() {
   const autoSizeSeedKeyRef = useRef('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
+  /** Which side market/limit preview uses for margin estimate (BUY→ask, SELL→bid). Updated on Buy/Sell hover/focus and click. */
+  const [previewOrderSide, setPreviewOrderSide] = useState<'BUY' | 'SELL'>('BUY')
+  /** Free Margin % slider: null when disabled or unknown; default 15% when symbol/side context applies. */
+  const [sliderPct, setSliderPct] = useState<number | null>(null)
+  /** Default % of free margin used for slider + size on new symbol/side (or when slider becomes enabled). */
+  const DEFAULT_FREE_MARGIN_SLIDER_PCT = 0.15
+  const lastSliderContextRef = useRef<string>('')
+  const prevSliderDisabledRef = useRef(true)
+  const freeMarginTicksListId = useId()
 
   // Filter symbols for dropdown by search (code or price)
   const filteredSymbolsForDropdown = useMemo(() => {
@@ -420,6 +435,110 @@ export function RightTradingPanel() {
     setSize(nextSize)
   }, [selectedSymbol, currency, orderType, limitPrice, sizeMode, getDefaultSizeForMinMargin])
 
+  const isSliderDisabled = useMemo(() => {
+    const fm = accountSummary?.freeMargin
+    if (fm == null || fm <= 0) return true
+    if (!selectedSymbol) return true
+    const exec = previewOrderSide === 'BUY' ? selectedSymbol.numericPrice2 : selectedSymbol.numericPrice
+    if (!Number.isFinite(exec) || exec <= 0) return true
+    return false
+  }, [accountSummary?.freeMargin, selectedSymbol, previewOrderSide])
+
+  /** Apply free-margin % to size input (same math as range input). */
+  const applyFreeMarginFromPct = useCallback(
+    (pct: number) => {
+      if (!(pct > 0 && pct <= 1)) return
+      const fm = accountSummary?.freeMargin
+      if (fm == null || fm <= 0 || !selectedSymbol || isSliderDisabled) return
+      const execPrice = previewOrderSide === 'BUY' ? selectedSymbol.numericPrice2 : selectedSymbol.numericPrice
+      if (!Number.isFinite(execPrice) || execPrice <= 0) return
+      const targetMarginUsd = fm * pct
+      const userMin = meData?.minLeverage ?? 1
+      const userMaxRaw = meData?.maxLeverage ?? 100
+      const fallbackLeverage = Math.max(userMin, Math.min(userMaxRaw, 500))
+      const notionalForLev = targetMarginUsd * fallbackLeverage
+      const effLev = resolveEffectiveLeverageFromTiersOrNull(
+        notionalForLev,
+        symbolLeverage?.tiers ?? null,
+        meData?.minLeverage,
+        meData?.maxLeverage
+      )
+      const finalLev = effLev ?? fallbackLeverage
+      const notional = targetMarginUsd * finalLev
+      const rawSize = notional / execPrice
+
+      const tiersList = symbolLeverage?.tiers ?? []
+      const topTier = tiersList.length > 0 ? tiersList[tiersList.length - 1] : null
+      const rawTopNotionalTo = topTier?.notional_to ?? null
+      const topNotionalTo: number | null =
+        rawTopNotionalTo == null || rawTopNotionalTo === ''
+          ? null
+          : Number(rawTopNotionalTo)
+
+      let cappedSize = rawSize
+      if (topNotionalTo != null && Number.isFinite(topNotionalTo) && topNotionalTo > 0) {
+        const safeMaxNotional = topNotionalTo * 0.999
+        const maxSizeFromCap = safeMaxNotional / execPrice
+        if (cappedSize > maxSizeFromCap) {
+          cappedSize = maxSizeFromCap
+        }
+      }
+
+      const baseSize = Number(cappedSize.toFixed(6))
+      if (currency === selectedSymbol.quoteCurrency) {
+        const quoteSize = baseSize * execPrice
+        setSize(quoteSize.toFixed(2))
+      } else {
+        setSize(String(baseSize))
+      }
+    },
+    [
+      accountSummary?.freeMargin,
+      selectedSymbol,
+      previewOrderSide,
+      symbolLeverage?.tiers,
+      meData?.minLeverage,
+      meData?.maxLeverage,
+      currency,
+      isSliderDisabled,
+    ]
+  )
+
+  const handleFreeMarginSliderChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const intPct = parseInt(e.target.value, 10)
+      if (!Number.isFinite(intPct) || intPct < 1 || intPct > 100) return
+      const pct = intPct / 100
+      setSliderPct(pct)
+      applyFreeMarginFromPct(pct)
+    },
+    [applyFreeMarginFromPct]
+  )
+
+  // Default slider to 15% and fill size from that % when symbol/side changes or slider becomes usable.
+  useEffect(() => {
+    if (isSliderDisabled || !selectedSymbol) {
+      setSliderPct(null)
+      if (isSliderDisabled) prevSliderDisabledRef.current = true
+      return
+    }
+    const ctx = `${selectedSymbol.code}|${previewOrderSide}|${currency ?? ''}`
+    const becameEnabled = prevSliderDisabledRef.current && !isSliderDisabled
+    prevSliderDisabledRef.current = false
+    if (lastSliderContextRef.current !== ctx || becameEnabled) {
+      lastSliderContextRef.current = ctx
+      setSliderPct(DEFAULT_FREE_MARGIN_SLIDER_PCT)
+      applyFreeMarginFromPct(DEFAULT_FREE_MARGIN_SLIDER_PCT)
+    }
+  }, [
+    selectedSymbol?.code,
+    previewOrderSide,
+    currency,
+    isSliderDisabled,
+    selectedSymbol,
+    applyFreeMarginFromPct,
+  ])
+
   /** Server-side margin (same as place_order). Uses Redis execution price + risk::effective_leverage. */
   const canEstimateServerMargin =
     !!selectedSymbol &&
@@ -427,7 +546,11 @@ export function RightTradingPanel() {
     sizeCalculations.currentUnits > 0 &&
     (orderType === 'market' || (orderType === 'limit' && limitPrice.trim() !== ''))
 
-  const { data: serverMarginEstimate, isFetching: isEstimatingServerMargin } = useQuery({
+  const {
+    data: serverMarginEstimate,
+    isFetching: isEstimatingServerMargin,
+    isError: isMarginEstimateError,
+  } = useQuery({
     queryKey: [
       'v1',
       'orderMarginEstimate',
@@ -435,12 +558,12 @@ export function RightTradingPanel() {
       sizeCalculations.currentUnits,
       orderType,
       limitPrice,
+      previewOrderSide,
     ],
     queryFn: () =>
       estimateOrderMargin({
         symbol: selectedSymbol!.code,
-        // Buy uses ask for market (same as place_order); show consistent with long preview
-        side: 'BUY',
+        side: previewOrderSide,
         orderType: orderType === 'limit' ? 'LIMIT' : 'MARKET',
         size: String(sizeCalculations.currentUnits),
         limitPrice: orderType === 'limit' && limitPrice.trim() ? limitPrice : undefined,
@@ -465,27 +588,34 @@ export function RightTradingPanel() {
 
     const bid = selectedSymbol.numericPrice || 0
     const ask = selectedSymbol.numericPrice2 || bid
-    const refPrice = ask !== bid ? (bid + ask) / 2 : bid
+    const refPriceMid = ask !== bid ? (bid + ask) / 2 : bid
 
     const baseSize = sizeCalculations.currentUnits
-    const quoteValue = refPrice > 0 ? baseSize * refPrice : 0
+    const quoteValue = refPriceMid > 0 ? baseSize * refPriceMid : 0
 
     const spread = Math.abs(ask - bid)
     const fees = 0
-    const effectiveLeverage = getEffectiveLeverage(
-      quoteValue,
-      symbolLeverage?.tiers ?? null,
-      meData?.minLeverage,
-      meData?.maxLeverage,
-      50
-    )
-    const margin = effectiveLeverage > 0 ? quoteValue / effectiveLeverage : quoteValue * 0.02
+    const limitPx =
+      orderType === 'limit' && limitPrice.trim() !== '' ? parseFloat(limitPrice) : Number.NaN
+    const limitExecutionPrice = Number.isFinite(limitPx) && limitPx > 0 ? limitPx : null
+    const marginUsd = clientMarketFallbackMarginUsdOrNull({
+      bid,
+      ask,
+      side: previewOrderSide,
+      baseUnits: baseSize,
+      tiers: symbolLeverage?.tiers,
+      userMin: meData?.minLeverage,
+      userMax: meData?.maxLeverage,
+      orderType: orderType === 'limit' ? 'LIMIT' : 'MARKET',
+      limitExecutionPrice,
+    })
+    const margin = marginUsd != null ? marginUsd.toFixed(2) : '—'
     const liquidation = '-'
 
     return {
       spread: spread.toFixed(2),
       fees: fees.toFixed(2),
-      margin: margin.toFixed(2),
+      margin,
       liquidation,
       usdValue: quoteValue.toFixed(2),
       baseSize: baseSize.toFixed(8),
@@ -497,17 +627,26 @@ export function RightTradingPanel() {
     meData?.minLeverage,
     meData?.maxLeverage,
     symbolLeverage?.tiers,
+    previewOrderSide,
+    orderType,
+    limitPrice,
   ])
 
-  // Current order notional (exposure) for "active tier" indicator in Leverage card (matches cost breakdown)
+  // Current order notional (exposure) for "active tier" indicator in Leverage card (matches preview execution price)
   const currentOrderNotional = useMemo(() => {
     if (!selectedSymbol) return 0
+    if (orderType === 'limit' && limitPrice.trim() !== '') {
+      const lp = parseFloat(limitPrice)
+      if (Number.isFinite(lp) && lp > 0) {
+        return sizeCalculations.currentUnits * lp
+      }
+    }
     const bid = selectedSymbol.numericPrice || 0
     const ask = selectedSymbol.numericPrice2 || bid
-    const refPrice = ask !== bid ? (bid + ask) / 2 : bid
-    if (refPrice <= 0) return 0
-    return sizeCalculations.currentUnits * refPrice
-  }, [selectedSymbol, sizeCalculations.currentUnits])
+    const exec = previewOrderSide === 'SELL' ? bid : ask
+    if (exec <= 0) return 0
+    return sizeCalculations.currentUnits * exec
+  }, [selectedSymbol, sizeCalculations.currentUnits, previewOrderSide, orderType, limitPrice])
 
   // Effective leverage for current order (used to show "active" on user min/max when clamped)
   const effectiveLeverageForCard = useMemo(
@@ -519,19 +658,61 @@ export function RightTradingPanel() {
     ((meData.minLeverage != null && effectiveLeverageForCard === meData.minLeverage) ||
       (meData.maxLeverage != null && effectiveLeverageForCard === meData.maxLeverage))
 
-  const estMarginDollars = (() => {
+  const parsedServerMarginUsd = useMemo(() => {
     const s = serverMarginEstimate?.requiredMargin
-    if (s != null && s !== '') {
-      const n = parseFloat(s)
-      if (Number.isFinite(n)) return n
-    }
-    return parseFloat(costBreakdown.margin) || 0
+    if (s == null || s === '') return null
+    const n = parseFloat(s)
+    return Number.isFinite(n) ? n : null
+  }, [serverMarginEstimate?.requiredMargin])
+
+  const fallbackMarginUsd = useMemo(() => {
+    if (!selectedSymbol) return null
+    const limitPx =
+      orderType === 'limit' && limitPrice.trim() !== '' ? parseFloat(limitPrice) : Number.NaN
+    const limitExecutionPrice = Number.isFinite(limitPx) && limitPx > 0 ? limitPx : null
+    return clientMarketFallbackMarginUsdOrNull({
+      bid: selectedSymbol.numericPrice || 0,
+      ask: selectedSymbol.numericPrice2 || selectedSymbol.numericPrice || 0,
+      side: previewOrderSide,
+      baseUnits: sizeCalculations.currentUnits,
+      tiers: symbolLeverage?.tiers,
+      userMin: meData?.minLeverage,
+      userMax: meData?.maxLeverage,
+      orderType: orderType === 'limit' ? 'LIMIT' : 'MARKET',
+      limitExecutionPrice,
+    })
+  }, [
+    selectedSymbol,
+    previewOrderSide,
+    sizeCalculations.currentUnits,
+    symbolLeverage?.tiers,
+    meData?.minLeverage,
+    meData?.maxLeverage,
+    orderType,
+    limitPrice,
+  ])
+
+  /** Resolved margin: server estimate when valid, else strict client fallback (no 2% guess). */
+  const estMarginDollars: number | null =
+    parsedServerMarginUsd != null ? parsedServerMarginUsd : fallbackMarginUsd
+
+  const effectiveLeverageDisplay: string = (() => {
+    if (isMarginEstimateError) return '—'
+    const raw = serverMarginEstimate?.effectiveLeverage
+    if (raw == null) return '—'
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return '—'
+    return Number.isInteger(n) ? `${n}×` : `${n.toFixed(2)}×`
   })()
 
+  const marginCalcUnavailable = canEstimateServerMargin && estMarginDollars == null
+
   // Block Buy/Sell when estimated margin exceeds free margin (server also enforces)
-  const insufficientFreeMargin = estMarginDollars > (accountSummary?.freeMargin ?? 0)
+  const insufficientFreeMargin =
+    estMarginDollars != null && estMarginDollars > (accountSummary?.freeMargin ?? 0)
   const minRequiredMarginDollars = MIN_EST_MARGIN_DOLLARS
-  const belowMinRequiredMargin = estMarginDollars > 0 && estMarginDollars < minRequiredMarginDollars
+  const belowMinRequiredMargin =
+    estMarginDollars != null && estMarginDollars > 0 && estMarginDollars < minRequiredMarginDollars
 
   // Format live price for limit price placeholder
   const livePricePlaceholder = useMemo(() => {
@@ -573,6 +754,7 @@ export function RightTradingPanel() {
   }, [selectedSymbol, currency])
 
   const handleMaxSize = () => {
+    setSliderPct(null)
     if (!selectedSymbol || !selectedSymbol.numericPrice) {
       toast.error('Please select a symbol')
       return
@@ -865,11 +1047,17 @@ export function RightTradingPanel() {
       return
     }
 
-    if (insufficientFreeMargin) {
-      const estMargin = estMarginDollars
+    if (canEstimateServerMargin && estMarginDollars == null) {
+      toast.error(
+        'Margin cannot be calculated — tier configuration unavailable or price data missing. Check Admin leverage profiles for this symbol.'
+      )
+      return
+    }
+
+    if (insufficientFreeMargin && estMarginDollars != null) {
       const freeMargin = accountSummary?.freeMargin ?? 0
       toast.error(
-        `Insufficient funds: required margin $${estMargin.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
+        `Insufficient funds: required margin $${estMarginDollars.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
       )
       return
     }
@@ -964,17 +1152,19 @@ export function RightTradingPanel() {
   }
 
   const handleBuy = () => {
-    handlePlaceOrder('BUY')
+    setPreviewOrderSide('BUY')
+    void handlePlaceOrder('BUY')
   }
 
   const handleSell = () => {
-    handlePlaceOrder('SELL')
+    setPreviewOrderSide('SELL')
+    void handlePlaceOrder('SELL')
   }
 
   return (
-    <div className="h-full min-h-0 overflow-hidden bg-gradient-to-b from-[#0f172a] to-[#0b1220] flex flex-col border-l border-white/5">
+    <div className="h-full min-h-0 overflow-hidden bg-gradient-to-b from-slate-100 to-slate-50 dark:from-[#0f172a] dark:to-[#0b1220] flex flex-col border-l border-slate-200 dark:border-white/5">
       {/* Header */}
-      <div className="shrink-0 h-12 border-b border-white/5 flex items-center justify-between px-4 bg-gradient-to-r from-white/[0.02] to-transparent">
+      <div className="shrink-0 h-12 border-b border-slate-200 dark:border-white/5 flex items-center justify-between px-4 bg-gradient-to-r from-slate-100/70 dark:from-white/[0.02] to-transparent">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-bold text-text tracking-tight">Trading Panel</h2>
           <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
@@ -984,13 +1174,13 @@ export function RightTradingPanel() {
           className="p-1.5 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           title="Close Panel"
         >
-          <X className="h-4 w-4 text-muted" />
+          <X className="h-4 w-4 text-slate-600 dark:text-muted" />
         </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {/* Order Ticket */}
-        <div className="p-4 border-b border-white/5">
+        <div className="p-4 border-b border-slate-200 dark:border-white/5">
           <div className="flex items-center gap-2 mb-4">
             <div className="h-1 w-1 rounded-full bg-accent"></div>
             <div className="text-xs font-bold text-text uppercase tracking-wider">Order Ticket</div>
@@ -998,32 +1188,32 @@ export function RightTradingPanel() {
 
           {/* Symbol */}
           <div className="mb-4 relative" ref={symbolDropdownRef}>
-            <label className="text-xs font-semibold text-muted mb-2 block uppercase tracking-wider">Symbol</label>
+            <label className="text-xs font-semibold text-slate-600 dark:text-muted mb-2 block uppercase tracking-wider">Symbol</label>
             <button
               type="button"
               onClick={() => setSymbolDropdownOpen((o) => !o)}
               className={cn(
                 'w-full rounded-lg bg-surface-2 border px-3 py-2.5 text-sm font-medium text-text focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200 hover:border-accent/30 flex items-center justify-between gap-2',
-                symbolDropdownOpen ? 'border-accent/50' : 'border-white/5'
+                symbolDropdownOpen ? 'border-accent/50' : 'border-slate-200 dark:border-white/5'
               )}
             >
               <span className="truncate">{selectedSymbol?.code || 'Select symbol'}</span>
-              <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted transition-transform', symbolDropdownOpen && 'rotate-180')} />
+              <ChevronDown className={cn('h-4 w-4 shrink-0 text-slate-600 dark:text-muted transition-transform', symbolDropdownOpen && 'rotate-180')} />
             </button>
             {symbolDropdownOpen && (
               <div
-                className="absolute left-0 right-0 top-full mt-1 z-50 rounded-lg bg-surface-2 border border-white/10 shadow-xl shadow-black/40 overflow-hidden flex flex-col"
+                className="absolute left-0 right-0 top-full mt-1 z-50 rounded-lg bg-surface-2 border border-slate-300 dark:border-white/10 shadow-xl shadow-slate-400/20 dark:shadow-black/40 overflow-hidden flex flex-col"
                 style={{ maxHeight: 'min(60vh, 320px)' }}
               >
-                <div className="shrink-0 p-2 border-b border-white/5">
+                <div className="shrink-0 p-2 border-b border-slate-200 dark:border-white/5">
                   <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-600 dark:text-muted pointer-events-none" />
                     <Input
                       placeholder="Search symbols..."
                       value={symbolSearchQuery}
                       onChange={(e) => setSymbolSearchQuery(e.target.value)}
                       className={cn(
-                        'pl-8 h-9 text-sm bg-white/5 border-white/10 text-text placeholder:text-muted',
+                        'pl-8 h-9 text-sm bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 text-text placeholder:text-slate-500 dark:placeholder:text-muted',
                         'focus:border-accent/50 focus:ring-1 focus:ring-accent/20'
                       )}
                       autoFocus
@@ -1032,7 +1222,7 @@ export function RightTradingPanel() {
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   {filteredSymbolsForDropdown.length === 0 ? (
-                    <div className="px-3 py-4 text-center text-muted text-sm">No symbols match</div>
+                    <div className="px-3 py-4 text-center text-slate-600 dark:text-muted text-sm">No symbols match</div>
                   ) : (
                     filteredSymbolsForDropdown.map((symbol) => (
                       <button
@@ -1047,7 +1237,7 @@ export function RightTradingPanel() {
                           'w-full px-3 py-2.5 text-left text-sm font-medium flex items-center justify-between gap-2 transition-colors',
                           selectedSymbol?.id === symbol.id
                             ? 'bg-accent/15 text-accent'
-                            : 'text-text hover:bg-white/5'
+                            : 'text-text hover:bg-slate-100 dark:hover:bg-white/5'
                         )}
                       >
                         <span className="truncate">{symbol.code}</span>
@@ -1062,29 +1252,29 @@ export function RightTradingPanel() {
 
           {/* Live Quote - Enhanced Professional Design */}
           {selectedSymbol && (
-            <div className="mb-4 p-4 rounded-xl bg-gradient-to-br from-surface-2/80 to-surface-2/40 border border-white/5 shadow-lg shadow-black/20 relative overflow-hidden">
+            <div className="mb-4 p-4 rounded-xl bg-gradient-to-br from-slate-100 to-white border border-slate-200 shadow-sm dark:from-surface-2/80 dark:to-surface-2/40 dark:border-white/5 dark:shadow-lg dark:shadow-black/20 relative overflow-hidden">
               {/* Live indicator */}
               <div className="absolute top-2 right-2 flex items-center gap-1.5">
                 <Activity className="h-3 w-3 text-success animate-pulse" />
                 <span className="text-[10px] font-semibold text-success uppercase tracking-wider">Live</span>
               </div>
               
-              <div className="text-[10px] font-bold text-muted uppercase tracking-widest mb-3">Live Quote</div>
+              <div className="text-[10px] font-bold text-slate-600 dark:text-muted uppercase tracking-widest mb-3">Live Quote</div>
               
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <div className="text-[10px] text-muted/70 uppercase tracking-wider">Bid</div>
+                  <div className="text-[10px] text-slate-600/90 dark:text-muted/70 uppercase tracking-wider">Bid</div>
                   {selectedSymbol.numericPrice > 0 ? (
                     <SinglePriceDisplay
                       price={selectedSymbol.numericPrice}
                       formatted={liveQuoteBidFormatted(selectedSymbol)}
                     />
                   ) : (
-                    <div className="text-lg font-bold text-text-muted">—</div>
+                    <div className="text-lg font-bold text-slate-500 dark:text-text-muted">—</div>
                   )}
                 </div>
                 <div className="space-y-1.5 text-right">
-                  <div className="text-[10px] text-muted/70 uppercase tracking-wider">Ask</div>
+                  <div className="text-[10px] text-slate-600/90 dark:text-muted/70 uppercase tracking-wider">Ask</div>
                   {selectedSymbol.numericPrice2 > 0 ? (
                     <div className="flex justify-end">
                       <SinglePriceDisplay
@@ -1093,16 +1283,16 @@ export function RightTradingPanel() {
                       />
                     </div>
                   ) : (
-                    <div className="text-lg font-bold text-text-muted">—</div>
+                    <div className="text-lg font-bold text-slate-500 dark:text-text-muted">—</div>
                   )}
                 </div>
               </div>
               
               {/* Spread indicator */}
               {selectedSymbol.numericPrice > 0 && selectedSymbol.numericPrice2 > 0 && (
-                <div className="mt-3 pt-3 border-t border-white/5">
+                <div className="mt-3 pt-3 border-t border-slate-200 dark:border-white/5">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-muted/70">Spread</span>
+                    <span className="text-[10px] text-slate-600/90 dark:text-muted/70">Spread</span>
                     <span className="text-xs font-semibold text-text">
                       {liveQuoteSpreadFormatted(selectedSymbol)}
                     </span>
@@ -1114,7 +1304,7 @@ export function RightTradingPanel() {
 
           {/* Order Type */}
           <div className="mb-4">
-            <label className="text-xs font-semibold text-muted mb-2 block uppercase tracking-wider">Order Type</label>
+            <label className="text-xs font-semibold text-slate-600 dark:text-muted mb-2 block uppercase tracking-wider">Order Type</label>
             <Segmented
               options={[
                 { value: 'market', label: 'Market' },
@@ -1129,7 +1319,7 @@ export function RightTradingPanel() {
           {/* Limit Price Input */}
           {orderType === 'limit' && (
             <div className="mb-3">
-              <label className="text-xs text-muted mb-1 block">Limit Price</label>
+              <label className="text-xs text-slate-600 dark:text-muted mb-1 block">Limit Price</label>
               <Input
                 type="number"
                 step="0.01"
@@ -1144,7 +1334,7 @@ export function RightTradingPanel() {
           {/* Size Mode Selector - hidden when only Units is shown */}
           {!SHOW_ONLY_UNITS_SIZE_MODE && (
           <div className="mb-3">
-            <label className="text-xs font-semibold text-muted uppercase tracking-wider mb-2 block">Size Mode</label>
+            <label className="text-xs font-semibold text-slate-600 dark:text-muted uppercase tracking-wider mb-2 block">Size Mode</label>
             <Segmented
               options={[
                 { value: 'units', label: 'Units' },
@@ -1161,7 +1351,7 @@ export function RightTradingPanel() {
           {/* Size Input - Conditional based on mode */}
           <div className="mb-4">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-muted uppercase tracking-wider">
+              <label className="text-xs font-semibold text-slate-600 dark:text-muted uppercase tracking-wider">
                 {SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units' ? 'Size' : sizeMode === 'lots' ? 'Lot Size' : 'Pip Position'}
               </label>
               {(SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units') && (
@@ -1183,14 +1373,17 @@ export function RightTradingPanel() {
                     type="number"
                     step="0.000001"
                     value={size}
-                    onChange={(e) => setSize(e.target.value)}
+                    onChange={(e) => {
+                      setSliderPct(null)
+                      setSize(e.target.value)
+                    }}
                     placeholder={orderType === 'market' ? marketSizePlaceholder : 'Enter size'}
                     className="flex-1"
                   />
                   <select
                     value={currency}
                     onChange={(e) => handleCurrencyChange(e.target.value)}
-                    className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
+                    className="rounded-lg bg-surface-2 border border-slate-200 dark:border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
                     disabled={!selectedSymbol}
                   >
                     {selectedSymbol ? (
@@ -1203,7 +1396,7 @@ export function RightTradingPanel() {
                     )}
                   </select>
                 </div>
-                <div className="text-xs text-muted mt-1">
+                <div className="text-xs text-slate-600 dark:text-muted mt-1">
                   {selectedSymbol && currency ? (
                     currency === selectedSymbol.baseCurrency ? (
                       <>≈ {costBreakdown.quoteValue} {selectedSymbol.quoteCurrency}</>
@@ -1213,6 +1406,63 @@ export function RightTradingPanel() {
                   ) : (
                     <>≈ 0.00 USD</>
                   )}
+                </div>
+
+                {/* Free Margin % Slider — allocates % of free margin; updates size (base or quote per unit selector). */}
+                <div className={cn('mt-3 space-y-2', isSliderDisabled && 'pointer-events-none opacity-50')}>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600/90 dark:text-muted/80">Free Margin %</span>
+                    <span className="font-semibold text-accent">
+                      {sliderPct == null ? '—' : `${Math.round(sliderPct * 100)}%`}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={100}
+                    step={1}
+                    value={sliderPct == null ? 1 : Math.round(sliderPct * 100)}
+                    onChange={handleFreeMarginSliderChange}
+                    disabled={isSliderDisabled}
+                    className={cn(
+                      // h-6 gives vertical room so the thumb can sit centered on the track (h-2 alone clips/misaligns the thumb).
+                      'h-6 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed',
+                      '[&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-slate-300 dark:[&::-webkit-slider-runnable-track]:bg-white/10',
+                      '[&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-0 [&::-webkit-slider-thumb]:bg-emerald-500 [&::-webkit-slider-thumb]:shadow-none',
+                      '[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-slate-300 dark:[&::-moz-range-track]:bg-white/10',
+                      '[&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:box-border [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-emerald-500',
+                      isSliderDisabled && 'pointer-events-none opacity-50'
+                    )}
+                    list={freeMarginTicksListId}
+                    aria-label="Allocate percent of free margin to order size"
+                  />
+                  <datalist id={freeMarginTicksListId}>
+                    <option value="1" />
+                    <option value="25" />
+                    <option value="50" />
+                    <option value="75" />
+                    <option value="100" />
+                  </datalist>
+                  <div className="relative mx-0.5 h-4 text-[10px] text-slate-600/70 dark:text-muted/60">
+                    {[1, 25, 50, 75, 100].map((v) => {
+                      const pctAlong = ((v - 1) / 99) * 100
+                      const transform =
+                        v === 1 ? 'translateX(0)' : v === 100 ? 'translateX(-100%)' : 'translateX(-50%)'
+                      return (
+                        <span
+                          key={v}
+                          className="absolute top-0 whitespace-nowrap"
+                          style={{ left: `${pctAlong}%`, transform }}
+                        >
+                          {v}%
+                        </span>
+                      )
+                    })}
+                  </div>
+                  <div className="flex items-center justify-between text-xs pt-1">
+                    <span className="text-slate-600/90 dark:text-muted/80">Leverage</span>
+                    <span className="font-semibold text-accent">{effectiveLeverageDisplay}</span>
+                  </div>
                 </div>
               </>
             )}
@@ -1229,11 +1479,11 @@ export function RightTradingPanel() {
                     placeholder="0.5"
                     className="flex-1"
                   />
-                  <div className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text">
+                  <div className="rounded-lg bg-surface-2 border border-slate-200 dark:border-white/5 px-3 py-2 text-sm text-text">
                     Lots
                   </div>
                 </div>
-                <div className="text-xs text-muted mt-1">
+                <div className="text-xs text-slate-600 dark:text-muted mt-1">
                   {sizeCalculations.currentUnits > 0 && (
                     <>
                       {formatUnits(sizeCalculations.currentUnits, getSymbolForCalculations() || {} as AdminSymbol)} units
@@ -1245,7 +1495,7 @@ export function RightTradingPanel() {
                     </span>
                   )}
                   {getSymbolForCalculations() && (
-                    <span className="ml-2 text-muted/70">
+                    <span className="ml-2 text-slate-600/85 dark:text-muted/70">
                       (Min: {getSymbolForCalculations()?.lotMin || 0.01}, Max: {getSymbolForCalculations()?.lotMax || 100})
                     </span>
                   )}
@@ -1268,14 +1518,14 @@ export function RightTradingPanel() {
                   <select
                     value={pipPositionCurrency}
                     onChange={(e) => setPipPositionCurrency(e.target.value)}
-                    className="rounded-lg bg-surface-2 border border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
+                    className="rounded-lg bg-surface-2 border border-slate-200 dark:border-white/5 px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20 focus:ring-offset-0 transition-all duration-200"
                   >
                     <option value="USD">USD</option>
                     <option value="EUR">EUR</option>
                     <option value="GBP">GBP</option>
                   </select>
                 </div>
-                <div className="text-xs text-muted mt-1">
+                <div className="text-xs text-slate-600 dark:text-muted mt-1">
                   {sizeCalculations.currentLotSize > 0 && (
                     <>
                       {formatLotSize(sizeCalculations.currentLotSize, getSymbolForCalculations() || {} as AdminSymbol)} lots
@@ -1287,7 +1537,7 @@ export function RightTradingPanel() {
                     </span>
                   )}
                   {sizeCalculations.pipValuePerLot > 0 && (
-                    <span className="ml-2 text-muted/70">
+                    <span className="ml-2 text-slate-600/85 dark:text-muted/70">
                       (Pip value: ${sizeCalculations.pipValuePerLot.toFixed(2)}/lot)
                     </span>
                   )}
@@ -1303,20 +1553,20 @@ export function RightTradingPanel() {
                 checked={useSlTp}
                 onChange={(e) => setUseSlTp(e.target.checked)}
               />
-              <span className="text-xs text-muted ml-2">Use Stop Loss / Take Profit</span>
+              <span className="text-xs text-slate-600 dark:text-muted ml-2">Use Stop Loss / Take Profit</span>
             </div>
             {useSlTp && (
               <div className="space-y-3 mt-2">
                 {/* Side for SL/TP calculation (entry price = ask for LONG, bid for SHORT) */}
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-muted">For:</span>
-                  <div className="flex rounded-lg overflow-hidden border border-white/10">
+                  <span className="text-[10px] text-slate-600 dark:text-muted">For:</span>
+                  <div className="flex rounded-lg overflow-hidden border border-slate-300 dark:border-white/10">
                     <button
                       type="button"
                       onClick={() => setSlTpSide('LONG')}
                       className={cn(
                         'px-2 py-1 text-[10px] font-medium transition-colors',
-                        slTpSide === 'LONG' ? 'bg-accent text-white' : 'bg-surface-2 text-muted hover:text-text'
+                        slTpSide === 'LONG' ? 'bg-accent text-white' : 'bg-slate-100 text-slate-600 hover:text-slate-900 dark:bg-surface-2 dark:text-muted dark:hover:text-text'
                       )}
                     >
                       Buy
@@ -1326,7 +1576,7 @@ export function RightTradingPanel() {
                       onClick={() => setSlTpSide('SHORT')}
                       className={cn(
                         'px-2 py-1 text-[10px] font-medium transition-colors',
-                        slTpSide === 'SHORT' ? 'bg-accent text-white' : 'bg-surface-2 text-muted hover:text-text'
+                        slTpSide === 'SHORT' ? 'bg-accent text-white' : 'bg-slate-100 text-slate-600 hover:text-slate-900 dark:bg-surface-2 dark:text-muted dark:hover:text-text'
                       )}
                     >
                       Sell
@@ -1335,10 +1585,10 @@ export function RightTradingPanel() {
                 </div>
                 {/* Stop Loss: Price ($) and Amount ($) */}
                 <div className="space-y-1.5">
-                  <label className="text-[10px] text-muted font-semibold block">Stop Loss</label>
+                  <label className="text-[10px] text-slate-600 dark:text-muted font-semibold block">Stop Loss</label>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-[10px] text-muted/80 mb-0.5 block">Price ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Price ($)</label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1365,7 +1615,7 @@ export function RightTradingPanel() {
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] text-muted/80 mb-0.5 block">Amount ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Amount ($)</label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1395,10 +1645,10 @@ export function RightTradingPanel() {
                 </div>
                 {/* Take Profit: Price ($) and Amount ($) */}
                 <div className="space-y-1.5">
-                  <label className="text-[10px] text-muted font-semibold block">Take Profit</label>
+                  <label className="text-[10px] text-slate-600 dark:text-muted font-semibold block">Take Profit</label>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-[10px] text-muted/80 mb-0.5 block">Price ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Price ($)</label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1425,7 +1675,7 @@ export function RightTradingPanel() {
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] text-muted/80 mb-0.5 block">Amount ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Amount ($)</label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1458,28 +1708,28 @@ export function RightTradingPanel() {
           </div>
 
           {/* Cost Breakdown - Enhanced */}
-          <div className="mb-4 p-4 rounded-xl bg-gradient-to-br from-surface-2/60 to-surface-2/30 border border-white/5 shadow-md">
-            <div className="text-[10px] font-bold text-muted uppercase tracking-widest mb-3">Cost Breakdown</div>
+          <div className="mb-4 p-4 rounded-xl bg-gradient-to-br from-slate-100 to-slate-50 border border-slate-200 shadow-sm dark:from-surface-2/60 dark:to-surface-2/30 dark:border-white/5 dark:shadow-md">
+            <div className="text-[10px] font-bold text-slate-600 dark:text-muted uppercase tracking-widest mb-3">Cost Breakdown</div>
             <div className="space-y-2.5 text-xs">
-              <div className="flex justify-between items-center py-1 border-b border-white/5">
-                <span className="text-muted/80">Spread</span>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200 dark:border-white/5">
+                <span className="text-slate-600/90 dark:text-muted/80">Spread</span>
                 <span className="font-semibold text-text">{costBreakdown.spread}</span>
               </div>
-              <div className="flex justify-between items-center py-1 border-b border-white/5">
-                <span className="text-muted/80">Fees</span>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200 dark:border-white/5">
+                <span className="text-slate-600/90 dark:text-muted/80">Fees</span>
                 <span className="font-semibold text-text">${costBreakdown.fees}</span>
               </div>
-              <div className="flex justify-between items-center py-1 border-b border-white/5">
-                <span className="text-muted/80">Est. Margin</span>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200 dark:border-white/5">
+                <span className="text-slate-600/90 dark:text-muted/80">Est. Margin</span>
                 <span className="font-semibold text-accent inline-flex items-center gap-1.5">
-                  {isEstimatingServerMargin && canEstimateServerMargin && !serverMarginEstimate ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted shrink-0" />
+                  {isEstimatingServerMargin && canEstimateServerMargin && estMarginDollars == null ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-600 dark:text-muted shrink-0" />
                   ) : null}
-                  ${estMarginDollars.toFixed(2)}
+                  {estMarginDollars == null ? '—' : `$${estMarginDollars.toFixed(2)}`}
                 </span>
               </div>
               <div className="flex justify-between items-center py-1">
-                <span className="text-muted/80">Est. Liquidation</span>
+                <span className="text-slate-600/90 dark:text-muted/80">Est. Liquidation</span>
                 <span className="font-semibold text-text">{costBreakdown.liquidation}</span>
               </div>
             </div>
@@ -1498,7 +1748,22 @@ export function RightTradingPanel() {
               variant="success" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-success/20 hover:shadow-success/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleBuy}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || belowMinRequiredMargin || !canPlaceOrder}
+              onMouseEnter={() => setPreviewOrderSide('BUY')}
+              onFocus={() => setPreviewOrderSide('BUY')}
+              title={
+                marginCalcUnavailable
+                  ? 'Margin cannot be calculated — tier configuration unavailable.'
+                  : undefined
+              }
+              disabled={
+                isSubmitting ||
+                !selectedSymbol ||
+                !wsConnected ||
+                marginCalcUnavailable ||
+                insufficientFreeMargin ||
+                belowMinRequiredMargin ||
+                !canPlaceOrder
+              }
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (
@@ -1513,7 +1778,22 @@ export function RightTradingPanel() {
               variant="danger" 
               className="w-full py-3.5 font-bold text-sm shadow-lg shadow-danger/20 hover:shadow-danger/30 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" 
               onClick={handleSell}
-              disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || belowMinRequiredMargin || !canPlaceOrder}
+              onMouseEnter={() => setPreviewOrderSide('SELL')}
+              onFocus={() => setPreviewOrderSide('SELL')}
+              title={
+                marginCalcUnavailable
+                  ? 'Margin cannot be calculated — tier configuration unavailable.'
+                  : undefined
+              }
+              disabled={
+                isSubmitting ||
+                !selectedSymbol ||
+                !wsConnected ||
+                marginCalcUnavailable ||
+                insufficientFreeMargin ||
+                belowMinRequiredMargin ||
+                !canPlaceOrder
+              }
             >
               <div className="flex items-center justify-center gap-2">
                 {isSubmitting ? (
@@ -1525,9 +1805,15 @@ export function RightTradingPanel() {
               </div>
             </Button>
           </div>
-          {insufficientFreeMargin && estMarginDollars > 0 && (
+          {insufficientFreeMargin && estMarginDollars != null && estMarginDollars > 0 && (
             <div className="mt-2 text-xs text-danger text-center">
               Insufficient free margin (Est. margin &gt; Free margin)
+            </div>
+          )}
+          {marginCalcUnavailable && (
+            <div className="mt-2 text-xs text-warning text-center px-2">
+              Margin cannot be calculated — tier configuration unavailable or price data missing. Check Admin leverage
+              profiles for this symbol.
             </div>
           )}
           {belowMinRequiredMargin && (
@@ -1536,7 +1822,7 @@ export function RightTradingPanel() {
             </div>
           )}
           {!wsConnected && (wsState === 'connecting' || wsState === 'connected') && (
-            <div className="mt-2 text-xs text-muted text-center">
+            <div className="mt-2 text-xs text-slate-600 dark:text-muted text-center">
               Connecting to live updates...
             </div>
           )}
@@ -1548,10 +1834,10 @@ export function RightTradingPanel() {
         </div>
 
         {/* Leverage, Symbol Details, User - collapsibles */}
-        <div className="border-b border-white/5">
+        <div className="border-b border-slate-200 dark:border-white/5">
           {/* Leverage - collapsible (first); hidden when user's group has hide_leverage_in_terminal */}
           {!meData?.hideLeverageInTerminal && (
-          <div className="border-b border-white/5">
+          <div className="border-b border-slate-200 dark:border-white/5">
             <button
               onClick={() => setLeverageDetailsOpen(!leverageDetailsOpen)}
               className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
@@ -1561,9 +1847,9 @@ export function RightTradingPanel() {
                 <span className="text-xs font-bold text-text uppercase tracking-wider">Leverage</span>
               </div>
               {leverageDetailsOpen ? (
-                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+                <ChevronUp className="h-4 w-4 text-slate-600 dark:text-muted group-hover:text-slate-900 dark:group-hover:text-text transition-colors" />
               ) : (
-                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+                <ChevronDown className="h-4 w-4 text-slate-600 dark:text-muted group-hover:text-slate-900 dark:group-hover:text-text transition-colors" />
               )}
             </button>
             {leverageDetailsOpen && (
@@ -1571,13 +1857,13 @@ export function RightTradingPanel() {
                 {meData ? (
                   <>
                     {selectedSymbol && (
-                      <div className="flex justify-between items-center py-2 border-b border-white/5">
-                        <span className="text-muted/80">Symbol</span>
+                      <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                        <span className="text-slate-600/90 dark:text-muted/80">Symbol</span>
                         <span className="font-mono font-medium text-text">{selectedSymbol.code}</span>
                       </div>
                     )}
-                    <div className="flex justify-between items-center py-2 border-b border-white/5">
-                      <span className="text-muted/80">Leverage profile{selectedSymbol ? ` (${selectedSymbol.code})` : ''}</span>
+                    <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                      <span className="text-slate-600/90 dark:text-muted/80">Leverage profile{selectedSymbol ? ` (${selectedSymbol.code})` : ''}</span>
                       <span className="font-medium text-text">
                         {selectedSymbol
                           ? symbolLeverageLoading
@@ -1597,7 +1883,7 @@ export function RightTradingPanel() {
                             aria-hidden
                           />
                         )}
-                        <span className={isUserLimitActive ? 'text-text' : 'text-muted/80'}>Your min – max</span>
+                        <span className={isUserLimitActive ? 'text-text' : 'text-slate-600/90 dark:text-muted/80'}>Your min – max</span>
                       </span>
                       <span className="font-semibold text-accent">
                         {meData.minLeverage != null && meData.maxLeverage != null
@@ -1610,13 +1896,13 @@ export function RightTradingPanel() {
                       </span>
                     </div>
                     {(meData.minLeverage == null && meData.maxLeverage == null) && (
-                      <p className="text-[10px] text-muted/80 pt-1">
+                      <p className="text-[10px] text-slate-600/90 dark:text-muted/80 pt-1">
                         Set in Admin → Users (leverage column)
                       </p>
                     )}
                     {selectedSymbol && symbolLeverage?.tiers && symbolLeverage.tiers.length > 0 && (
-                      <div className="pt-2 border-t border-white/5 space-y-1.5">
-                        <span className="text-muted/80 text-[10px] uppercase tracking-wider block mb-1.5">Profile tiers</span>
+                      <div className="pt-2 border-t border-slate-200 dark:border-white/5 space-y-1.5">
+                        <span className="text-slate-600/90 dark:text-muted/80 text-[10px] uppercase tracking-wider block mb-1.5">Profile tiers</span>
                         <ul className="space-y-1">
                           {symbolLeverage.tiers.map((tier, idx) => {
                             const from = parseFloat(tier.notional_from) || 0
@@ -1632,7 +1918,7 @@ export function RightTradingPanel() {
                                       aria-hidden
                                     />
                                   )}
-                                  <span className={isActive ? 'text-text' : 'text-muted/80 truncate'}>
+                                  <span className={isActive ? 'text-text' : 'text-slate-600/90 dark:text-muted/80 truncate'}>
                                     {formatTierNotional(tier.notional_from)} – {tier.notional_to != null ? formatTierNotional(tier.notional_to) : '∞'} USD
                                   </span>
                                 </span>
@@ -1645,7 +1931,7 @@ export function RightTradingPanel() {
                     )}
                   </>
                 ) : (
-                  <div className="flex items-center gap-2 text-muted py-2">
+                  <div className="flex items-center gap-2 text-slate-600 dark:text-muted py-2">
                     <Loader2 className="h-4 w-4 animate-spin shrink-0" />
                     <span>Loading…</span>
                   </div>
@@ -1656,7 +1942,7 @@ export function RightTradingPanel() {
           )}
 
           {/* Symbol Details - collapsible (second) */}
-          <div className="border-t border-white/5">
+          <div className="border-t border-slate-200 dark:border-white/5">
             <button
               onClick={() => setSymbolDetailsOpen(!symbolDetailsOpen)}
               className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
@@ -1666,35 +1952,35 @@ export function RightTradingPanel() {
                 <span className="text-xs font-bold text-text uppercase tracking-wider">Symbol Details</span>
               </div>
               {symbolDetailsOpen ? (
-                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+                <ChevronUp className="h-4 w-4 text-slate-600 dark:text-muted group-hover:text-slate-900 dark:group-hover:text-text transition-colors" />
               ) : (
-                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+                <ChevronDown className="h-4 w-4 text-slate-600 dark:text-muted group-hover:text-slate-900 dark:group-hover:text-text transition-colors" />
               )}
             </button>
             {symbolDetailsOpen && selectedSymbol && (
               <div className="px-4 pb-4 space-y-3 text-xs bg-surface-2/20">
                 {selectedSymbol.providerDescription && (
-                  <div className="py-2 border-b border-white/5">
-                    <div className="text-muted/80 mb-1">Description</div>
+                  <div className="py-2 border-b border-slate-200 dark:border-white/5">
+                    <div className="text-slate-600/90 dark:text-muted/80 mb-1">Description</div>
                     <div className="font-medium text-text leading-relaxed">
                       {selectedSymbol.providerDescription}
                     </div>
                   </div>
                 )}
                 {selectedSymbol.mmdpsCategory && (
-                  <div className="flex justify-between items-center py-2 border-b border-white/5">
-                    <span className="text-muted/80">Category</span>
+                  <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                    <span className="text-slate-600/90 dark:text-muted/80">Category</span>
                     <span className="font-semibold text-text">{selectedSymbol.mmdpsCategory}</span>
                   </div>
                 )}
-                <div className="flex justify-between items-center py-2 border-b border-white/5">
-                  <span className="text-muted/80">Price</span>
+                <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                  <span className="text-slate-600/90 dark:text-muted/80">Price</span>
                   <span className="font-semibold text-text">
                     {selectedSymbol.numericPrice > 0 ? liveQuoteBidFormatted(selectedSymbol) : '—'}
                   </span>
                 </div>
-                <div className="flex justify-between items-center py-2 border-b border-white/5">
-                  <span className="text-muted/80">24h Change</span>
+                <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                  <span className="text-slate-600/90 dark:text-muted/80">24h Change</span>
                   <div className={cn(
                     "flex items-center gap-1.5 font-semibold",
                     selectedSymbol.change24h >= 0 ? 'text-success' : 'text-danger'
@@ -1708,7 +1994,7 @@ export function RightTradingPanel() {
                   </div>
                 </div>
                 <div className="flex justify-between items-center py-2">
-                  <span className="text-muted/80">24h Volume</span>
+                  <span className="text-slate-600/90 dark:text-muted/80">24h Volume</span>
                   <span className="font-semibold text-text">${(selectedSymbol.volume24h / 1000000).toFixed(2)}M</span>
                 </div>
               </div>
@@ -1716,7 +2002,7 @@ export function RightTradingPanel() {
           </div>
 
           {/* User - collapsible (third) */}
-          <div className="border-t border-white/5">
+          <div className="border-t border-slate-200 dark:border-white/5">
             <button
               onClick={() => setUserDetailsOpen(!userDetailsOpen)}
               className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-surface-2/30 transition-all duration-200 group"
@@ -1726,40 +2012,40 @@ export function RightTradingPanel() {
                 <span className="text-xs font-bold text-text uppercase tracking-wider">User</span>
               </div>
               {userDetailsOpen ? (
-                <ChevronUp className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+                <ChevronUp className="h-4 w-4 text-slate-600 dark:text-muted group-hover:text-slate-900 dark:group-hover:text-text transition-colors" />
               ) : (
-                <ChevronDown className="h-4 w-4 text-muted group-hover:text-text transition-colors" />
+                <ChevronDown className="h-4 w-4 text-slate-600 dark:text-muted group-hover:text-slate-900 dark:group-hover:text-text transition-colors" />
               )}
             </button>
             {userDetailsOpen && (
               <div className="px-4 pb-4 space-y-2.5 text-xs bg-surface-2/20">
                 {meData ? (
                   <>
-                    <div className="flex items-center gap-2 pb-2 border-b border-white/5">
+                    <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/5">
                       <User className="h-4 w-4 text-accent shrink-0" />
                       <span className="font-semibold text-text truncate">{meData.email}</span>
                     </div>
                     {meData.groupName != null && (
-                      <div className="flex justify-between items-center py-2 border-b border-white/5">
-                        <span className="text-muted/80">Group</span>
+                      <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                        <span className="text-slate-600/90 dark:text-muted/80">Group</span>
                         <span className="font-medium text-text">{meData.groupName}</span>
                       </div>
                     )}
                     {meData.priceProfileName != null && (
-                      <div className="flex justify-between items-center py-2 border-b border-white/5">
-                        <span className="text-muted/80">Price stream</span>
+                      <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                        <span className="text-slate-600/90 dark:text-muted/80">Price stream</span>
                         <span className="font-medium text-text">{meData.priceProfileName}</span>
                       </div>
                     )}
                     {meData.leverageProfileName != null && (
-                      <div className="flex justify-between items-center py-2 border-b border-white/5">
-                        <span className="text-muted/80">Leverage profile</span>
+                      <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
+                        <span className="text-slate-600/90 dark:text-muted/80">Leverage profile</span>
                         <span className="font-medium text-text">{meData.leverageProfileName}</span>
                       </div>
                     )}
                     {(meData.minLeverage != null || meData.maxLeverage != null) && (
                       <div className="flex justify-between items-center py-2">
-                        <span className="text-muted/80">Leverage range</span>
+                        <span className="text-slate-600/90 dark:text-muted/80">Leverage range</span>
                         <span className="font-medium text-text">
                           {meData.minLeverage != null && meData.maxLeverage != null
                             ? `${meData.minLeverage}–${meData.maxLeverage}x`
@@ -1771,7 +2057,7 @@ export function RightTradingPanel() {
                     )}
                   </>
                 ) : (
-                  <div className="flex items-center gap-2 text-muted py-2">
+                  <div className="flex items-center gap-2 text-slate-600 dark:text-muted py-2">
                     <Loader2 className="h-4 w-4 animate-spin shrink-0" />
                     <span>Loading user…</span>
                   </div>
@@ -1783,19 +2069,19 @@ export function RightTradingPanel() {
           {/* Promo carousel - from API (fetch once on mount, no polling) */}
           {promoLoading && (
             <div className="p-4">
-              <div className="relative rounded-xl border border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-black/10">
-                <div className="aspect-[400/180] w-full animate-pulse bg-slate-800 rounded-xl" />
+              <div className="relative rounded-xl border border-slate-300 dark:border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-slate-300/20 dark:shadow-black/10">
+                <div className="aspect-[400/180] w-full animate-pulse bg-slate-200 dark:bg-slate-800 rounded-xl" />
               </div>
             </div>
           )}
           {!promoLoading && !promoError && promoSlides.length > 0 && (
             <div className="p-4">
-              <div className="relative rounded-xl border border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-black/10">
+              <div className="relative rounded-xl border border-slate-300 dark:border-white/10 bg-surface-2/60 overflow-hidden shadow-lg shadow-slate-300/20 dark:shadow-black/10">
                 <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 px-2 py-1.5">
-                  <span className="text-[10px] font-bold text-white/70 uppercase tracking-widest">Promoted</span>
+                  <span className="text-[10px] font-bold text-slate-600 dark:text-white/70 uppercase tracking-widest">Promoted</span>
                   <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent">New</span>
                 </div>
-                <div className="relative aspect-[400/180] w-full overflow-hidden bg-slate-800">
+                <div className="relative aspect-[400/180] w-full overflow-hidden bg-slate-200 dark:bg-slate-800">
                   {promoSlides.map((slide, idx) => (
                     <div
                       key={slide.id}
@@ -1812,13 +2098,13 @@ export function RightTradingPanel() {
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
                       <div className="absolute bottom-0 left-0 right-0 p-3 text-left">
-                        <h3 className="text-sm font-bold text-white drop-shadow-sm">{slide.title}</h3>
-                        <p className="text-[11px] text-white/80 mt-0.5">{slide.subtitle ?? ''}</p>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white drop-shadow-sm">{slide.title}</h3>
+                        <p className="text-[11px] text-slate-700 dark:text-white/80 mt-0.5">{slide.subtitle ?? ''}</p>
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="flex items-center justify-between gap-2 px-3 py-2.5 bg-surface-2/40 border-t border-white/5">
+                <div className="flex items-center justify-between gap-2 px-3 py-2.5 bg-surface-2/40 border-t border-slate-200 dark:border-white/5">
                   <div className="flex items-center gap-1.5">
                     {promoSlides.map((_, idx) => (
                       <button
@@ -1828,7 +2114,7 @@ export function RightTradingPanel() {
                         onClick={() => setPromoSlideIndex(idx)}
                         className={cn(
                           'h-1.5 rounded-full transition-all',
-                          idx === promoSlideIndex ? 'w-4 bg-accent' : 'w-1.5 bg-white/30 hover:bg-white/50'
+                          idx === promoSlideIndex ? 'w-4 bg-accent' : 'w-1.5 bg-slate-400/80 dark:bg-white/30 hover:bg-slate-500 dark:hover:bg-white/50'
                         )}
                       />
                     ))}
@@ -1861,17 +2147,17 @@ export function RightTradingPanel() {
       </div>
 
       {/* Footer - status strip */}
-      <div className="shrink-0 border-t border-white/5 px-3 py-3">
-        <div className="rounded-lg bg-surface-2/40 border border-white/5 p-3 space-y-2.5">
+      <div className="shrink-0 border-t border-slate-200 dark:border-white/5 px-3 py-3">
+        <div className="rounded-lg bg-surface-2/40 border border-slate-200 dark:border-white/5 p-3 space-y-2.5">
           <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 text-muted-foreground">
+            <span className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
               <Clock className="h-3.5 w-3.5 shrink-0" />
             </span>
-            <span className="font-mono text-[11px] font-medium tabular-nums text-slate-100">{currentTimeLabel}</span>
+            <span className="font-mono text-[11px] font-medium tabular-nums text-slate-900 dark:text-slate-100">{currentTimeLabel}</span>
           </div>
-          <div className="h-px bg-white/5" />
+          <div className="h-px bg-slate-200 dark:bg-white/5" />
           <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 text-muted-foreground">
+            <span className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
               <Gauge className="h-3.5 w-3.5 shrink-0" />
               <span>Ping</span>
             </span>
@@ -1879,7 +2165,7 @@ export function RightTradingPanel() {
               className={cn(
                 'font-mono text-[11px] font-medium tabular-nums',
                 pingMs == null
-                  ? 'text-muted-foreground'
+                  ? 'text-slate-500 dark:text-slate-400'
                   : pingMs <= 100
                     ? 'text-success'
                     : 'text-danger'

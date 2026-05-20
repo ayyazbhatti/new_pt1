@@ -7,8 +7,8 @@ import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useWebSocketState } from '@/shared/ws/wsHooks'
 import { toast } from '@/shared/components/common'
-import { placeOrder } from '../api/orders.api'
-import { me, getSymbolLeverage, getEffectiveLeverage } from '@/shared/api/auth.api'
+import { placeOrder, estimateOrderMargin, clientMarketFallbackMarginUsdOrNull } from '../api/orders.api'
+import { me, getSymbolLeverage } from '@/shared/api/auth.api'
 
 /**
  * Compact Buy/Sell strip for the Chart tab: size input + Est. Margin + Buy + Sell (MARKET orders).
@@ -29,34 +29,62 @@ export function ChartTradingStrip() {
 
   const [size, setSize] = useState('0.01')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [previewOrderSide, setPreviewOrderSide] = useState<'BUY' | 'SELL'>('BUY')
 
   const canPlaceOrder = tradingAccess !== 'disabled'
   const wsConnected = wsState === 'authenticated'
   const bid = selectedSymbol?.numericPrice ?? 0
   const ask = selectedSymbol?.numericPrice2 ?? bid
-  const refPrice = ask !== bid ? (bid + ask) / 2 : bid
   const sizeNum = parseFloat(size) || 0
-  const quoteValue = sizeNum * refPrice
   const freeMargin = accountSummary?.freeMargin ?? 0
 
-  // Est. Margin: same logic as Trade panel (notional × mid, leverage from tiers)
-  const estMargin = useMemo(() => {
-    if (!selectedSymbol || quoteValue <= 0) return 0
-    const effectiveLeverage = getEffectiveLeverage(
-      quoteValue,
-      symbolLeverage?.tiers ?? null,
-      meData?.minLeverage,
-      meData?.maxLeverage,
-      50
-    )
-    return effectiveLeverage > 0 ? quoteValue / effectiveLeverage : quoteValue * 0.02
-  }, [selectedSymbol, quoteValue, symbolLeverage?.tiers, meData?.minLeverage, meData?.maxLeverage])
+  const canEstimateServerMargin =
+    !!selectedSymbol && Number.isFinite(sizeNum) && sizeNum > 0
 
-  const estMarginFormatted = selectedSymbol && (sizeNum > 0 || estMargin > 0)
-    ? `$${estMargin.toFixed(2)}`
-    : '$0.00'
+  const { data: serverMarginEstimate } = useQuery({
+    queryKey: ['v1', 'orderMarginEstimate', 'chartStrip', selectedSymbol?.code, sizeNum, previewOrderSide],
+    queryFn: () =>
+      estimateOrderMargin({
+        symbol: selectedSymbol!.code,
+        side: previewOrderSide,
+        orderType: 'MARKET',
+        size: String(sizeNum),
+      }),
+    enabled: canEstimateServerMargin,
+    staleTime: 2000,
+  })
 
-  const insufficientFreeMargin = estMargin > 0 && estMargin > freeMargin
+  const parsedServerMarginUsd = useMemo(() => {
+    const s = serverMarginEstimate?.requiredMargin
+    if (s == null || s === '') return null
+    const n = parseFloat(s)
+    return Number.isFinite(n) ? n : null
+  }, [serverMarginEstimate?.requiredMargin])
+
+  const fallbackMarginUsd = useMemo(() => {
+    if (!selectedSymbol) return null
+    return clientMarketFallbackMarginUsdOrNull({
+      bid,
+      ask,
+      side: previewOrderSide,
+      baseUnits: sizeNum,
+      tiers: symbolLeverage?.tiers,
+      userMin: meData?.minLeverage,
+      userMax: meData?.maxLeverage,
+    })
+  }, [selectedSymbol, bid, ask, previewOrderSide, sizeNum, symbolLeverage?.tiers, meData?.minLeverage, meData?.maxLeverage])
+
+  const estMarginUsd: number | null = parsedServerMarginUsd != null ? parsedServerMarginUsd : fallbackMarginUsd
+  const marginCalcUnavailable = canEstimateServerMargin && estMarginUsd == null
+
+  const estMarginFormatted = useMemo(() => {
+    if (!selectedSymbol) return '$0.00'
+    if (sizeNum <= 0) return '$0.00'
+    if (estMarginUsd == null) return '—'
+    return `$${estMarginUsd.toFixed(2)}`
+  }, [selectedSymbol, sizeNum, estMarginUsd])
+
+  const insufficientFreeMargin = estMarginUsd != null && estMarginUsd > freeMargin
 
   const step = 0.01
   const minSize = 0.001
@@ -78,9 +106,15 @@ export function ChartTradingStrip() {
       toast.error('Enter a valid size')
       return
     }
-    if (insufficientFreeMargin) {
+    if (canEstimateServerMargin && estMarginUsd == null) {
       toast.error(
-        `Insufficient funds: required margin $${estMargin.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
+        'Margin cannot be calculated — tier configuration unavailable or price data missing. Check Admin leverage profiles for this symbol.'
+      )
+      return
+    }
+    if (insufficientFreeMargin && estMarginUsd != null) {
+      toast.error(
+        `Insufficient funds: required margin $${estMarginUsd.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
       )
       return
     }
@@ -129,7 +163,7 @@ export function ChartTradingStrip() {
   }
 
   return (
-    <div className="shrink-0 flex flex-col gap-2 px-3 py-2 border-t border-white/5 bg-surface-2/50">
+    <div className="shrink-0 flex flex-col gap-2 px-3 py-2 border-t border-slate-200 dark:border-white/5 bg-surface-2/50">
       <div className="flex items-center gap-2">
         <label className="text-xs text-muted shrink-0 font-medium">Size</label>
         <div className="flex-1 min-w-0 flex items-stretch rounded-md border border-border bg-background overflow-hidden">
@@ -149,7 +183,7 @@ export function ChartTradingStrip() {
               aria-label="Decrease size"
               onClick={() => adjustSize(-step)}
               disabled={!selectedSymbol || sizeNum <= minSize}
-              className="w-9 h-full flex items-center justify-center text-muted hover:text-foreground hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none touch-manipulation"
+              className="w-9 h-full flex items-center justify-center text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/80 dark:hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none touch-manipulation"
             >
               <Minus className="h-3.5 w-3.5" />
             </button>
@@ -158,7 +192,7 @@ export function ChartTradingStrip() {
               aria-label="Increase size"
               onClick={() => adjustSize(step)}
               disabled={!selectedSymbol}
-              className="w-9 h-full flex items-center justify-center text-muted hover:text-foreground hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none touch-manipulation border-l border-border"
+              className="w-9 h-full flex items-center justify-center text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/80 dark:hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none touch-manipulation border-l border-border"
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
@@ -178,8 +212,25 @@ export function ChartTradingStrip() {
           variant="success"
           size="sm"
           className="flex-1 min-w-0 h-11 font-semibold text-sm"
-          onClick={() => handlePlaceOrder('BUY')}
-          disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || !canPlaceOrder}
+          onClick={() => {
+            setPreviewOrderSide('BUY')
+            void handlePlaceOrder('BUY')
+          }}
+          onMouseEnter={() => setPreviewOrderSide('BUY')}
+          onFocus={() => setPreviewOrderSide('BUY')}
+          title={
+            marginCalcUnavailable
+              ? 'Margin cannot be calculated — tier configuration unavailable.'
+              : undefined
+          }
+          disabled={
+            isSubmitting ||
+            !selectedSymbol ||
+            !wsConnected ||
+            marginCalcUnavailable ||
+            insufficientFreeMargin ||
+            !canPlaceOrder
+          }
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <TrendingUp className="h-4 w-4" />}
           <span className="ml-1">Buy</span>
@@ -188,8 +239,25 @@ export function ChartTradingStrip() {
           variant="danger"
           size="sm"
           className="flex-1 min-w-0 h-11 font-semibold text-sm"
-          onClick={() => handlePlaceOrder('SELL')}
-          disabled={isSubmitting || !selectedSymbol || !wsConnected || insufficientFreeMargin || !canPlaceOrder}
+          onClick={() => {
+            setPreviewOrderSide('SELL')
+            void handlePlaceOrder('SELL')
+          }}
+          onMouseEnter={() => setPreviewOrderSide('SELL')}
+          onFocus={() => setPreviewOrderSide('SELL')}
+          title={
+            marginCalcUnavailable
+              ? 'Margin cannot be calculated — tier configuration unavailable.'
+              : undefined
+          }
+          disabled={
+            isSubmitting ||
+            !selectedSymbol ||
+            !wsConnected ||
+            marginCalcUnavailable ||
+            insufficientFreeMargin ||
+            !canPlaceOrder
+          }
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <TrendingDown className="h-4 w-4" />}
           <span className="ml-1">Sell</span>

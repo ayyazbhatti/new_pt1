@@ -18,6 +18,7 @@ import { priceStreamClient } from '@/shared/ws/priceStreamClient'
 import { normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { getOpenPositions, getClosedPositions } from '../api/positions.api'
 import type { Position } from '../api/positions.api'
+import { useThemeStore } from '@/shared/store/themeStore'
 import './chartAskPriceLineOverlay'
 import './chartPositionOpenMarkerOverlay'
 import './chartPositionClosedMarkerOverlay'
@@ -44,8 +45,10 @@ export interface ChartPlaceholderHandle {
   getPictureUrl: (type: 'png' | 'jpeg', includeOverlay?: boolean) => string | null
 }
 
-/** Chart styles aligned with app theme (background from wrapper; grid slightly more visible than panel borders) */
-const APP_THEME_CHART_STYLES = {
+type ChartApi = NonNullable<ReturnType<typeof init>>
+
+/** Dark mode: grid / tooltips tuned for klinecharts `setStyles('dark')` base. */
+const APP_THEME_CHART_STYLES_DARK = {
   grid: {
     show: true,
     horizontal: {
@@ -94,10 +97,84 @@ const APP_THEME_CHART_STYLES = {
   },
 }
 
+/** Light mode: used after `setStyles('light')` so grid and HUD read on pale chrome. */
+const APP_THEME_CHART_STYLES_LIGHT = {
+  grid: {
+    show: true,
+    horizontal: {
+      show: true,
+      size: 0.5,
+      color: 'rgba(15, 23, 42, 0.12)',
+      style: 'dashed',
+      dashedValue: [4, 4],
+    },
+    vertical: {
+      show: true,
+      size: 0.5,
+      color: 'rgba(15, 23, 42, 0.12)',
+      style: 'dashed',
+      dashedValue: [4, 4],
+    },
+  },
+  crosshair: {
+    horizontal: {
+      text: {
+        borderColor: 'rgba(248, 250, 252, 0.96)',
+        backgroundColor: 'rgba(248, 250, 252, 0.96)',
+      },
+    },
+    vertical: {
+      text: {
+        borderColor: 'rgba(248, 250, 252, 0.96)',
+        backgroundColor: 'rgba(248, 250, 252, 0.96)',
+      },
+    },
+  },
+  candle: {
+    tooltip: {
+      title: { show: false },
+      rect: {
+        color: 'rgba(255, 255, 255, 0.96)',
+        borderColor: 'rgba(15, 23, 42, 0.14)',
+      },
+    },
+  },
+  indicator: {
+    tooltip: {
+      title: { color: '#64748b' },
+      legend: { color: '#64748b' },
+    },
+  },
+}
+
+function applyKlineThemeAndSettings(
+  chart: ChartApi,
+  isDark: boolean,
+  chartSettings: ChartSettings,
+  chartType: ChartTypeKey
+) {
+  chart.setStyles(isDark ? 'dark' : 'light')
+  chart.setStyles((isDark ? APP_THEME_CHART_STYLES_DARK : APP_THEME_CHART_STYLES_LIGHT) as Record<string, unknown>)
+  chart.setStyles({
+    grid: { show: chartSettings.grid },
+    crosshair: { show: chartSettings.crosshair },
+    candle: {
+      type: chartTypeToCandleType(chartType),
+      tooltip: { showRule: chartSettings.tooltipShowRule },
+      bar: {
+        upColor: chartSettings.candleUpColor,
+        downColor: chartSettings.candleDownColor,
+      },
+    },
+  })
+}
+
 export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlaceholderProps>(function ChartPlaceholder(
   { chartType, timeframe, indicators, drawingTool, drawingMagnetMode, chartSettings },
   ref
 ) {
+  const uiTheme = useThemeStore((s) => s.theme)
+  const chartIsDark = uiTheme === 'dark'
   const { selectedSymbol, chartShowAskPrice, chartShowPositionMarker, chartShowClosedPositionMarker } = useTerminalStore()
   const chartRef = useRef<ReturnType<typeof init> | null>(null)
   const subscribeBarCallbackRef = useRef<((data: KLineData) => void) | null>(null)
@@ -143,6 +220,8 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     []
   )
 
+  // Re-init chart only when symbol changes; theme/settings are applied in a separate effect.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     // Wait for real terminal selection to avoid loading fallback BTC chart, then immediately reloading.
     if (!selectedSymbol?.code) return
@@ -156,10 +235,8 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     const chart = init(CHART_CONTAINER_ID)
     chartRef.current = chart
 
-    chart.setStyles('dark')
-    chart.setStyles(APP_THEME_CHART_STYLES as any)
     const candleType = chartTypeToCandleType(chartType)
-    chart.setStyles({ candle: { type: candleType } })
+    applyKlineThemeAndSettings(chart, chartIsDark, chartSettings, chartType)
     const ticker = selectedSymbol?.code ?? 'BTC-USD'
     const name = selectedSymbol?.code?.replace('-', '/') ?? 'BTC/USD'
     const pricePrecision = selectedSymbol?.pricePrecision ?? 2
@@ -427,6 +504,13 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     }
   }, [timeframe, chartType])
 
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    applyKlineThemeAndSettings(chart, chartIsDark, chartSettings, chartType)
+    chart.resize()
+  }, [chartIsDark, chartSettings, chartType])
+
   // When indicators change, sync chart: remove all then add each with calcParams
   useEffect(() => {
     const chart = chartRef.current
@@ -444,23 +528,6 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     chart.createOverlay({ name: drawingTool, mode: drawingMagnetMode })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- drawingMagnetMode applied when tool is chosen
   }, [drawingTool])
-
-  // Apply chart settings (grid, crosshair, tooltip, candle colors)
-  useEffect(() => {
-    const chart = chartRef.current
-    if (!chart) return
-    chart.setStyles({
-      grid: { show: chartSettings.grid },
-      crosshair: { show: chartSettings.crosshair },
-      candle: {
-        tooltip: { showRule: chartSettings.tooltipShowRule },
-        bar: {
-          upColor: chartSettings.candleUpColor,
-          downColor: chartSettings.candleDownColor,
-        },
-      },
-    })
-  }, [chartSettings])
 
   // When ask price line is disabled, remove overlay immediately
   useEffect(() => {
@@ -599,7 +666,7 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
           aria-live="polite"
         >
           <Spinner size="lg" className="text-accent" />
-          <p className="text-sm font-medium text-muted-foreground">Loading chart…</p>
+          <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Loading chart…</p>
         </div>
       )}
     </div>

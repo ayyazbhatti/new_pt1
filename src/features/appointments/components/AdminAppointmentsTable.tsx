@@ -45,7 +45,7 @@ export function AdminAppointmentsTable({
     apt.status !== 'cancelled' && apt.status !== 'completed'
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-700">
+    <div className="table-scroll rounded-lg border border-slate-700">
       <table className="w-full min-w-[800px]">
         <thead className="border-b border-slate-700 bg-slate-800">
           <tr>

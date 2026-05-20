@@ -12,15 +12,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#0b1220',
-        surface: '#111a2b',
-        'surface-1': '#1a2332',
-        'surface-2': '#0f172a',
-        border: 'rgba(255, 255, 255, 0.08)',
-        text: '#e5e7eb',
-        'text-muted': '#94a3b8',
-        'text-dim': '#94a3b8',
-        muted: '#94a3b8',
+        /**
+         * Theme tokens: `html` / `html.dark` in globals.css.
+         * Surfaces + background use `rgb(r g b / <alpha-value>)` so utilities like `bg-surface-2/50` work.
+         */
+        background: 'rgb(var(--color-background-rgb) / <alpha-value>)',
+        surface: 'rgb(var(--color-surface-rgb) / <alpha-value>)',
+        'surface-1': 'rgb(var(--color-surface-1-rgb) / <alpha-value>)',
+        'surface-2': 'rgb(var(--color-surface-2-rgb) / <alpha-value>)',
+        border: 'var(--color-border)',
+        text: 'var(--color-text)',
+        'text-muted': 'var(--color-text-muted)',
+        'text-dim': 'var(--color-text-dim)',
+        muted: 'rgb(var(--color-muted-rgb) / <alpha-value>)',
         accent: '#3b82f6',
         accentBlue: '#3b82f6',
         success: '#22c55e',

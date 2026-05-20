@@ -2,7 +2,7 @@ use axum::{
     extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
     Router,
     Extension,
 };
@@ -3064,6 +3064,58 @@ async fn get_notifications(
     }))
 }
 
+async fn mark_notification_read(
+    Extension(claims): Extension<Claims>,
+    State(pool): State<PgPool>,
+    Path(notification_id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let user_id = claims.sub;
+
+    let result = sqlx::query(
+        r#"UPDATE notifications
+         SET read = TRUE, read_at = NOW()
+         WHERE id = $1 AND user_id = $2 AND read = FALSE"#,
+    )
+    .bind(notification_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        error!("mark_notification_read sql error: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    if result.rows_affected() == 0 {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mark_all_notifications_read(
+    Extension(claims): Extension<Claims>,
+    State(pool): State<PgPool>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let user_id = claims.sub;
+
+    let result = sqlx::query(
+        r#"UPDATE notifications
+         SET read = TRUE, read_at = NOW()
+         WHERE user_id = $1 AND read = FALSE"#,
+    )
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        error!("mark_all_notifications_read sql error: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "markedCount": result.rows_affected() as i64
+    })))
+}
+
 // ============================================================================
 // GET USER POSITIONS
 // ============================================================================
@@ -3416,6 +3468,8 @@ pub fn create_notifications_router(
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
     Router::new()
+        .route("/read-all", post(mark_all_notifications_read))
+        .route("/:id/read", patch(mark_notification_read))
         .route("/", get(get_notifications))
         .layer(axum::middleware::from_fn(auth_middleware))
         .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {

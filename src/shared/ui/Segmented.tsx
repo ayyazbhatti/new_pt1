@@ -10,7 +10,7 @@ interface SegmentedProps extends Omit<HTMLAttributes<HTMLDivElement>, 'onChange'
 export function Segmented({ options, value, onChange, className, ...props }: SegmentedProps) {
   return (
     <div
-      className={cn('inline-flex rounded-lg bg-surface-2 p-1', className)}
+      className={cn('inline-flex rounded-lg bg-slate-100 dark:bg-surface-2 p-1', className)}
       {...props}
     >
       {options.map((option) => (
@@ -22,7 +22,7 @@ export function Segmented({ options, value, onChange, className, ...props }: Seg
             'px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
             value === option.value
               ? 'bg-accent text-white'
-              : 'text-text-dim hover:text-text'
+              : 'text-slate-600 dark:text-text-dim hover:text-slate-900 dark:hover:text-text'
           )}
         >
           {option.label}

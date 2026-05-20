@@ -71,7 +71,7 @@ export function ChartSettingsModal({ open, onOpenChange, settings, onSettingsCha
           <Label className="text-sm font-medium text-text">Candle colors</Label>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Up</label>
+              <label className="text-xs text-slate-600 dark:text-slate-400">Up</label>
               <div className="flex items-center gap-2">
                 <input
                   type="color"
@@ -97,7 +97,7 @@ export function ChartSettingsModal({ open, onOpenChange, settings, onSettingsCha
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Down</label>
+              <label className="text-xs text-slate-600 dark:text-slate-400">Down</label>
               <div className="flex items-center gap-2">
                 <input
                   type="color"

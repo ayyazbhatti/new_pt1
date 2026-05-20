@@ -1,4 +1,4 @@
-import { Search, X, LayoutDashboard, Bell, CreditCard, MessageCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown } from 'lucide-react'
+import { Search, X, LayoutDashboard, Bell, CreditCard, MessageCircle, Star, ChevronDown, ChevronUp, Settings, LogOut, ArrowUp, ArrowDown, Sun, Moon } from 'lucide-react'
 import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
@@ -15,6 +15,7 @@ import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
 import { fetchBalance } from '@/features/wallet/api'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAccountSummary, accountSummaryQueryKey } from '@/features/wallet/hooks/useAccountSummary'
+import { useThemeStore } from '@/shared/store/themeStore'
 import { updateTerminalPreferences } from '@/features/terminal/api/preferences.api'
 import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
@@ -79,6 +80,8 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const queryClient = useQueryClient()
   const { accountSummary, isLoading: accountSummaryLoading } = useAccountSummary()
+  const theme = useThemeStore((s) => s.theme)
+  const toggleTheme = useThemeStore((s) => s.toggleTheme)
   const wsState = useWebSocketState()
   const symbols = getFilteredSymbols()
   const symbolsByCategory = useMemo(() => groupSymbolsByAssetClass(symbols), [symbols])
@@ -304,19 +307,19 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   }
 
   return (
-    <div className="h-full min-h-0 overflow-hidden bg-gradient-to-b from-[#0f172a] via-[#0d1524] to-[#0b1220] flex flex-col border-r border-white/5">
+    <div className="h-full min-h-0 overflow-hidden bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 dark:from-[#0f172a] dark:via-[#0d1524] dark:to-[#0b1220] flex flex-col border-r border-slate-200 dark:border-white/5">
       {/* Top User Row */}
-      <div className="shrink-0 px-4 py-3.5 border-b border-white/5 bg-gradient-to-r from-white/5 to-transparent">
+      <div className="shrink-0 px-4 py-3.5 border-b border-slate-200 dark:border-white/5 bg-gradient-to-r from-slate-200/60 dark:from-white/5 to-transparent">
         <div className="flex items-center gap-3">
           <div className="relative">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-accent to-accent/80 flex items-center justify-center text-white font-semibold text-sm shadow-lg shadow-accent/20 ring-1 ring-white/10">
+            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-accent to-accent/80 flex items-center justify-center text-white font-semibold text-sm shadow-lg shadow-accent/20 ring-1 ring-slate-300/80 dark:ring-white/10">
               {getUserInitials()}
             </div>
-            <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-success border-2 border-[#0f172a] ring-1 ring-success/50"></div>
+            <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-success border-2 border-slate-100 dark:border-[#0f172a] ring-1 ring-success/50"></div>
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-text truncate leading-tight">{getUserDisplayName()}</div>
-            <div className="text-xs text-text-muted/80 mt-0.5">Trading Account</div>
+            <div className="text-xs text-slate-600/90 dark:text-text-muted/80 mt-0.5">Trading Account</div>
           </div>
           <div className="flex items-center gap-0.5">
             <a
@@ -324,9 +327,9 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               target="_blank"
               rel="noopener noreferrer"
               title="User panel (new tab)"
-              className="p-2 hover:bg-white/5 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group inline-flex"
+              className="p-2 hover:bg-slate-200/70 dark:hover:bg-white/5 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group inline-flex"
             >
-              <LayoutDashboard className="h-4 w-4 text-text-muted group-hover:text-text transition-colors" />
+              <LayoutDashboard className="h-4 w-4 text-slate-600 dark:text-text-muted group-hover:text-slate-900 dark:group-hover:text-text transition-colors" />
             </a>
             <button
               onClick={() => {
@@ -337,12 +340,12 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               }}
               className={cn(
                 'p-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 relative group',
-                notificationPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-white/5 text-text-muted group-hover:text-text'
+                notificationPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-slate-200/70 dark:hover:bg-white/5 text-slate-600 dark:text-text-muted group-hover:text-slate-900 dark:group-hover:text-text'
               )}
               title="Notifications"
             >
               <Bell className="h-4 w-4" />
-              <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-danger ring-2 ring-[#0f172a]"></span>
+              <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-danger ring-2 ring-slate-100 dark:ring-[#0f172a]"></span>
             </button>
             <button
               onClick={() => {
@@ -353,7 +356,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               }}
               className={cn(
                 'p-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group',
-                paymentPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-white/5 text-text-muted group-hover:text-text'
+                paymentPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-slate-200/70 dark:hover:bg-white/5 text-slate-600 dark:text-text-muted group-hover:text-slate-900 dark:group-hover:text-text'
               )}
               title="Deposit history"
             >
@@ -368,7 +371,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               }}
               className={cn(
                 'p-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 group',
-                chatPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-white/5 text-text-muted group-hover:text-text'
+                chatPanelOpen ? 'bg-accent/15 text-accent' : 'hover:bg-slate-200/70 dark:hover:bg-white/5 text-slate-600 dark:text-text-muted group-hover:text-slate-900 dark:group-hover:text-text'
               )}
               title="Chat"
             >
@@ -379,7 +382,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
       </div>
 
       {/* Balance from WebSocket/wallet store (realtime); Equity & Margin from account summary */}
-      <div className="shrink-0 px-4 py-3.5 border-b border-white/5 bg-gradient-to-b from-white/[0.02] to-transparent">
+      <div className="shrink-0 px-4 py-3.5 border-b border-slate-200 dark:border-white/5 bg-gradient-to-b from-slate-100/80 dark:from-white/[0.02] to-transparent">
         <div className="space-y-2.5">
           {(() => {
             const displayBalance = balance ?? 0
@@ -396,14 +399,14 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               <>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider">Balance</span>
+                    <span className="text-[10px] font-medium text-slate-600/90 dark:text-text-muted/70 uppercase tracking-wider">Balance</span>
                     {balanceLoadingState ? (
                       <div className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse"></div>
                     ) : (
                       <div className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50"></div>
                     )}
                   </div>
-                  <div className="text-xs font-medium text-text-muted/60">{currency || 'USD'}</div>
+                  <div className="text-xs font-medium text-slate-600/85 dark:text-text-muted/60">{currency || 'USD'}</div>
                 </div>
                 {balanceLoadingState ? (
                   <div className="flex items-baseline gap-2">
@@ -424,7 +427,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                 )}
                 <div className="flex items-center justify-between pt-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-text-muted/60">Equity</span>
+                    <span className="text-[10px] text-slate-600/85 dark:text-text-muted/60">Equity</span>
                     {equityMarginLoading ? (
                       <Skeleton className="h-4 w-20" />
                     ) : (
@@ -434,7 +437,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                     )}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-text-muted/60">Margin</span>
+                    <span className="text-[10px] text-slate-600/85 dark:text-text-muted/60">Margin</span>
                     {equityMarginLoading ? (
                       <Skeleton className="h-4 w-16" />
                     ) : (
@@ -451,13 +454,13 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
       </div>
 
       {/* Search */}
-      <div className="shrink-0 px-4 py-3 border-b border-white/5">
+      <div className="shrink-0 px-4 py-3 border-b border-slate-200 dark:border-white/5">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted/60 pointer-events-none" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-600/80 dark:text-text-muted/60 pointer-events-none" />
           <Input
             placeholder="Search symbols..."
             className={cn(
-              'pl-9 h-9 text-sm bg-white/5 border-white/10 focus:bg-white/10 focus:border-accent/50 transition-all',
+              'pl-9 h-9 text-sm bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 focus:bg-slate-50 dark:focus:bg-white/10 focus:border-accent/50 transition-all',
               searchQuery && 'pr-9'
             )}
             value={searchQuery}
@@ -467,7 +470,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             <button
               type="button"
               onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-text-muted hover:text-text hover:bg-white/10 transition-colors"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-600 dark:text-text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-200 dark:hover:bg-white/10 transition-colors"
               aria-label="Clear search"
             >
               <X className="h-4 w-4" />
@@ -477,14 +480,14 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
       </div>
 
       {/* Tabs */}
-      <div className="shrink-0 px-4 pt-3 pb-2.5 border-b border-white/5 flex items-center gap-1.5">
+      <div className="shrink-0 px-4 pt-3 pb-2.5 border-b border-slate-200 dark:border-white/5 flex items-center gap-1.5">
         <button
           onClick={() => setActiveTab('all')}
           className={cn(
             'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all duration-200 relative',
             activeTab === 'all'
               ? 'bg-accent text-white shadow-lg shadow-accent/20'
-              : 'text-text-muted hover:text-text hover:bg-white/5'
+              : 'text-slate-600 dark:text-text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/70 dark:hover:bg-white/5'
           )}
         >
           All ({symbols.length})
@@ -495,7 +498,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all duration-200 flex items-center gap-1.5 relative',
             activeTab === 'watchlists'
               ? 'bg-accent text-white shadow-lg shadow-accent/20'
-              : 'text-text-muted hover:text-text hover:bg-white/5'
+              : 'text-slate-600 dark:text-text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/70 dark:hover:bg-white/5'
           )}
         >
           <span>Favourite</span>
@@ -529,10 +532,10 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               </div>
             ))
           ) : symbolsByCategory.length === 0 ? (
-            <div className="px-4 py-6 text-center text-xs text-muted">No symbols match.</div>
+            <div className="px-4 py-6 text-center text-xs text-slate-600 dark:text-muted">No symbols match.</div>
           ) : (
             symbolsByCategory.map((group) => (
-              <div key={group.key} className="border-b border-white/5 last:border-b-0">
+              <div key={group.key} className="border-b border-slate-200 dark:border-white/5 last:border-b-0">
                 <button
                   type="button"
                   onClick={() => {
@@ -541,17 +544,17 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                   title={searchActive ? 'Clear search to collapse categories' : undefined}
                   className={cn(
                     'shrink-0 w-full px-4 py-2.5 flex items-center justify-between transition-all duration-200 group',
-                    searchActive ? 'cursor-default' : 'hover:bg-white/5 cursor-pointer'
+                    searchActive ? 'cursor-default' : 'hover:bg-slate-200/60 dark:hover:bg-white/5 cursor-pointer'
                   )}
                 >
                   <div className="text-[11px] font-bold text-text/70 uppercase tracking-widest text-left">
                     {group.label}{' '}
-                    <span className="text-text-muted/60 font-semibold">({group.symbols.length})</span>
+                    <span className="text-slate-600/80 dark:text-text-muted/60 font-semibold">({group.symbols.length})</span>
                   </div>
                   {isSectionOpen(group.key) ? (
-                    <ChevronUp className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors shrink-0" />
+                    <ChevronUp className="h-3.5 w-3.5 text-slate-600/80 dark:text-text-muted/60 group-hover:text-slate-900 dark:group-hover:text-text transition-colors shrink-0" />
                   ) : (
-                    <ChevronDown className="h-3.5 w-3.5 text-text-muted/60 group-hover:text-text transition-colors shrink-0" />
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-600/80 dark:text-text-muted/60 group-hover:text-slate-900 dark:group-hover:text-text transition-colors shrink-0" />
                   )}
                 </button>
                 {isSectionOpen(group.key) &&
@@ -560,7 +563,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                       key={symbol.id}
                       onClick={() => setSelectedSymbol(symbol)}
                       className={cn(
-                        'px-4 py-2.5 hover:bg-white/5 transition-all duration-200 cursor-pointer group relative',
+                        'px-4 py-2.5 hover:bg-slate-200/60 dark:hover:bg-white/5 transition-all duration-200 cursor-pointer group relative',
                         selectedSymbol?.id === symbol.id && 'bg-accent/10 border-l-2 border-accent'
                       )}
                     >
@@ -577,7 +580,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                               )
                               toast.success(watchlist.has(symbol.id) ? 'Removed from favourites' : 'Added to favourites')
                             }}
-                            className="p-1 hover:bg-white/10 rounded transition-all duration-200 hover:scale-110 active:scale-95 shrink-0 mt-0.5"
+                            className="p-1 hover:bg-slate-200 dark:hover:bg-white/10 rounded transition-all duration-200 hover:scale-110 active:scale-95 shrink-0 mt-0.5"
                             aria-label={watchlist.has(symbol.id) ? 'Remove from favourites' : 'Add to favourites'}
                           >
                             <Star
@@ -585,7 +588,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                                 'h-3.5 w-3.5 transition-all',
                                 watchlist.has(symbol.id)
                                   ? 'fill-warning text-warning drop-shadow-sm'
-                                  : 'text-text-muted/40 group-hover:text-text-muted/60'
+                                  : 'text-slate-500/70 dark:text-text-muted/40 group-hover:text-slate-700 dark:group-hover:text-text-muted/60'
                               )}
                             />
                           </button>
@@ -633,7 +636,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
       </div>
 
       {/* Bottom Buttons */}
-      <div className="shrink-0 px-4 py-3 border-t border-white/5 bg-gradient-to-t from-white/[0.02] to-transparent">
+      <div className="shrink-0 px-4 py-3 border-t border-slate-200 dark:border-white/5 bg-gradient-to-t from-slate-100/70 dark:from-white/[0.02] to-transparent">
         <div className="grid grid-cols-2 gap-2">
           <Button
             variant="success"
@@ -653,7 +656,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
       </div>
 
       {/* Bottom Nav */}
-      <div className="shrink-0 px-4 py-2.5 border-t border-white/5 space-y-0.5">
+      <div className="shrink-0 px-4 py-2.5 border-t border-slate-200 dark:border-white/5 space-y-0.5">
         <button
           onClick={() => {
             setChatPanelOpen(false)
@@ -661,15 +664,17 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             setPaymentPanelOpen(false)
             setSettingsPanelOpen(!settingsPanelOpen)
           }}
-          className="w-full text-left text-xs font-medium text-text-muted/70 hover:text-text hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
+          className="w-full text-left text-xs font-medium text-slate-600/90 dark:text-text-muted/70 hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/70 dark:hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
         >
           Settings
         </button>
         <button
-          onClick={() => toast('Theme toggle coming soon')}
-          className="w-full text-left text-xs font-medium text-text-muted/70 hover:text-text hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
+          type="button"
+          onClick={() => toggleTheme()}
+          className="w-full flex items-center gap-2 text-left text-xs font-medium text-slate-600/90 dark:text-text-muted/70 hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/70 dark:hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
         >
-          Light Theme
+          {theme === 'dark' ? <Sun className="h-3.5 w-3.5 shrink-0" aria-hidden /> : <Moon className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+          {theme === 'dark' ? 'Light Theme' : 'Dark Theme'}
         </button>
         <button
           onClick={handleLogout}

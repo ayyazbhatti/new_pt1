@@ -115,7 +115,7 @@ export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
 
       <Card className="p-4 bg-surface-2">
         <div className="text-sm font-semibold text-text mb-3">Raw JSON</div>
-        <pre className="text-xs font-mono text-text-muted bg-surface-1 p-3 rounded overflow-auto max-h-48">
+        <pre className="scroll-surface text-xs font-mono text-text-muted bg-surface-1 p-3 rounded overflow-auto max-h-48">
           {JSON.stringify(order, null, 2)}
         </pre>
       </Card>

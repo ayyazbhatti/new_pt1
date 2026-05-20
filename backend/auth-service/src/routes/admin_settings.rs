@@ -1,4 +1,4 @@
-//! Admin settings routes: email configuration (GET/PUT), send test email (POST), email templates (GET/PUT),
+//! Admin settings routes: general platform settings (GET/PUT), email configuration (GET/PUT), send test email (POST), email templates (GET/PUT),
 //! data provider integrations (GET/PUT), Voiso integration (GET/PUT).
 
 use axum::{
@@ -9,7 +9,7 @@ use axum::{
     Router,
 };
 use contracts::DataProvidersConfig;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -83,6 +83,7 @@ async fn check_settings_permission(
 
 pub fn create_admin_settings_router(pool: PgPool) -> Router<PgPool> {
     Router::new()
+        .route("/general", get(get_general_settings).put(put_general_settings))
         .route("/email-config", get(get_email_config).put(put_email_config))
         .route("/email-config/test", post(post_test_email))
         .route("/email-templates", get(get_email_templates))
@@ -98,6 +99,128 @@ pub fn create_admin_settings_router(pool: PgPool) -> Router<PgPool> {
         .route("/ai/test", post(post_test_ai_config))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(pool)
+}
+
+async fn ensure_general_settings_row(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO platform_general_settings (singleton_id)
+        VALUES (1)
+        ON CONFLICT (singleton_id) DO NOTHING
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneralSettingsDto {
+    site_name: String,
+    timezone: String,
+    currency: String,
+}
+
+fn validate_general_settings(body: &GeneralSettingsDto) -> Result<(), String> {
+    let site = body.site_name.trim();
+    if site.is_empty() {
+        return Err("Site name is required".to_string());
+    }
+    if site.len() > 100 {
+        return Err("Site name must be at most 100 characters".to_string());
+    }
+    let tz = body.timezone.trim();
+    if tz.is_empty() {
+        return Err("Timezone is required".to_string());
+    }
+    let cur = body.currency.trim().to_ascii_uppercase();
+    if cur.len() != 3 || !cur.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Err("Currency must be a 3-letter ISO code (e.g. USD)".to_string());
+    }
+    Ok(())
+}
+
+async fn get_general_settings(
+    State(pool): State<PgPool>,
+    claims: Extension<Claims>,
+) -> Result<Json<GeneralSettingsDto>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "settings:view").await?;
+    ensure_general_settings_row(&pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    let row: (String, String, String) = sqlx::query_as(
+        r#"
+        SELECT site_name, timezone, currency
+        FROM platform_general_settings
+        WHERE singleton_id = 1
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!("get_general_settings: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    Ok(Json(GeneralSettingsDto {
+        site_name: row.0,
+        timezone: row.1,
+        currency: row.2,
+    }))
+}
+
+async fn put_general_settings(
+    State(pool): State<PgPool>,
+    claims: Extension<Claims>,
+    Json(mut body): Json<GeneralSettingsDto>,
+) -> Result<Json<GeneralSettingsDto>, (StatusCode, Json<serde_json::Value>)> {
+    check_settings_permission(&pool, &claims, "settings:edit").await?;
+    body.site_name = body.site_name.trim().to_string();
+    body.timezone = body.timezone.trim().to_string();
+    body.currency = body.currency.trim().to_ascii_uppercase();
+    if let Err(msg) = validate_general_settings(&body) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": { "code": "VALIDATION", "message": msg }
+            })),
+        ));
+    }
+    ensure_general_settings_row(&pool).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    sqlx::query(
+        r#"
+        UPDATE platform_general_settings
+        SET site_name = $1,
+            timezone = $2,
+            currency = $3,
+            updated_at = NOW()
+        WHERE singleton_id = 1
+        "#,
+    )
+    .bind(&body.site_name)
+    .bind(&body.timezone)
+    .bind(&body.currency)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        error!("put_general_settings: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
+        )
+    })?;
+    Ok(Json(body))
 }
 
 async fn ensure_voiso_config_row(pool: &PgPool) -> Result<(), sqlx::Error> {

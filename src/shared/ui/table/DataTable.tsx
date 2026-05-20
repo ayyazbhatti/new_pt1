@@ -201,7 +201,7 @@ export function DataTable<TData>({
   return (
     <div className={cn('space-y-4', className)}>
       <div className={cn(bordered && 'rounded-lg border border-border', 'overflow-hidden')}>
-        <div className="overflow-x-auto">
+        <div className="table-scroll">
           <table
             className={cn('w-full', tableClassName)}
             style={compact ? { tableLayout: 'fixed' } : undefined}

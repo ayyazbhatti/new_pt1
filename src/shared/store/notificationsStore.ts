@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import { NotificationPushPayload } from '../ws/wsEvents'
-import { fetchNotifications } from '../api/notifications.api'
+import {
+  fetchNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from '../api/notifications.api'
 
 export type Notification = NotificationPushPayload
 
@@ -9,8 +13,8 @@ interface NotificationsState {
   unreadCount: number
   isLoading: boolean
   push: (notification: Notification) => void
-  markRead: (id: string) => void
-  markAllRead: () => void
+  markRead: (id: string) => Promise<void>
+  markAllRead: () => Promise<void>
   clear: () => void
   loadNotifications: () => Promise<void>
   setLoading: (loading: boolean) => void
@@ -48,7 +52,13 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     })
   },
 
-  markRead: (id: string) => {
+  markRead: async (id: string) => {
+    try {
+      await markNotificationRead(id)
+    } catch (e) {
+      console.error('markNotificationRead failed:', e)
+      return
+    }
     set((state) => {
       const item = state.items.find((item) => item.id === id)
       if (item && !item.read) {
@@ -63,7 +73,13 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     })
   },
 
-  markAllRead: () => {
+  markAllRead: async () => {
+    try {
+      await markAllNotificationsRead()
+    } catch (e) {
+      console.error('markAllNotificationsRead failed:', e)
+      return
+    }
     set((state) => ({
       items: state.items.map((item) => ({ ...item, read: true })),
       unreadCount: 0,

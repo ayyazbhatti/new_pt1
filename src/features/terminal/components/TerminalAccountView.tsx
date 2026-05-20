@@ -56,7 +56,7 @@ export function TerminalAccountView({ onOpenDeposit }: TerminalAccountViewProps)
   }
 
   return (
-    <div className="h-full min-h-0 overflow-auto flex flex-col bg-gradient-to-b from-[#0f172a] via-[#0d1524] to-[#0b1220]">
+    <div className="h-full min-h-0 overflow-auto flex flex-col bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 dark:from-[#0f172a] dark:via-[#0d1524] dark:to-[#0b1220]">
       {/* Header */}
       <div className="shrink-0 px-4 py-4 border-b border-white/5">
         <h2 className="text-lg font-semibold text-text">Account</h2>

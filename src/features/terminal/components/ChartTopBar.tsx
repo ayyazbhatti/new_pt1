@@ -183,7 +183,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
 
   if (!selectedSymbol) {
     return (
-      <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-white/5 flex items-center overflow-x-auto scrollbar-thin shadow-sm">
+      <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-slate-200 dark:border-white/10 flex items-center overflow-x-auto scrollbar-thin shadow-sm">
         <div className="flex items-center gap-3 flex-nowrap min-w-max px-4 py-2">
           <Segmented
             options={[
@@ -203,7 +203,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
                   'px-2.5 py-1 text-xs font-bold rounded transition-all duration-200',
                   timeframe === tf
                     ? 'bg-accent text-white shadow-md shadow-accent/20'
-                    : 'text-muted hover:text-text hover:bg-surface-2/50'
+                    : 'text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/80 dark:hover:bg-surface-2/50'
                 )}
               >
                 {tf}
@@ -217,7 +217,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
               className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200"
               title="Add indicator"
             >
-              <BarChart2 className="h-4 w-4 text-muted hover:text-text" />
+              <BarChart2 className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
             </button>
           </div>
           {indicators.length > 0 && (
@@ -231,7 +231,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
                   <button
                     type="button"
                     onClick={() => setEditingIndicator(ind)}
-                    className="rounded p-0.5 hover:bg-surface-2 text-muted hover:text-text"
+                    className="rounded p-0.5 hover:bg-surface-2 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text"
                     title={`Edit ${ind.name} parameters`}
                     aria-label={`Edit ${ind.name} parameters`}
                   >
@@ -240,7 +240,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
                   <button
                     type="button"
                     onClick={() => onIndicatorRemove(ind.name)}
-                    className="rounded p-0.5 hover:bg-surface-2 text-muted hover:text-text"
+                    className="rounded p-0.5 hover:bg-surface-2 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text"
                     title={`Remove ${ind.name}`}
                     aria-label={`Remove ${ind.name}`}
                   >
@@ -263,30 +263,30 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
               className={cn('p-2 hover:bg-surface-2 rounded-lg transition-all duration-200', drawingTool && 'text-accent')}
               title="Draw"
             >
-              <Pencil className="h-4 w-4 text-muted hover:text-text" />
+              <Pencil className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
             </button>
           </div>
           {onDrawingMagnetModeChange && (
             <div className="relative" ref={magnetRef}>
               <button type="button" onClick={() => setMagnetOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200" title="Magnet mode">
-                <Magnet className="h-4 w-4 text-muted hover:text-text" />
+                <Magnet className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
               </button>
             </div>
           )}
           <div className="flex items-center gap-1 bg-surface-2/30 rounded-lg p-1">
             <button onClick={onZoomOut} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200" title="Zoom out">
-              <ZoomOut className="h-4 w-4 text-muted hover:text-text" />
+              <ZoomOut className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
             </button>
             <button onClick={onZoomIn} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200" title="Zoom in">
-              <ZoomIn className="h-4 w-4 text-muted hover:text-text" />
+              <ZoomIn className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
             </button>
             <button onClick={onScrollToLatest ?? onResetZoom} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200" title="Scroll to latest (real-time)">
-              <SkipForward className="h-4 w-4 text-muted hover:text-text" />
+              <SkipForward className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
             </button>
             {onDownloadChart && (
               <div className="relative" ref={downloadRef}>
                 <button onClick={() => setDownloadOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200" title="Download chart">
-                  <Download className="h-4 w-4 text-muted hover:text-text" />
+                  <Download className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
                 </button>
               </div>
             )}
@@ -295,8 +295,8 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
       {indicatorOpen && indicatorRect &&
         createPortal(
           <div ref={indicatorDropdownRef} className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]" style={{ position: 'fixed', left: indicatorRect.left, top: indicatorRect.bottom + 4 }}>
-            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Add indicator</div>
-            {availableIndicators.length === 0 ? <div className="px-2.5 py-1.5 text-xs text-muted-foreground">None</div> : availableIndicators.map((name) => {
+            <div className="px-2.5 py-1 text-xs text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">Add indicator</div>
+            {availableIndicators.length === 0 ? <div className="px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-400">None</div> : availableIndicators.map((name) => {
               const Icon = getIndicatorIcon(name)
               return <button key={name} type="button" onClick={() => { onIndicatorAdd(name); setIndicatorOpen(false) }} className="flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs text-text hover:bg-surface-2"><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{name}</span></button>
             })}
@@ -306,7 +306,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
       {drawOpen && drawRect &&
         createPortal(
           <div ref={drawDropdownRef} className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]" style={{ position: 'fixed', left: drawRect.left, top: drawRect.bottom + 4 }}>
-            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Draw</div>
+            <div className="px-2.5 py-1 text-xs text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">Draw</div>
             <button type="button" onClick={() => { onDrawingToolChange(null); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', !drawingTool ? 'text-accent' : 'text-text')}><CircleOff className="h-3.5 w-3.5 shrink-0" /><span className="truncate">None</span></button>
             {overlayList.map((name) => { const Icon = getOverlayIcon(name); return <button key={name} type="button" onClick={() => { onDrawingToolChange(name); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingTool === name ? 'text-accent' : 'text-text')}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{name}</span></button> })}
           </div>,
@@ -315,7 +315,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
       {magnetOpen && magnetRect && onDrawingMagnetModeChange &&
         createPortal(
           <div ref={magnetDropdownRef} className="w-max min-w-[7rem] max-w-[10rem] rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]" style={{ position: 'fixed', left: magnetRect.left, top: magnetRect.bottom + 4 }}>
-            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Magnet</div>
+            <div className="px-2.5 py-1 text-xs text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">Magnet</div>
             {DRAWING_MAGNET_OPTIONS.map((opt) => { const Icon = MAGNET_ICONS[opt.value]; return <button key={opt.value} type="button" onClick={() => { onDrawingMagnetModeChange(opt.value); setMagnetOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', drawingMagnetMode === opt.value ? 'text-accent' : 'text-text')}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{opt.label}</span></button> })}
           </div>,
           document.body
@@ -333,7 +333,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
   }
 
   return (
-    <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-border/50 flex items-center overflow-x-auto scrollbar-thin shadow-sm">
+    <div className="shrink-0 h-14 bg-gradient-to-r from-surface via-surface to-surface-2 border-b border-slate-200 dark:border-white/10 flex items-center overflow-x-auto scrollbar-thin shadow-sm">
       <div className="flex items-center gap-3 flex-nowrap min-w-max px-4 py-2">
         <Segmented
           options={[
@@ -353,7 +353,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
                 "px-2.5 py-1 text-xs font-bold rounded transition-all duration-200",
                 timeframe === tf
                   ? 'bg-accent text-white shadow-md shadow-accent/20'
-                  : 'text-muted hover:text-text hover:bg-surface-2/50'
+                  : 'text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/80 dark:hover:bg-surface-2/50'
               )}
             >
               {tf}
@@ -362,7 +362,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
         </div>
         <div className="relative" ref={indicatorRef}>
           <button type="button" onClick={() => setIndicatorOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95" title="Add indicator">
-            <BarChart2 className="h-4 w-4 text-muted hover:text-text" />
+            <BarChart2 className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           </button>
         </div>
         {indicators.length > 0 && (
@@ -370,10 +370,10 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             {indicators.map((ind) => (
               <span key={ind.name} className="inline-flex items-center gap-1 rounded-md bg-surface-2/80 px-2 py-0.5 text-xs text-text shrink-0">
                 {ind.name}
-                <button type="button" onClick={() => setEditingIndicator(ind)} className="rounded p-0.5 hover:bg-surface-2 text-muted hover:text-text" title={`Edit ${ind.name} parameters`} aria-label={`Edit ${ind.name} parameters`}>
+                <button type="button" onClick={() => setEditingIndicator(ind)} className="rounded p-0.5 hover:bg-surface-2 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" title={`Edit ${ind.name} parameters`} aria-label={`Edit ${ind.name} parameters`}>
                   <SlidersHorizontal className="h-3 w-3" />
                 </button>
-                <button type="button" onClick={() => onIndicatorRemove(ind.name)} className="rounded p-0.5 hover:bg-surface-2 text-muted hover:text-text" title={`Remove ${ind.name}`} aria-label={`Remove ${ind.name}`}>
+                <button type="button" onClick={() => onIndicatorRemove(ind.name)} className="rounded p-0.5 hover:bg-surface-2 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" title={`Remove ${ind.name}`} aria-label={`Remove ${ind.name}`}>
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -383,13 +383,13 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
         <IndicatorParamsModal open={!!editingIndicator} onOpenChange={(open) => !open && setEditingIndicator(null)} indicator={editingIndicator} onSave={onIndicatorParamsChange} />
         <div className="relative" ref={drawRef}>
           <button type="button" onClick={() => setDrawOpen((v) => !v)} className={cn('p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95', drawingTool && 'text-accent')} title="Draw">
-            <Pencil className="h-4 w-4 text-muted hover:text-text" />
+            <Pencil className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           </button>
         </div>
         {onDrawingMagnetModeChange && (
           <div className="relative" ref={magnetRef}>
             <button type="button" onClick={() => setMagnetOpen((v) => !v)} className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95" title="Magnet mode">
-              <Magnet className="h-4 w-4 text-muted hover:text-text" />
+              <Magnet className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
             </button>
           </div>
         )}
@@ -399,28 +399,28 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
             title="Clear all drawings"
           >
-            <Trash2 className="h-4 w-4 text-muted hover:text-text" />
+            <Trash2 className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           </button>
           <button
             onClick={onZoomOut}
             className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
             title="Zoom out"
           >
-            <ZoomOut className="h-4 w-4 text-muted hover:text-text" />
+            <ZoomOut className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           </button>
           <button
             onClick={onZoomIn}
             className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
             title="Zoom in"
           >
-            <ZoomIn className="h-4 w-4 text-muted hover:text-text" />
+            <ZoomIn className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           </button>
           <button
             onClick={onScrollToLatest ?? onResetZoom}
             className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
             title="Scroll to latest (real-time)"
           >
-            <SkipForward className="h-4 w-4 text-muted hover:text-text" />
+            <SkipForward className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           </button>
           <div className="relative" ref={downloadRef}>
             <button
@@ -428,7 +428,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
               className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
               title="Download chart"
             >
-              <Download className="h-4 w-4 text-muted hover:text-text" />
+              <Download className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
             </button>
           </div>
           <button
@@ -436,7 +436,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             className="p-2 hover:bg-surface-2 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
             title="Chart Settings"
           >
-            <Settings className="h-4 w-4 text-muted hover:text-text" />
+            <Settings className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           </button>
         </div>
       </div>
@@ -447,9 +447,9 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
           title={isChartFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
         >
           {isChartFullscreen ? (
-            <Minimize2 className="h-4 w-4 text-muted hover:text-text" />
+            <Minimize2 className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           ) : (
-            <Maximize2 className="h-4 w-4 text-muted hover:text-text" />
+            <Maximize2 className="h-4 w-4 text-slate-600 dark:text-muted hover:text-slate-900 dark:hover:text-text" />
           )}
         </button>
       )}
@@ -460,9 +460,9 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]"
             style={{ position: 'fixed', left: indicatorRect.left, top: indicatorRect.bottom + 4 }}
           >
-            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Add indicator</div>
+            <div className="px-2.5 py-1 text-xs text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">Add indicator</div>
             {availableIndicators.length === 0 ? (
-              <div className="px-2.5 py-1.5 text-xs text-muted-foreground">None</div>
+              <div className="px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-400">None</div>
             ) : (
               availableIndicators.map((name) => {
                 const Icon = getIndicatorIcon(name)
@@ -484,7 +484,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             className="w-max min-w-[7rem] max-w-[10rem] max-h-[280px] overflow-y-auto rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]"
             style={{ position: 'fixed', left: drawRect.left, top: drawRect.bottom + 4 }}
           >
-            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Draw</div>
+            <div className="px-2.5 py-1 text-xs text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">Draw</div>
             <button type="button" onClick={() => { onDrawingToolChange(null); setDrawOpen(false) }} className={cn('flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs hover:bg-surface-2', !drawingTool ? 'text-accent' : 'text-text')}>
               <CircleOff className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">None</span>
@@ -508,7 +508,7 @@ export function ChartTopBar({ chartType, timeframe, indicators, drawingTool, dra
             className="w-max min-w-[7rem] max-w-[10rem] rounded-lg border border-border bg-surface-1 py-1 shadow-lg z-[9999]"
             style={{ position: 'fixed', left: magnetRect.left, top: magnetRect.bottom + 4 }}
           >
-            <div className="px-2.5 py-1 text-xs text-muted-foreground border-b border-border/50">Magnet</div>
+            <div className="px-2.5 py-1 text-xs text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">Magnet</div>
             {DRAWING_MAGNET_OPTIONS.map((opt) => {
               const Icon = MAGNET_ICONS[opt.value]
               return (

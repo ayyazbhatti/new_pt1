@@ -18,6 +18,54 @@ use crate::observability::Metrics;
 use crate::subjects::subjects as nats_subjects;
 use crate::utils::now;
 
+/// Redis pub/sub for ws-gateway `position_update` (same JSON as `fill_action == "created"` in `execute_fill`).
+async fn publish_open_position_to_redis_ws_tick(
+    conn: &mut ConnectionManager,
+    user_id: Uuid,
+    position_id: Uuid,
+    symbol: &str,
+    side_str: &str,
+    quantity: Decimal,
+    ts_ms: i64,
+    context: &str,
+) {
+    let redis_payload = serde_json::json!({
+        "user_id": user_id.to_string(),
+        "position_id": position_id.to_string(),
+        "symbol": symbol,
+        "side": side_str,
+        "quantity": quantity.to_string(),
+        "unrealized_pnl": "0",
+        "status": "OPEN",
+        "trigger_reason": None::<String>,
+        "ts": ts_ms,
+    });
+    match serde_json::to_string(&redis_payload) {
+        Ok(payload_str) => {
+            if let Err(e) = redis::cmd("PUBLISH")
+                .arg("positions:updates")
+                .arg(payload_str)
+                .query_async::<_, i64>(conn)
+                .await
+            {
+                error!(
+                    "Failed to publish position opened event to Redis for {} ({}): {}",
+                    position_id, context, e
+                );
+            } else {
+                info!(
+                    "Published position opened event to Redis pub/sub for position {} ({})",
+                    position_id, context
+                );
+            }
+        }
+        Err(e) => error!(
+            "Failed to serialize position opened Redis payload for {} ({}): {}",
+            position_id, context, e
+        ),
+    }
+}
+
 pub struct TickHandler {
     cache: Arc<OrderCache>,
     redis: Arc<crate::redis::RedisClient>,
@@ -349,39 +397,24 @@ impl TickHandler {
                     PositionSide::Long => "LONG",
                     PositionSide::Short => "SHORT",
                 };
-                let redis_payload = serde_json::json!({
-                    "user_id": pos_event.user_id.to_string(),
-                    "position_id": pos_event.position_id.to_string(),
-                    "symbol": pos_event.symbol,
-                    "side": side_str,
-                    "quantity": pos_event.size.to_string(),
-                    "unrealized_pnl": "0",
-                    "status": "OPEN",
-                    "trigger_reason": None::<String>,
-                    "ts": pos_event.ts.timestamp_millis(),
-                });
-                match serde_json::to_string(&redis_payload) {
-                    Ok(payload_str) => {
-                        if let Err(e) = redis::cmd("PUBLISH")
-                            .arg("positions:updates")
-                            .arg(payload_str)
-                            .query_async::<_, i64>(conn)
-                            .await
-                        {
-                            error!("Failed to publish position opened event to Redis for {}: {}", pos_id, e);
-                        } else {
-                            info!("Published position opened event to Redis pub/sub for position {}", pos_id);
-                        }
-                    }
-                    Err(e) => error!("Failed to serialize position opened Redis payload for {}: {}", pos_id, e),
-                }
+                publish_open_position_to_redis_ws_tick(
+                    conn,
+                    pos_event.user_id,
+                    pos_event.position_id,
+                    &pos_event.symbol,
+                    side_str,
+                    pos_event.size,
+                    pos_event.ts.timestamp_millis(),
+                    "created",
+                )
+                .await;
             }
             if fill_action == "flipped" {
                 let raw: HashMap<String, String> = redis::cmd("HGETALL").arg(format!("pos:by_id:{}", pos_id)).query_async(conn).await.unwrap_or_default();
                 let size = raw.get("size").and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(fill_size);
                 let entry = raw.get("entry_price").or(raw.get("avg_price")).and_then(|s| Decimal::from_str_exact(s).ok()).unwrap_or(fill_price);
-                let side_str = raw.get("side").map(|s| s.as_str()).unwrap_or("LONG");
-                let pos_side = if side_str == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+                let side_raw = raw.get("side").map(|s| s.as_str()).unwrap_or("LONG");
+                let pos_side = if side_raw == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
                 let lev = raw
                     .get("leverage")
                     .and_then(|s| Decimal::from_str_exact(s).ok())
@@ -403,6 +436,21 @@ impl TickHandler {
                     ts: now(),
                 };
                 self.nats.publish_event(nats_subjects::EVENT_POSITION_OPENED, &pos_event).await?;
+                let side_str = match pos_event.side {
+                    PositionSide::Long => "LONG",
+                    PositionSide::Short => "SHORT",
+                };
+                publish_open_position_to_redis_ws_tick(
+                    conn,
+                    pos_event.user_id,
+                    pos_event.position_id,
+                    &pos_event.symbol,
+                    side_str,
+                    pos_event.size,
+                    pos_event.ts.timestamp_millis(),
+                    "flipped",
+                )
+                .await;
             }
             let _ = position_events::publish_position_updated(self.nats.as_ref(), conn, pos_id, None).await;
         }

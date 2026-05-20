@@ -19,7 +19,7 @@ export function TerminalMobileNav() {
 
   return (
     <nav
-      className="lg:hidden shrink-0 flex items-center justify-around border-t border-white/10 bg-surface-2/95 backdrop-blur-sm pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 flex-shrink-0"
+      className="lg:hidden shrink-0 flex items-center justify-around border-t border-slate-900/10 dark:border-white/10 bg-slate-100/95 dark:bg-surface-2/95 backdrop-blur-sm pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 flex-shrink-0"
       role="tablist"
     >
       {TABS.map(({ id, label, icon: Icon }) => (
@@ -33,7 +33,7 @@ export function TerminalMobileNav() {
             'flex flex-col items-center justify-center gap-1 min-h-[44px] min-w-[44px] px-3 py-2 rounded-lg transition-colors',
             mobileTab === id
               ? 'text-accent bg-accent/10'
-              : 'text-text-muted hover:text-text hover:bg-white/5'
+              : 'text-slate-600 dark:text-text-muted hover:text-slate-900 dark:hover:text-text hover:bg-slate-900/5 dark:hover:bg-white/5'
           )}
         >
           <Icon className="h-5 w-5 shrink-0" aria-hidden />

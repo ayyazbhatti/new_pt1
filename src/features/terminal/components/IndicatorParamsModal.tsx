@@ -57,7 +57,7 @@ export function IndicatorParamsModal({ open, onOpenChange, indicator, onSave }: 
     <ModalShell open={open} onOpenChange={onOpenChange} title={`${indicator.name} parameters`} size="sm">
       <div className="space-y-4 pt-2">
         {labels.length === 0 ? (
-          <p className="text-sm text-muted-foreground">This indicator has no configurable parameters.</p>
+          <p className="text-sm text-slate-600 dark:text-slate-400">This indicator has no configurable parameters.</p>
         ) : (
           labels.map((label, i) => (
             <div key={i} className="space-y-1.5">

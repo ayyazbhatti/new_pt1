@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
@@ -41,6 +41,11 @@ import { getEmailTemplates, updateEmailTemplate } from '../api/emailTemplates.ap
 import { IntegrationsSettingsTab } from '../components/IntegrationsSettingsTab'
 import { VoisoSettingsTab } from '../components/VoisoSettingsTab'
 import { AiSettingsTab } from '../components/AiSettingsTab'
+import {
+  getGeneralSettings,
+  updateGeneralSettings,
+  type GeneralSettings,
+} from '../api/generalSettings.api'
 
 const SETTINGS_TABS = [
   { id: 'general', label: 'General', icon: Settings },
@@ -75,6 +80,7 @@ export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const tab = (searchParams.get('tab') as SettingsTabId) || 'general'
   const canEditSettings = useCanAccess('settings:edit')
+  const canViewSettings = useCanAccess('settings:view')
 
   const [siteName, setSiteName] = useState('LandBricks')
   const [supportEmail, setSupportEmail] = useState('support@landbricks.com')
@@ -154,6 +160,60 @@ export function SettingsPage() {
   }, [editingTemplateId, mergedTemplates])
 
   const queryClient = useQueryClient()
+
+  const generalSettingsQuery = useQuery({
+    queryKey: ['admin', 'settings', 'general'],
+    queryFn: getGeneralSettings,
+    enabled: tab === 'general' && canViewSettings,
+  })
+
+  useEffect(() => {
+    const d = generalSettingsQuery.data
+    if (!d) return
+    setSiteName(d.siteName)
+    setTimezone(d.timezone)
+    setDefaultCurrency(d.currency)
+  }, [generalSettingsQuery.data])
+
+  const generalDirty = useMemo(() => {
+    const d = generalSettingsQuery.data
+    if (!d) return false
+    return (
+      siteName.trim() !== d.siteName.trim() ||
+      timezone !== d.timezone ||
+      defaultCurrency !== d.currency
+    )
+  }, [generalSettingsQuery.data, siteName, timezone, defaultCurrency])
+
+  const saveGeneralSettingsMutation = useMutation({
+    mutationFn: (payload: GeneralSettings) => updateGeneralSettings(payload),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(['admin', 'settings', 'general'], saved)
+      toast.success('General settings saved')
+    },
+    onError: (err: unknown) => {
+      toast.error(getApiErrorMessage(err) || 'Failed to save general settings')
+    },
+  })
+
+  const handleSaveGeneralSettings = useCallback(() => {
+    if (!generalSettingsQuery.data) return
+    saveGeneralSettingsMutation.mutate({
+      siteName: siteName.trim(),
+      timezone,
+      currency: defaultCurrency,
+    })
+  }, [generalSettingsQuery.data, siteName, timezone, defaultCurrency, saveGeneralSettingsMutation])
+
+  const handleResetGeneralSettings = useCallback(() => {
+    const d = generalSettingsQuery.data
+    if (!d) return
+    setSiteName(d.siteName)
+    setTimezone(d.timezone)
+    setDefaultCurrency(d.currency)
+    toast.success('Reverted site name, timezone, and currency to last saved values')
+  }, [generalSettingsQuery.data])
+
   const updateTemplateMutation = useMutation({
     mutationFn: ({ id, subject, body }: { id: string; subject: string; body: string }) =>
       updateEmailTemplate(id, { subject, body }),
@@ -312,13 +372,44 @@ export function SettingsPage() {
 
         {/* Content */}
         <div className="min-w-0 flex-1">
-          {tab === 'general' && (
+          {tab === 'general' && !canViewSettings && (
+            <Card className="p-6">
+              <p className="text-sm text-text-muted">
+                You need the <span className="font-mono text-text">settings:view</span> permission to load
+                general settings.
+              </p>
+            </Card>
+          )}
+
+          {tab === 'general' && canViewSettings && generalSettingsQuery.isLoading && !generalSettingsQuery.data && (
+            <div className="flex items-center gap-2 text-sm text-text-muted">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading general settings…
+            </div>
+          )}
+
+          {tab === 'general' && canViewSettings && generalSettingsQuery.isError && (
+            <Card className="p-6">
+              <p className="text-sm text-destructive">
+                Could not load general settings. {getApiErrorMessage(generalSettingsQuery.error)}
+              </p>
+            </Card>
+          )}
+
+          {tab === 'general' && canViewSettings && generalSettingsQuery.data && (
             <div className="space-y-8">
+              {generalSettingsQuery.isFetching && !generalSettingsQuery.isLoading && (
+                <div className="flex items-center gap-2 text-xs text-text-muted">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Refreshing…
+                </div>
+              )}
               {/* Site Identity */}
               <Card className="p-6">
                 <h3 className="text-base font-semibold text-text">Site Identity</h3>
                 <p className="mt-1 text-sm text-text-muted">
-                  Basic information about your platform
+                  Basic information about your platform. Site name, timezone, and default currency are saved to the
+                  server.
                 </p>
                 <div className="mt-6 grid gap-5 sm:grid-cols-1">
                   <div>
@@ -329,6 +420,7 @@ export function SettingsPage() {
                       value={siteName}
                       onChange={(e) => setSiteName(e.target.value)}
                       placeholder="Site name"
+                      disabled={!canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
                       The name displayed throughout the platform.
@@ -343,16 +435,17 @@ export function SettingsPage() {
                       value={supportEmail}
                       onChange={(e) => setSupportEmail(e.target.value)}
                       placeholder="support@example.com"
+                      disabled={!canEditSettings}
                     />
                     <p className="mt-1.5 text-xs text-text-muted">
-                      Email address for user support inquiries.
+                      Email address for user support inquiries. (Not persisted yet — UI only.)
                     </p>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-text">
                       Default Currency
                     </label>
-                    <Select value={defaultCurrency} onValueChange={setDefaultCurrency}>
+                    <Select value={defaultCurrency} onValueChange={setDefaultCurrency} disabled={!canEditSettings}>
                       <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
@@ -368,7 +461,7 @@ export function SettingsPage() {
                     <label className="mb-1.5 block text-sm font-medium text-text">
                       Timezone
                     </label>
-                    <Select value={timezone} onValueChange={setTimezone}>
+                    <Select value={timezone} onValueChange={setTimezone} disabled={!canEditSettings}>
                       <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
@@ -392,7 +485,7 @@ export function SettingsPage() {
               <Card className="p-6">
                 <h3 className="text-base font-semibold text-text">Contact / Social</h3>
                 <p className="mt-1 text-sm text-text-muted">
-                  Contact information and social media links
+                  Contact information and social media links (not persisted yet — UI only.)
                 </p>
                 <div className="mt-6 grid gap-5 sm:grid-cols-1">
                   <div>
@@ -403,6 +496,7 @@ export function SettingsPage() {
                       value={whatsapp}
                       onChange={(e) => setWhatsapp(e.target.value)}
                       placeholder="+1234567890"
+                      disabled={!canEditSettings}
                     />
                   </div>
                   <div>
@@ -413,6 +507,7 @@ export function SettingsPage() {
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
                       placeholder="+1 (234) 567-8900"
+                      disabled={!canEditSettings}
                     />
                   </div>
                   <div>
@@ -423,6 +518,7 @@ export function SettingsPage() {
                       value={facebook}
                       onChange={(e) => setFacebook(e.target.value)}
                       placeholder="https://facebook.com/..."
+                      disabled={!canEditSettings}
                     />
                   </div>
                   <div>
@@ -433,6 +529,7 @@ export function SettingsPage() {
                       value={instagram}
                       onChange={(e) => setInstagram(e.target.value)}
                       placeholder="https://instagram.com/..."
+                      disabled={!canEditSettings}
                     />
                   </div>
                   <div>
@@ -443,6 +540,7 @@ export function SettingsPage() {
                       value={twitter}
                       onChange={(e) => setTwitter(e.target.value)}
                       placeholder="https://twitter.com/..."
+                      disabled={!canEditSettings}
                     />
                   </div>
                 </div>
@@ -465,24 +563,32 @@ export function SettingsPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => {
-                      setSiteName('LandBricks')
-                      setSupportEmail('support@landbricks.com')
-                      setDefaultCurrency('USD')
-                      setTimezone('America/New_York')
-                      setWhatsapp('+1234567890')
-                      setPhone('+1 (234) 567-8900')
-                      setFacebook('https://facebook.com/...')
-                      setInstagram('https://instagram.com/...')
-                      setTwitter('https://twitter.com/...')
-                    }}
+                    onClick={handleResetGeneralSettings}
+                    disabled={saveGeneralSettingsMutation.isPending || generalSettingsQuery.isFetching}
                   >
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Reset
                   </Button>
-                  <Button type="button">
-                    <Save className="mr-2 h-4 w-4" />
-                    Save Changes
+                  <Button
+                    type="button"
+                    onClick={handleSaveGeneralSettings}
+                    disabled={
+                      saveGeneralSettingsMutation.isPending ||
+                      !generalDirty ||
+                      !generalSettingsQuery.data
+                    }
+                  >
+                    {saveGeneralSettingsMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving…
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-4 w-4" />
+                        Save Changes
+                      </>
+                    )}
                   </Button>
                 </div>
               )}

@@ -1661,7 +1661,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                     <p className="text-sm text-slate-500">This user has not made any deposits or withdrawals yet.</p>
                   </div>
                 ) : (
-                  <div className="mt-6 overflow-x-auto rounded-lg border border-slate-700">
+                  <div className="mt-6 table-scroll rounded-lg border border-slate-700">
                     <DataTable data={fundingTransactions} columns={fundingTableColumns} />
                   </div>
                 )}
@@ -1966,7 +1966,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                     <p className="mt-2 text-sm text-slate-400">No open positions</p>
                   </div>
                 ) : (
-                  <div className="overflow-x-auto rounded-lg border border-slate-700">
+                  <div className="table-scroll rounded-lg border border-slate-700">
                     <table className="w-full min-w-[700px] text-sm">
                       <thead className="border-b border-slate-700">
                         <tr>
@@ -2082,7 +2082,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
               </div>
             )}
             {ordersPositionsSubTab === 'closed' && (
-              <div className="overflow-x-auto rounded-lg border border-slate-700">
+              <div className="table-scroll rounded-lg border border-slate-700">
                 <table className="w-full min-w-[900px] table-fixed text-sm [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap [&_th]:overflow-hidden [&_td]:overflow-hidden [&_th]:text-ellipsis [&_td]:text-ellipsis">
                   <thead className="border-b border-slate-700">
                     <tr>

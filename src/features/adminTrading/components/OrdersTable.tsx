@@ -218,7 +218,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
       </div>
 
       {/* Virtualized Body */}
-      <div ref={parentRef} className="h-[600px] overflow-auto">
+      <div ref={parentRef} className="scroll-surface h-[600px] overflow-auto">
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,

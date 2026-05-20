@@ -240,7 +240,7 @@ export function AdminMarkupPage() {
 
       {/* Table */}
       <div className="overflow-hidden rounded-lg border border-border bg-surface-2">
-        <div className="overflow-x-auto">
+        <div className="table-scroll">
           <table className="w-full min-w-[600px]">
             <thead>
               <tr className="border-b border-border bg-surface-2">

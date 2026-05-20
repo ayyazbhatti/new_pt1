@@ -288,7 +288,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
   return (
     <div className="rounded-lg border border-border overflow-hidden">
       {/* Single scroll container so header and body scroll together horizontally */}
-      <div ref={parentRef} className="h-[600px] overflow-auto">
+      <div ref={parentRef} className="scroll-surface h-[600px] overflow-auto">
         <div style={{ minWidth: TABLE_MIN_WIDTH, width: 'max-content' }}>
           {/* Header row - sticky for vertical scroll only, scrolls with content horizontally */}
           <div

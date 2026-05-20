@@ -3,6 +3,45 @@
 @tailwind utilities;
 
 @layer base {
+  /* Semantic palette: toggled with `html.dark` (Tailwind class strategy). */
+  html {
+    color-scheme: light;
+    --color-background: #f8fafc;
+    --color-background-rgb: 248 250 252;
+    --color-surface: #f1f5f9;
+    --color-surface-rgb: 241 245 249;
+    --color-surface-1: #ffffff;
+    --color-surface-1-rgb: 255 255 255;
+    --color-surface-2: #e2e8f0;
+    --color-surface-2-rgb: 226 232 240;
+    --color-border: rgba(15, 23, 42, 0.12);
+    --color-text: #0f172a;
+    --color-text-muted: #64748b;
+    --color-text-dim: #64748b;
+    --color-muted: #64748b;
+    --color-muted-rgb: 100 116 139;
+    touch-action: manipulation;
+    -ms-touch-action: manipulation;
+  }
+
+  html.dark {
+    color-scheme: dark;
+    --color-background: #0b1220;
+    --color-background-rgb: 11 18 32;
+    --color-surface: #111a2b;
+    --color-surface-rgb: 17 26 43;
+    --color-surface-1: #1a2332;
+    --color-surface-1-rgb: 26 35 50;
+    --color-surface-2: #0f172a;
+    --color-surface-2-rgb: 15 23 42;
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-text: #e5e7eb;
+    --color-text-muted: #94a3b8;
+    --color-text-dim: #94a3b8;
+    --color-muted: #94a3b8;
+    --color-muted-rgb: 148 163 184;
+  }
+
   html,
   body,
   #root {
@@ -11,40 +50,40 @@
     font-size: 80%;
   }
 
-  /* Prevent pinch-zoom on mobile (works with viewport meta + JS gesture blocking) */
-  html {
-    touch-action: manipulation;
-    -ms-touch-action: manipulation;
-  }
-
   body {
-    background-color: #0b1220;
-    color: #e5e7eb;
+    background-color: var(--color-background);
+    color: var(--color-text);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
       'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
       sans-serif;
-    background: linear-gradient(135deg, #0b1220 0%, #0f172a 100%);
+    background: linear-gradient(135deg, var(--color-background) 0%, var(--color-surface-2) 100%);
     overscroll-behavior: none;
   }
 
   * {
-    border-color: rgba(255, 255, 255, 0.08);
+    border-color: var(--color-border);
   }
 
-  /* Override browser default input styles for dark theme */
+  /* Override browser default input styles to match theme */
   input,
   textarea,
   select {
-    background-color: #1a2332;
-    color: #e5e7eb;
+    background-color: var(--color-surface-1);
+    color: var(--color-text);
+    color-scheme: light;
+  }
+
+  html.dark input,
+  html.dark textarea,
+  html.dark select {
     color-scheme: dark;
   }
 
   input::placeholder,
   textarea::placeholder {
-    color: #94a3b8;
+    color: var(--color-text-muted);
   }
 
   input:focus,
@@ -53,11 +92,20 @@
     @apply outline-none;
   }
 
+  html:not(.dark) input:-webkit-autofill,
+  html:not(.dark) input:-webkit-autofill:hover,
+  html:not(.dark) input:-webkit-autofill:focus,
+  html:not(.dark) input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 30px #ffffff inset !important;
+    -webkit-text-fill-color: #0f172a !important;
+    caret-color: #0f172a;
+  }
+
   /* Fix autofill styles for dark theme */
-  input:-webkit-autofill,
-  input:-webkit-autofill:hover,
-  input:-webkit-autofill:focus,
-  input:-webkit-autofill:active {
+  html.dark input:-webkit-autofill,
+  html.dark input:-webkit-autofill:hover,
+  html.dark input:-webkit-autofill:focus,
+  html.dark input:-webkit-autofill:active {
     -webkit-box-shadow: 0 0 0 30px #1a2332 inset !important;
     -webkit-text-fill-color: #e5e7eb !important;
     caret-color: #e5e7eb;
@@ -75,7 +123,7 @@
   }
   
   .focus-ring:focus-visible {
-    --tw-ring-offset-color: #0b1220;
+    --tw-ring-offset-color: var(--color-background);
   }
 }
 
@@ -87,6 +135,11 @@
 
   .scrollbar-thin:hover,
   .scrollbar-thin.scrolling {
+    scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+  }
+
+  html.dark .scrollbar-thin:hover,
+  html.dark .scrollbar-thin.scrolling {
     scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   }
 
@@ -287,8 +340,49 @@
     @apply border-b-0;
   }
 
+  /**
+   * Dark slim scrollbars for wide tables (overflow-x) and overflow-auto panes (virtualized lists).
+   * Use .table-scroll on horizontal table wrappers; add .scroll-surface alongside overflow-auto where both axes scroll.
+   */
   .table-scroll {
-    @apply overflow-x-auto scrollbar-thin;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
+  .table-scroll,
+  .scroll-surface {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.45) rgba(15, 23, 42, 0.55);
+  }
+
+  .table-scroll::-webkit-scrollbar,
+  .scroll-surface::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+
+  .table-scroll::-webkit-scrollbar-track,
+  .scroll-surface::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.55);
+    border-radius: 4px;
+  }
+
+  .table-scroll::-webkit-scrollbar-thumb,
+  .scroll-surface::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.42);
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .table-scroll::-webkit-scrollbar-thumb:hover,
+  .scroll-surface::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(186, 198, 212, 0.6);
+  }
+
+  .table-scroll::-webkit-scrollbar-corner,
+  .scroll-surface::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 

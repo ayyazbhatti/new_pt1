@@ -93,7 +93,7 @@ export function CenterWorkspace({ hideBottomDock = false, mobileShowOnlyBottomDo
   }
 
   return (
-    <div className="h-full min-h-0 overflow-hidden flex flex-col">
+    <div className="h-full min-h-0 overflow-hidden flex flex-col bg-background">
       <div ref={chartFullscreenRef} className="flex flex-1 min-h-0 flex-col bg-background">
         <div className="shrink-0 overflow-visible relative z-10">
           <ChartTopBar

@@ -1,4 +1,120 @@
 import { http } from '@/shared/api/http'
+import type { SymbolLeverageTier } from '@/shared/api/auth.api'
+
+/**
+ * Same tier selection as `risk::effective_leverage` / `effectiveLeverageFromTiers` in auth.api,
+ * but returns `null` when leverage cannot be resolved (no silent defaults — fail closed for terminal margin fallback).
+ */
+export function resolveEffectiveLeverageFromTiersOrNull(
+  notional: number,
+  tiers: SymbolLeverageTier[] | null | undefined,
+  userMin: number | null | undefined,
+  userMax: number | null | undefined
+): number | null {
+  if (!tiers?.length) return null
+  const userMinN = userMin != null ? userMin : 1
+  const userMaxN = userMax != null ? userMax : 500
+  if (userMinN < 1 || userMaxN < 1 || userMinN > userMaxN) return null
+  if (!Number.isFinite(notional) || notional < 0) return null
+  if (notional === 0) return null
+
+  const parseBound = (s: string) => {
+    const v = parseFloat(String(s).trim())
+    return Number.isFinite(v) ? v : Number.NaN
+  }
+
+  let bestLev: number | null = null
+  let bestFrom: number | null = null
+  for (const t of tiers) {
+    const from = parseBound(t.notional_from)
+    if (Number.isNaN(from) || notional < from) continue
+    const toRaw = t.notional_to
+    let inTier: boolean
+    if (toRaw == null || String(toRaw).trim() === '') {
+      inTier = true
+    } else {
+      const to = parseBound(String(toRaw))
+      if (Number.isNaN(to)) continue
+      inTier = notional < to
+    }
+    if (inTier) {
+      if (bestFrom == null || from > bestFrom) {
+        bestFrom = from
+        bestLev = t.max_leverage
+      }
+    }
+  }
+
+  let symbolLev = bestLev
+
+  if (symbolLev == null) {
+    for (let i = tiers.length - 1; i >= 0; i--) {
+      const t = tiers[i]
+      if (t.notional_to != null && String(t.notional_to).trim() !== '') continue
+      const from = parseBound(t.notional_from)
+      if (Number.isNaN(from)) continue
+      if (notional >= from) {
+        symbolLev = t.max_leverage
+        break
+      }
+    }
+  }
+
+  if (symbolLev == null && notional > 0) {
+    let bestFloor: { from: number; lev: number } | null = null
+    for (const t of tiers) {
+      const from = parseBound(t.notional_from)
+      if (Number.isNaN(from)) continue
+      if (bestFloor == null || from < bestFloor.from) {
+        bestFloor = { from, lev: t.max_leverage }
+      }
+    }
+    if (bestFloor != null && notional < bestFloor.from) {
+      symbolLev = bestFloor.lev
+    }
+  }
+
+  if (symbolLev == null || symbolLev < 1) return null
+  return Math.max(userMinN, Math.min(userMaxN, symbolLev))
+}
+
+/** Client-only margin fallback: MARKET uses BUY→ask / SELL→bid; LIMIT uses `limitExecutionPrice` when provided (>0). */
+export function clientMarketFallbackMarginUsdOrNull(args: {
+  bid: number
+  ask: number
+  side: 'BUY' | 'SELL'
+  baseUnits: number
+  tiers: SymbolLeverageTier[] | null | undefined
+  userMin: number | null | undefined
+  userMax: number | null | undefined
+  orderType?: 'MARKET' | 'LIMIT'
+  /** For LIMIT orders: same value as server `compute_order_margin_details` (limit price). Ignored for MARKET. */
+  limitExecutionPrice?: number | null
+}): number | null {
+  const {
+    bid,
+    ask,
+    side,
+    baseUnits,
+    tiers,
+    userMin,
+    userMax,
+    orderType = 'MARKET',
+    limitExecutionPrice,
+  } = args
+  if (!Number.isFinite(baseUnits) || baseUnits <= 0) return null
+  let exec: number
+  if (orderType === 'LIMIT' && limitExecutionPrice != null && Number.isFinite(limitExecutionPrice) && limitExecutionPrice > 0) {
+    exec = limitExecutionPrice
+  } else {
+    exec = side === 'SELL' ? bid : ask
+  }
+  if (!Number.isFinite(exec) || exec <= 0) return null
+  const notional = baseUnits * exec
+  const lev = resolveEffectiveLeverageFromTiersOrNull(notional, tiers, userMin, userMax)
+  if (lev == null || lev <= 0) return null
+  return notional / lev
+}
 
 export interface PlaceOrderRequest {
   symbol: string

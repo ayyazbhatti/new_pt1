@@ -470,7 +470,7 @@ export function UserAffiliatePage() {
           <div className="p-3 sm:p-4 md:p-6 border-b border-slate-700">
             <h3 className="text-base sm:text-lg font-semibold text-white">My Referrals</h3>
           </div>
-          <div className="overflow-x-auto">
+          <div className="table-scroll">
             <table className="w-full min-w-[600px]">
               <thead className="bg-slate-700/50">
                 <tr>
@@ -521,7 +521,7 @@ export function UserAffiliatePage() {
           <div className="p-3 sm:p-4 md:p-6 border-b border-slate-700">
             <h3 className="text-base sm:text-lg font-semibold text-white">Commission History</h3>
           </div>
-          <div className="overflow-x-auto">
+          <div className="table-scroll">
             <table className="w-full min-w-[600px]">
               <thead className="bg-slate-700/50">
                 <tr>
