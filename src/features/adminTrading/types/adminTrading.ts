@@ -1,4 +1,4 @@
-export type OrderStatus = 'pending' | 'filled' | 'cancelled' | 'rejected'
+export type OrderStatus = 'pending' | 'cancelling' | 'partially_filled' | 'filled' | 'cancelled' | 'rejected'
 export type OrderSide = 'buy' | 'sell'
 export type OrderType = 'market' | 'limit' | 'stop' | 'stopLimit'
 export type PositionSide = 'long' | 'short'

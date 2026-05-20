@@ -86,7 +86,7 @@ export interface ListOrdersResponse {
 }
 
 export interface ListOrdersParams {
-  status?: string // "pending", "filled", "cancelled", etc.
+  status?: string // "pending", "cancelling", "filled", "cancelled", etc.
   limit?: number
   offset?: number
 }

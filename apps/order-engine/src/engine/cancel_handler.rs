@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use async_nats::Message;
 use contracts::{commands::CancelOrderCommand, VersionedMessage};
 use redis::aio::ConnectionManager;
+use rust_decimal::Decimal;
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 
@@ -98,6 +99,36 @@ impl CancelHandler {
                 };
                 
                 self.nats.publish_event(nats_subjects::EVENT_ORDER_CANCELED, &event).await?;
+
+                // Also publish evt.order.updated for PostgreSQL sync via auth-service order_event_handler
+                let order_updated_event = contracts::events::OrderUpdatedEvent {
+                    order_id: cmd.order_id,
+                    user_id: cmd.user_id,
+                    status: contracts::enums::OrderStatus::Cancelled,
+                    filled_size: Decimal::ZERO,
+                    avg_fill_price: None,
+                    reason: Some("Canceled by user".to_string()),
+                    ts: now(),
+                };
+                match self
+                    .nats
+                    .publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event)
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            "📤 Published evt.order.updated order_id={}, status=CANCELLED",
+                            cmd.order_id
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to publish evt.order.updated for cancel of order {}: {}",
+                            cmd.order_id, e
+                        );
+                    }
+                }
+
                 self.metrics.inc_orders_canceled();
                 
                 // Update cache

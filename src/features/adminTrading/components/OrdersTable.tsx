@@ -132,7 +132,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
               ? 'success'
               : status === 'cancelled' || status === 'rejected'
                 ? 'danger'
-                : status === 'pending'
+                : status === 'pending' || status === 'cancelling'
                   ? 'warning'
                   : 'neutral'
           return <Badge variant={variant}>{status.toUpperCase()}</Badge>

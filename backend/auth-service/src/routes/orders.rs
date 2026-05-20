@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use contracts::{VersionedMessage, commands::{PlaceOrderCommand, LeverageTier as CmdLeverageTier}, enums::{Side, OrderType, TimeInForce}};
+use contracts::{VersionedMessage, commands::{CancelOrderCommand, PlaceOrderCommand, LeverageTier as CmdLeverageTier}, enums::{Side, OrderType, TimeInForce}};
 use crate::models::leverage_profile::LeverageProfileTier;
 use redis::AsyncCommands;
 use redis_model::keys::Keys;
@@ -1085,7 +1085,7 @@ async fn cancel_order(
     let result = sqlx::query(
         r#"
         UPDATE orders
-        SET status = 'cancelled'::order_status, cancelled_at = $1, updated_at = $1
+        SET status = 'cancelling'::order_status, updated_at = $1
         WHERE id = $2 AND user_id = $3 AND status = 'pending'::order_status
         "#,
     )
@@ -1117,31 +1117,40 @@ async fn cancel_order(
     }
 
     // Publish to NATS
-    let cancel_event = serde_json::json!({
-        "orderId": order_id.to_string(),
-        "userId": user_id.to_string(),
-        "cancelledAt": now.to_rfc3339(),
-    });
+    let cancel_cmd = CancelOrderCommand {
+        user_id,
+        order_id,
+        idempotency_key: Uuid::new_v4().to_string(),
+        ts: now,
+    };
 
-    let msg = VersionedMessage::new("order.cancel", &cancel_event)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let msg = VersionedMessage::new("cmd.order.cancel", &cancel_cmd)
+        .map_err(|e| {
+            error!("Failed to create VersionedMessage for cancel: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     let payload = serde_json::to_vec(&msg)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // TODO: If NATS publish fails, order is stuck in 'cancelling' state.
+    // Consider implementing a sweeper that reverts cancelling orders older than N minutes back to pending if no engine event arrives.
     orders_state.nats.publish("cmd.order.cancel".to_string(), payload.into()).await
-        .ok(); // Don't fail if NATS publish fails
+        .map_err(|e| {
+            error!("Failed to publish cancel command to NATS for order {}: {}", order_id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Also publish to Redis for ws-gateway
     let redis_payload = serde_json::json!({
         "type": "order.update",
         "user_id": user_id.to_string(),
         "order_id": order_id.to_string(),
-        "status": "CANCELLED",
+        "status": "CANCELLING",
         "ts": now.timestamp_millis(),
         "payload": {
             "user_id": user_id.to_string(),
             "order_id": order_id.to_string(),
-            "status": "CANCELLED",
+            "status": "CANCELLING",
             "ts": now.timestamp_millis(),
         }
     });
@@ -1153,7 +1162,7 @@ async fn cancel_order(
             .await;
     }
 
-    info!("Order cancelled: order_id={}, user_id={}", order_id, user_id);
+    info!("Order cancel requested: order_id={}, user_id={}", order_id, user_id);
     // Return 204 No Content so the frontend does not try to parse a JSON body (cancel has no response body).
     Ok(StatusCode::NO_CONTENT)
 }

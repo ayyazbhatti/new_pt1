@@ -20,12 +20,7 @@ fn permission_denied_to_response(
 ) -> (StatusCode, Json<ErrorResponse>) {
     (
         e.status,
-        Json(ErrorResponse {
-            error: ErrorDetail {
-                code: e.code,
-                message: e.message,
-            },
-        }),
+        Json(ErrorResponse::new(e.code, e.message)),
     )
 }
 

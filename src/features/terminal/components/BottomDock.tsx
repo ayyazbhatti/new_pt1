@@ -238,7 +238,15 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const fetchOrders = useCallback(async (silent?: boolean) => {
     if (!silent) setOrdersLoading(true)
     try {
-      const data = await listOrders({ status: 'pending', limit: 100 })
+      const [pendingData, cancellingData] = await Promise.all([
+        listOrders({ status: 'pending', limit: 100 }),
+        listOrders({ status: 'cancelling', limit: 100 }),
+      ])
+      const byId = new Map<string, Order>()
+      for (const o of [...pendingData.items, ...cancellingData.items]) {
+        byId.set(o.id, o)
+      }
+      const data = { items: Array.from(byId.values()), total: byId.size }
       const now = Date.now()
       const tombstones = terminalOrderTombstonesRef.current
       // Keep tombstones bounded and self-cleaning.
@@ -508,7 +516,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     (raw.price as string) ?? (raw as { avg_fill_price?: string }).avg_fill_price
                   updated[existing] = {
                     ...updated[existing],
-                    status: stRaw.toLowerCase() || updated[existing].status,
+                    status: (st === 'CANCELLING' ? 'cancelling' : stRaw.toLowerCase()) || updated[existing].status,
                     filled_size: qty || updated[existing].filled_size,
                     avg_fill_price:
                       (typeof px === 'string' ? px : px != null ? String(px) : undefined) ||
@@ -1216,10 +1224,15 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.filter(o => o.status === 'pending').map((order, index) => {
+                  {orders.filter(o => {
+                    const s = (o.status || '').trim().toLowerCase()
+                    return s === 'pending' || s === 'cancelling'
+                  }).map((order, index) => {
                     const createdDate = new Date(order.created_at)
                     const timeStr = createdDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-                    const isPendingOrder = (order.status || '').trim().toLowerCase() === 'pending'
+                    const statusNorm = (order.status || '').trim().toLowerCase()
+                    const isPendingOrder = statusNorm === 'pending'
+                    const isCancellingOrder = statusNorm === 'cancelling'
                     
                     return (
                     <tr 
@@ -1249,11 +1262,13 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                           "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
                           order.status === 'filled' 
                             ? 'bg-success/20 text-success' 
+                            : isCancellingOrder
+                            ? 'bg-warning/20 text-warning'
                             : order.status === 'pending' 
                             ? 'bg-info/20 text-info' 
                             : 'bg-muted/20 text-muted'
                         )}>
-                          {order.status}
+                          {isCancellingOrder ? 'cancelling' : order.status}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-text font-medium">{timeStr}</td>
@@ -1279,8 +1294,13 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                                 onClick={async () => {
                                   try {
                                     await cancelOrderApi(order.id)
-                                    toast.success(`Order ${order.id.slice(0, 8)}... cancelled`)
-                                    fetchOrders()
+                                    setOrders((prev) =>
+                                      prev.map((o) =>
+                                        o.id === order.id ? { ...o, status: 'cancelling' } : o
+                                      )
+                                    )
+                                    toast.success(`Order ${order.id.slice(0, 8)}... cancel requested`)
+                                    void fetchOrders(true)
                                   } catch (error: any) {
                                     toast.error(`Failed to cancel order: ${error.message}`)
                                   }

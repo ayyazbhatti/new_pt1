@@ -15,6 +15,7 @@ export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
     const variants: Record<string, 'success' | 'danger' | 'neutral' | 'warning'> = {
       filled: 'success',
       pending: 'warning',
+      cancelling: 'warning',
       cancelled: 'neutral',
       rejected: 'danger',
     }

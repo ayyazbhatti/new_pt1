@@ -98,6 +98,7 @@ export function OrdersAdminPanel() {
     const variants: Record<string, 'success' | 'danger' | 'neutral' | 'warning'> = {
       filled: 'success',
       pending: 'warning',
+      cancelling: 'warning',
       cancelled: 'neutral',
       rejected: 'danger',
     }

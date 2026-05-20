@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::Utc;
 use contracts::{
-    commands::PlaceOrderCommand,
+    commands::{CancelOrderCommand, PlaceOrderCommand},
     enums::{OrderType, Side, TimeInForce},
     VersionedMessage,
 };
@@ -15,7 +15,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
@@ -205,12 +205,45 @@ pub struct PaginatedResponse<T> {
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ErrorDetail {
     pub code: String,
     pub message: String,
+}
+
+impl ErrorResponse {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            error: ErrorDetail {
+                code: code.into(),
+                message: message.into(),
+            },
+            current_status: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn with_order_hint(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        current_status: String,
+        suggestion: impl Into<String>,
+    ) -> Self {
+        Self {
+            error: ErrorDetail {
+                code: code.into(),
+                message: message.into(),
+            },
+            current_status: Some(current_status),
+            suggestion: Some(suggestion.into()),
+        }
+    }
 }
 
 // Types are already public and can be accessed via crate::routes::admin_trading::
@@ -224,12 +257,7 @@ fn permission_denied_to_response(
 ) -> (StatusCode, Json<ErrorResponse>) {
     (
         e.status,
-        Json(ErrorResponse {
-            error: ErrorDetail {
-                code: e.code,
-                message: e.message,
-            },
-        }),
+        Json(ErrorResponse::new(e.code, e.message)),
     )
 }
 
@@ -251,12 +279,7 @@ async fn list_admin_orders(
         .map_err(|(status, Json(se))| {
             (
                 status,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: se.error.code,
-                        message: se.error.message,
-                    },
-                }),
+                Json(ErrorResponse::new(se.error.code, se.error.message)),
             )
         })?;
 
@@ -310,12 +333,7 @@ async fn list_admin_orders(
         error!("Failed to count orders: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to fetch orders".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to fetch orders".to_string())),
         )
     })?;
     let total_count = count_row.0;
@@ -381,12 +399,7 @@ async fn list_admin_orders(
         error!("Failed to fetch orders: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to fetch orders".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to fetch orders".to_string())),
         )
     })?;
 
@@ -463,36 +476,21 @@ async fn create_admin_order(
     let user_id = Uuid::parse_str(&req.user_id).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_USER_ID".to_string(),
-                    message: "Invalid user_id format".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_USER_ID".to_string(), "Invalid user_id format".to_string())),
         )
     })?;
 
     let symbol_id = Uuid::parse_str(&req.symbol_id).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_SYMBOL_ID".to_string(),
-                    message: "Invalid symbol_id format".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_SYMBOL_ID".to_string(), "Invalid symbol_id format".to_string())),
         )
     })?;
 
     let size = Decimal::try_from(req.size).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_SIZE".to_string(),
-                    message: "Invalid size".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_SIZE".to_string(), "Invalid size".to_string())),
         )
     })?;
 
@@ -514,22 +512,12 @@ async fn create_admin_order(
         error!("Failed to fetch user: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to fetch user".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to fetch user".to_string())),
         )
     })?
     .ok_or((
         StatusCode::NOT_FOUND,
-        Json(ErrorResponse {
-            error: ErrorDetail {
-                code: "USER_NOT_FOUND".to_string(),
-                message: "User not found".to_string(),
-            },
-        }),
+        Json(ErrorResponse::new("USER_NOT_FOUND".to_string(), "User not found".to_string())),
     ))?;
 
     let symbol_row = sqlx::query!(r#"SELECT code FROM symbols WHERE id = $1"#, symbol_id)
@@ -539,22 +527,12 @@ async fn create_admin_order(
             error!("Failed to fetch symbol: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "INTERNAL_ERROR".to_string(),
-                        message: "Failed to fetch symbol".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to fetch symbol".to_string())),
             )
         })?
         .ok_or((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "SYMBOL_NOT_FOUND".to_string(),
-                    message: "Symbol not found".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("SYMBOL_NOT_FOUND".to_string(), "Symbol not found".to_string())),
         ))?;
 
     let group_name = if let Some(group_id) = user_row.group_id {
@@ -597,12 +575,7 @@ async fn create_admin_order(
         error!("Failed to insert order: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to create order".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to create order".to_string())),
         )
     })?;
 
@@ -614,12 +587,7 @@ async fn create_admin_order(
             error!("Invalid side: {}", req.side);
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "INVALID_SIDE".to_string(),
-                        message: "Side must be BUY or SELL".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("INVALID_SIDE".to_string(), "Side must be BUY or SELL".to_string())),
             ));
         }
     };
@@ -630,12 +598,7 @@ async fn create_admin_order(
             error!("Invalid order type: {}", req.order_type);
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "INVALID_ORDER_TYPE".to_string(),
-                        message: "Order type must be MARKET or LIMIT".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("INVALID_ORDER_TYPE".to_string(), "Order type must be MARKET or LIMIT".to_string())),
             ));
         }
     };
@@ -687,24 +650,14 @@ async fn create_admin_order(
         error!("Failed to create versioned message: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to publish order event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to publish order event".to_string())),
         )
     })?;
     let payload = serde_json::to_vec(&msg).map_err(|e| {
         error!("Failed to serialize order command: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize order event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize order event".to_string())),
         )
     })?;
 
@@ -749,13 +702,8 @@ async fn create_admin_order(
             error!("Admin order JetStream publish failed: {}", e);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "ORDER_QUEUE_UNAVAILABLE".to_string(),
-                        message: "Order queue temporarily unavailable. Please try again."
-                            .to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("ORDER_QUEUE_UNAVAILABLE".to_string(), "Order queue temporarily unavailable. Please try again."
+                            .to_string())),
             )
         })?;
     admin_state
@@ -766,12 +714,7 @@ async fn create_admin_order(
             error!("Failed to publish to NATS: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "INTERNAL_ERROR".to_string(),
-                        message: "Failed to publish order event".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to publish order event".to_string())),
             )
         })?;
 
@@ -801,23 +744,13 @@ async fn create_admin_order(
     let admin_msg = VersionedMessage::new("admin.order.created", &admin_event).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to publish admin event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to publish admin event".to_string())),
         )
     })?;
     let admin_payload = serde_json::to_vec(&admin_msg).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize admin event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize admin event".to_string())),
         )
     })?;
 
@@ -899,32 +832,22 @@ async fn cancel_admin_order(
         error!("Failed to fetch order: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to fetch order".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to fetch order".to_string())),
         )
     })?
     .ok_or((
         StatusCode::NOT_FOUND,
-        Json(ErrorResponse {
-            error: ErrorDetail {
-                code: "ORDER_NOT_FOUND".to_string(),
-                message: "Order not found".to_string(),
-            },
-        }),
+        Json(ErrorResponse::new("ORDER_NOT_FOUND".to_string(), "Order not found".to_string())),
     ))?;
 
     let user_id = order_row.user_id;
 
-    // Update order status
-    sqlx::query(
+    // Only pending orders go through engine cancel; use force_cancel for terminal-state overrides.
+    let result = sqlx::query(
         r#"
         UPDATE orders
-        SET status = 'cancelled'::order_status, cancelled_at = $1, updated_at = $1
-        WHERE id = $2
+        SET status = 'cancelling'::order_status, updated_at = $1
+        WHERE id = $2 AND status = 'pending'::order_status
         "#,
     )
     .bind(now)
@@ -935,55 +858,69 @@ async fn cancel_admin_order(
         error!("Failed to cancel order: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to cancel order".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to cancel order".to_string())),
         )
     })?;
 
-    // Publish events
-    let cancel_event = serde_json::json!({
-        "orderId": order_id.to_string(),
-        "userId": user_id.to_string(),
-        "timestamp": now.to_rfc3339(),
-    });
+    if result.rows_affected() == 0 {
+        let current_status = order_row.status.as_deref().unwrap_or("unknown").to_string();
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::with_order_hint(
+                "ORDER_NOT_CANCELLABLE",
+                "Order is not in pending state. Use force cancel to mark non-pending orders as cancelled.",
+                current_status,
+                "force_cancel",
+            )),
+        ));
+    }
 
-    let msg = VersionedMessage::new("admin.order.canceled", &cancel_event).map_err(|_| {
+    let cancel_cmd = CancelOrderCommand {
+        user_id,
+        order_id,
+        idempotency_key: Uuid::new_v4().to_string(),
+        ts: now,
+    };
+
+    let msg = VersionedMessage::new("cmd.order.cancel", &cancel_cmd).map_err(|e| {
+        error!("Failed to create VersionedMessage for admin cancel: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to publish cancel event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to publish cancel command".to_string())),
         )
     })?;
     let payload = serde_json::to_vec(&msg).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize cancel event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize cancel command".to_string())),
         )
     })?;
 
+    // TODO: If NATS publish fails, order is stuck in 'cancelling' state.
+    // Consider implementing a sweeper that reverts cancelling orders older than N minutes back to pending if no engine event arrives.
     admin_state
         .nats
-        .publish("admin.order.canceled".to_string(), payload.into())
+        .publish("cmd.order.cancel".to_string(), payload.into())
         .await
-        .ok();
+        .map_err(|e| {
+            error!(
+                "Failed to publish cancel command to NATS for order {}: {}",
+                order_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to publish cancel command to NATS".to_string())),
+            )
+        })?;
 
-    // Also publish to Redis
+    // Notify admin UI via Redis (engine evt.order.updated will finalize DB + user WS)
     let redis_payload = serde_json::json!({
-        "type": "admin.order.canceled",
-        "payload": cancel_event,
+        "type": "admin.order.cancelling",
+        "payload": {
+            "orderId": order_id.to_string(),
+            "userId": user_id.to_string(),
+            "timestamp": now.to_rfc3339(),
+        },
     });
     if let Ok(mut conn) = admin_state.redis.get().await {
         let _: Result<(), _> = redis::cmd("PUBLISH")
@@ -994,7 +931,7 @@ async fn cancel_admin_order(
     }
 
     info!(
-        "Admin cancelled order: order_id={}, admin_id={}",
+        "Admin cancel requested: order_id={}, admin_id={}",
         order_id, claims.sub
     );
     Ok(StatusCode::OK)
@@ -1016,40 +953,34 @@ async fn force_cancel_admin_order(
 
     let now = Utc::now();
 
-    // Check if order exists
-    let order_row = sqlx::query!(r#"SELECT user_id FROM orders WHERE id = $1"#, order_id)
-        .fetch_optional(&pool)
-        .await
-        .map_err(|e| {
-            error!("Failed to fetch order: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "INTERNAL_ERROR".to_string(),
-                        message: "Failed to fetch order".to_string(),
-                    },
-                }),
-            )
-        })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "ORDER_NOT_FOUND".to_string(),
-                    message: "Order not found".to_string(),
-                },
-            }),
-        ))?;
+    let order_row = sqlx::query!(
+        r#"SELECT user_id, status::text as "status!" FROM orders WHERE id = $1"#,
+        order_id
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to fetch order: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to fetch order".to_string())),
+        )
+    })?
+    .ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse::new("ORDER_NOT_FOUND".to_string(), "Order not found".to_string())),
+    ))?;
 
     let user_id = order_row.user_id;
+    let current_status = order_row.status;
+    let needs_engine_cancel = matches!(current_status.as_str(), "pending" | "cancelling");
 
-    // Force cancel (ignore current status)
+    // Force cancel: mark DB cancelled immediately (admin intent is final).
     sqlx::query(
         r#"
         UPDATE orders
         SET status = 'cancelled'::order_status, cancelled_at = $1, updated_at = $1
-        WHERE id = $2
+        WHERE id = $2 AND status <> 'cancelled'::order_status
         "#,
     )
     .bind(now)
@@ -1060,55 +991,51 @@ async fn force_cancel_admin_order(
         error!("Failed to force cancel order: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to force cancel order".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to force cancel order".to_string())),
         )
     })?;
 
-    // Publish events (same as cancel)
-    let cancel_event = serde_json::json!({
-        "orderId": order_id.to_string(),
-        "userId": user_id.to_string(),
-        "timestamp": now.to_rfc3339(),
-    });
+    if needs_engine_cancel {
+        let cancel_cmd = CancelOrderCommand {
+            user_id,
+            order_id,
+            idempotency_key: Uuid::new_v4().to_string(),
+            ts: now,
+        };
 
-    let msg = VersionedMessage::new("admin.order.canceled", &cancel_event).map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to publish cancel event".to_string(),
-                },
-            }),
-        )
-    })?;
-    let payload = serde_json::to_vec(&msg).map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize cancel event".to_string(),
-                },
-            }),
-        )
-    })?;
+        let msg = VersionedMessage::new("cmd.order.cancel", &cancel_cmd).map_err(|e| {
+            error!("Force cancel: failed to create VersionedMessage: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to build cancel command".to_string())),
+            )
+        })?;
+        let payload = serde_json::to_vec(&msg).map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize cancel command".to_string())),
+            )
+        })?;
 
-    admin_state
-        .nats
-        .publish("admin.order.canceled".to_string(), payload.into())
-        .await
-        .ok();
+        if let Err(e) = admin_state
+            .nats
+            .publish("cmd.order.cancel".to_string(), payload.into())
+            .await
+        {
+            warn!(
+                "Force cancel: failed to publish engine cancel for order {}: {}. DB updated to cancelled regardless.",
+                order_id, e
+            );
+        }
+    }
 
-    // Also publish to Redis
     let redis_payload = serde_json::json!({
         "type": "admin.order.canceled",
-        "payload": cancel_event,
+        "payload": {
+            "orderId": order_id.to_string(),
+            "userId": user_id.to_string(),
+            "timestamp": now.to_rfc3339(),
+        },
     });
     if let Ok(mut conn) = admin_state.redis.get().await {
         let _: Result<(), _> = redis::cmd("PUBLISH")
@@ -1119,8 +1046,8 @@ async fn force_cancel_admin_order(
     }
 
     info!(
-        "Admin force cancelled order: order_id={}, admin_id={}",
-        order_id, claims.sub
+        "Admin force cancelled order: order_id={}, admin_id={}, previous_status={}, engine_notified={}",
+        order_id, claims.sub, current_status, needs_engine_cancel
     );
     Ok(StatusCode::OK)
 }

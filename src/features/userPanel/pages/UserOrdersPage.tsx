@@ -176,7 +176,9 @@ function buildOrderColumns(viewMode: ViewMode): ColumnDef<Order>[] {
             ? 'bg-success/15 text-success'
             : status === 'pending'
               ? 'bg-blue-500/15 text-blue-400'
-              : 'bg-text-muted/15 text-text-muted'
+              : status === 'cancelling'
+                ? 'bg-amber-500/15 text-amber-400'
+                : 'bg-text-muted/15 text-text-muted'
         return (
           <span className={cn('inline-flex rounded px-2 py-0.5 text-xs font-medium', statusClass)}>
             {status}

@@ -45,12 +45,7 @@ async fn list_closed_positions_admin(
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Cache unavailable".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Cache unavailable".to_string())),
         )
     })?;
 
@@ -61,12 +56,7 @@ async fn list_closed_positions_admin(
             error!("Admin closed positions: Redis KEYS failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "REDIS_ERROR".to_string(),
-                        message: "Failed to list position keys".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Failed to list position keys".to_string())),
             )
         })?;
 
@@ -134,12 +124,7 @@ async fn list_closed_positions_admin(
             error!("Admin closed positions: user fetch failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "DB_ERROR".to_string(),
-                        message: "Failed to load user info".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("DB_ERROR".to_string(), "Failed to load user info".to_string())),
             )
         })?;
         let group_ids: Vec<Uuid> = rows
@@ -321,12 +306,7 @@ fn permission_denied_to_response(
 ) -> (StatusCode, Json<ErrorResponse>) {
     (
         e.status,
-        Json(ErrorResponse {
-            error: ErrorDetail {
-                code: e.code,
-                message: e.message,
-            },
-        }),
+        Json(ErrorResponse::new(e.code, e.message)),
     )
 }
 
@@ -345,12 +325,7 @@ async fn list_admin_positions(
         .map_err(|(status, Json(se))| {
             (
                 status,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: se.error.code,
-                        message: se.error.message,
-                    },
-                }),
+                Json(ErrorResponse::new(se.error.code, se.error.message)),
             )
         })?;
 
@@ -372,12 +347,7 @@ async fn list_admin_positions(
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Cache unavailable".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Cache unavailable".to_string())),
         )
     })?;
 
@@ -399,12 +369,7 @@ async fn list_admin_positions(
                 error!("Admin positions: Redis open index KEYS failed: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: ErrorDetail {
-                            code: "REDIS_ERROR".to_string(),
-                            message: "Failed to list open position indexes".to_string(),
-                        },
-                    }),
+                    Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Failed to list open position indexes".to_string())),
                 )
             })?
         };
@@ -496,12 +461,7 @@ async fn list_admin_positions(
             error!("Admin positions: user fetch failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "DB_ERROR".to_string(),
-                        message: "Failed to load user info".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("DB_ERROR".to_string(), "Failed to load user info".to_string())),
             )
         })?;
         let group_ids: Vec<Uuid> = rows
@@ -722,12 +682,7 @@ async fn close_admin_position(
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Cache unavailable".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Cache unavailable".to_string())),
         )
     })?;
 
@@ -739,36 +694,21 @@ async fn close_admin_position(
         );
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Failed to read position".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Failed to read position".to_string())),
         )
     })?;
 
     if pos_data.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "NOT_FOUND".to_string(),
-                    message: "Position not found".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("NOT_FOUND".to_string(), "Position not found".to_string())),
         ));
     }
 
     let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_POSITION".to_string(),
-                    message: "Position missing user_id".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_POSITION".to_string(), "Position missing user_id".to_string())),
         )
     })?;
 
@@ -776,12 +716,10 @@ async fn close_admin_position(
     if !status.eq_ignore_ascii_case("OPEN") {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "POSITION_NOT_OPEN".to_string(),
-                    message: format!("Position is not open (status: {})", status),
-                },
-            }),
+            Json(ErrorResponse::new(
+                "POSITION_NOT_OPEN",
+                format!("Position is not open (status: {})", status),
+            )),
         ));
     }
 
@@ -807,12 +745,7 @@ async fn close_admin_position(
         );
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "NATS_ERROR".to_string(),
-                    message: "Failed to send close command".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("NATS_ERROR".to_string(), "Failed to send close command".to_string())),
         ));
     }
     info!(
@@ -828,23 +761,13 @@ async fn close_admin_position(
     let msg = VersionedMessage::new("admin.position.closed", &close_event).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to publish close event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to publish close event".to_string())),
         )
     })?;
     let payload = serde_json::to_vec(&msg).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize close event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize close event".to_string())),
         )
     })?;
     admin_state
@@ -876,23 +799,13 @@ async fn modify_position_sltp(
         VersionedMessage::new("admin.position.sltp.modified", &modify_event).map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "INTERNAL_ERROR".to_string(),
-                        message: "Failed to publish modify event".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to publish modify event".to_string())),
             )
         })?;
     let payload = serde_json::to_vec(&msg).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize modify event".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize modify event".to_string())),
         )
     })?;
     admin_state
@@ -918,12 +831,7 @@ async fn reopen_admin_position(
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Cache unavailable".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Cache unavailable".to_string())),
         )
     })?;
 
@@ -935,24 +843,14 @@ async fn reopen_admin_position(
         );
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Failed to read position".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Failed to read position".to_string())),
         )
     })?;
 
     if pos_data.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "NOT_FOUND".to_string(),
-                    message: "Position not found".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("NOT_FOUND".to_string(), "Position not found".to_string())),
         ));
     }
 
@@ -960,35 +858,23 @@ async fn reopen_admin_position(
     if !status.eq_ignore_ascii_case("CLOSED") && !status.eq_ignore_ascii_case("LIQUIDATED") {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "POSITION_NOT_CLOSED".to_string(),
-                    message: format!("Position is not closed (status: {}). Only closed or liquidated positions can be re-opened.", status),
-                },
-            }),
+            Json(ErrorResponse::new(
+                "POSITION_NOT_CLOSED",
+                format!("Position is not closed (status: {}). Only closed or liquidated positions can be re-opened.", status),
+            )),
         ));
     }
 
     let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_POSITION".to_string(),
-                    message: "Position missing user_id".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_POSITION".to_string(), "Position missing user_id".to_string())),
         )
     })?;
     let _user_id = Uuid::parse_str(&user_id_str).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_POSITION".to_string(),
-                    message: "Invalid user_id on position".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_POSITION".to_string(), "Invalid user_id on position".to_string())),
         )
     })?;
 
@@ -1000,12 +886,7 @@ async fn reopen_admin_position(
     if original_size.parse::<f64>().unwrap_or(0.0) <= 0.0 {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "CANNOT_REOPEN".to_string(),
-                    message: "Cannot re-open: original size unknown or zero.".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("CANNOT_REOPEN".to_string(), "Cannot re-open: original size unknown or zero.".to_string())),
         ));
     }
 
@@ -1016,12 +897,7 @@ async fn reopen_admin_position(
     let payload = serde_json::to_vec(&cmd).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize reopen command".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize reopen command".to_string())),
         )
     })?;
 
@@ -1033,12 +909,7 @@ async fn reopen_admin_position(
             error!("Admin reopen: NATS publish failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "NATS_ERROR".to_string(),
-                        message: "Failed to send reopen command".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("NATS_ERROR".to_string(), "Failed to send reopen command".to_string())),
             )
         })?;
 
@@ -1064,24 +935,14 @@ async fn reopen_admin_position_with_params(
     if req.size <= 0.0 {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_SIZE".to_string(),
-                    message: "size must be greater than 0".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_SIZE".to_string(), "size must be greater than 0".to_string())),
         ));
     }
 
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Cache unavailable".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Cache unavailable".to_string())),
         )
     })?;
 
@@ -1093,24 +954,14 @@ async fn reopen_admin_position_with_params(
         );
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Failed to read position".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Failed to read position".to_string())),
         )
     })?;
 
     if pos_data.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "NOT_FOUND".to_string(),
-                    message: "Position not found".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("NOT_FOUND".to_string(), "Position not found".to_string())),
         ));
     }
 
@@ -1118,24 +969,17 @@ async fn reopen_admin_position_with_params(
     if !status.eq_ignore_ascii_case("CLOSED") && !status.eq_ignore_ascii_case("LIQUIDATED") {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "POSITION_NOT_CLOSED".to_string(),
-                    message: format!("Position is not closed (status: {}). Only closed or liquidated positions can be re-opened with params.", status),
-                },
-            }),
+            Json(ErrorResponse::new(
+                "POSITION_NOT_CLOSED",
+                format!("Position is not closed (status: {}). Only closed or liquidated positions can be re-opened with params.", status),
+            )),
         ));
     }
 
     let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_POSITION".to_string(),
-                    message: "Position missing user_id".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_POSITION".to_string(), "Position missing user_id".to_string())),
         )
     })?;
 
@@ -1160,12 +1004,7 @@ async fn reopen_admin_position_with_params(
     let payload = serde_json::to_vec(&cmd).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize reopen_with_params command".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize reopen_with_params command".to_string())),
         )
     })?;
 
@@ -1180,12 +1019,7 @@ async fn reopen_admin_position_with_params(
             error!("Admin reopen_with_params: NATS publish failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "NATS_ERROR".to_string(),
-                        message: "Failed to send reopen_with_params command".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("NATS_ERROR".to_string(), "Failed to send reopen_with_params command".to_string())),
             )
         })?;
 
@@ -1211,12 +1045,7 @@ async fn update_admin_position_params(
     let mut conn = admin_state.redis.get().await.map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Cache unavailable".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Cache unavailable".to_string())),
         )
     })?;
 
@@ -1228,24 +1057,14 @@ async fn update_admin_position_params(
         );
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "REDIS_ERROR".to_string(),
-                    message: "Failed to read position".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("REDIS_ERROR".to_string(), "Failed to read position".to_string())),
         )
     })?;
 
     if pos_data.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "NOT_FOUND".to_string(),
-                    message: "Position not found".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("NOT_FOUND".to_string(), "Position not found".to_string())),
         ));
     }
 
@@ -1253,39 +1072,27 @@ async fn update_admin_position_params(
     if !status.eq_ignore_ascii_case("OPEN") {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "POSITION_NOT_OPEN".to_string(),
-                    message: format!(
-                        "Position is not open (status: {}). Only open positions can be updated.",
-                        status
-                    ),
-                },
-            }),
+            Json(ErrorResponse::new(
+                "POSITION_NOT_OPEN",
+                format!(
+                    "Position is not open (status: {}). Only open positions can be updated.",
+                    status
+                ),
+            )),
         ));
     }
 
     let user_id_str = pos_data.get("user_id").cloned().ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_POSITION".to_string(),
-                    message: "Position missing user_id".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_POSITION".to_string(), "Position missing user_id".to_string())),
         )
     })?;
 
     if req.size.map(|s| s <= 0.0).unwrap_or(false) {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INVALID_SIZE".to_string(),
-                    message: "size must be greater than 0".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INVALID_SIZE".to_string(), "size must be greater than 0".to_string())),
         ));
     }
 
@@ -1300,12 +1107,7 @@ async fn update_admin_position_params(
     let payload = serde_json::to_vec(&cmd).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: "INTERNAL_ERROR".to_string(),
-                    message: "Failed to serialize update_params command".to_string(),
-                },
-            }),
+            Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to serialize update_params command".to_string())),
         )
     })?;
 
@@ -1317,12 +1119,7 @@ async fn update_admin_position_params(
             error!("Admin update_params: NATS publish failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        code: "NATS_ERROR".to_string(),
-                        message: "Failed to send update_params command".to_string(),
-                    },
-                }),
+                Json(ErrorResponse::new("NATS_ERROR".to_string(), "Failed to send update_params command".to_string())),
             )
         })?;
 
