@@ -345,6 +345,36 @@ impl TickHandler {
                     ts: now(),
                 };
                 self.nats.publish_event(nats_subjects::EVENT_POSITION_OPENED, &pos_event).await?;
+                let side_str = match pos_event.side {
+                    PositionSide::Long => "LONG",
+                    PositionSide::Short => "SHORT",
+                };
+                let redis_payload = serde_json::json!({
+                    "user_id": pos_event.user_id.to_string(),
+                    "position_id": pos_event.position_id.to_string(),
+                    "symbol": pos_event.symbol,
+                    "side": side_str,
+                    "quantity": pos_event.size.to_string(),
+                    "unrealized_pnl": "0",
+                    "status": "OPEN",
+                    "trigger_reason": None::<String>,
+                    "ts": pos_event.ts.timestamp_millis(),
+                });
+                match serde_json::to_string(&redis_payload) {
+                    Ok(payload_str) => {
+                        if let Err(e) = redis::cmd("PUBLISH")
+                            .arg("positions:updates")
+                            .arg(payload_str)
+                            .query_async::<_, i64>(conn)
+                            .await
+                        {
+                            error!("Failed to publish position opened event to Redis for {}: {}", pos_id, e);
+                        } else {
+                            info!("Published position opened event to Redis pub/sub for position {}", pos_id);
+                        }
+                    }
+                    Err(e) => error!("Failed to serialize position opened Redis payload for {}: {}", pos_id, e),
+                }
             }
             if fill_action == "flipped" {
                 let raw: HashMap<String, String> = redis::cmd("HGETALL").arg(format!("pos:by_id:{}", pos_id)).query_async(conn).await.unwrap_or_default();
