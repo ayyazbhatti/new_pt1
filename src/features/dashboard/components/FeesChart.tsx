@@ -8,12 +8,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import type { DailyFlow } from '../api/dashboard.api'
+import type { DailyFee } from '../api/dashboard.api'
 import { formatCurrency } from '@/features/adminFinance/utils/formatters'
 
-/** Matches `tailwind.config.js` theme.extend.colors */
-const COLOR_SUCCESS = '#22c55e'
-const COLOR_DANGER = '#ef4444'
+/** Matches `tailwind.config.js` theme.extend.colors.accent */
+const COLOR_ACCENT = '#3b82f6'
 
 function shortMonthDay(ymd: string): string {
   const [y, m, d] = ymd.split('-').map(Number)
@@ -30,33 +29,30 @@ function abbreviateUsd(n: number): string {
   return `${sign}$${v.toFixed(0)}`
 }
 
-interface FlowTooltipProps {
+interface FeeTooltipProps {
   active?: boolean
-  payload?: { dataKey: string; value: number; color: string }[]
+  payload?: { value: number }[]
   label?: string
 }
 
-function FlowTooltip({ active, payload, label }: FlowTooltipProps) {
+function FeeTooltip({ active, payload, label }: FeeTooltipProps) {
   if (!active || !payload?.length || !label) return null
+  const v = Number(payload[0]?.value ?? 0)
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-xs shadow-md">
       <p className="mb-1 font-medium text-text">{shortMonthDay(label)}</p>
-      {payload.map((p) => (
-        <p key={p.dataKey} className="text-text" style={{ color: p.color }}>
-          {p.dataKey === 'deposits' ? 'Deposits' : 'Withdrawals'}: {formatCurrency(Number(p.value), 'USD')}
-        </p>
-      ))}
+      <p className="text-text">Net fees: {formatCurrency(v, 'USD')}</p>
     </div>
   )
 }
 
-export interface RevenueChartProps {
-  data: DailyFlow[]
+export interface FeesChartProps {
+  data: DailyFee[]
   loading?: boolean
 }
 
-export function RevenueChart({ data, loading }: RevenueChartProps) {
-  const hasFlow = data.some((d) => d.deposits > 0 || d.withdrawals > 0)
+export function FeesChart({ data, loading }: FeesChartProps) {
+  const hasFees = data.some((d) => d.fees !== 0)
 
   if (loading) {
     return (
@@ -66,18 +62,15 @@ export function RevenueChart({ data, loading }: RevenueChartProps) {
     )
   }
 
-  if (!hasFlow) {
+  if (!hasFees) {
     return (
       <div className="flex min-h-[220px] items-center justify-center px-4 text-center text-sm text-text-muted">
-        No transactions in the last 30 days
+        No fees recorded in the last 30 days
       </div>
     )
   }
 
-  const chartData = data.map((row) => ({
-    ...row,
-    label: shortMonthDay(row.date),
-  }))
+  const chartData = data.map((row) => ({ ...row, label: shortMonthDay(row.date) }))
 
   return (
     <div className="h-[240px] w-full min-h-[220px] text-text-muted">
@@ -98,23 +91,14 @@ export function RevenueChart({ data, loading }: RevenueChartProps) {
             tickLine={false}
             width={56}
           />
-          <Tooltip content={<FlowTooltip />} />
+          <Tooltip content={<FeeTooltip />} />
           <Area
             type="monotone"
-            dataKey="deposits"
-            name="Deposits"
-            stroke={COLOR_SUCCESS}
-            fill={COLOR_SUCCESS}
-            fillOpacity={0.25}
-            strokeWidth={2}
-          />
-          <Area
-            type="monotone"
-            dataKey="withdrawals"
-            name="Withdrawals"
-            stroke={COLOR_DANGER}
-            fill={COLOR_DANGER}
-            fillOpacity={0.2}
+            dataKey="fees"
+            name="Net fees"
+            stroke={COLOR_ACCENT}
+            fill={COLOR_ACCENT}
+            fillOpacity={0.22}
             strokeWidth={2}
           />
         </AreaChart>

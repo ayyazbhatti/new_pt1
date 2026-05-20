@@ -1,16 +1,22 @@
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { Card } from '@/shared/ui/card'
 import { RevenueChart } from '../components/RevenueChart'
+import { FeesChart } from '../components/FeesChart'
 import {
   fetchDashboardUsers,
   fetchDashboardFinance,
   fetchDashboardRecentTransactions,
   fetchDashboardPositions,
+  fetchDashboardTransactionsForCharts,
   DASHBOARD_QUERY_KEYS,
+  type DailyFlow,
+  type DailyFee,
 } from '../api/dashboard.api'
+import type { Transaction } from '@/features/adminFinance/api/finance.api'
 import { formatCurrency } from '@/features/adminFinance/utils/formatters'
 import {
   Users,
@@ -23,10 +29,71 @@ import {
   Headphones,
   ArrowRight,
   TrendingUp,
+  TrendingDown,
   Bell,
   UserCheck,
   Loader2,
 } from 'lucide-react'
+
+const CHART_DAYS = 30
+
+function formatYmdLocal(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function buildDayKeys(days: number): string[] {
+  const keys: string[] = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    keys.push(formatYmdLocal(d))
+  }
+  return keys
+}
+
+function transactionDayKey(iso: string): string {
+  return formatYmdLocal(new Date(iso))
+}
+
+function aggregateCharts(transactions: Transaction[]): { flowData: DailyFlow[]; feeData: DailyFee[] } {
+  const keys = buildDayKeys(CHART_DAYS)
+  const deposits: Record<string, number> = Object.fromEntries(keys.map((k) => [k, 0]))
+  const withdrawals: Record<string, number> = Object.fromEntries(keys.map((k) => [k, 0]))
+  const fees: Record<string, number> = Object.fromEntries(keys.map((k) => [k, 0]))
+
+  for (const tx of transactions) {
+    if (tx.status !== 'completed') continue
+    const day = transactionDayKey(tx.createdAt)
+    if (!(day in deposits)) continue
+
+    if (tx.type === 'deposit') {
+      deposits[day] += tx.netAmount
+    } else if (tx.type === 'withdrawal') {
+      withdrawals[day] += tx.netAmount
+    }
+    if (tx.type === 'fee') {
+      fees[day] += -tx.netAmount
+    } else if (tx.type === 'rebate') {
+      fees[day] += tx.netAmount
+    }
+  }
+
+  const flowData: DailyFlow[] = keys.map((date) => ({
+    date,
+    deposits: deposits[date],
+    withdrawals: withdrawals[date],
+  }))
+  const feeData: DailyFee[] = keys.map((date) => ({
+    date,
+    fees: fees[date],
+  }))
+  return { flowData, feeData }
+}
 
 function formatRelativeTime(dateString: string | null | undefined): string {
   if (!dateString) return '—'
@@ -85,6 +152,12 @@ export function DashboardPage() {
     queryKey: DASHBOARD_QUERY_KEYS.positions,
     queryFn: fetchDashboardPositions,
   })
+  const { data: chartTransactions = [], isLoading: chartTxLoading } = useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.chartTransactions(CHART_DAYS),
+    queryFn: () => fetchDashboardTransactionsForCharts(CHART_DAYS),
+  })
+
+  const { flowData, feeData } = useMemo(() => aggregateCharts(chartTransactions), [chartTransactions])
 
   const statsLoading = usersLoading || financeLoading || positionsLoading
   const totalUsers = usersData?.total ?? 0
@@ -110,6 +183,10 @@ export function DashboardPage() {
     date: u.created_at ? new Date(u.created_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—',
     source: '—',
   }))
+
+  const depositsToday = financeData?.depositsToday
+  const withdrawalsToday = financeData?.withdrawalsToday
+  const netFeesToday = financeData?.netFeesToday ?? 0
 
   return (
     <ContentShell>
@@ -154,6 +231,65 @@ export function DashboardPage() {
             </Card>
           )
         })}
+      </div>
+
+      {/* Today snapshot — finance overview */}
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Card className="flex items-start gap-3 p-4">
+          <div className="rounded-lg bg-surface-2 p-2 shrink-0 text-success">
+            {financeLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+            ) : (
+              <TrendingUp className="h-5 w-5" aria-hidden />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Deposits today</p>
+            <p className="mt-1 text-xl font-bold text-text">
+              {financeLoading ? '—' : formatCurrency(depositsToday?.amount ?? 0, 'USD')}
+            </p>
+            {!financeLoading && depositsToday != null && (
+              <p className="mt-1 text-xs text-text-muted">
+                ({depositsToday.count} transaction{depositsToday.count !== 1 ? 's' : ''})
+              </p>
+            )}
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="rounded-lg bg-surface-2 p-2 shrink-0 text-danger">
+            {financeLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+            ) : (
+              <TrendingDown className="h-5 w-5" aria-hidden />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Withdrawals today</p>
+            <p className="mt-1 text-xl font-bold text-text">
+              {financeLoading ? '—' : formatCurrency(withdrawalsToday?.amount ?? 0, 'USD')}
+            </p>
+            {!financeLoading && withdrawalsToday != null && (
+              <p className="mt-1 text-xs text-text-muted">
+                ({withdrawalsToday.count} transaction{withdrawalsToday.count !== 1 ? 's' : ''})
+              </p>
+            )}
+          </div>
+        </Card>
+        <Card className="flex items-start gap-3 p-4">
+          <div className="rounded-lg bg-surface-2 p-2 shrink-0 text-accent">
+            {financeLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+            ) : (
+              <DollarSign className="h-5 w-5" aria-hidden />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text-muted">Net fees today</p>
+            <p className="mt-1 text-xl font-bold text-text">
+              {financeLoading ? '—' : formatCurrency(netFeesToday, 'USD')}
+            </p>
+          </div>
+        </Card>
       </div>
 
       {/* Quick actions */}
@@ -264,44 +400,51 @@ export function DashboardPage() {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        {/* Revenue overview chart */}
         <Card className="overflow-hidden">
           <div className="border-b border-border bg-surface-2 px-4 py-3 flex items-center gap-2">
             <TrendingUp className="h-4 w-4 text-text-muted" />
-            <h2 className="text-sm font-semibold text-text">Revenue overview</h2>
+            <h2 className="text-sm font-semibold text-text">Deposit & withdrawal flow (30 days)</h2>
           </div>
           <div className="bg-surface-2/50 p-4">
-            <RevenueChart className="text-text-muted" />
+            <RevenueChart data={flowData} loading={chartTxLoading} />
           </div>
         </Card>
 
-        {/* Platform alerts */}
         <Card className="overflow-hidden">
           <div className="border-b border-border bg-surface-2 px-4 py-3 flex items-center gap-2">
-            <Bell className="h-4 w-4 text-text-muted" />
-            <h2 className="text-sm font-semibold text-text">Platform alerts</h2>
+            <DollarSign className="h-4 w-4 text-text-muted" />
+            <h2 className="text-sm font-semibold text-text">Net fees (30 days)</h2>
           </div>
-          <ul className="divide-y divide-border">
-            {PLATFORM_ALERTS_PLACEHOLDER.map((alert) => (
-              <li
-                key={alert.id}
-                className={`flex items-center gap-3 px-4 py-3 ${
-                  alert.variant === 'warning' ? 'bg-amber-500/5' : 'bg-surface-2/30'
-                }`}
-              >
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${
-                    alert.variant === 'warning' ? 'bg-amber-500' : 'bg-blue-500'
-                  }`}
-                />
-                <span className="text-sm text-text">{alert.text}</span>
-              </li>
-            ))}
-          </ul>
+          <div className="bg-surface-2/50 p-4">
+            <FeesChart data={feeData} loading={chartTxLoading} />
+          </div>
         </Card>
       </div>
 
-      {/* Open support / additional placeholder row */}
+      <Card className="mt-6 overflow-hidden">
+        <div className="border-b border-border bg-surface-2 px-4 py-3 flex items-center gap-2">
+          <Bell className="h-4 w-4 text-text-muted" />
+          <h2 className="text-sm font-semibold text-text">Platform alerts</h2>
+        </div>
+        <ul className="divide-y divide-border">
+          {PLATFORM_ALERTS_PLACEHOLDER.map((alert) => (
+            <li
+              key={alert.id}
+              className={`flex items-center gap-3 px-4 py-3 ${
+                alert.variant === 'warning' ? 'bg-amber-500/5' : 'bg-surface-2/30'
+              }`}
+            >
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${
+                  alert.variant === 'warning' ? 'bg-amber-500' : 'bg-blue-500'
+                }`}
+              />
+              <span className="text-sm text-text">{alert.text}</span>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
       <Card className="mt-6 overflow-hidden">
         <div className="border-b border-border bg-surface-2 px-4 py-3 flex items-center gap-2">
           <UserCheck className="h-4 w-4 text-text-muted" />
