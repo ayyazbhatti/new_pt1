@@ -26,6 +26,7 @@ import {
   Send,
   Loader2,
   Edit,
+  Banknote,
 } from 'lucide-react'
 import { DataTable, type ColumnDef } from '@/shared/ui/table'
 import { getApiErrorMessage } from '@/shared/api/http'
@@ -41,6 +42,7 @@ import { getEmailTemplates, updateEmailTemplate } from '../api/emailTemplates.ap
 import { IntegrationsSettingsTab } from '../components/IntegrationsSettingsTab'
 import { VoisoSettingsTab } from '../components/VoisoSettingsTab'
 import { AiSettingsTab } from '../components/AiSettingsTab'
+import { ExchangeRatesTab } from '../components/ExchangeRatesTab'
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -55,6 +57,7 @@ const SETTINGS_TABS = [
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'voiso', label: 'Voiso', icon: PhoneCall },
   { id: 'ai', label: 'AI Assistant', icon: Sparkles },
+  { id: 'fx-rates', label: 'Exchange Rates', icon: Banknote },
   { id: 'security', label: 'Security', icon: Shield },
 ] as const
 
@@ -334,6 +337,10 @@ export function SettingsPage() {
     ai: {
       title: 'AI Assistant',
       description: 'Configure the AI chat assistant for traders.',
+    },
+    'fx-rates': {
+      title: 'Exchange Rates',
+      description: 'USD-based FX snapshot cached for display currency and equity normalization (Phase 2+).',
     },
     security: { title: 'Security', description: 'Security settings' },
   }
@@ -826,6 +833,10 @@ export function SettingsPage() {
           )}
 
           {tab === 'ai' && <AiSettingsTab canEdit={canEditSettings} />}
+
+          {tab === 'fx-rates' && (
+            <ExchangeRatesTab canView={canViewSettings} canEdit={canEditSettings} />
+          )}
 
           {tab === 'email-templates' && (
             <div className="space-y-8">

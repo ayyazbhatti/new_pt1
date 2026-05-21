@@ -40,6 +40,10 @@ function toCamelCase(obj: any): UserGroup {
     createdByUserId: obj.created_by_user_id ?? undefined,
     createdByEmail: obj.created_by_email ?? undefined,
     hideLeverageInTerminal: obj.hide_leverage_in_terminal ?? undefined,
+    timezone: obj.timezone ?? undefined,
+    displayCurrency: obj.display_currency ?? undefined,
+    swapEnabled: obj.swap_enabled ?? false,
+    feesEnabled: obj.fees_enabled ?? false,
   }
 }
 
@@ -54,6 +58,10 @@ function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
   }
   if ('signup_slug' in payload) out.signup_slug = payload.signup_slug ?? null
   if ('hide_leverage_in_terminal' in payload) out.hide_leverage_in_terminal = payload.hide_leverage_in_terminal ?? null
+  if ('timezone' in payload && payload.timezone !== undefined) out.timezone = payload.timezone
+  if ('display_currency' in payload && payload.display_currency !== undefined) out.display_currency = payload.display_currency
+  if ('swap_enabled' in payload && payload.swap_enabled !== undefined) out.swap_enabled = payload.swap_enabled
+  if ('fees_enabled' in payload && payload.fees_enabled !== undefined) out.fees_enabled = payload.fees_enabled
   return out
 }
 
@@ -135,6 +143,14 @@ export async function getGroupUsage(id: string): Promise<UsageResponse> {
   return http<UsageResponse>(`/api/admin/groups/${id}/usage`, {
     method: 'GET',
   })
+}
+
+/** Open positions in Postgres for users in this group (DB sync; used for admin warnings). */
+export async function getGroupOpenPositionsCount(id: string): Promise<number> {
+  const res = await http<{ count: number }>(`/api/admin/groups/${id}/open-positions-count`, {
+    method: 'GET',
+  })
+  return res.count ?? 0
 }
 
 export async function updateGroupPriceProfile(groupId: string, priceProfileId: string | null): Promise<void> {

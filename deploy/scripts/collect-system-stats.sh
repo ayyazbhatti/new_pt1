@@ -3,6 +3,7 @@
 # Run from cron on the host, e.g. every 2 minutes:
 #   */2 * * * * /opt/newpt/deploy/scripts/collect-system-stats.sh
 # Output: deploy/stats/system-stats.json (mount this read-only into auth container).
+# For macOS or mixed local dev, use collect-system-stats-local.sh (same output path / schema).
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

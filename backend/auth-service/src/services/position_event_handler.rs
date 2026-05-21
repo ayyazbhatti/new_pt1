@@ -122,6 +122,8 @@ impl PositionEventHandler {
 
         // margin_used: (size * entry_price) / leverage
         let margin_used = (event.size * entry_price) / leverage;
+        let margin_from_cash = event.margin_from_cash.unwrap_or(margin_used);
+        let margin_from_bonus = event.margin_from_bonus.unwrap_or(rust_decimal::Decimal::ZERO);
 
         // Liquidation (simplified): LONG entry * (1 - 1/L), SHORT entry * (1 + 1/L)
         let one = rust_decimal::Decimal::ONE;
@@ -162,8 +164,10 @@ impl PositionEventHandler {
                 pnl_percent = $8,
                 status = $9::position_status,
                 updated_at = $10,
-                closed_at = $11
-            WHERE id = $12
+                closed_at = $11,
+                margin_from_cash = $12,
+                margin_from_bonus = $13
+            WHERE id = $14
             "#
         )
         .bind(event.size)
@@ -177,6 +181,8 @@ impl PositionEventHandler {
         .bind(status_str)
         .bind(updated_at)
         .bind(closed_at)
+        .bind(margin_from_cash)
+        .bind(margin_from_bonus)
         .bind(event.position_id)
         .execute(&*self.pool)
         .await
@@ -201,12 +207,12 @@ impl PositionEventHandler {
             INSERT INTO positions (
                 id, user_id, symbol_id, side, size, entry_price, mark_price,
                 leverage, margin_used, liquidation_price, pnl, pnl_percent,
-                status, opened_at, updated_at, closed_at
+                status, opened_at, updated_at, closed_at, margin_from_cash, margin_from_bonus
             )
             VALUES (
                 $1, $2, $3, $4::position_side, $5, $6, $7,
                 $8, $9, $10, $11, $12,
-                $13::position_status, $14, $15, $16
+                $13::position_status, $14, $15, $16, $17, $18
             )
             ON CONFLICT (id) DO UPDATE SET
                 size = $5,
@@ -219,7 +225,9 @@ impl PositionEventHandler {
                 pnl_percent = $12,
                 status = $13::position_status,
                 updated_at = $15,
-                closed_at = $16
+                closed_at = $16,
+                margin_from_cash = EXCLUDED.margin_from_cash,
+                margin_from_bonus = EXCLUDED.margin_from_bonus
             "#
         )
         .bind(event.position_id)
@@ -238,6 +246,8 @@ impl PositionEventHandler {
         .bind(opened_at)
         .bind(updated_at)
         .bind(closed_at)
+        .bind(margin_from_cash)
+        .bind(margin_from_bonus)
         .execute(&*self.pool)
         .await
         .context("Failed to insert position into database")?;

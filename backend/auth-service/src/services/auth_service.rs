@@ -3,6 +3,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::user::{PublicUser, User, UserSession, UserStatus};
+use crate::models::user_row_sql::{USER_SESSIONS_ROW_SQL, USERS_ROW_SQL};
 use crate::services::user_events_service::{RecordUserEventInput, UserEventsService};
 use crate::utils::hash::{hash_password, hash_token, verify_password};
 use crate::utils::jwt::{generate_access_token, generate_refresh_token, Claims, get_refresh_token_ttl};
@@ -58,9 +59,9 @@ impl AuthService {
 
         // Check if email already exists
         let email_lower = email.to_lowercase();
-        let existing = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL",
-        )
+        let existing = sqlx::query_as::<_, User>(&format!(
+            "SELECT {USERS_ROW_SQL} FROM users WHERE email = $1 AND deleted_at IS NULL",
+        ))
         .bind(&email_lower)
         .fetch_optional(&self.pool)
         .await?;
@@ -71,9 +72,9 @@ impl AuthService {
 
         // Find referrer if referral code provided
         let (referred_by_user_id, referrer_group_id): (Option<Uuid>, Option<Uuid>) = if let Some(code) = referral_code {
-            let referrer = sqlx::query_as::<_, User>(
-                "SELECT * FROM users WHERE referral_code = $1 AND deleted_at IS NULL",
-            )
+            let referrer = sqlx::query_as::<_, User>(&format!(
+                "SELECT {USERS_ROW_SQL} FROM users WHERE referral_code = $1 AND deleted_at IS NULL",
+            ))
             .bind(code)
             .fetch_optional(&self.pool)
             .await?;
@@ -139,7 +140,7 @@ impl AuthService {
         // Insert user (default leverage 1–500 so terminal shows "Your min – max" without admin edit)
         const DEFAULT_MIN_LEVERAGE: i32 = 1;
         const DEFAULT_MAX_LEVERAGE: i32 = 500;
-        let user = sqlx::query_as::<_, User>(
+        let user = sqlx::query_as::<_, User>(&format!(
             r#"
             INSERT INTO users (
                 email, password_hash, first_name, last_name, country,
@@ -147,9 +148,9 @@ impl AuthService {
                 min_leverage, max_leverage
             )
             VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9, $10, $11)
-            RETURNING *
+            RETURNING {USERS_ROW_SQL}
             "#,
-        )
+        ))
         .bind(&email_lower)
         .bind(&password_hash)
         .bind(first_name)
@@ -209,9 +210,9 @@ impl AuthService {
             return Err(anyhow::anyhow!("Password must contain at least one number"));
         }
         let email_lower = email.to_lowercase();
-        let existing = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL",
-        )
+        let existing = sqlx::query_as::<_, User>(&format!(
+            "SELECT {USERS_ROW_SQL} FROM users WHERE email = $1 AND deleted_at IS NULL",
+        ))
         .bind(&email_lower)
         .fetch_optional(&self.pool)
         .await?;
@@ -249,7 +250,7 @@ impl AuthService {
         .await?;
         const DEFAULT_MIN_LEVERAGE: i32 = 1;
         const DEFAULT_MAX_LEVERAGE: i32 = 500;
-        let user = sqlx::query_as::<_, User>(
+        let user = sqlx::query_as::<_, User>(&format!(
             r#"
             INSERT INTO users (
                 email, password_hash, first_name, last_name, country,
@@ -257,9 +258,9 @@ impl AuthService {
                 min_leverage, max_leverage
             )
             VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, NULL, $8, $9, $10)
-            RETURNING *
+            RETURNING {USERS_ROW_SQL}
             "#,
-        )
+        ))
         .bind(&email_lower)
         .bind(&password_hash)
         .bind(first_name)
@@ -285,9 +286,9 @@ impl AuthService {
         let email_lower = email.to_lowercase();
 
         // Find user
-        let user = match sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE LOWER(email) = $1 AND deleted_at IS NULL",
-        )
+        let user = match sqlx::query_as::<_, User>(&format!(
+            "SELECT {USERS_ROW_SQL} FROM users WHERE LOWER(email) = $1 AND deleted_at IS NULL",
+        ))
         .bind(&email_lower)
         .fetch_optional(&self.pool)
         .await?
@@ -349,23 +350,23 @@ impl AuthService {
         let token_hash = hash_token(refresh_token);
 
         // Find session
-        let session = sqlx::query_as::<_, UserSession>(
+        let session = sqlx::query_as::<_, UserSession>(&format!(
             r#"
-            SELECT * FROM user_sessions
+            SELECT {USER_SESSIONS_ROW_SQL} FROM user_sessions
             WHERE refresh_token_hash = $1
             AND is_revoked = false
             AND expires_at > NOW()
             "#,
-        )
+        ))
         .bind(&token_hash)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Invalid refresh token"))?;
 
         // Get user
-        let user = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL",
-        )
+        let user = sqlx::query_as::<_, User>(&format!(
+            "SELECT {USERS_ROW_SQL} FROM users WHERE id = $1 AND deleted_at IS NULL",
+        ))
         .bind(session.user_id)
         .fetch_one(&self.pool)
         .await?;
@@ -423,9 +424,9 @@ impl AuthService {
     }
 
     pub async fn get_user_by_id(&self, user_id: Uuid) -> anyhow::Result<User> {
-        let user = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL",
-        )
+        let user = sqlx::query_as::<_, User>(&format!(
+            "SELECT {USERS_ROW_SQL} FROM users WHERE id = $1 AND deleted_at IS NULL",
+        ))
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await?
@@ -514,29 +515,29 @@ impl AuthService {
         }
 
         let users = if let Some(ids) = allowed_group_ids {
-            sqlx::query_as::<_, User>(
+            sqlx::query_as::<_, User>(&format!(
                 r#"
-                SELECT * FROM users
+                SELECT {USERS_ROW_SQL} FROM users
                 WHERE deleted_at IS NULL
                   AND group_id = ANY($1)
                 ORDER BY created_at DESC
                 LIMIT $2 OFFSET $3
                 "#,
-            )
+            ))
             .bind(ids)
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
             .await?
         } else {
-            sqlx::query_as::<_, User>(
+            sqlx::query_as::<_, User>(&format!(
                 r#"
-                SELECT * FROM users
+                SELECT {USERS_ROW_SQL} FROM users
                 WHERE deleted_at IS NULL
                 ORDER BY created_at DESC
                 LIMIT $1 OFFSET $2
                 "#,
-            )
+            ))
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
@@ -595,9 +596,9 @@ impl AuthService {
             .bind(country_filter)
             .fetch_one(&self.pool)
             .await?;
-            let users = sqlx::query_as::<_, User>(
+            let users = sqlx::query_as::<_, User>(&format!(
                 r#"
-                SELECT * FROM users
+                SELECT {USERS_ROW_SQL} FROM users
                 WHERE deleted_at IS NULL
                   AND group_id = ANY($1)
                   AND (NOT $2::boolean OR (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3 OR id::text ILIKE $3))
@@ -607,7 +608,7 @@ impl AuthService {
                 ORDER BY created_at DESC
                 LIMIT $7 OFFSET $8
                 "#,
-            )
+            ))
             .bind(ids)
             .bind(has_search)
             .bind(search_pattern.as_deref().unwrap_or("%"))
@@ -637,9 +638,9 @@ impl AuthService {
             .bind(country_filter)
             .fetch_one(&self.pool)
             .await?;
-            let users = sqlx::query_as::<_, User>(
+            let users = sqlx::query_as::<_, User>(&format!(
                 r#"
-                SELECT * FROM users
+                SELECT {USERS_ROW_SQL} FROM users
                 WHERE deleted_at IS NULL
                   AND (NOT $1::boolean OR (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2 OR id::text ILIKE $2))
                   AND ($3::text IS NULL OR status::text = $3)
@@ -648,7 +649,7 @@ impl AuthService {
                 ORDER BY created_at DESC
                 LIMIT $6 OFFSET $7
                 "#,
-            )
+            ))
             .bind(has_search)
             .bind(search_pattern.as_deref().unwrap_or("%"))
             .bind(status_filter.as_deref())
@@ -779,7 +780,7 @@ impl AuthService {
 
             const DEFAULT_MIN_LEVERAGE: i32 = 1;
             const DEFAULT_MAX_LEVERAGE: i32 = 500;
-            let row = sqlx::query_as::<_, User>(
+            let row = sqlx::query_as::<_, User>(&format!(
                 r#"
                 INSERT INTO users (
                     email, password_hash, first_name, last_name, country,
@@ -787,9 +788,9 @@ impl AuthService {
                     min_leverage, max_leverage
                 )
                 VALUES ($1, $2, $3, $4, $5, 'user', $6, false, $7, $8, $9, $10, $11)
-                RETURNING *
+                RETURNING {USERS_ROW_SQL}
                 "#,
-            )
+            ))
             .bind(&email_lower)
             .bind(&password_hash)
             .bind(&first_name)

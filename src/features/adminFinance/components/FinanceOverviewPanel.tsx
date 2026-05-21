@@ -2,13 +2,19 @@ import { Card } from '@/shared/ui/card'
 import { Badge } from '@/shared/ui/badge'
 import { DataTable, ColumnDef } from '@/shared/ui/table'
 import { Transaction } from '../types/finance'
-import { formatDateTime, formatCurrency } from '../utils/formatters'
+import { useFormatFromUsd, useFormatConverted, useFormatSignedFromUsd } from '@/shared/currency'
+import { useFormatDateTime } from '@/shared/datetime'
 import { ArrowUp, ArrowDown, TrendingUp, Loader2 } from 'lucide-react'
 import { useMemo, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchFinanceOverview, fetchTransactions, Transaction as ApiTransaction } from '../api/finance.api'
+import { TradingTransactionTypeDisplay } from '@/shared/components/TradingTransactionTypeDisplay'
 
 export function FinanceOverviewPanel() {
+  const formatDateTime = useFormatDateTime()
+  const formatMoney = useFormatFromUsd()
+  const formatConv = useFormatConverted()
+  const formatSigned = useFormatSignedFromUsd()
   const { data: overview, isLoading: overviewLoading } = useQuery({
     queryKey: ['finance-overview'],
     queryFn: fetchFinanceOverview,
@@ -88,11 +94,7 @@ export function FinanceOverviewPanel() {
     return <Badge variant={variants[status] || 'neutral'}>{displayStatus}</Badge>
   }
 
-  const getTypeLabel = (type: string) => {
-    return type.charAt(0).toUpperCase() + type.slice(1)
-  }
-
-  const columns: ColumnDef<Transaction>[] = [
+  const columns: ColumnDef<Transaction>[] = useMemo(() => [
     {
       accessorKey: 'createdAt',
       header: 'Time',
@@ -128,11 +130,15 @@ export function FinanceOverviewPanel() {
       accessorKey: 'type',
       header: 'Type',
       cell: ({ row }) => {
-        const type = row.getValue('type') as string
-        const isWithdrawal = type.toLowerCase() === 'withdrawal'
+        const tx = row.original
+        const type = (row.getValue('type') as string).toLowerCase()
+        const isWithdrawal = type === 'withdrawal'
+        if (type === 'fee' || type === 'swap') {
+          return <TradingTransactionTypeDisplay type={tx.type} amount={tx.amount} methodDetails={tx.methodDetails} />
+        }
         return (
           <span className={`capitalize ${isWithdrawal ? 'text-danger font-semibold' : ''}`}>
-            {getTypeLabel(type)}
+            {type.charAt(0).toUpperCase() + type.slice(1)}
           </span>
         )
       },
@@ -142,15 +148,21 @@ export function FinanceOverviewPanel() {
       header: 'Amount',
       cell: ({ row }) => {
         const tx = row.original
-        const isWithdrawal = tx.type.toLowerCase() === 'withdrawal'
-        // Withdrawals should be red, otherwise use normal logic (positive=green, negative=red)
+        const t = tx.type.toLowerCase()
+        const isWithdrawal = t === 'withdrawal'
+        if (t === 'fee' || t === 'swap') {
+          return (
+            <span className={`font-mono font-semibold ${tx.netAmount >= 0 ? 'text-success' : 'text-danger'}`}>
+              {formatSigned(tx.netAmount)}
+            </span>
+          )
+        }
         const color = isWithdrawal ? 'text-danger' : (tx.netAmount >= 0 ? 'text-success' : 'text-danger')
-        // Withdrawals should show minus sign, deposits/adjustments show plus for positive
         const sign = isWithdrawal ? '-' : (tx.netAmount >= 0 ? '+' : '')
         return (
           <span className={`font-mono font-semibold ${color}`}>
             {sign}
-            {formatCurrency(Math.abs(tx.netAmount), tx.currency)}
+            {formatConv(Math.abs(tx.netAmount), tx.currency)}
           </span>
         )
       },
@@ -174,7 +186,7 @@ export function FinanceOverviewPanel() {
         return <span className="font-mono text-sm text-text-muted">{row.getValue('reference')}</span>
       },
     },
-  ]
+  ], [formatDateTime, formatConv, formatSigned])
 
   if (overviewLoading || transactionsLoading) {
     return (
@@ -190,7 +202,7 @@ export function FinanceOverviewPanel() {
         <Card className="p-4 bg-surface-2">
           <div className="text-sm text-text-muted mb-1">Total User Balances</div>
           <div className="text-2xl font-bold text-text mb-2">
-            {formatCurrency(stats.totalBalances, 'USD')}
+            {formatMoney(stats.totalBalances)}
           </div>
           <div className="flex items-center gap-1 text-xs text-text-muted">
             <TrendingUp className="h-3 w-3" />
@@ -210,7 +222,7 @@ export function FinanceOverviewPanel() {
         <Card className="p-4 bg-surface-2">
           <div className="text-sm text-text-muted mb-1">Net Fees (Today)</div>
           <div className="text-2xl font-bold text-text mb-2">
-            {formatCurrency(stats.netFeesToday, 'USD')}
+            {formatMoney(stats.netFeesToday)}
           </div>
           <div className="flex items-center gap-1 text-xs text-text-muted">
             {stats.netFeesToday >= 0 ? (
@@ -228,14 +240,14 @@ export function FinanceOverviewPanel() {
           <div className="text-sm text-text-muted mb-2">Deposits Processed Today</div>
           <div className="text-xl font-bold text-text mb-1">{stats.depositsToday.count}</div>
           <div className="text-sm text-text-muted">
-            Total: {formatCurrency(stats.depositsToday.amount, 'USD')}
+            Total: {formatMoney(stats.depositsToday.amount)}
           </div>
         </Card>
         <Card className="p-4 bg-surface-2">
           <div className="text-sm text-text-muted mb-2">Withdrawals Processed Today</div>
           <div className="text-xl font-bold text-text mb-1">{stats.withdrawalsToday.count}</div>
           <div className="text-sm text-text-muted">
-            Total: {formatCurrency(stats.withdrawalsToday.amount, 'USD')}
+            Total: {formatMoney(stats.withdrawalsToday.amount)}
           </div>
         </Card>
       </div>

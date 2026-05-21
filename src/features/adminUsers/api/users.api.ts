@@ -37,6 +37,10 @@ export interface UpdateUserProfilePayload {
   phone?: string | null
   country?: string
   status?: 'active' | 'disabled' | 'suspended'
+  /** Omitted = leave unchanged; null clears user override. */
+  timezone?: string | null
+  /** Omitted = leave unchanged; null clears user override. */
+  display_currency?: string | null
 }
 
 export async function updateUserProfile(
@@ -51,6 +55,8 @@ export async function updateUserProfile(
   if (payload.phone !== undefined) body.phone = payload.phone?.trim() ?? null
   if (payload.country !== undefined) body.country = payload.country?.trim() ?? null
   if (payload.status !== undefined) body.status = payload.status
+  if (payload.timezone !== undefined) body.timezone = payload.timezone
+  if (payload.display_currency !== undefined) body.display_currency = payload.display_currency
   await http(`/api/admin/users/${userId}/profile`, {
     method: 'PUT',
     body: JSON.stringify(body),
@@ -244,6 +250,9 @@ export interface AdminAccountSummaryResponse {
   marginLevel: string | null
   realizedPnl: number
   unrealizedPnl: number
+  bonus?: number
+  totalSwapPaidUsd?: number
+  totalFeesPaidUsd?: number
   updatedAt?: string
   marginCallLevelThreshold?: number | null
   stopOutLevelThreshold?: number | null

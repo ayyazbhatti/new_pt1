@@ -47,6 +47,10 @@ pub struct Order {
     pub leverage_tiers: Option<Vec<LeverageTier>>,
     /// "hedging" or "netting"; used by fill Lua to decide add vs reduce/flip. Always serialized so Lua sees it.
     pub account_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_cash: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_bonus: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +109,10 @@ pub struct OrderCommand {
     pub leverage_tiers: Option<Vec<LeverageTier>>,
     pub correlation_id: String,
     pub ts: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_cash: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_bonus: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +204,10 @@ pub struct PositionClosedEvent {
     pub ts: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_reason: Option<String>, // "SL" or "TP" for stop loss/take profit triggers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_cash: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_bonus: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

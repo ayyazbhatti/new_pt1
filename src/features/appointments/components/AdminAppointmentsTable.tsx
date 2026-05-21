@@ -1,5 +1,5 @@
 import type { Appointment } from '../types'
-import { formatDate, formatTime } from '../utils/format'
+import { useFormatDate, useFormatTime } from '@/shared/datetime'
 import { StatusBadge } from './StatusBadge'
 import { Button } from '@/shared/ui/button'
 import {
@@ -41,6 +41,8 @@ export function AdminAppointmentsTable({
   canComplete = true,
   canSendReminder = true,
 }: AdminAppointmentsTableProps) {
+  const formatDate = useFormatDate()
+  const formatTime = useFormatTime()
   const canAct = (apt: Appointment) =>
     apt.status !== 'cancelled' && apt.status !== 'completed'
 

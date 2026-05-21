@@ -1,5 +1,6 @@
 import { WsInboundEvent, WsOutboundEvent } from './wsEvents'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { getWsGatewayUrl } from './wsGatewayUrl'
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'authenticated'
 
@@ -338,14 +339,8 @@ class WebSocketClient {
   }
 }
 
-// Singleton instance
-// @ts-ignore - Vite env types
-// Use same-origin in browser (dev: Vite proxies /ws; production: nginx proxies /ws). Use wss when page is HTTPS.
-const WS_URL =
-  import.meta.env?.VITE_WS_URL ||
-  (typeof location !== 'undefined'
-    ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?group=default`
-    : 'ws://localhost:3003/ws?group=default')
+// Singleton — see `getWsGatewayUrl` (dev uses direct ws-gateway port; prod uses same-origin /ws).
+const WS_URL = getWsGatewayUrl()
 export const wsClient = new WebSocketClient(WS_URL)
 
 // Auto-connect on import (lazy) - but only if user is already logged in

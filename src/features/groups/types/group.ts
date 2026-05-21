@@ -36,6 +36,14 @@ export type UserGroup = {
   createdByEmail?: string | null
   /** When true, users in this group do not see the Leverage section in the trading terminal. */
   hideLeverageInTerminal?: boolean
+  /** Optional IANA timezone default for members. */
+  timezone?: string | null
+  /** Optional ISO 4217 display currency default for members. */
+  displayCurrency?: string | null
+  /** When true, swap (overnight financing) may be charged for this group’s positions at rollover (Phase 3). */
+  swapEnabled?: boolean
+  /** When true, per-trade fees may be charged for this group at order placement (Phase 2). */
+  feesEnabled?: boolean
 }
 
 export interface ListGroupsParams {
@@ -65,6 +73,12 @@ export interface CreateGroupPayload {
   signup_slug?: string | null
   /** When true, users in this group do not see the Leverage section in the trading terminal. */
   hide_leverage_in_terminal?: boolean | null
+  /** Optional IANA timezone for group members; null/empty clears. */
+  timezone?: string | null
+  /** Optional ISO 4217 display currency for group members; null/empty clears. */
+  display_currency?: string | null
+  swap_enabled?: boolean | null
+  fees_enabled?: boolean | null
 }
 
 export interface UpdateGroupPayload extends CreateGroupPayload {}

@@ -153,6 +153,29 @@ pub struct UserResponse {
     /// When true, hide the Leverage section in the trading terminal (from user's group setting).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_leverage_in_terminal: Option<bool>,
+    /// IANA timezone or NULL — user-level override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    /// IANA timezone or NULL — from the user's group only (not user override).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_timezone: Option<String>,
+    /// Resolved effective IANA timezone for display (user → group → platform → UTC).
+    pub effective_timezone: String,
+    /// `user` | `group` | `platform` | `fallback`
+    pub effective_timezone_origin: String,
+    /// ISO 4217 currency code or NULL — user-level override
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_currency: Option<String>,
+    /// ISO 4217 currency code or NULL — inherited from group, NOT including user override
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_display_currency: Option<String>,
+    /// Resolved effective display currency (user → group → platform → USD)
+    pub effective_display_currency: String,
+    /// `user` | `group` | `platform` | `fallback`
+    pub effective_display_currency_origin: String,
+    /// Platform default currency from general settings (for client-side resolution chain)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform_display_currency: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -851,37 +874,23 @@ async fn register(
                 }
             });
 
+            let user_resp = build_user_response(&pool, &user, None, true).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "REGISTER_BUILD_FAILED".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
+
             Ok(Json(AuthResponse {
-            access_token,
-            refresh_token,
-            user: UserResponse {
-                id: user.id,
-                email: user.email,
-                first_name: user.first_name,
-                last_name: user.last_name,
-                role: user.role,
-                status: user.status.into(),
-                phone: user.phone.clone(),
-                country: user.country.clone(),
-                created_at: Some(user.created_at),
-                last_login_at: user.last_login_at,
-                referral_code: user.referral_code.clone(),
-                group_id: user.group_id,
-                group_name: None,
-                min_leverage: user.min_leverage,
-                max_leverage: user.max_leverage,
-                price_profile_name: None,
-                leverage_profile_name: None,
-                account_type: user.account_type.or_else(|| Some("hedging".to_string())),
-                margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
-                trading_access: user.trading_access.or_else(|| Some("full".to_string())),
-                open_positions_count: None,
-                permission_profile_id: None,
-                permission_profile_name: None,
-                permissions: Some(vec![]),
-                hide_leverage_in_terminal: None,
-            },
-        }))
+                access_token,
+                refresh_token,
+                user: user_resp,
+            }))
         }
         Err(e) => {
             let code = if e.to_string().contains("already registered") {
@@ -923,50 +932,21 @@ async fn login(
         .await
     {
         Ok((user, access_token, refresh_token)) => {
-            let perm_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
-            let permissions = perm_service
-                .get_effective_permissions(&user.role, user.permission_profile_id)
-                .await;
-            let permission_profile_name: Option<String> = if let Some(profile_id) = user.permission_profile_id {
-                sqlx::query_scalar::<_, String>("SELECT name FROM permission_profiles WHERE id = $1")
-                    .bind(profile_id)
-                    .fetch_optional(&pool)
-                    .await
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
+            let user_resp = build_user_response(&pool, &user, None, false).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "LOGIN_BUILD_FAILED".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
+                )
+            })?;
             Ok(Json(AuthResponse {
                 access_token,
                 refresh_token,
-                user: UserResponse {
-                    id: user.id,
-                    email: user.email,
-                    first_name: user.first_name,
-                    last_name: user.last_name,
-                    role: user.role,
-                    status: user.status.into(),
-                    phone: user.phone.clone(),
-                    country: user.country.clone(),
-                    created_at: Some(user.created_at),
-                    last_login_at: user.last_login_at,
-                    referral_code: user.referral_code.clone(),
-                    group_id: user.group_id,
-                    group_name: None,
-                    min_leverage: user.min_leverage,
-                    max_leverage: user.max_leverage,
-                    price_profile_name: None,
-                    leverage_profile_name: None,
-                    account_type: user.account_type.or_else(|| Some("hedging".to_string())),
-                    margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
-                    trading_access: user.trading_access.or_else(|| Some("full".to_string())),
-                    open_positions_count: None,
-                    permission_profile_id: user.permission_profile_id,
-                    permission_profile_name,
-                    permissions: Some(permissions),
-                    hide_leverage_in_terminal: None,
-                },
+                user: user_resp,
             }))
         }
         Err(e) => Err((
@@ -1033,6 +1013,139 @@ async fn logout(
     }
 }
 
+/// Assemble [`UserResponse`] with group joins, permissions, and effective timezone resolution.
+async fn build_user_response(
+    pool: &PgPool,
+    user: &crate::models::user::User,
+    open_positions_count: Option<i32>,
+    empty_permissions: bool,
+) -> Result<UserResponse, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct GroupProfileRow {
+        group_name: Option<String>,
+        price_profile_name: Option<String>,
+        leverage_profile_name: Option<String>,
+        hide_leverage_in_terminal: Option<bool>,
+        group_timezone: Option<String>,
+        group_display_currency: Option<String>,
+    }
+
+    let group_row: Option<GroupProfileRow> = if let Some(gid) = user.group_id {
+        sqlx::query_as::<_, GroupProfileRow>(
+            r#"
+            SELECT ug.name AS group_name, psp.name AS price_profile_name, lp.name AS leverage_profile_name,
+                   ug.hide_leverage_in_terminal, ug.timezone AS group_timezone, ug.display_currency AS group_display_currency
+            FROM user_groups ug
+            LEFT JOIN price_stream_profiles psp ON ug.default_price_profile_id = psp.id
+            LEFT JOIN leverage_profiles lp ON ug.default_leverage_profile_id = lp.id
+            WHERE ug.id = $1
+            "#,
+        )
+        .bind(gid)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        None
+    };
+
+    let group_name = group_row.as_ref().and_then(|r| r.group_name.clone());
+    let price_profile_name = group_row.as_ref().and_then(|r| r.price_profile_name.clone());
+    let leverage_profile_name = group_row.as_ref().and_then(|r| r.leverage_profile_name.clone());
+    let hide_leverage_in_terminal = group_row.as_ref().and_then(|r| r.hide_leverage_in_terminal);
+    let group_timezone = group_row.as_ref().and_then(|r| r.group_timezone.clone());
+    let group_display_currency = group_row.as_ref().and_then(|r| r.group_display_currency.clone());
+
+    let (platform_tz, platform_currency) =
+        crate::utils::effective_currency::fetch_platform_settings(pool).await?;
+    let user_tz = user.timezone.clone();
+    let (effective_timezone, effective_timezone_origin) =
+        crate::utils::effective_timezone::resolve_effective_timezone(
+            user_tz.as_deref(),
+            group_timezone.as_deref(),
+            platform_tz.as_deref(),
+        );
+
+    let user_dc = user.display_currency.clone();
+    let (effective_display_currency, effective_display_currency_origin) =
+        crate::utils::effective_currency::resolve_effective_display_currency(
+            user_dc.as_deref(),
+            group_display_currency.as_deref(),
+            platform_currency.as_deref(),
+        );
+
+    let (permission_profile_name, permissions) = if empty_permissions {
+        (None, Some(vec![]))
+    } else {
+        let perm_service =
+            crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
+        let permissions = perm_service
+            .get_effective_permissions(&user.role, user.permission_profile_id)
+            .await;
+        let permission_profile_name: Option<String> =
+            if let Some(profile_id) = user.permission_profile_id {
+                sqlx::query_scalar::<_, String>("SELECT name FROM permission_profiles WHERE id = $1")
+                    .bind(profile_id)
+                    .fetch_optional(pool)
+                    .await?
+            } else {
+                None
+            };
+        (permission_profile_name, Some(permissions))
+    };
+
+    Ok(UserResponse {
+        id: user.id,
+        email: user.email.clone(),
+        first_name: user.first_name.clone(),
+        last_name: user.last_name.clone(),
+        role: user.role.clone(),
+        status: user.status.into(),
+        phone: user.phone.clone(),
+        country: user.country.clone(),
+        created_at: Some(user.created_at),
+        last_login_at: user.last_login_at,
+        referral_code: user.referral_code.clone(),
+        group_id: user.group_id,
+        group_name,
+        min_leverage: user.min_leverage,
+        max_leverage: user.max_leverage,
+        price_profile_name,
+        leverage_profile_name,
+        account_type: user
+            .account_type
+            .as_deref()
+            .filter(|s| *s == "hedging" || *s == "netting")
+            .map(|s| s.to_string())
+            .or_else(|| Some("hedging".to_string())),
+        margin_calculation_type: user
+            .margin_calculation_type
+            .as_deref()
+            .filter(|s| *s == "hedged" || *s == "net")
+            .map(|s| s.to_string())
+            .or_else(|| Some("hedged".to_string())),
+        trading_access: user
+            .trading_access
+            .as_deref()
+            .filter(|s| *s == "full" || *s == "close_only" || *s == "disabled")
+            .map(|s| s.to_string())
+            .or_else(|| Some("full".to_string())),
+        open_positions_count,
+        permission_profile_id: user.permission_profile_id,
+        permission_profile_name,
+        permissions,
+        hide_leverage_in_terminal,
+        timezone: user_tz,
+        group_timezone,
+        effective_timezone,
+        effective_timezone_origin,
+        display_currency: user_dc,
+        group_display_currency,
+        effective_display_currency,
+        effective_display_currency_origin,
+        platform_display_currency: platform_currency.clone(),
+    })
+}
+
 async fn me(
     State(pool): State<PgPool>,
     axum::extract::Extension(claims): axum::extract::Extension<Claims>,
@@ -1042,87 +1155,18 @@ async fn me(
 
     match service.get_user_by_id(claims.sub).await {
         Ok(user) => {
-            // Fetch group name, profile names, and hide_leverage_in_terminal if user has a group
-            let (group_name, price_profile_name, leverage_profile_name, hide_leverage_in_terminal): (
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<bool>,
-            ) = if let Some(group_id) = user.group_id {
-                #[derive(sqlx::FromRow)]
-                struct GroupProfileRow {
-                    group_name: Option<String>,
-                    price_profile_name: Option<String>,
-                    leverage_profile_name: Option<String>,
-                    hide_leverage_in_terminal: Option<bool>,
-                }
-                let row = sqlx::query_as::<_, GroupProfileRow>(
-                    r#"
-                    SELECT ug.name AS group_name, psp.name AS price_profile_name, lp.name AS leverage_profile_name,
-                           ug.hide_leverage_in_terminal
-                    FROM user_groups ug
-                    LEFT JOIN price_stream_profiles psp ON ug.default_price_profile_id = psp.id
-                    LEFT JOIN leverage_profiles lp ON ug.default_leverage_profile_id = lp.id
-                    WHERE ug.id = $1
-                    "#,
-                )
-                .bind(group_id)
-                .fetch_optional(&pool)
-                .await
-                .ok()
-                .flatten();
+            let body = build_user_response(&pool, &user, None, false).await.map_err(|e| {
                 (
-                    row.as_ref().and_then(|r| r.group_name.clone()),
-                    row.as_ref().and_then(|r| r.price_profile_name.clone()),
-                    row.as_ref().and_then(|r| r.leverage_profile_name.clone()),
-                    row.as_ref().and_then(|r| r.hide_leverage_in_terminal),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            code: "ME_BUILD_FAILED".to_string(),
+                            message: e.to_string(),
+                        },
+                    }),
                 )
-            } else {
-                (None, None, None, None)
-            };
-
-            let perm_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
-            let permissions = perm_service
-                .get_effective_permissions(&user.role, user.permission_profile_id)
-                .await;
-            let permission_profile_name: Option<String> = if let Some(profile_id) = user.permission_profile_id {
-                sqlx::query_scalar::<_, String>("SELECT name FROM permission_profiles WHERE id = $1")
-                    .bind(profile_id)
-                    .fetch_optional(&pool)
-                    .await
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-
-            Ok(Json(UserResponse {
-                id: user.id,
-                email: user.email,
-                first_name: user.first_name,
-                last_name: user.last_name,
-                role: user.role,
-                status: user.status.into(),
-                phone: user.phone,
-                country: user.country,
-                created_at: Some(user.created_at),
-                last_login_at: user.last_login_at,
-                referral_code: user.referral_code,
-                group_id: user.group_id,
-                group_name,
-                min_leverage: user.min_leverage,
-                max_leverage: user.max_leverage,
-                price_profile_name,
-                leverage_profile_name,
-                account_type: user.account_type.or_else(|| Some("hedging".to_string())),
-                margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
-                trading_access: user.trading_access.or_else(|| Some("full".to_string())),
-                open_positions_count: None,
-                permission_profile_id: user.permission_profile_id,
-                permission_profile_name,
-                permissions: Some(permissions),
-                hide_leverage_in_terminal,
-            }))
+            })?;
+            Ok(Json(body))
         },
         Err(e) => Err((
             StatusCode::NOT_FOUND,
@@ -1324,80 +1368,19 @@ async fn update_me(
         )
     })?;
 
-    // Same response shape as me()
-    let (group_name, price_profile_name, leverage_profile_name): (Option<String>, Option<String>, Option<String>) =
-        if let Some(group_id) = user.group_id {
-            #[derive(sqlx::FromRow)]
-            struct GroupProfileRow {
-                group_name: Option<String>,
-                price_profile_name: Option<String>,
-                leverage_profile_name: Option<String>,
-            }
-            let row = sqlx::query_as::<_, GroupProfileRow>(
-                r#"
-                SELECT ug.name AS group_name, psp.name AS price_profile_name, lp.name AS leverage_profile_name
-                FROM user_groups ug
-                LEFT JOIN price_stream_profiles psp ON ug.default_price_profile_id = psp.id
-                LEFT JOIN leverage_profiles lp ON ug.default_leverage_profile_id = lp.id
-                WHERE ug.id = $1
-                "#,
-            )
-            .bind(group_id)
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
-            (
-                row.as_ref().and_then(|r| r.group_name.clone()),
-                row.as_ref().and_then(|r| r.price_profile_name.clone()),
-                row.as_ref().and_then(|r| r.leverage_profile_name.clone()),
-            )
-        } else {
-            (None, None, None)
-        };
+    let body = build_user_response(&pool, &user, None, false).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "UPDATE_ME_BUILD_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+    })?;
 
-    let perm_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
-    let permissions = perm_service
-        .get_effective_permissions(&user.role, user.permission_profile_id)
-        .await;
-    let permission_profile_name: Option<String> = if let Some(profile_id) = user.permission_profile_id {
-        sqlx::query_scalar::<_, String>("SELECT name FROM permission_profiles WHERE id = $1")
-            .bind(profile_id)
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten()
-    } else {
-        None
-    };
-
-    Ok(Json(UserResponse {
-        id: user.id,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        role: user.role,
-        status: user.status.into(),
-        phone: user.phone,
-        country: user.country,
-        created_at: Some(user.created_at),
-        last_login_at: user.last_login_at,
-        referral_code: user.referral_code,
-        group_id: user.group_id,
-        group_name,
-        min_leverage: user.min_leverage,
-        max_leverage: user.max_leverage,
-        price_profile_name,
-        leverage_profile_name,
-        account_type: user.account_type.or_else(|| Some("hedging".to_string())),
-        margin_calculation_type: user.margin_calculation_type.or_else(|| Some("hedged".to_string())),
-        trading_access: user.trading_access.or_else(|| Some("full".to_string())),
-        open_positions_count: None,
-        permission_profile_id: user.permission_profile_id,
-        permission_profile_name,
-        permissions: Some(permissions),
-        hide_leverage_in_terminal: None,
-    }))
+    Ok(Json(body))
 }
 
 async fn symbol_leverage(
@@ -1812,85 +1795,21 @@ async fn list_users(
                 }
             };
 
-            let permission_profiles_service = crate::services::permission_profiles_service::PermissionProfilesService::new(pool.clone());
-
             let mut user_responses: Vec<UserResponse> = Vec::new();
             for u in users {
-                let group_name: Option<String> = if let Some(group_id) = u.group_id {
-                    sqlx::query_scalar::<_, String>(
-                        "SELECT name FROM user_groups WHERE id = $1"
-                    )
-                    .bind(group_id)
-                    .fetch_optional(&pool)
-                    .await
-                    .ok()
-                    .flatten()
-                } else {
-                    None
-                };
-
-                let (permission_profile_name, permissions): (Option<String>, Option<Vec<String>>) =
-                    if let Some(profile_id) = u.permission_profile_id {
-                        let name = sqlx::query_scalar::<_, String>(
-                            "SELECT name FROM permission_profiles WHERE id = $1",
-                        )
-                        .bind(profile_id)
-                        .fetch_optional(&pool)
-                        .await
-                        .ok()
-                        .flatten();
-                        let perms = permission_profiles_service
-                            .get_effective_permissions(&u.role, Some(profile_id))
-                            .await;
-                        (name, Some(perms))
-                    } else {
-                        let perms = permission_profiles_service
-                            .get_effective_permissions(&u.role, None)
-                            .await;
-                        (None, Some(perms))
-                    };
-
-                let account_type = u
-                    .account_type
-                    .filter(|s| s == "hedging" || s == "netting")
-                    .or_else(|| Some("hedging".to_string()));
-                let margin_calculation_type = u
-                    .margin_calculation_type
-                    .filter(|s| s == "hedged" || s == "net")
-                    .or_else(|| Some("hedged".to_string()));
-                let trading_access = u
-                    .trading_access
-                    .filter(|s| s == "full" || s == "close_only" || s == "disabled")
-                    .or_else(|| Some("full".to_string()));
                 let open_positions_count = open_counts.get(&u.id).copied();
-
-                user_responses.push(UserResponse {
-                    id: u.id,
-                    email: u.email,
-                    first_name: u.first_name,
-                    last_name: u.last_name,
-                    role: u.role,
-                    status: u.status.into(),
-                    phone: u.phone,
-                    country: u.country,
-                    created_at: Some(u.created_at),
-                    last_login_at: u.last_login_at,
-                    referral_code: u.referral_code,
-                    group_id: u.group_id,
-                    group_name,
-                    min_leverage: u.min_leverage,
-                    max_leverage: u.max_leverage,
-                    price_profile_name: None,
-                    leverage_profile_name: None,
-                    account_type,
-                    margin_calculation_type,
-                    trading_access,
-                    open_positions_count,
-                    permission_profile_id: u.permission_profile_id,
-                    permission_profile_name,
-                    permissions,
-                    hide_leverage_in_terminal: None,
-                });
+                let row = build_user_response(&pool, &u, open_positions_count, false).await.map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ErrorDetail {
+                                code: "LIST_USERS_BUILD_FAILED".to_string(),
+                                message: e.to_string(),
+                            },
+                        }),
+                    )
+                })?;
+                user_responses.push(row);
             }
             Ok(Json(ListUsersResponse {
                 items: user_responses,

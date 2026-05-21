@@ -8,6 +8,7 @@ import { useWalletStore } from '@/shared/store/walletStore'
 import { useNavigate } from 'react-router-dom'
 import { toast } from '@/shared/components/common'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
+import { useFormatFromUsd } from '@/shared/currency'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
 import { cn } from '@/shared/utils'
@@ -31,6 +32,7 @@ export function TerminalAccountView({ onOpenDeposit }: TerminalAccountViewProps)
   const navigate = useNavigate()
   const { balance, equity, margin_used, currency, isLoading: balanceLoading } = useWalletStore()
   const { accountSummary, isLoading: accountSummaryLoading } = useAccountSummary()
+  const formatMoney = useFormatFromUsd()
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
 
@@ -74,7 +76,7 @@ export function TerminalAccountView({ onOpenDeposit }: TerminalAccountViewProps)
             <Skeleton className="h-8 w-32" />
           ) : (
             <div className="text-2xl font-bold text-text">
-              ${displayBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {formatMoney(displayBalance)}
             </div>
           )}
           <div className="flex justify-between mt-3 pt-3 border-t border-white/10 text-xs">
@@ -84,7 +86,7 @@ export function TerminalAccountView({ onOpenDeposit }: TerminalAccountViewProps)
                 <Skeleton className="h-4 w-20 inline-block align-middle" />
               ) : (
                 <span className="font-semibold text-text">
-                  ${displayEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {formatMoney(displayEquity)}
                 </span>
               )}
             </div>
@@ -94,7 +96,7 @@ export function TerminalAccountView({ onOpenDeposit }: TerminalAccountViewProps)
                 <Skeleton className="h-4 w-16 inline-block align-middle" />
               ) : (
                 <span className="font-semibold text-text">
-                  ${displayMargin.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {formatMoney(displayMargin)}
                 </span>
               )}
             </div>

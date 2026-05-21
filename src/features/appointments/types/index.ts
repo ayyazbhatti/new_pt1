@@ -83,6 +83,9 @@ export interface UserSearchResult {
   first_name?: string
   last_name?: string
   full_name?: string
+  timezone?: string | null
+  group_timezone?: string | null
+  effective_timezone?: string | null
 }
 
 export interface CreateAppointmentRequest {

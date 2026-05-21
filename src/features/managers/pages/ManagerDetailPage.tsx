@@ -1,8 +1,10 @@
 import { useParams, Link } from 'react-router-dom'
+import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Card } from '@/shared/ui/card'
 import { Badge } from '@/shared/ui/badge'
-import { formatCurrency } from '@/features/adminFinance/utils/formatters'
+import { useFormatFromUsd, useFormatSignedFromUsd, useFormatConverted } from '@/shared/currency'
 import {
   ChevronLeft,
   Users,
@@ -21,6 +23,8 @@ import {
 } from 'lucide-react'
 import { useManagerStats } from '../hooks/useManagerStats'
 import type { ManagerStats } from '../hooks/useManagerStats'
+import { listUsers } from '@/shared/api/users.api'
+import { TimezoneOverrideProvider } from '@/shared/datetime'
 
 function StatusBadge({ status }: { status: string }) {
   const variant = status === 'approved' || status === 'filled' ? 'success' : status === 'pending' ? 'warning' : 'danger'
@@ -32,14 +36,6 @@ const OVERVIEW_CARDS = [
   { key: 'groups', label: 'Groups', desc: 'Groups this manager owns or manages', icon: FolderKanban, iconClassName: 'text-blue-500' },
   { key: 'active', label: 'Active users', desc: 'Users with recent activity', icon: UserCheck, iconClassName: 'text-emerald-500' },
   { key: 'leads', label: 'Assigned leads', desc: 'Leads owned by this manager', icon: UserPlus, iconClassName: 'text-amber-500' },
-] as const
-
-const TRADING_KPI_KEYS = [
-  { key: 'deposits', label: 'Deposits (total)', getSub: (s: ManagerStats) => `${s.deposits.totalCount} txns`, icon: ArrowDownToLine, iconClassName: 'text-emerald-500' },
-  { key: 'withdrawals', label: 'Withdrawals (total)', getSub: (s: ManagerStats) => `${s.withdrawals.totalCount} txns`, icon: ArrowUpFromLine, iconClassName: 'text-amber-500' },
-  { key: 'positions', label: 'Open positions', getSub: (s: ManagerStats) => `Exposure ${formatCurrency(s.positions.totalExposure, 'USD')}`, icon: LayoutList, iconClassName: 'text-blue-500' },
-  { key: 'orders', label: 'Active orders', getSub: (s: ManagerStats) => `Filled today: ${s.orders.filledToday}`, icon: ClipboardList, iconClassName: 'text-slate-400' },
-  { key: 'pnl', label: 'Live PnL', getSub: () => 'Unrealized across all positions', icon: TrendingUp, iconClassName: 'text-emerald-500' },
 ] as const
 
 function LoadingSkeleton() {
@@ -61,6 +57,60 @@ function LoadingSkeleton() {
 export function ManagerDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { manager, stats, isLoading, error, isOtherManagerUnsupported } = useManagerStats(id)
+  const formatMoney = useFormatFromUsd()
+  const formatSigned = useFormatSignedFromUsd()
+  const formatConv = useFormatConverted()
+
+  const TRADING_KPI_KEYS = useMemo(
+    () =>
+      [
+        {
+          key: 'deposits',
+          label: 'Deposits (total)',
+          getSub: (s: ManagerStats) => `${s.deposits.totalCount} txns`,
+          icon: ArrowDownToLine,
+          iconClassName: 'text-emerald-500',
+        },
+        {
+          key: 'withdrawals',
+          label: 'Withdrawals (total)',
+          getSub: (s: ManagerStats) => `${s.withdrawals.totalCount} txns`,
+          icon: ArrowUpFromLine,
+          iconClassName: 'text-amber-500',
+        },
+        {
+          key: 'positions',
+          label: 'Open positions',
+          getSub: (s: ManagerStats) => `Exposure ${formatMoney(s.positions.totalExposure)}`,
+          icon: LayoutList,
+          iconClassName: 'text-blue-500',
+        },
+        {
+          key: 'orders',
+          label: 'Active orders',
+          getSub: (s: ManagerStats) => `Filled today: ${s.orders.filledToday}`,
+          icon: ClipboardList,
+          iconClassName: 'text-slate-400',
+        },
+        {
+          key: 'pnl',
+          label: 'Live PnL',
+          getSub: () => 'Unrealized across all positions',
+          icon: TrendingUp,
+          iconClassName: 'text-emerald-500',
+        },
+      ] as const,
+    [formatMoney],
+  )
+
+  const { data: managerUserTz } = useQuery({
+    queryKey: ['manager-detail-user-tz', manager?.userId, manager?.userEmail],
+    queryFn: async () => {
+      const r = await listUsers({ search: manager!.userEmail!.trim(), page_size: 50 })
+      return r.items.find((u) => u.id === manager!.userId) ?? null
+    },
+    enabled: Boolean(manager?.userId && manager?.userEmail?.trim()),
+  })
 
   if (!id) {
     return (
@@ -133,8 +183,8 @@ export function ManagerDetailPage() {
 
   const pageTitle = `Manager statistics${manager.userName ? ` — ${manager.userName}` : ''}`
 
-  return (
-    <ContentShell>
+  const managerDetailMain = (
+    <>
       <PageHeader
         title={pageTitle}
         description={
@@ -205,14 +255,14 @@ export function ManagerDetailPage() {
               const Icon = card.icon
               const value =
                 card.key === 'deposits'
-                  ? formatCurrency(stats.deposits.totalVolume, 'USD')
+                  ? formatMoney(stats.deposits.totalVolume)
                   : card.key === 'withdrawals'
-                    ? formatCurrency(stats.withdrawals.totalVolume, 'USD')
+                    ? formatMoney(stats.withdrawals.totalVolume)
                     : card.key === 'positions'
                       ? String(stats.positions.openCount)
                       : card.key === 'orders'
                         ? String(stats.orders.activeCount)
-                        : formatCurrency(stats.positions.livePnl, 'USD')
+                        : formatSigned(stats.positions.livePnl)
               const sub = card.getSub(stats)
               return (
                 <Card key={card.key} className="flex items-start gap-3 p-4">
@@ -240,7 +290,7 @@ export function ManagerDetailPage() {
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
                   <div>
                     <p className="text-xs text-text-muted">Total volume</p>
-                    <p className="text-lg font-semibold text-text">{formatCurrency(stats.deposits.totalVolume, 'USD')}</p>
+                    <p className="text-lg font-semibold text-text">{formatMoney(stats.deposits.totalVolume)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-text-muted">Total count</p>
@@ -248,7 +298,7 @@ export function ManagerDetailPage() {
                   </div>
                   <div>
                     <p className="text-xs text-text-muted">Today (volume)</p>
-                    <p className="text-lg font-semibold text-text">{formatCurrency(stats.deposits.todayVolume, 'USD')}</p>
+                    <p className="text-lg font-semibold text-text">{formatMoney(stats.deposits.todayVolume)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-text-muted">Today (count)</p>
@@ -271,7 +321,7 @@ export function ManagerDetailPage() {
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
                   <div>
                     <p className="text-xs text-text-muted">Total volume</p>
-                    <p className="text-lg font-semibold text-text">{formatCurrency(stats.withdrawals.totalVolume, 'USD')}</p>
+                    <p className="text-lg font-semibold text-text">{formatMoney(stats.withdrawals.totalVolume)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-text-muted">Total count</p>
@@ -279,7 +329,7 @@ export function ManagerDetailPage() {
                   </div>
                   <div>
                     <p className="text-xs text-text-muted">Today (volume)</p>
-                    <p className="text-lg font-semibold text-text">{formatCurrency(stats.withdrawals.todayVolume, 'USD')}</p>
+                    <p className="text-lg font-semibold text-text">{formatMoney(stats.withdrawals.todayVolume)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-text-muted">Today (count)</p>
@@ -322,7 +372,7 @@ export function ManagerDetailPage() {
                       stats.recentDeposits.map((row) => (
                         <tr key={row.id} className="border-b border-border/50 hover:bg-surface-2/30">
                           <td className="px-4 py-3 text-text">{row.user}</td>
-                          <td className="px-4 py-3 text-text">{formatCurrency(row.amount, row.currency)}</td>
+                          <td className="px-4 py-3 text-text">{formatConv(row.amount, row.currency)}</td>
                           <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
                           <td className="px-4 py-3 text-text-muted">{row.time}</td>
                         </tr>
@@ -359,7 +409,7 @@ export function ManagerDetailPage() {
                       stats.recentWithdrawals.map((row) => (
                         <tr key={row.id} className="border-b border-border/50 hover:bg-surface-2/30">
                           <td className="px-4 py-3 text-text">{row.user}</td>
-                          <td className="px-4 py-3 text-text">{formatCurrency(row.amount, row.currency)}</td>
+                          <td className="px-4 py-3 text-text">{formatConv(row.amount, row.currency)}</td>
                           <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
                           <td className="px-4 py-3 text-text-muted">{row.time}</td>
                         </tr>
@@ -389,7 +439,7 @@ export function ManagerDetailPage() {
                     stats.positions.livePnl >= 0 ? 'text-emerald-600' : 'text-red-600'
                   }`}
                 >
-                  {formatCurrency(stats.positions.livePnl, 'USD')}
+                  {formatSigned(stats.positions.livePnl)}
                 </p>
               </div>
             </Card>
@@ -401,7 +451,7 @@ export function ManagerDetailPage() {
               <div className="border-b border-border bg-surface-2 px-4 py-3">
                 <h2 className="text-sm font-semibold text-text">Open positions</h2>
                 <p className="mt-0.5 text-xs text-text-muted">
-                  {stats.positions.openCount} open · {formatCurrency(stats.positions.totalExposure, 'USD')} exposure · {stats.positions.closedToday} closed today
+                  {stats.positions.openCount} open · {formatMoney(stats.positions.totalExposure)} exposure · {stats.positions.closedToday} closed today
                 </p>
               </div>
               <div className="table-scroll">
@@ -435,7 +485,7 @@ export function ManagerDetailPage() {
                           <td
                             className={`px-4 py-3 font-medium ${row.livePnl >= 0 ? 'text-emerald-600' : 'text-red-600'}`}
                           >
-                            {row.livePnl >= 0 ? '+' : ''}{formatCurrency(row.livePnl, 'USD')}
+                            {formatSigned(row.livePnl)}
                           </td>
                           <td className="px-4 py-3 text-text-muted">{row.user}</td>
                         </tr>
@@ -523,9 +573,9 @@ export function ManagerDetailPage() {
                         <tr key={row.user} className="border-b border-border/50 hover:bg-surface-2/30">
                           <td className="px-4 py-3 font-medium text-text-muted">{row.rank}</td>
                           <td className="px-4 py-3 text-text">{row.user}</td>
-                          <td className="px-4 py-3 font-medium text-emerald-600">{formatCurrency(row.pnl, 'USD')}</td>
+                          <td className="px-4 py-3 font-medium text-emerald-600">{formatSigned(row.pnl)}</td>
                           <td className="px-4 py-3 text-text">{row.winRate ? `${row.winRate}%` : '—'}</td>
-                          <td className="px-4 py-3 text-text-muted">{formatCurrency(row.volume, 'USD')}</td>
+                          <td className="px-4 py-3 text-text-muted">{formatMoney(row.volume)}</td>
                         </tr>
                       ))
                     )}
@@ -565,9 +615,9 @@ export function ManagerDetailPage() {
                         <tr key={row.user} className="border-b border-border/50 hover:bg-surface-2/30">
                           <td className="px-4 py-3 font-medium text-text-muted">{row.rank}</td>
                           <td className="px-4 py-3 text-text">{row.user}</td>
-                          <td className="px-4 py-3 font-medium text-red-600">{formatCurrency(row.pnl, 'USD')}</td>
+                          <td className="px-4 py-3 font-medium text-red-600">{formatSigned(row.pnl)}</td>
                           <td className="px-4 py-3 text-text">{row.winRate ? `${row.winRate}%` : '—'}</td>
-                          <td className="px-4 py-3 text-text-muted">{formatCurrency(row.volume, 'USD')}</td>
+                          <td className="px-4 py-3 text-text-muted">{formatMoney(row.volume)}</td>
                         </tr>
                       ))
                     )}
@@ -578,6 +628,24 @@ export function ManagerDetailPage() {
           </div>
         </>
       ) : null}
+    </>
+  )
+
+  return (
+    <ContentShell>
+      {managerUserTz ? (
+        <TimezoneOverrideProvider
+          source={{
+            userTimezone: managerUserTz.timezone ?? null,
+            groupTimezone: managerUserTz.group_timezone ?? null,
+            platformTimezone: undefined,
+          }}
+        >
+          {managerDetailMain}
+        </TimezoneOverrideProvider>
+      ) : (
+        managerDetailMain
+      )}
     </ContentShell>
   )
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import type { CreateAppointmentRequest, UserSearchResult, AppointmentType } from '../types'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
@@ -12,6 +12,8 @@ import {
 import { useModalStore } from '@/app/store'
 import { Search } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import { fromZonedWallClock, useEffectiveTimezone } from '@/shared/datetime'
+import { getUtcOffsetLabel, resolveEffectiveTimezone } from '@/shared/datetime/resolve'
 
 const TYPES: AppointmentType[] = ['consultation', 'support', 'onboarding', 'review', 'other']
 const DURATIONS = [15, 30, 45, 60]
@@ -40,12 +42,28 @@ export function CreateAppointmentModal({
   initialLead = null,
 }: CreateAppointmentModalProps) {
   const closeModal = useModalStore((s) => s.closeModal)
+  const adminEffective = useEffectiveTimezone()
   const [userQuery, setUserQuery] = useState('')
   const [userResults, setUserResults] = useState<UserSearchResult[]>([])
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(initialUser ?? null)
   const isUserLocked = initialUser != null
   const isForLead = initialLead != null
+
+  const wallClockIana = useMemo(() => {
+    if (isForLead || !selectedUser) {
+      return adminEffective.iana
+    }
+    return resolveEffectiveTimezone({
+      userTimezone: selectedUser.timezone ?? null,
+      groupTimezone: selectedUser.group_timezone ?? null,
+      platformTimezone: undefined,
+    }).iana
+  }, [isForLead, selectedUser, adminEffective.iana])
+  const wallClockHint = useMemo(
+    () => `${getUtcOffsetLabel(wallClockIana)} · ${wallClockIana}`,
+    [wallClockIana],
+  )
 
   useEffect(() => {
     if (initialUser) setSelectedUser(initialUser)
@@ -90,7 +108,7 @@ export function CreateAppointmentModal({
     if (isForLead && !initialLead) return
     const [y, m, d] = scheduledDate.split('-').map(Number)
     const [hour, min] = scheduledTime.split(':').map(Number)
-    const scheduled_at = new Date(y, m - 1, d, hour, min, 0).toISOString()
+    const scheduled_at = fromZonedWallClock(y, m, d, hour, min, wallClockIana).toISOString()
     const payload: CreateAppointmentRequest = {
       title: title.trim(),
       description: description.trim() || undefined,
@@ -185,6 +203,9 @@ export function CreateAppointmentModal({
         />
       </div>
       <div className="grid grid-cols-2 gap-4">
+        <p className="col-span-2 text-xs text-amber-100/90 rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-2">
+          Scheduled time (in trader&apos;s timezone: {wallClockHint})
+        </p>
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-300">Date *</label>
           <Input

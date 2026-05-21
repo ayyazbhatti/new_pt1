@@ -418,6 +418,12 @@ if not position_id and account_type == "netting" then
                         redis.call('HSET', new_pos_key, 'avg_price', tostring(fill_price))
                         redis.call('HSET', new_pos_key, 'leverage', tostring(pos_leverage))
                         redis.call('HSET', new_pos_key, 'margin', tostring(new_margin))
+                        do
+                        local mfc = tonumber(order.margin_from_cash or order.marginFromCash or new_margin) or new_margin
+                        local mfb = tonumber(order.margin_from_bonus or order.marginFromBonus or 0) or 0
+                        redis.call('HSET', new_pos_key, 'margin_from_cash', tostring(mfc))
+                        redis.call('HSET', new_pos_key, 'margin_from_bonus', tostring(mfb))
+                        end
                         redis.call('HSET', new_pos_key, 'unrealized_pnl', '0')
                         redis.call('HSET', new_pos_key, 'realized_pnl', '0')
                         redis.call('HSET', new_pos_key, 'status', 'OPEN')
@@ -462,6 +468,12 @@ if not position_id and fill_action == nil then
     redis.call('HSET', pos_key, 'avg_price', fill_price)
     redis.call('HSET', pos_key, 'leverage', tostring(leverage))
     redis.call('HSET', pos_key, 'margin', tostring(margin))
+    do
+    local mfc = tonumber(order.margin_from_cash or order.marginFromCash or margin) or margin
+    local mfb = tonumber(order.margin_from_bonus or order.marginFromBonus or 0) or 0
+    redis.call('HSET', pos_key, 'margin_from_cash', tostring(mfc))
+    redis.call('HSET', pos_key, 'margin_from_bonus', tostring(mfb))
+    end
     redis.call('HSET', pos_key, 'unrealized_pnl', '0')
     redis.call('HSET', pos_key, 'realized_pnl', '0')
     redis.call('HSET', pos_key, 'status', 'OPEN')
@@ -498,21 +510,9 @@ if not position_id and fill_action == nil then
     end
 end
 
--- Update balance (simplified - would need proper margin calculation)
-local balance_key = 'user:' .. user_id .. ':balance'
-local balance_json = redis.call('GET', balance_key)
-local balance = balance_json and cjson.decode(balance_json) or {
-    currency = "USD",
-    available = "10000.0",
-    locked = "0",
-    equity = "10000.0",
-    margin_used = "0",
-    free_margin = "10000.0"
-}
-
--- For now, just update timestamp
-balance.updated_at = timestamp_ms
-redis.call('SET', balance_key, cjson.encode(balance))
+-- Wallet balance / equity in Redis (`user:{id}:balance`) is owned and written by **auth-service**
+-- (account summary recompute after fills, deposits, swap settlement, etc.). Do not touch it here:
+-- a missing key + hard-coded fallback could persist bogus balances.
 
 -- Return result
 local result = {

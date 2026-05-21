@@ -54,6 +54,15 @@ function mapUserResponse(user: UserResponse): User {
     permissionProfileId: user.permission_profile_id ?? undefined,
     permissionProfileName: user.permission_profile_name ?? undefined,
     role: user.role,
+    timezone: user.timezone ?? null,
+    groupTimezone: user.group_timezone ?? null,
+    effectiveTimezone: user.effective_timezone ?? 'UTC',
+    effectiveTimezoneOrigin: user.effective_timezone_origin,
+    displayCurrency: user.display_currency ?? null,
+    groupDisplayCurrency: user.group_display_currency ?? null,
+    effectiveDisplayCurrency: user.effective_display_currency ?? 'USD',
+    effectiveDisplayCurrencyOrigin: user.effective_display_currency_origin,
+    platformDisplayCurrency: user.platform_display_currency ?? null,
   }
 }
 

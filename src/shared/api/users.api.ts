@@ -22,6 +22,15 @@ export interface UserResponse {
   open_positions_count?: number | null
   permission_profile_id?: string | null
   permission_profile_name?: string | null
+  timezone?: string | null
+  group_timezone?: string | null
+  effective_timezone?: string
+  effective_timezone_origin?: string
+  display_currency?: string | null
+  group_display_currency?: string | null
+  effective_display_currency?: string
+  effective_display_currency_origin?: string
+  platform_display_currency?: string | null
 }
 
 export interface ListUsersParams {

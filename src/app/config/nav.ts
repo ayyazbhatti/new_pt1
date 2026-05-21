@@ -24,6 +24,7 @@ export const adminNavItems: NavItem[] = [
   { label: 'Promotions', path: '/admin/promotions', icon: Megaphone, permission: 'promotions:view' },
   { label: 'Funded programs', path: '/admin/funded-programs', icon: Trophy, permission: 'dashboard:view' },
   { label: 'Swap Fees', path: '/admin/swap', icon: Clock, permission: 'swap:view' },
+  { label: 'Trading fees', path: '/admin/fees', icon: Receipt, permission: 'fees:view' },
   { label: 'Transactions', path: '/admin/transactions', icon: Receipt, permission: 'finance:view' },
   { label: 'Bonus', path: '/admin/bonus', icon: Gift, permission: 'bonus:view' },
   { label: 'Affiliate', path: '/admin/affiliate', icon: UsersRound, permission: 'affiliate:view' },

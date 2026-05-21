@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use contracts::enums::PositionStatus;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::str::FromStr;
@@ -7,7 +8,7 @@ use tracing::{debug, error, info, warn, instrument};
 use uuid::Uuid;
 use rust_decimal::Decimal;
 
-use crate::engine::{LuaScripts, OrderCache};
+use crate::engine::{LuaScripts, OrderCache, position_events};
 use crate::engine::position_handler::PositionHandler;
 use crate::models::PositionClosedEvent;
 use crate::nats::NatsClient;
@@ -227,6 +228,20 @@ impl SltpHandler {
         let closed_size = Decimal::from_str(&closed_size_str).unwrap_or(Decimal::ZERO);
         let realized_pnl_str: String = conn.hget(&pos_key, "realized_pnl").await.unwrap_or_else(|_| "0".to_string());
         let realized_pnl = Decimal::from_str(&realized_pnl_str).unwrap_or(Decimal::ZERO);
+        let margin_from_cash = Decimal::from_str(
+            &conn
+                .hget::<_, _, String>(&pos_key, "margin_from_cash")
+                .await
+                .unwrap_or_else(|_| "0".to_string()),
+        )
+        .unwrap_or(Decimal::ZERO);
+        let margin_from_bonus = Decimal::from_str(
+            &conn
+                .hget::<_, _, String>(&pos_key, "margin_from_bonus")
+                .await
+                .unwrap_or_else(|_| "0".to_string()),
+        )
+        .unwrap_or(Decimal::ZERO);
         
         // Determine side enum
         let pos_side = match side.as_deref() {
@@ -255,6 +270,8 @@ impl SltpHandler {
             correlation_id: Uuid::new_v4().to_string(),
             ts: now(),
             trigger_reason: Some(trigger_reason_str.to_string()),
+            margin_from_cash: Some(margin_from_cash),
+            margin_from_bonus: Some(margin_from_bonus),
         };
         
         // Publish to NATS
@@ -262,6 +279,22 @@ impl SltpHandler {
             error!("Failed to publish position closed event to NATS for {}: {}", position_id, e);
         } else {
             info!("Published position closed event to NATS with trigger_reason={} for position {}", trigger_reason_str, position_id);
+        }
+
+        // Sync position to auth-service Postgres via evt.position.updated.
+        // Required: prevents Redis-only positions (see docs/position-redis-postgres-sync-diagnostic-442fde7b.md).
+        if let Err(e) = position_events::publish_position_updated(
+            self.nats.as_ref(),
+            &mut conn,
+            *position_id,
+            Some(PositionStatus::Closed),
+        )
+        .await
+        {
+            warn!(
+                "Failed to publish evt.position.updated after SL/TP close {}: {}",
+                position_id, e
+            );
         }
         
         // Also publish to Redis pub/sub for gateway-ws

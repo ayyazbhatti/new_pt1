@@ -9,12 +9,15 @@ import { useModalStore } from '@/app/store'
 import { WalletDetailsModal } from '../modals/WalletDetailsModal'
 import { ManualAdjustmentModal } from '../modals/ManualAdjustmentModal'
 import { Eye, Plus, Loader2 } from 'lucide-react'
-import { formatDateTime, formatCurrency } from '../utils/formatters'
+import { useFormatConverted } from '@/shared/currency'
+import { useFormatDateTime } from '@/shared/datetime'
 import { useQuery } from '@tanstack/react-query'
 import { fetchWallets, Wallet as ApiWallet } from '../api/finance.api'
 
 export function FinanceWalletsPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const formatDateTime = useFormatDateTime()
+  const formatConv = useFormatConverted()
   const [filters, setFilters] = useState({
     search: '',
     walletType: 'all' as 'all' | WalletType,
@@ -92,7 +95,7 @@ export function FinanceWalletsPanel() {
     )
   }
 
-  const columns: ColumnDef<Wallet>[] = [
+  const columns: ColumnDef<Wallet>[] = useMemo(() => [
     {
       id: 'user',
       header: 'User',
@@ -127,7 +130,7 @@ export function FinanceWalletsPanel() {
         const wallet = row.original
         return (
           <span className="font-mono font-semibold text-text">
-            {formatCurrency(wallet.available, wallet.currency)}
+            {formatConv(wallet.available, wallet.currency)}
           </span>
         )
       },
@@ -139,7 +142,7 @@ export function FinanceWalletsPanel() {
         const wallet = row.original
         return (
           <span className="font-mono text-text-muted">
-            {formatCurrency(wallet.locked, wallet.currency)}
+            {formatConv(wallet.locked, wallet.currency)}
           </span>
         )
       },
@@ -152,7 +155,7 @@ export function FinanceWalletsPanel() {
         if (wallet.equity !== undefined) {
           return (
             <span className="font-mono text-text">
-              {formatCurrency(wallet.equity, wallet.currency)}
+              {formatConv(wallet.equity, wallet.currency)}
             </span>
           )
         }
@@ -188,7 +191,7 @@ export function FinanceWalletsPanel() {
         )
       },
     },
-  ]
+  ], [formatDateTime, formatConv, openModal])
 
   if (isLoading) {
     return (

@@ -10,6 +10,8 @@ import {
   SelectValue,
 } from '@/shared/ui/select'
 import { useModalStore } from '@/app/store'
+import { fromZonedWallClock, wallClockPartsInTimezone, useEffectiveTimezone } from '@/shared/datetime'
+import { getUtcOffsetLabel } from '@/shared/datetime/resolve'
 
 const TYPES: AppointmentType[] = ['consultation', 'support', 'onboarding', 'review', 'other']
 const DURATIONS = [15, 30, 45, 60]
@@ -18,10 +20,21 @@ interface EditAppointmentModalProps {
   appointment: Appointment
   onSubmit: (id: string, payload: UpdateAppointmentRequest) => void
   submitting?: boolean
+  /** When set, date/time fields are wall-clock in this IANA zone (e.g. trader effective TZ). Otherwise uses current effective TZ from context. */
+  wallClockTimezone?: string | null
 }
 
-export function EditAppointmentModal({ appointment, onSubmit, submitting = false }: EditAppointmentModalProps) {
+export function EditAppointmentModal({
+  appointment,
+  onSubmit,
+  submitting = false,
+  wallClockTimezone = null,
+}: EditAppointmentModalProps) {
   const closeModal = useModalStore((s) => s.closeModal)
+  const effective = useEffectiveTimezone()
+  const zone = (wallClockTimezone?.trim() || effective.iana) as string
+  const wallClockHint = `${getUtcOffsetLabel(zone)} · ${zone}`
+
   const [title, setTitle] = useState(appointment.title)
   const [description, setDescription] = useState(appointment.description ?? '')
   const [scheduledDate, setScheduledDate] = useState('')
@@ -34,16 +47,23 @@ export function EditAppointmentModal({ appointment, onSubmit, submitting = false
   const [notes, setNotes] = useState(appointment.notes ?? '')
 
   useEffect(() => {
-    const d = new Date(appointment.scheduled_at)
-    setScheduledDate(d.toISOString().slice(0, 10))
-    setScheduledTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`)
-  }, [appointment])
+    const parts = wallClockPartsInTimezone(appointment.scheduled_at, zone)
+    if (parts) {
+      const mm = String(parts.month).padStart(2, '0')
+      const dd = String(parts.day).padStart(2, '0')
+      setScheduledDate(`${parts.year}-${mm}-${dd}`)
+      setScheduledTime(`${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`)
+    } else {
+      setScheduledDate('')
+      setScheduledTime('')
+    }
+  }, [appointment, zone])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const [y, m, day] = scheduledDate.split('-').map(Number)
     const [hour, min] = scheduledTime.split(':').map(Number)
-    const scheduled_at = new Date(y, m - 1, day, hour, min, 0).toISOString()
+    const scheduled_at = fromZonedWallClock(y, m, day, hour, min, zone).toISOString()
     onSubmit(appointment.id, {
       title: title.trim(),
       description: description.trim() || undefined,
@@ -59,6 +79,9 @@ export function EditAppointmentModal({ appointment, onSubmit, submitting = false
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      <p className="text-xs text-amber-100/90 rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-2">
+        Date and time are in the trader&apos;s / appointment wall-clock timezone: {wallClockHint}
+      </p>
       <div>
         <label className="mb-1 block text-sm font-medium text-slate-300">Title *</label>
         <Input value={title} onChange={(e) => setTitle(e.target.value)} required className="border-slate-600 bg-slate-700 text-white" />

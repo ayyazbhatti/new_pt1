@@ -22,6 +22,8 @@ impl From<UserStatus> for String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+/// End-user row from `public.users`. When adding DB columns mapped here, also update
+/// [`crate::models::user_row_sql::USERS_ROW_SQL`] (avoids `SELECT *` prepared-plan issues).
 pub struct User {
     pub id: Uuid,
     pub email: String,
@@ -56,9 +58,17 @@ pub struct User {
     /// Soft delete; NULL = active. Must match users table for SELECT * / FromRow.
     #[serde(skip_serializing)]
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Optional IANA timezone override (highest priority in effective timezone resolution).
+    #[serde(default)]
+    pub timezone: Option<String>,
+    /// Optional ISO 4217 display currency override (highest priority in effective display currency resolution).
+    #[serde(default)]
+    pub display_currency: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+/// Session row from `public.user_sessions`. When adding DB columns, update
+/// [`crate::models::user_row_sql::USER_SESSIONS_ROW_SQL`].
 pub struct UserSession {
     pub id: Uuid,
     pub user_id: Uuid,

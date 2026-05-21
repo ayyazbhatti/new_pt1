@@ -6,6 +6,47 @@
 
 ---
 
+## Trading Costs (swap + fees)
+
+**Status:** Complete (Phases 1–6)
+
+**What ships:**
+
+- Per-group `swap_enabled` and `fees_enabled` toggles on user_groups
+- Fee rules: per group, per symbol or market, percentage of notional with min/max bounds
+- Swap rules: existing `swap_rules` table now consumed by an engine
+- Fee charging at order placement (pre-pay; refund on engine rejection)
+- Swap rollover engine: scheduled task accrues swap on positions at configured rollover time
+- Position close settles accumulated swap into wallet via a single transaction row
+- Account summary exposes `totalSwapPaidUsd` and `totalFeesPaidUsd`
+- Position payloads carry `accumulatedSwapUsd` and `accumulatedFeesUsd`
+- Position P&L breakdown UI (Market P&L, Swap, Fees, Net) in terminal + admin
+- First-swap notification (one-time per user)
+- Tooltips on bottom dock explain the new balance/equity formula
+
+**Architecture:**
+
+- cTrader-style: swap accrues on position, settles on close (no per-rollover wallet debit)
+- Fees: charged at placement to wallet, mirrored in `transactions`
+- Idempotency: unique index on `swap_charge_log(position_id, charged_at::date)` and on `fee_charge_log(order_id)`
+- FX-cache-aware: non-USD-quoted positions convert via the FX cache
+- Reconciliation: 5-minute scan for stale rejected orders with unrefunded fees
+
+**V1 limitations:**
+
+- Swap `calc_mode`: only `daily` supported (no `hourly` or `funding_8h`)
+- Fees: percentage of notional only (no fixed-per-trade, no tiered)
+- No grandfathering: enabling swap on a group charges all existing open positions from next rollover
+- No fee refund on user cancel (only on engine rejection)
+- Balance can go negative for fees (industry standard, no hard guardrail)
+
+**Permissions:**
+
+- `swap:view`, `swap:edit` (existing, reused)
+- `fees:view`, `fees:edit` (new)
+
+---
+
 ## Section A — Executive summary
 
 - **Stack:** React + TypeScript SPA (`src/`), Axum **auth-service** on port 3000 (`backend/auth-service`), **order-engine** (NATS + Redis + Lua) (`apps/order-engine`), **ws-gateway** for authenticated user WebSockets (`backend/ws-gateway`), **data-provider** for feeds/markup/ticks (`backend/data-provider`), optional **core-api** and **gateway-ws** (`apps/core-api`, `apps/gateway-ws`), Postgres + Redis + NATS JetStream in `deploy/docker-compose.prod.yml`.
@@ -14,7 +55,7 @@
 - **Market data:** **Binance** multiplex WS for crypto (`backend/data-provider/src/feeds/binance_feed.rs`); **MMDPS** for forex-style symbols (`mmdps_feed.rs`); chart history via `fetchChartKlines` / data-provider HTTP (`src/features/terminal/api/binanceKlines.ts`).
 - **Risk:** Per-user **hedging vs netting** and **hedged vs net margin calculation** on `users`; **tiered leverage** from profiles; **SL/TP** checked on ticks (`SltpHandler` + `check_sltp_triggers.lua`); **stop-out** publishes `cmd.position.close_all` from account summary recompute (`try_publish_stop_out_close_all` in `deposits.rs`).
 - **CRM / ops:** Leads, appointments, support chat (NATS `chat.*`), Voiso config, admin call user + WebRTC signaling types in `wsEvents.ts`.
-- **Gaps / stubs:** `/admin/reports`, `/admin/bonus`, `/user/trading`, user funded “My Plans” demo data, admin funded programs local `DEMO_PLAN`; **dual/parallel** services (`apps/core-api` vs auth overlap; `apps/gateway-ws` vs `ws-gateway`; `apps/data-provider` vs `backend/data-provider`); **three migration trees** (`infra/migrations`, `backend/auth-service/migrations`, `database/migrations`).
+- **Gaps / stubs:** `/admin/reports`, `/user/trading`, user funded “My Plans” demo data, admin funded programs local `DEMO_PLAN`; **dual/parallel** services (`apps/core-api` vs auth overlap; `apps/gateway-ws` vs `ws-gateway`; `apps/data-provider` vs `backend/data-provider`); **three migration trees** (`infra/migrations`, `backend/auth-service/migrations`, `database/migrations`).
 - **CI:** No `.github` or `.gitlab-ci.yml` found in repo (UNCERTAIN: CI may live outside).
 
 ---
@@ -24,13 +65,22 @@
 ```
 Total features cataloged: 201
 By status:
-  ✅ Complete:   168
-  ⚠️ Partial:    21
-  🚧 TODO/stub:   5
+  ✅ Complete:   171
+  ⚠️ Partial:    20
+  🚧 TODO/stub:   3
   🗑️ Legacy:      7
 ```
 
 *(Counts are pipe-table rows whose **Status** column is one of the emojis above, across all numbered inventory sections including §18.5; worker/handler tables in §14 are included. “UNCERTAIN” appendix items are excluded.)*
+
+---
+
+## Recent improvements (frontend)
+
+| When | What changed |
+|------|----------------|
+| 2026-05 | **Trading Costs (Phases 1–6):** Swap accrual engine, fee placement/refunds, position accumulators, account summary totals, terminal P&L breakdown, fee/swap transaction UI, reconciliation tooling. See `docs/phase-5-trading-costs-ui.md`, `docs/phase-6-trading-costs-cleanup.md`. |
+| 2026-05 | **Timezone / datetime Phase 4:** Removed duplicate per-feature date formatter modules; all wall-clock display goes through `src/shared/datetime` hooks; shared non-date helpers in `src/shared/utils/currency.ts`, `number.ts`, `duration.ts`. See `docs/phase-4-timezone-cleanup.md`. |
 
 ---
 
@@ -47,7 +97,7 @@ By status:
 ## Section D — Top 5 most incomplete features
 
 1. **Admin Reports** — Placeholder copy only — `src/features/reports/pages/ReportsPage.tsx`.
-2. **Admin Bonus** — Placeholder — `src/features/bonus/pages/BonusPage.tsx`.
+2. **Wallet admin ledger** — `WalletDetailsModal.tsx` imports `mockLedgerEntries` — mock ledger detail.
 3. **User funded programs (“My Plans”)** — Hardcoded `DEMO_PLANS` — `src/features/userPanel/pages/UserFundedProgramsPage.tsx`.
 4. **Admin funded programs** — In-memory `DEMO_PLAN`, comment “Replace with API” — `src/features/adminFundedPrograms/pages/AdminFundedProgramsPage.tsx`.
 5. **`/user/trading` page** — “coming soon” — `src/features/trading/pages/TradingPage.tsx`, `src/app/router/routes.tsx`.
@@ -117,7 +167,7 @@ By status:
 | SL/TP update on open positions | ✅ | `positions.api.ts` `updatePositionSltp`; BottomDock / positions UI | REST + WS refresh |
 | Order types Stop / Stop-Limit | 🗑️ | `crates/contracts/src/enums.rs` only `Market`, `Limit` | Not in engine enum |
 | Time-in-force GTC/IOC/FOK | ⚠️ | `TimeInForce` in `enums.rs`; `orders.api.ts` `tif?`; ticket uses `tif: 'GTC'` in `RightTradingPanel.tsx` | API supports; UI fixed to GTC |
-| Free Margin % slider (default 15%) | ✅ | `RightTradingPanel.tsx` `applyFreeMarginFromPct`, `DEFAULT_FREE_MARGIN_SLIDER_PCT` | Sizes order from % of free margin |
+| Free Margin % slider | 🗑️ | Removed from `RightTradingPanel.tsx` | Manual size input only; slider removed as unreliable |
 | Effective leverage / tiers | ✅ | `resolveEffectiveLeverageFromTiersOrNull` in `orders.api.ts`; `GET /api/auth/me/symbol-leverage` | Shown in ticket / estimates |
 | Cost breakdown (spread, fees, margin, liq.) | ✅ | `costBreakdown` useMemo, `useQuery` `estimateOrderMargin` in `RightTradingPanel.tsx` | Server estimate + client breakdown |
 | Buy / Sell (CFD long/short) | ✅ | `RightTradingPanel.tsx`, `previewOrderSide` | Buy uses ask, sell bid for estimates |
@@ -153,7 +203,7 @@ By status:
 | Withdrawal request | ✅ | `withdrawals.rs`, `UserWithdrawPage.tsx`, `useWithdrawalFlow.ts` | Publishes NATS **`withdrawal.request.created`** (`VersionedMessage`) + Redis side effects for downstream consumers |
 | Transaction history (admin/user) | ✅ | `finance.rs`, `AdminTransactionsPage.tsx`, user wallet views | List/filter transactions |
 | Wallet balance API | ✅ | `/api/wallet/*` in `deposits.rs`; `wallet/api.ts` | Multi-currency style fields |
-| Bonus field in summary | ⚠️ | Account summary types / UI | Shown if backend sends; no dedicated bonus engine in migrations |
+| Bonus field in summary | ✅ | `deposits.rs` account summary + Redis; `wallet/api.ts` `bonus`; `BottomDock.tsx`, `UserDashboardPage.tsx` | Equity includes bonus; non-withdrawable pool |
 | Manual finance adjustment | ✅ | Migration `add_finance_manual_adjustment.sql`; `finance.rs` | Admin credit/debit flows |
 | Margin call toast/modal | ✅ | `useMarginCall.ts` | Client-side threshold vs `marginCallLevelThreshold` |
 | Account summary margin-call / stop-out thresholds | ✅ | `AccountSummary` / `compute_account_summary_inner` `deposits.rs`; `get_margin_call_level_for_group`, `get_stop_out_level_for_group`; TS `AccountSummaryResponse` `marginCallLevelThreshold` / `stopOutLevelThreshold` in `wallet/api.ts` | Group thresholds attached to `GET /api/account/summary` (and Redis-cached summary) for UI risk display |
@@ -166,7 +216,7 @@ By status:
 
 | Feature | Status | Where it lives (key paths) | One-line description |
 |--------|--------|---------------------------|----------------------|
-| User dashboard | ✅ | `UserDashboardPage.tsx`, `dashboard.api.ts` | Uses real admin-style stats APIs |
+| User dashboard | ✅ | `UserDashboardPage.tsx`, `useAccountSummary` | Cash, bonus, equity, margin from live summary |
 | Profile | ✅ | `/user/profile` | Editable profile |
 | KYC page | ✅ | `/user/kyc` `UserKycPage.tsx` | Upload + status |
 | Positions history | ✅ | `UserPositionsPage.tsx` | Lists user positions |
@@ -229,7 +279,7 @@ By status:
 | Markup / price stream profiles | ✅ | `admin_markup.rs`, `redis-model` keys `psprof:*`; `admin_markup_service.rs` / `admin_markup.rs` publish Redis **`markup:update`** after profile/group changes; `backend/data-provider/src/main.rs` subscribes and refreshes groups **without restart** | Hot-reload of stream profiles to data-provider |
 | Symbol markup overrides | ✅ | Admin markup UI + Redis `symbol:markup:*` (UNCERTAIN exact key prefix variant) | |
 | Leverage profiles + tiers | ✅ | `admin_leverage_profiles.rs`, `LeverageProfilesPage.tsx` | |
-| Swap rules | ✅ | `admin_swap.rs`, `SwapRulesPage.tsx` | |
+| Swap rules + overnight engine | ✅ | `admin_swap.rs`, `swap_engine.rs`, `SwapRulesPage.tsx`, `apps/order-engine` Lua/ticks | Admin rules; engine accrues at rollover, settles on close |
 | Promotion slides | ✅ | `promotions.rs`, `AdminPromotionsPage.tsx` | |
 | Email config + templates | ✅ | `admin_settings.rs`, migrations `015_platform_email_config.sql`, `058_platform_email_templates.sql` | |
 | Data provider integrations | ✅ | `DataProviderIntegrationsService`, `IntegrationsSettingsTab.tsx`, migration `050_platform_data_provider_integrations.sql` | Synced to Redis on boot |
@@ -273,7 +323,7 @@ By status:
 | Appointments admin | ✅ | `admin_appointments.rs`, `AdminAppointmentsPage.tsx` | |
 | User appointments | ✅ | `appointments.rs` user routes | |
 | Audit log | ✅ | `admin_audit.rs`, `AdminProfilePage` / audit consumers UNCERTAIN UI location | Backend route exists |
-| Bonus admin | 🚧 | `BonusPage.tsx` | Stub |
+| Bonus admin | ✅ | `admin_bonus.rs`, `BonusPage.tsx`, `bonusAdmin.api.ts`; migrations `061_*` / `062_*` | Grant, revoke, scoped tx history; `bonus:view` / `bonus:edit` |
 | Reports admin | 🚧 | `ReportsPage.tsx` | Stub |
 | Affiliate admin | ✅ | `admin_affiliate.rs`, `AffiliatePage.tsx` | Commission layers, etc. |
 | AI-generated user reports (admin) | ✅ | `POST/GET/DELETE /api/admin/ai/reports/*` `ai_reports.rs`; `ai_reports` table migration; `UserDetailsModal.tsx` / `UserReportsListTab.tsx`, `GenerateReportModal.tsx`; `AiReportsWsProvider.tsx`; NATS `ai.report.*`; `ws-gateway` forwards `ai.report.>` | Streaming generation with Redis rate limits (`report_rate_limit_per_minute`) |
@@ -372,7 +422,7 @@ By status:
 | Terminal promotion slides | ✅ | `020_terminal_promotion_slides.sql`, public/admin promotion routes | |
 | Referral / affiliate | ✅ | Migrations `043_*`, admin + user affiliate pages | |
 | Funded programs | ⚠️ | Rich UI; **no backend API** in admin/user pages reviewed | Demo data |
-| Bonus credits | 🚧 | Admin Bonus page stub; permissions exist | |
+| Bonus credits | ✅ | `bonus_service.rs`, `admin_bonus.rs`, `BonusPage.tsx`, wallet bonus columns | Cash-first margin lock; loss absorbs consumable bonus; revoke unlocked only |
 
 ---
 
@@ -428,7 +478,7 @@ By status:
 |------|--------|
 | `UserFundedProgramsPage.tsx` | `DEMO_PLANS` static data — no API. |
 | `AdminFundedProgramsPage.tsx` | `DEMO_PLAN`, `PLACEHOLDER_STATS`, TODO API. |
-| `ReportsPage.tsx` / `BonusPage.tsx` | “coming soon”. |
+| `ReportsPage.tsx` | “coming soon”. |
 | `TradingPage.tsx` | `/user/trading` stub. |
 | `src/features/adminFinance/mocks/finance.mock.ts` | Mock transactions; `WalletDetailsModal.tsx` uses `mockLedgerEntries`. |
 | `src/features/affiliate/mocks/index.ts` | Empty placeholder file. |
@@ -441,6 +491,15 @@ By status:
 | **Export in BottomDock** | Toast only, no CSV/binary download implementation. |
 | **TIF selector** | Always `GTC` in UI while API type allows IOC/FOK. |
 | **Stop / stop-limit orders** | Not in `contracts::OrderType`. |
+
+---
+
+### Resolved technical debt (chronological)
+
+| Item | Resolution |
+|------|--------------|
+| Scattered duplicate `formatDateTime` / related helpers under multiple `src/features/**/utils/` files | **2026-05 — Phase 4:** Deleted duplicate modules; imports use `@/shared/datetime` and shared `currency` / `number` / `duration` utils. Documented in `docs/phase-4-timezone-cleanup.md`. |
+| Swap admin UI / DB rules without a production accrual + settlement path tied to wallet and positions | **RESOLVED Phases 3–6:** Swap engine, `swap_charge_log`, position accumulators, close settlement, UI copy and P&L breakdown. See `docs/phase-6-trading-costs-cleanup.md`. |
 
 ---
 

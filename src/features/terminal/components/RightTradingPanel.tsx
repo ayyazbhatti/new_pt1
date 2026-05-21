@@ -3,7 +3,7 @@ import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Segmented } from '@/shared/ui'
 import { Checkbox } from '@/shared/ui'
-import { useState, useMemo, useEffect, useCallback, useRef, useId, type ChangeEvent } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { cn } from '@/shared/utils'
 import { useTerminalStore } from '../store'
 import { toast } from '@/shared/components/common'
@@ -13,12 +13,14 @@ import {
   PlaceOrderRequest,
   estimateOrderMargin,
   clientMarketFallbackMarginUsdOrNull,
-  resolveEffectiveLeverageFromTiersOrNull,
 } from '../api/orders.api'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { useFormatFromUsd, useFormatAmount } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
 import { useQuery } from '@tanstack/react-query'
 import { me, getSymbolLeverage, getEffectiveLeverage } from '@/shared/api/auth.api'
 import { wsClient } from '@/shared/ws/wsClient'
+import { getWsGatewayUrl } from '@/shared/ws/wsGatewayUrl'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import {
   calculatePipValuePerLot,
@@ -36,6 +38,7 @@ import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { getPromotionSlides } from '../api/promotions.api'
 import type { PromotionSlidePublic } from '../api/promotions.api'
+import { useEffectiveTimezone, useTimezoneOffsetLabel } from '@/shared/datetime'
 
 // Local storage key for trading panel state
 const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
@@ -104,27 +107,6 @@ function quoteFractionDigits(bid?: string, ask?: string): number {
   return Math.max(frac(bid), frac(ask), 2)
 }
 
-/** Live Quote: show full WebSocket decimals for FX; otherwise use `pricePrecision`. */
-function liveQuoteBidFormatted(s: MockSymbol): string {
-  if (s.numericPrice <= 0) return ''
-  if (isForexTerminalSymbol(s) && s.bidQuote !== undefined && s.bidQuote !== '') {
-    return `$${s.bidQuote}`
-  }
-  const p = s.pricePrecision ?? 2
-  const n = s.numericPrice
-  return `$${n.toFixed(n % 1 === 0 ? 0 : p)}`
-}
-
-function liveQuoteAskFormatted(s: MockSymbol): string {
-  if (s.numericPrice2 <= 0) return ''
-  if (isForexTerminalSymbol(s) && s.askQuote !== undefined && s.askQuote !== '') {
-    return `$${s.askQuote}`
-  }
-  const p = s.pricePrecision ?? 2
-  const n = s.numericPrice2
-  return `$${n.toFixed(n % 1 === 0 ? 0 : p)}`
-}
-
 function liveQuoteSpreadFormatted(s: MockSymbol): string {
   if (s.numericPrice <= 0 || s.numericPrice2 <= 0) return '0'
   if (
@@ -169,6 +151,41 @@ export function RightTradingPanel() {
   }, [selectedSymbol, symbolsData])
 
   const { accountSummary } = useAccountSummary()
+  const formatMoney = useFormatFromUsd()
+  const formatAmount = useFormatAmount()
+  const formatLiveQuoteBid = useCallback(
+    (s: MockSymbol) => {
+      if (s.numericPrice <= 0) return ''
+      const qc = (s.quoteCurrency || 'USD') as CurrencyCode
+      if (isForexTerminalSymbol(s) && s.bidQuote !== undefined && s.bidQuote !== '') {
+        const n = parseFloat(s.bidQuote)
+        if (!Number.isFinite(n)) return ''
+        return formatAmount(n, qc)
+      }
+      return formatAmount(s.numericPrice, qc)
+    },
+    [formatAmount],
+  )
+  const formatLiveQuoteAsk = useCallback(
+    (s: MockSymbol) => {
+      if (s.numericPrice2 <= 0) return ''
+      const qc = (s.quoteCurrency || 'USD') as CurrencyCode
+      if (isForexTerminalSymbol(s) && s.askQuote !== undefined && s.askQuote !== '') {
+        const n = parseFloat(s.askQuote)
+        if (!Number.isFinite(n)) return ''
+        return formatAmount(n, qc)
+      }
+      return formatAmount(s.numericPrice2, qc)
+    },
+    [formatAmount],
+  )
+  const tz = useEffectiveTimezone()
+  const offsetLabel = useTimezoneOffsetLabel()
+  const [clockNow, setClockNow] = useState(() => new Date())
+  useEffect(() => {
+    const id = window.setInterval(() => setClockNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
 
   // Load initial state from localStorage only on mount (lazy init) so reload restores tab and values
   const [orderType, setOrderType] = useState(() => loadTradingPanelState().orderType || 'market')
@@ -196,13 +213,6 @@ export function RightTradingPanel() {
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
   /** Which side market/limit preview uses for margin estimate (BUY→ask, SELL→bid). Updated on Buy/Sell hover/focus and click. */
   const [previewOrderSide, setPreviewOrderSide] = useState<'BUY' | 'SELL'>('BUY')
-  /** Free Margin % slider: null when disabled or unknown; default 15% when symbol/side context applies. */
-  const [sliderPct, setSliderPct] = useState<number | null>(null)
-  /** Default % of free margin used for slider + size on new symbol/side (or when slider becomes enabled). */
-  const DEFAULT_FREE_MARGIN_SLIDER_PCT = 0.15
-  const lastSliderContextRef = useRef<string>('')
-  const prevSliderDisabledRef = useRef(true)
-  const freeMarginTicksListId = useId()
 
   // Filter symbols for dropdown by search (code or price)
   const filteredSymbolsForDropdown = useMemo(() => {
@@ -435,110 +445,6 @@ export function RightTradingPanel() {
     setSize(nextSize)
   }, [selectedSymbol, currency, orderType, limitPrice, sizeMode, getDefaultSizeForMinMargin])
 
-  const isSliderDisabled = useMemo(() => {
-    const fm = accountSummary?.freeMargin
-    if (fm == null || fm <= 0) return true
-    if (!selectedSymbol) return true
-    const exec = previewOrderSide === 'BUY' ? selectedSymbol.numericPrice2 : selectedSymbol.numericPrice
-    if (!Number.isFinite(exec) || exec <= 0) return true
-    return false
-  }, [accountSummary?.freeMargin, selectedSymbol, previewOrderSide])
-
-  /** Apply free-margin % to size input (same math as range input). */
-  const applyFreeMarginFromPct = useCallback(
-    (pct: number) => {
-      if (!(pct > 0 && pct <= 1)) return
-      const fm = accountSummary?.freeMargin
-      if (fm == null || fm <= 0 || !selectedSymbol || isSliderDisabled) return
-      const execPrice = previewOrderSide === 'BUY' ? selectedSymbol.numericPrice2 : selectedSymbol.numericPrice
-      if (!Number.isFinite(execPrice) || execPrice <= 0) return
-      const targetMarginUsd = fm * pct
-      const userMin = meData?.minLeverage ?? 1
-      const userMaxRaw = meData?.maxLeverage ?? 100
-      const fallbackLeverage = Math.max(userMin, Math.min(userMaxRaw, 500))
-      const notionalForLev = targetMarginUsd * fallbackLeverage
-      const effLev = resolveEffectiveLeverageFromTiersOrNull(
-        notionalForLev,
-        symbolLeverage?.tiers ?? null,
-        meData?.minLeverage,
-        meData?.maxLeverage
-      )
-      const finalLev = effLev ?? fallbackLeverage
-      const notional = targetMarginUsd * finalLev
-      const rawSize = notional / execPrice
-
-      const tiersList = symbolLeverage?.tiers ?? []
-      const topTier = tiersList.length > 0 ? tiersList[tiersList.length - 1] : null
-      const rawTopNotionalTo = topTier?.notional_to ?? null
-      const topNotionalTo: number | null =
-        rawTopNotionalTo == null || rawTopNotionalTo === ''
-          ? null
-          : Number(rawTopNotionalTo)
-
-      let cappedSize = rawSize
-      if (topNotionalTo != null && Number.isFinite(topNotionalTo) && topNotionalTo > 0) {
-        const safeMaxNotional = topNotionalTo * 0.999
-        const maxSizeFromCap = safeMaxNotional / execPrice
-        if (cappedSize > maxSizeFromCap) {
-          cappedSize = maxSizeFromCap
-        }
-      }
-
-      const baseSize = Number(cappedSize.toFixed(6))
-      if (currency === selectedSymbol.quoteCurrency) {
-        const quoteSize = baseSize * execPrice
-        setSize(quoteSize.toFixed(2))
-      } else {
-        setSize(String(baseSize))
-      }
-    },
-    [
-      accountSummary?.freeMargin,
-      selectedSymbol,
-      previewOrderSide,
-      symbolLeverage?.tiers,
-      meData?.minLeverage,
-      meData?.maxLeverage,
-      currency,
-      isSliderDisabled,
-    ]
-  )
-
-  const handleFreeMarginSliderChange = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      const intPct = parseInt(e.target.value, 10)
-      if (!Number.isFinite(intPct) || intPct < 1 || intPct > 100) return
-      const pct = intPct / 100
-      setSliderPct(pct)
-      applyFreeMarginFromPct(pct)
-    },
-    [applyFreeMarginFromPct]
-  )
-
-  // Default slider to 15% and fill size from that % when symbol/side changes or slider becomes usable.
-  useEffect(() => {
-    if (isSliderDisabled || !selectedSymbol) {
-      setSliderPct(null)
-      if (isSliderDisabled) prevSliderDisabledRef.current = true
-      return
-    }
-    const ctx = `${selectedSymbol.code}|${previewOrderSide}|${currency ?? ''}`
-    const becameEnabled = prevSliderDisabledRef.current && !isSliderDisabled
-    prevSliderDisabledRef.current = false
-    if (lastSliderContextRef.current !== ctx || becameEnabled) {
-      lastSliderContextRef.current = ctx
-      setSliderPct(DEFAULT_FREE_MARGIN_SLIDER_PCT)
-      applyFreeMarginFromPct(DEFAULT_FREE_MARGIN_SLIDER_PCT)
-    }
-  }, [
-    selectedSymbol?.code,
-    previewOrderSide,
-    currency,
-    isSliderDisabled,
-    selectedSymbol,
-    applyFreeMarginFromPct,
-  ])
-
   /** Server-side margin (same as place_order). Uses Redis execution price + risk::effective_leverage. */
   const canEstimateServerMargin =
     !!selectedSymbol &&
@@ -572,12 +478,20 @@ export function RightTradingPanel() {
     staleTime: 2000,
   })
 
+  /** Pre-pay placement fee from POST /v1/orders/estimate; null when fees off / no rule / zero / loading. */
+  const placementFeeFromEstimateUsd = useMemo(() => {
+    const raw = serverMarginEstimate?.estimatedFeeUsd
+    if (raw == null || raw === '') return null
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return null
+    return n
+  }, [serverMarginEstimate?.estimatedFeeUsd])
+
   // Calculate costs from the same base-units path as place order (units / lots / pip), not raw `size` only
   const costBreakdown = useMemo(() => {
     if (!selectedSymbol) {
       return {
         spread: '0.00',
-        fees: '0.00',
         margin: '0.00',
         liquidation: '-',
         usdValue: '0.00',
@@ -594,7 +508,6 @@ export function RightTradingPanel() {
     const quoteValue = refPriceMid > 0 ? baseSize * refPriceMid : 0
 
     const spread = Math.abs(ask - bid)
-    const fees = 0
     const limitPx =
       orderType === 'limit' && limitPrice.trim() !== '' ? parseFloat(limitPrice) : Number.NaN
     const limitExecutionPrice = Number.isFinite(limitPx) && limitPx > 0 ? limitPx : null
@@ -614,7 +527,6 @@ export function RightTradingPanel() {
 
     return {
       spread: spread.toFixed(2),
-      fees: fees.toFixed(2),
       margin,
       liquidation,
       usdValue: quoteValue.toFixed(2),
@@ -707,9 +619,10 @@ export function RightTradingPanel() {
 
   const marginCalcUnavailable = canEstimateServerMargin && estMarginDollars == null
 
-  // Block Buy/Sell when estimated margin exceeds free margin (server also enforces)
+  // Block Buy/Sell when estimated margin + placement fee exceeds free margin (server also enforces)
   const insufficientFreeMargin =
-    estMarginDollars != null && estMarginDollars > (accountSummary?.freeMargin ?? 0)
+    estMarginDollars != null &&
+    estMarginDollars + (placementFeeFromEstimateUsd ?? 0) > (accountSummary?.freeMargin ?? 0)
   const minRequiredMarginDollars = MIN_EST_MARGIN_DOLLARS
   const belowMinRequiredMargin =
     estMarginDollars != null && estMarginDollars > 0 && estMarginDollars < minRequiredMarginDollars
@@ -754,7 +667,6 @@ export function RightTradingPanel() {
   }, [selectedSymbol, currency])
 
   const handleMaxSize = () => {
-    setSliderPct(null)
     if (!selectedSymbol || !selectedSymbol.numericPrice) {
       toast.error('Please select a symbol')
       return
@@ -850,43 +762,33 @@ export function RightTradingPanel() {
     return () => clearInterval(t)
   }, [promoSlides.length])
 
-  // Live current time (local timezone)
-  const [currentTimeLabel, setCurrentTimeLabel] = useState(() => {
-    const now = new Date()
-    const offsetMin = -now.getTimezoneOffset()
-    const sign = offsetMin >= 0 ? '+' : '-'
-    const absHours = Math.floor(Math.abs(offsetMin) / 60)
-    const utcLabel = `UTC${sign}${absHours}`
-    const time = now.toTimeString().slice(0, 8)
-    const day = String(now.getDate()).padStart(2, '0')
-    const month = String(now.getMonth() + 1).padStart(2, '0')
-    const year = now.getFullYear()
-    return `${utcLabel} ▼ ${time} ${day}.${month}.${year}`
-  })
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = new Date()
-      const offsetMin = -now.getTimezoneOffset()
-      const sign = offsetMin >= 0 ? '+' : '-'
-      const absHours = Math.floor(Math.abs(offsetMin) / 60)
-      const utcLabel = `UTC${sign}${absHours}`
-      const time = now.toTimeString().slice(0, 8)
-      const day = String(now.getDate()).padStart(2, '0')
-      const month = String(now.getMonth() + 1).padStart(2, '0')
-      const year = now.getFullYear()
-      setCurrentTimeLabel(`${utcLabel} ▼ ${time} ${day}.${month}.${year}`)
-    }, 1000)
-    return () => clearInterval(interval)
-  }, [])
+  const headerClockTime = useMemo(
+    () =>
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz.iana,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(clockNow),
+    [clockNow, tz.iana],
+  )
+  const headerClockDate = useMemo(
+    () =>
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz.iana,
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      })
+        .format(clockNow)
+        .replace(/\//g, '.'),
+    [clockNow, tz.iana],
+  )
 
   // Measure ping by fetching WS gateway health (proxied in dev via /ws-health)
   useEffect(() => {
-    const wsUrl =
-      import.meta.env?.VITE_WS_URL ||
-      (typeof location !== 'undefined'
-        ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?group=default`
-        : 'ws://localhost:3003/ws?group=default')
+    const wsUrl = getWsGatewayUrl()
     const healthUrl = import.meta.env.DEV
       ? '/ws-health'
       : wsUrl.replace(/^wss?/, (m) => (m === 'wss' ? 'https' : 'http')).replace(/\/ws.*$/, '') + '/health'
@@ -934,15 +836,18 @@ export function RightTradingPanel() {
       if (event.type === 'admin.order.updated' || event.type === 'admin.order.filled' || event.type === 'admin.order.canceled' || event.type === 'admin.order.rejected') {
         const order = (event as any).payload.order || (event as any).payload
         const orderId = order?.orderId || order?.id || (event as any).payload.orderId
-        
+        const status = order?.status || (event as any).payload.status
+        if (status === 'Filled' || status === 'FILLED' || status === 'filled') {
+          useTerminalStore.getState().requestOpenPositionsRefresh()
+        }
+
         if (orderId && typeof orderId === 'string' && pendingOrders.has(orderId)) {
           setPendingOrders(prev => {
             const next = new Set(prev)
             next.delete(orderId)
             return next
           })
-          
-          const status = order?.status || (event as any).payload.status
+
           if (status === 'Filled' || status === 'FILLED' || status === 'filled') {
             toast.success(`Order ${orderId.slice(0, 8)}... filled successfully`, { duration: 4000 })
           } else if (status === 'Rejected' || status === 'REJECTED' || status === 'rejected') {
@@ -1034,7 +939,7 @@ export function RightTradingPanel() {
       }
       const calculatedLots = calculateLotSizeFromPipPosition(pipPosNum, symbolForCalc, price, pipPositionCurrency)
       baseSize = calculateUnitsFromLots(calculatedLots, symbolForCalc)
-      displaySize = `$${pipPosNum.toFixed(2)}/pip (${formatLotSize(calculatedLots, symbolForCalc)} lots, ${formatUnits(baseSize, symbolForCalc)} units)`
+      displaySize = `${formatAmount(pipPosNum, pipPositionCurrency as CurrencyCode)}/pip (${formatLotSize(calculatedLots, symbolForCalc)} lots, ${formatUnits(baseSize, symbolForCalc)} units)`
     }
 
     if (!Number.isFinite(baseSize) || baseSize <= 0) {
@@ -1057,12 +962,12 @@ export function RightTradingPanel() {
     if (insufficientFreeMargin && estMarginDollars != null) {
       const freeMargin = accountSummary?.freeMargin ?? 0
       toast.error(
-        `Insufficient funds: required margin $${estMarginDollars.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
+        `Insufficient funds: required margin ${formatMoney(estMarginDollars)}, free margin ${formatMoney(freeMargin)}`
       )
       return
     }
     if (belowMinRequiredMargin) {
-      toast.error(`Estimated margin must be at least $${minRequiredMarginDollars.toFixed(2)} to open a position`)
+      toast.error(`Estimated margin must be at least ${formatMoney(minRequiredMarginDollars)} to open a position`)
       return
     }
 
@@ -1091,7 +996,9 @@ export function RightTradingPanel() {
       }
       
       setPendingOrders(prev => new Set(prev).add(orderId))
-      
+
+      useTerminalStore.getState().requestOpenPositionsRefresh()
+
       // Show "submitted" message - actual execution happens asynchronously
       toast.success(
         `${side} order submitted: ${displaySize} @ ${selectedSymbol.code} (Order ID: ${orderId.slice(0, 8)}...)`,
@@ -1130,12 +1037,12 @@ export function RightTradingPanel() {
       const minRequired = Number((data as { min_required_margin?: string })?.min_required_margin)
       const insufficientMessage =
         Number.isFinite(required) && Number.isFinite(free)
-          ? `Insufficient funds: required margin $${required.toFixed(2)}, free margin $${free.toFixed(2)}`
+          ? `Insufficient funds: required margin ${formatMoney(required)}, free margin ${formatMoney(free)}`
           : 'Insufficient funds/margin to place this order'
       const minRequiredMessage =
         Number.isFinite(minRequired)
-          ? `Estimated margin must be at least $${minRequired.toFixed(2)} to open a position`
-          : `Estimated margin must be at least $${minRequiredMarginDollars.toFixed(2)} to open a position`
+          ? `Estimated margin must be at least ${formatMoney(minRequired)} to open a position`
+          : `Estimated margin must be at least ${formatMoney(minRequiredMarginDollars)} to open a position`
       const is403 = status === 403 || (typeof err?.message === 'string' && err.message.includes('403'))
       const errorMessage =
         (minRequiredMarginCode ? minRequiredMessage : null) ||
@@ -1267,7 +1174,7 @@ export function RightTradingPanel() {
                   {selectedSymbol.numericPrice > 0 ? (
                     <SinglePriceDisplay
                       price={selectedSymbol.numericPrice}
-                      formatted={liveQuoteBidFormatted(selectedSymbol)}
+                      formatted={formatLiveQuoteBid(selectedSymbol)}
                     />
                   ) : (
                     <div className="text-lg font-bold text-slate-500 dark:text-text-muted">—</div>
@@ -1279,7 +1186,7 @@ export function RightTradingPanel() {
                     <div className="flex justify-end">
                       <SinglePriceDisplay
                         price={selectedSymbol.numericPrice2}
-                        formatted={liveQuoteAskFormatted(selectedSymbol)}
+                        formatted={formatLiveQuoteAsk(selectedSymbol)}
                       />
                     </div>
                   ) : (
@@ -1373,10 +1280,7 @@ export function RightTradingPanel() {
                     type="number"
                     step="0.000001"
                     value={size}
-                    onChange={(e) => {
-                      setSliderPct(null)
-                      setSize(e.target.value)
-                    }}
+                    onChange={(e) => setSize(e.target.value)}
                     placeholder={orderType === 'market' ? marketSizePlaceholder : 'Enter size'}
                     className="flex-1"
                   />
@@ -1404,65 +1308,13 @@ export function RightTradingPanel() {
                       <>≈ {costBreakdown.baseSize} {selectedSymbol.baseCurrency}</>
                     )
                   ) : (
-                    <>≈ 0.00 USD</>
+                    <>≈ {formatMoney(0)}</>
                   )}
                 </div>
 
-                {/* Free Margin % Slider — allocates % of free margin; updates size (base or quote per unit selector). */}
-                <div className={cn('mt-3 space-y-2', isSliderDisabled && 'pointer-events-none opacity-50')}>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-600/90 dark:text-muted/80">Free Margin %</span>
-                    <span className="font-semibold text-accent">
-                      {sliderPct == null ? '—' : `${Math.round(sliderPct * 100)}%`}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={1}
-                    max={100}
-                    step={1}
-                    value={sliderPct == null ? 1 : Math.round(sliderPct * 100)}
-                    onChange={handleFreeMarginSliderChange}
-                    disabled={isSliderDisabled}
-                    className={cn(
-                      // h-6 gives vertical room so the thumb can sit centered on the track (h-2 alone clips/misaligns the thumb).
-                      'h-6 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed',
-                      '[&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-slate-300 dark:[&::-webkit-slider-runnable-track]:bg-white/10',
-                      '[&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-0 [&::-webkit-slider-thumb]:bg-emerald-500 [&::-webkit-slider-thumb]:shadow-none',
-                      '[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-slate-300 dark:[&::-moz-range-track]:bg-white/10',
-                      '[&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:box-border [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-emerald-500',
-                      isSliderDisabled && 'pointer-events-none opacity-50'
-                    )}
-                    list={freeMarginTicksListId}
-                    aria-label="Allocate percent of free margin to order size"
-                  />
-                  <datalist id={freeMarginTicksListId}>
-                    <option value="1" />
-                    <option value="25" />
-                    <option value="50" />
-                    <option value="75" />
-                    <option value="100" />
-                  </datalist>
-                  <div className="relative mx-0.5 h-4 text-[10px] text-slate-600/70 dark:text-muted/60">
-                    {[1, 25, 50, 75, 100].map((v) => {
-                      const pctAlong = ((v - 1) / 99) * 100
-                      const transform =
-                        v === 1 ? 'translateX(0)' : v === 100 ? 'translateX(-100%)' : 'translateX(-50%)'
-                      return (
-                        <span
-                          key={v}
-                          className="absolute top-0 whitespace-nowrap"
-                          style={{ left: `${pctAlong}%`, transform }}
-                        >
-                          {v}%
-                        </span>
-                      )
-                    })}
-                  </div>
-                  <div className="flex items-center justify-between text-xs pt-1">
-                    <span className="text-slate-600/90 dark:text-muted/80">Leverage</span>
-                    <span className="font-semibold text-accent">{effectiveLeverageDisplay}</span>
-                  </div>
+                <div className="flex items-center justify-between text-xs pt-1 mt-3">
+                  <span className="text-slate-600/90 dark:text-muted/80">Leverage</span>
+                  <span className="font-semibold text-accent">{effectiveLeverageDisplay}</span>
                 </div>
               </>
             )}
@@ -1491,7 +1343,7 @@ export function RightTradingPanel() {
                   )}
                   {sizeCalculations.currentPipPosition > 0 && (
                     <span className="ml-2">
-                      • ${sizeCalculations.currentPipPosition.toFixed(2)}/pip
+                      • {formatAmount(sizeCalculations.currentPipPosition, pipPositionCurrency as CurrencyCode)}/pip
                     </span>
                   )}
                   {getSymbolForCalculations() && (
@@ -1538,7 +1390,7 @@ export function RightTradingPanel() {
                   )}
                   {sizeCalculations.pipValuePerLot > 0 && (
                     <span className="ml-2 text-slate-600/85 dark:text-muted/70">
-                      (Pip value: ${sizeCalculations.pipValuePerLot.toFixed(2)}/lot)
+                      (Pip value: {formatAmount(sizeCalculations.pipValuePerLot, (selectedSymbol?.quoteCurrency || 'USD') as CurrencyCode)}/lot)
                     </span>
                   )}
                 </div>
@@ -1583,12 +1435,14 @@ export function RightTradingPanel() {
                     </button>
                   </div>
                 </div>
-                {/* Stop Loss: Price ($) and Amount ($) */}
+                {/* Stop Loss: price and notional in quote currency */}
                 <div className="space-y-1.5">
                   <label className="text-[10px] text-slate-600 dark:text-muted font-semibold block">Stop Loss</label>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Price ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">
+                        Price ({selectedSymbol?.quoteCurrency || 'USD'})
+                      </label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1615,7 +1469,9 @@ export function RightTradingPanel() {
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Amount ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">
+                        Amount ({selectedSymbol?.quoteCurrency || 'USD'} notional)
+                      </label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1643,12 +1499,14 @@ export function RightTradingPanel() {
                     </div>
                   </div>
                 </div>
-                {/* Take Profit: Price ($) and Amount ($) */}
+                {/* Take Profit: price and notional in quote currency */}
                 <div className="space-y-1.5">
                   <label className="text-[10px] text-slate-600 dark:text-muted font-semibold block">Take Profit</label>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Price ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">
+                        Price ({selectedSymbol?.quoteCurrency || 'USD'})
+                      </label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1675,7 +1533,9 @@ export function RightTradingPanel() {
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">Amount ($)</label>
+                      <label className="text-[10px] text-slate-600 dark:text-muted/80 mb-0.5 block">
+                        Amount ({selectedSymbol?.quoteCurrency || 'USD'} notional)
+                      </label>
                       <Input
                         type="number"
                         step="0.01"
@@ -1717,7 +1577,11 @@ export function RightTradingPanel() {
               </div>
               <div className="flex justify-between items-center py-1 border-b border-slate-200 dark:border-white/5">
                 <span className="text-slate-600/90 dark:text-muted/80">Fees</span>
-                <span className="font-semibold text-text">${costBreakdown.fees}</span>
+                <span className="font-semibold text-text">
+                  {placementFeeFromEstimateUsd != null
+                    ? formatMoney(placementFeeFromEstimateUsd)
+                    : '—'}
+                </span>
               </div>
               <div className="flex justify-between items-center py-1 border-b border-slate-200 dark:border-white/5">
                 <span className="text-slate-600/90 dark:text-muted/80">Est. Margin</span>
@@ -1725,7 +1589,7 @@ export function RightTradingPanel() {
                   {isEstimatingServerMargin && canEstimateServerMargin && estMarginDollars == null ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-600 dark:text-muted shrink-0" />
                   ) : null}
-                  {estMarginDollars == null ? '—' : `$${estMarginDollars.toFixed(2)}`}
+                  {estMarginDollars == null ? '—' : formatMoney(estMarginDollars)}
                 </span>
               </div>
               <div className="flex justify-between items-center py-1">
@@ -1818,7 +1682,7 @@ export function RightTradingPanel() {
           )}
           {belowMinRequiredMargin && (
             <div className="mt-2 text-xs text-warning text-center">
-              Minimum estimated margin is ${minRequiredMarginDollars.toFixed(2)}
+              Minimum estimated margin is {formatMoney(minRequiredMarginDollars)}
             </div>
           )}
           {!wsConnected && (wsState === 'connecting' || wsState === 'connected') && (
@@ -1976,7 +1840,7 @@ export function RightTradingPanel() {
                 <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
                   <span className="text-slate-600/90 dark:text-muted/80">Price</span>
                   <span className="font-semibold text-text">
-                    {selectedSymbol.numericPrice > 0 ? liveQuoteBidFormatted(selectedSymbol) : '—'}
+                    {selectedSymbol.numericPrice > 0 ? formatLiveQuoteBid(selectedSymbol) : '—'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
@@ -1995,7 +1859,10 @@ export function RightTradingPanel() {
                 </div>
                 <div className="flex justify-between items-center py-2">
                   <span className="text-slate-600/90 dark:text-muted/80">24h Volume</span>
-                  <span className="font-semibold text-text">${(selectedSymbol.volume24h / 1000000).toFixed(2)}M</span>
+                  <span className="font-semibold text-text">
+                    {`${(selectedSymbol.volume24h / 1_000_000).toFixed(2)}M`}{' '}
+                    <span className="text-muted font-normal">{selectedSymbol.quoteCurrency ?? ''}</span>
+                  </span>
                 </div>
               </div>
             )}
@@ -2150,10 +2017,15 @@ export function RightTradingPanel() {
       <div className="shrink-0 border-t border-slate-200 dark:border-white/5 px-3 py-3">
         <div className="rounded-lg bg-surface-2/40 border border-slate-200 dark:border-white/5 p-3 space-y-2.5">
           <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+            <span className="flex min-w-0 items-center gap-2 text-slate-600 dark:text-slate-400">
               <Clock className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate text-[10px] font-medium text-slate-600 dark:text-slate-400">
+                {offsetLabel} · {tz.iana}
+              </span>
             </span>
-            <span className="font-mono text-[11px] font-medium tabular-nums text-slate-900 dark:text-slate-100">{currentTimeLabel}</span>
+            <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-slate-900 dark:text-slate-100">
+              {headerClockTime} {headerClockDate}
+            </span>
           </div>
           <div className="h-px bg-slate-200 dark:bg-white/5" />
           <div className="flex items-center justify-between gap-3">

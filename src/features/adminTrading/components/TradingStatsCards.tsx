@@ -1,5 +1,6 @@
 import { Card } from '@/shared/ui/card'
 import { Order, Position, MarginEvent } from '../types/adminTrading'
+import { useFormatFromUsd } from '@/shared/currency'
 
 interface TradingStatsCardsProps {
   orders: Order[]
@@ -8,6 +9,7 @@ interface TradingStatsCardsProps {
 }
 
 export function TradingStatsCards({ orders, positions, marginEvents }: TradingStatsCardsProps) {
+  const formatMoney = useFormatFromUsd()
   const activeOrders = orders.filter((o) => o.status === 'pending').length
   const openPositions = positions.filter((p) => p.status === 'open').length
   const totalExposure = positions
@@ -32,7 +34,7 @@ export function TradingStatsCards({ orders, positions, marginEvents }: TradingSt
       <Card className="p-4 bg-surface-2">
         <div className="text-sm text-text-muted mb-1">Total Exposure</div>
         <div className="text-2xl font-bold text-text">
-          ${(totalExposure / 1000000).toFixed(2)}M
+          {formatMoney(totalExposure)}
         </div>
       </Card>
       <Card className="p-4 bg-surface-2">

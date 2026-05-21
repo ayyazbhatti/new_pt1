@@ -218,43 +218,8 @@ impl TickHandler {
                                 filled_any = true;
                             }
                             Err(e) => {
-                                let error_msg = e.to_string();
-                                if error_msg.contains("order_not_pending") || error_msg.contains("FILLED") {
-                                    let order_key = format!("order:{}", order.id);
-                                    let order_json: Option<String> = {
-                                        use redis::AsyncCommands;
-                                        conn.get(&order_key).await.unwrap_or(None)
-                                    };
-                                    if let Some(json_str) = order_json {
-                                        if let Ok(order_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                                            if let Some(status) = order_data.get("status").and_then(|v| v.as_str()) {
-                                                if status == "FILLED" {
-                                                    let filled_size = order_data.get("filled_size")
-                                                        .and_then(|v| v.as_str())
-                                                        .and_then(|s| Decimal::from_str_exact(s).ok())
-                                                        .unwrap_or(order.size);
-                                                    let avg_fill_price = order_data.get("average_fill_price")
-                                                        .and_then(|v| v.as_str())
-                                                        .and_then(|s| Decimal::from_str_exact(s).ok());
-                                                    let order_updated_event = contracts::events::OrderUpdatedEvent {
-                                                        order_id: order.id,
-                                                        user_id: order.user_id,
-                                                        status: contracts::enums::OrderStatus::Filled,
-                                                        filled_size,
-                                                        avg_fill_price,
-                                                        reason: None,
-                                                        ts: now(),
-                                                    };
-                                                    if let Err(pub_err) = self.nats.publish_event(nats_subjects::EVENT_ORDER_UPDATED, &order_updated_event).await {
-                                                        error!("❌ Failed to publish evt.order.updated: {}", pub_err);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    error!("Failed to fill order {}: {}", order_id, e);
-                                }
+                                // `order_not_pending` + FILLED is handled inside `execute_fill` (returns Ok after DB sync).
+                                error!("Failed to fill order {}: {}", order_id, e);
                             }
                         }
                     }
@@ -305,6 +270,27 @@ impl TickHandler {
         
         if result.get("error").is_some() {
             let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let lua_status = result.get("status").and_then(|v| v.as_str());
+            if error_msg == "order_not_pending" && lua_status == Some("FILLED") {
+                // Sync position to auth-service Postgres via evt.position.updated.
+                // Required: prevents Redis-only positions (see docs/position-redis-postgres-sync-diagnostic-442fde7b.md).
+                position_events::sync_duplicate_fill_to_db(
+                    self.nats.as_ref(),
+                    conn,
+                    order,
+                    fill_price,
+                    fill_size,
+                )
+                .await;
+                let mut updated_order = order.clone();
+                updated_order.status = contracts::enums::OrderStatus::Filled;
+                updated_order.filled_size = fill_size;
+                updated_order.average_fill_price = Some(fill_price);
+                updated_order.filled_at = Some(now());
+                self.cache.update_order(updated_order);
+                self.cache.remove_pending_order(&order.symbol, order.id);
+                return Ok(());
+            }
             return Err(anyhow::anyhow!("Lua script error: {}", error_msg));
         }
         
@@ -357,6 +343,22 @@ impl TickHandler {
         if let Some(closed_id) = closed_position_id {
             let closed_side = result.get("closed_position_side").and_then(|v| v.as_str()).unwrap_or("LONG");
             let pos_side = if closed_side == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+            let (margin_c, margin_b) = {
+                let raw: std::collections::HashMap<String, String> = redis::cmd("HGETALL")
+                    .arg(format!("pos:by_id:{}", closed_id))
+                    .query_async(conn)
+                    .await
+                    .unwrap_or_default();
+                let mfc = raw
+                    .get("margin_from_cash")
+                    .and_then(|s| Decimal::from_str_exact(s).ok())
+                    .unwrap_or(Decimal::ZERO);
+                let mfb = raw
+                    .get("margin_from_bonus")
+                    .and_then(|s| Decimal::from_str_exact(s).ok())
+                    .unwrap_or(Decimal::ZERO);
+                (mfc, mfb)
+            };
             let closed_event = crate::models::PositionClosedEvent {
                 position_id: closed_id,
                 user_id: order.user_id,
@@ -368,6 +370,8 @@ impl TickHandler {
                 correlation_id: order.idempotency_key.clone(),
                 ts: now(),
                 trigger_reason: None,
+                margin_from_cash: Some(margin_c),
+                margin_from_bonus: Some(margin_b),
             };
             self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &closed_event).await?;
             let _ = position_events::publish_position_updated(self.nats.as_ref(), conn, closed_id, Some(PositionStatus::Closed)).await;

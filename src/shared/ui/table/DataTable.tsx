@@ -92,7 +92,14 @@ const TableCell = memo(({ cell, onRowClick, dense, compact }: { cell: any; onRow
   if (isLiveOrInteractiveCell) {
     return false
   }
-  
+
+  // Columns that render from `row.original` without an accessor have `getValue() === undefined`
+  // for every render. Comparing only getValue() would skip updates when row data was patched
+  // (e.g. Admin → Groups timezone / dropdowns after local state merge).
+  if (prev.cell.row.original !== next.cell.row.original) {
+    return false
+  }
+
   // For other cells, only re-render if cell ID or value changes
   return prev.cell.id === next.cell.id &&
          prev.cell.getValue() === next.cell.getValue() &&

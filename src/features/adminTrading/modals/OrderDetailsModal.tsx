@@ -2,13 +2,14 @@ import { Card } from '@/shared/ui/card'
 import { Badge } from '@/shared/ui/badge'
 import { Order } from '../types/adminTrading'
 import { useModalStore } from '@/app/store'
-import { formatDateTime } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
 
 interface OrderDetailsModalProps {
   order: Order
 }
 
 export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
+  const formatDateTime = useFormatDateTime()
   const closeModal = useModalStore((state) => state.closeModal)
 
   const getStatusBadge = (status: string) => {

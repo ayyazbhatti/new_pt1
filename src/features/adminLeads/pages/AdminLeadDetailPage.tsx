@@ -37,17 +37,8 @@ import { createAppointment } from '@/features/appointments/api/appointments.api'
 import { toast } from '@/shared/components/common'
 import { getApiErrorMessage } from '@/shared/api/http'
 import type { Appointment } from '@/features/appointments/types'
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    })
-  } catch {
-    return iso
-  }
-}
+import { listUsers } from '@/shared/api/users.api'
+import { TimezoneOverrideProvider, useFormatDateTime } from '@/shared/datetime'
 
 function ActivityIcon({ type }: { type: LeadActivity['type'] }) {
   if (type === 'note') return <StickyNote className="h-4 w-4 text-text-muted" />
@@ -66,6 +57,7 @@ function isValidLeadTab(tab: string | null): tab is LeadDetailTab {
 export function AdminLeadDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const formatDateTime = useFormatDateTime()
   const [searchParams, setSearchParams] = useSearchParams()
   const openModal = useModalStore((state) => state.openModal)
   const queryClient = useQueryClient()
@@ -94,6 +86,15 @@ export function AdminLeadDetailPage() {
     queryKey: ['leads', id],
     queryFn: () => getLeadById(id!),
     enabled: !!id,
+  })
+
+  const { data: convertedLeadUser } = useQuery({
+    queryKey: ['leads', id, 'converted-user-tz', lead?.convertedUserId],
+    queryFn: async () => {
+      const r = await listUsers({ search: lead!.email!.trim(), page_size: 50 })
+      return r.items.find((u) => u.id === lead!.convertedUserId!) ?? null
+    },
+    enabled: Boolean(lead?.convertedUserId && lead.email?.trim()),
   })
 
   const { data: activities = [] } = useQuery({
@@ -302,8 +303,8 @@ export function AdminLeadDetailPage() {
 
   const displayName = lead.name || lead.email || `Lead #${lead.id}`
 
-  return (
-    <ContentShell>
+  const leadDetailMain = (
+    <>
       {/* Breadcrumb */}
       <nav className="mb-4 flex items-center gap-2 text-sm text-text-muted">
         <Link to="/admin/leads" className="hover:text-text">
@@ -429,7 +430,7 @@ export function AdminLeadDetailPage() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-text-muted w-24">Created</span>
-                <span className="text-text">{formatDate(lead.createdAt)}</span>
+                <span className="text-text">{formatDateTime(lead.createdAt)}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-text-muted w-24">Created by</span>
@@ -439,7 +440,7 @@ export function AdminLeadDetailPage() {
                 <div className="flex items-center gap-2">
                   <span className="text-text-muted w-24">Last activity</span>
                   <span className="text-text">
-                    {formatDate(lead.lastActivityAt)}
+                    {formatDateTime(lead.lastActivityAt)}
                   </span>
                 </div>
               )}
@@ -452,7 +453,7 @@ export function AdminLeadDetailPage() {
                 <h3 className="text-sm font-medium text-text mb-2">Converted</h3>
                 <p className="text-sm text-text-muted">
                   {lead.convertedAt &&
-                    `Converted on ${formatDate(lead.convertedAt)}.`}
+                    `Converted on ${formatDateTime(lead.convertedAt)}.`}
                   {lead.convertedUserId &&
                     ` Linked to user ID: ${lead.convertedUserId}.`}
                 </p>
@@ -509,7 +510,7 @@ export function AdminLeadDetailPage() {
                         {activity.content}
                       </p>
                       <p className="text-xs text-text-muted mt-2">
-                        {activity.createdBy} · {formatDate(activity.createdAt)}
+                        {activity.createdBy} · {formatDateTime(activity.createdAt)}
                       </p>
                     </div>
                   </div>
@@ -550,7 +551,7 @@ export function AdminLeadDetailPage() {
                     <div>
                       <p className="text-sm font-medium text-text">{apt.title}</p>
                       <p className="text-xs text-text-muted mt-1">
-                        {formatDate(apt.scheduled_at)} · {apt.duration_minutes} min · {apt.status}
+                        {formatDateTime(apt.scheduled_at)} · {apt.duration_minutes} min · {apt.status}
                       </p>
                       {apt.description && (
                         <p className="text-sm text-text-muted mt-2">{apt.description}</p>
@@ -569,6 +570,24 @@ export function AdminLeadDetailPage() {
           )}
         </TabsContent>
       </Tabs>
+    </>
+  )
+
+  return (
+    <ContentShell>
+      {lead.convertedUserId ? (
+        <TimezoneOverrideProvider
+          source={{
+            userTimezone: convertedLeadUser?.timezone ?? null,
+            groupTimezone: convertedLeadUser?.group_timezone ?? null,
+            platformTimezone: undefined,
+          }}
+        >
+          {leadDetailMain}
+        </TimezoneOverrideProvider>
+      ) : (
+        leadDetailMain
+      )}
     </ContentShell>
   )
 }

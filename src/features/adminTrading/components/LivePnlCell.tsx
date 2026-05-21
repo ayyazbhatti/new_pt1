@@ -3,6 +3,7 @@ import { useAdminTradingStore } from '../store/adminTrading.store'
 import type { AdminPosition } from '../types'
 import { cn } from '@/shared/utils'
 import { computePositionPnl, computePnlPercent } from '../utils/pnl'
+import { useFormatSignedFromUsd } from '@/shared/currency'
 
 interface LivePnlCellProps {
   position: AdminPosition
@@ -34,9 +35,10 @@ export const LivePnlAmountCell = memo(function LivePnlAmountCell({
   readOnly,
 }: LivePnlCellProps) {
   const { pnl, isPositive } = useLivePnlValues(position, readOnly)
+  const formatSigned = useFormatSignedFromUsd()
   return (
     <span className={cn('text-sm font-mono', isPositive ? 'text-success' : 'text-danger')}>
-      {isPositive ? '+' : ''}${pnl.toFixed(2)}
+      {formatSigned(pnl)}
     </span>
   )
 })

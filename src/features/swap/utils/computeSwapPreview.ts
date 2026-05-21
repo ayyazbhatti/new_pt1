@@ -24,35 +24,35 @@ export function computeSwapPreview(
     breakdown.push(`Calculation: 8-hour funding (${periods.toFixed(2)} periods)`)
   }
 
-  // Calculate charge
+  // Calculate accrual (USD) for preview — wallet settles on position close in production
   let charge = 0
   if (rule.unit === 'percent') {
     // Use notional: positionSize * currentPrice
     const notional = input.positionSize * input.currentPrice
     breakdown.push(`Notional: ${notional.toFixed(2)} ${input.quoteCurrency}`)
     charge = notional * (rate / 100) * periods
-    breakdown.push(`Formula: ${notional.toFixed(2)} × (${rate}% / 100) × ${periods.toFixed(2)} = ${charge.toFixed(4)}`)
+    breakdown.push(`Formula: ${notional.toFixed(2)} × (${rate}% / 100) × ${periods.toFixed(2)} = ${charge.toFixed(4)} (accrual)`)
   } else {
     // Fixed per period
     charge = rate * periods
-    breakdown.push(`Formula: ${rate} ${input.quoteCurrency} × ${periods.toFixed(2)} = ${charge.toFixed(4)}`)
+    breakdown.push(`Formula: ${rate} ${input.quoteCurrency} × ${periods.toFixed(2)} = ${charge.toFixed(4)} (accrual)`)
   }
 
   // Apply clamps
   if (rule.minCharge !== undefined && charge < rule.minCharge) {
-    breakdown.push(`Min charge applied: ${charge.toFixed(4)} → ${rule.minCharge.toFixed(4)}`)
+    breakdown.push(`Min accrual clamp: ${charge.toFixed(4)} → ${rule.minCharge.toFixed(4)}`)
     charge = rule.minCharge
   }
   if (rule.maxCharge !== undefined && charge > rule.maxCharge) {
-    breakdown.push(`Max charge applied: ${charge.toFixed(4)} → ${rule.maxCharge.toFixed(4)}`)
+    breakdown.push(`Max accrual clamp: ${charge.toFixed(4)} → ${rule.maxCharge.toFixed(4)}`)
     charge = rule.maxCharge
   }
 
   // Weekend/triple day handling (informational)
   if (rule.weekendRule === 'triple_day' && rule.tripleDay) {
-    breakdown.push(`Triple swap day: ${rule.tripleDay} (3x charge)`)
+    breakdown.push(`Triple swap day: ${rule.tripleDay} (3× accrual that day when applicable)`)
   } else if (rule.weekendRule === 'fri_triple') {
-    breakdown.push('Friday triple swap (3x charge)')
+    breakdown.push('Friday triple swap (3× accrual when applicable)')
   }
 
   breakdown.push(`Rollover time: ${rule.rolloverTimeUtc} UTC`)

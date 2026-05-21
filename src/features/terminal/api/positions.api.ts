@@ -17,6 +17,10 @@ export interface Position {
   margin: string
   unrealized_pnl: string
   realized_pnl: string
+  /** Accrued swap on this position (USD), from DB; settled to wallet on close. */
+  accumulatedSwapUsd?: string
+  /** Placement fees attributed to this position (USD). */
+  accumulatedFeesUsd?: string
   status: 'OPEN' | 'CLOSED' | 'LIQUIDATED'
   opened_at: number
   updated_at: number

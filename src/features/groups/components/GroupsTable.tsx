@@ -5,6 +5,8 @@ import { Badge } from '@/shared/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { UserGroup, ProfileRef } from '../types/group'
 import { GroupFormDialog } from './GroupFormDialog'
+import { GroupTimezoneModal } from './GroupTimezoneModal'
+import { GroupCurrencyModal } from './GroupCurrencyModal'
 import { DeleteGroupDialog } from './DeleteGroupDialog'
 import { AssignSymbolsModal } from '../modals/AssignSymbolsModal'
 import { Eye, Edit, Trash2, Settings, Copy, Tag, ChevronDown } from 'lucide-react'
@@ -25,14 +27,27 @@ interface GroupsTableProps {
   availablePriceProfiles?: ProfileRef[]
   /** Leverage profile options (same source as Admin → Leverage profiles) */
   availableLeverageProfiles?: ProfileRef[]
-  /** Callback to update group in parent state (same pattern as Admin Users page) so dropdown updates immediately */
-  onGroupUpdate?: (
-    groupId: string,
-    updates: Partial<Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'leverageProfileId' | 'leverageProfile' | 'tagIds'>>
-  ) => void
+  /** Callback to update group in parent state (same pattern as Admin → Users `onUserUpdate`). */
+  onGroupUpdate?: (groupId: string, updates: Partial<UserGroup>) => void
   onRefresh?: () => void
   /** All tags for the assign-tags dropdown */
   allTags?: { id: string; name: string }[]
+}
+
+/** Fields from PUT/POST response to merge into the admin groups table row (Admin Users–style local patch). */
+function listRowPatchFromSavedGroup(g: UserGroup): Partial<UserGroup> {
+  return {
+    name: g.name,
+    description: g.description ?? null,
+    status: g.status,
+    marginCallLevel: g.marginCallLevel ?? null,
+    stopOutLevel: g.stopOutLevel ?? null,
+    signupSlug: g.signupSlug,
+    hideLeverageInTerminal: g.hideLeverageInTerminal,
+    timezone: g.timezone ?? null,
+    displayCurrency: g.displayCurrency ?? null,
+    updatedAt: g.updatedAt,
+  }
 }
 
 /** Sentinel for "None" – Radix Select forbids value="" on SelectItem */
@@ -61,6 +76,8 @@ export function GroupsTable({
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [timezoneEditGroup, setTimezoneEditGroup] = useState<UserGroup | null>(null)
+  const [currencyEditGroup, setCurrencyEditGroup] = useState<UserGroup | null>(null)
   const [openTagsGroupId, setOpenTagsGroupId] = useState<string | null>(null)
   const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
   const [updatingTagsGroupId, setUpdatingTagsGroupId] = useState<string | null>(null)
@@ -119,6 +136,114 @@ export function GroupsTable({
       },
     },
     {
+      id: 'timezone',
+      header: 'Timezone',
+      cell: ({ row }) => {
+        const group = row.original
+        const tz = group.timezone?.trim()
+        const defaultTitle =
+          'No group timezone set; members use platform default until a user override applies.'
+        const editTitle = canEditGroups ? 'Click to change group timezone' : 'Requires edit groups permission'
+
+        if (!tz) {
+          if (!canEditGroups) {
+            return (
+              <span className="text-sm text-text-muted" title={defaultTitle}>
+                Default
+              </span>
+            )
+          }
+          return (
+            <button
+              type="button"
+              className="max-w-[180px] truncate text-left text-sm text-accent underline-offset-2 hover:text-accent/90 hover:underline cursor-pointer"
+              title={`${defaultTitle} ${editTitle}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                setTimezoneEditGroup(group)
+              }}
+            >
+              Default
+            </button>
+          )
+        }
+        if (!canEditGroups) {
+          return (
+            <span className="block max-w-[180px] truncate font-mono text-sm text-text" title={tz}>
+              {tz}
+            </span>
+          )
+        }
+        return (
+          <button
+            type="button"
+            className="block max-w-[180px] cursor-pointer truncate text-left font-mono text-sm text-accent underline-offset-2 hover:text-accent/90 hover:underline"
+            title={`${tz} · ${editTitle}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setTimezoneEditGroup(group)
+            }}
+          >
+            {tz}
+          </button>
+        )
+      },
+    },
+    {
+      id: 'displayCurrency',
+      header: 'Currency',
+      cell: ({ row }) => {
+        const group = row.original
+        const cur = group.displayCurrency?.trim().toUpperCase()
+        const defaultTitle =
+          'No group display currency set; members use platform default until a user override applies.'
+        const editTitle = canEditGroups ? 'Click to change group display currency' : 'Requires edit groups permission'
+
+        if (!cur) {
+          if (!canEditGroups) {
+            return (
+              <span className="text-sm text-text-muted" title={defaultTitle}>
+                Default
+              </span>
+            )
+          }
+          return (
+            <button
+              type="button"
+              className="max-w-[100px] truncate text-left font-mono text-sm text-accent underline-offset-2 hover:text-accent/90 hover:underline cursor-pointer"
+              title={`${defaultTitle} ${editTitle}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                setCurrencyEditGroup(group)
+              }}
+            >
+              Default
+            </button>
+          )
+        }
+        if (!canEditGroups) {
+          return (
+            <span className="block max-w-[100px] truncate font-mono text-sm text-text" title={cur}>
+              {cur}
+            </span>
+          )
+        }
+        return (
+          <button
+            type="button"
+            className="block max-w-[100px] cursor-pointer truncate text-left font-mono text-sm text-accent underline-offset-2 hover:text-accent/90 hover:underline"
+            title={`${cur} · ${editTitle}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setCurrencyEditGroup(group)
+            }}
+          >
+            {cur}
+          </button>
+        )
+      },
+    },
+    {
       accessorKey: 'marginCallLevel',
       header: 'Margin call %',
       cell: ({ row }) => {
@@ -147,18 +272,26 @@ export function GroupsTable({
               checked={checked}
               onChange={() => {
                 if (!canEditGroups || isUpdating) return
-                updateGroup.mutate({
-                  id: group.id,
-                  payload: {
-                    name: group.name,
-                    description: group.description ?? null,
-                    status: group.status,
-                    margin_call_level: group.marginCallLevel ?? null,
-                    stop_out_level: group.stopOutLevel ?? null,
-                    signup_slug: group.signupSlug ?? null,
-                    hide_leverage_in_terminal: !checked,
+                updateGroup.mutate(
+                  {
+                    id: group.id,
+                    payload: {
+                      name: group.name,
+                      description: group.description ?? null,
+                      status: group.status,
+                      margin_call_level: group.marginCallLevel ?? null,
+                      stop_out_level: group.stopOutLevel ?? null,
+                      signup_slug: group.signupSlug ?? null,
+                      hide_leverage_in_terminal: !checked,
+                      timezone: group.timezone?.trim() ? group.timezone.trim() : null,
+                    },
                   },
-                })
+                  {
+                    onSuccess: () => {
+                      onGroupUpdate?.(group.id, { hideLeverageInTerminal: !checked })
+                    },
+                  }
+                )
               }}
               disabled={!canEditGroups || isUpdating}
               title={checked ? 'Leverage hidden in terminal for this group' : 'Show leverage in terminal'}
@@ -449,7 +582,24 @@ export function GroupsTable({
         )
       },
     },
-  ], [canTags, openTagsGroupId, updatingTagsGroupId, canEditGroups, canDeleteGroups, canSymbolSettings, canPriceProfile, groups, availablePriceProfiles, availableLeverageProfiles, allTags, updateGroup, updatePriceProfile, updateLeverageProfile, onGroupUpdate, onRefresh])
+  ], [
+    canTags,
+    openTagsGroupId,
+    updatingTagsGroupId,
+    canEditGroups,
+    canDeleteGroups,
+    canSymbolSettings,
+    canPriceProfile,
+    groups,
+    availablePriceProfiles,
+    availableLeverageProfiles,
+    allTags,
+    updateGroup,
+    updatePriceProfile,
+    updateLeverageProfile,
+    onGroupUpdate,
+    onRefresh,
+  ])
 
   const openTagsGroup = openTagsGroupId ? groups.find((g) => g.id === openTagsGroupId) : null
   const openTagsTagIds = openTagsGroup?.tagIds ?? []
@@ -526,11 +676,11 @@ export function GroupsTable({
           mode="edit"
           initial={editingGroup}
           open={editDialogOpen}
+          onSaved={(g) => onGroupUpdate?.(g.id, listRowPatchFromSavedGroup(g))}
           onOpenChange={(open) => {
             setEditDialogOpen(open)
             if (!open) {
               setEditingGroup(null)
-              onRefresh?.()
             }
           }}
         />
@@ -549,6 +699,24 @@ export function GroupsTable({
           }}
         />
       )}
+
+      <GroupTimezoneModal
+        group={timezoneEditGroup}
+        open={timezoneEditGroup != null}
+        onOpenChange={(open) => {
+          if (!open) setTimezoneEditGroup(null)
+        }}
+        onUpdated={(groupId, timezone) => onGroupUpdate?.(groupId, { timezone })}
+      />
+
+      <GroupCurrencyModal
+        group={currencyEditGroup}
+        open={currencyEditGroup != null}
+        onOpenChange={(open) => {
+          if (!open) setCurrencyEditGroup(null)
+        }}
+        onUpdated={(groupId, displayCurrency) => onGroupUpdate?.(groupId, { displayCurrency })}
+      />
     </>
   )
 }

@@ -10,7 +10,7 @@ import { AdminConfirmModal, toast } from '@/shared/components/common'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useCanAccess } from '@/shared/utils/permissions'
-import { formatDateTime } from '@/features/adminUsers/utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
 import {
   deleteAiReport,
   listAiReports,
@@ -58,6 +58,7 @@ export function UserReportsListTab({
   subjectName,
   subjectEmail,
 }: UserReportsListTabProps) {
+  const formatDateTime = useFormatDateTime()
   const queryClient = useQueryClient()
   const openModal = useModalStore((s) => s.openModal)
   const closeModal = useModalStore((s) => s.closeModal)
@@ -192,7 +193,7 @@ export function UserReportsListTab({
         },
       },
     ],
-    [canDelete, handleView, resolveGeneratorLabel],
+    [canDelete, handleView, resolveGeneratorLabel, formatDateTime],
   )
 
   const items = listQuery.data?.items ?? []

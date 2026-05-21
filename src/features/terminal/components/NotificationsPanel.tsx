@@ -8,35 +8,52 @@ import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { cn } from '@/shared/utils'
 import type { NotificationPushPayload } from '@/shared/ws/wsEvents'
+import { useFormatRelative } from '@/shared/datetime'
+import { useFormatFromUsd } from '@/shared/currency'
+import type { Notification } from '@/shared/store/notificationsStore'
+
+type DepositMeta = {
+  kind?: string
+  amount_usd?: string | number
+  symbol?: string
+  reason?: string | null
+}
+
+function notificationDisplayMessage(n: Notification, formatMoney: (v: number | string | null | undefined) => string): string {
+  const meta = n.meta as DepositMeta | undefined
+  const mk = meta?.kind
+  const amtRaw = meta?.amount_usd ?? (meta as { amount?: number } | undefined)?.amount
+  const amt =
+    typeof amtRaw === 'number'
+      ? amtRaw
+      : amtRaw != null && String(amtRaw).trim() !== ''
+        ? Number(amtRaw)
+        : NaN
+  if (mk === 'deposit_approved' && Number.isFinite(amt)) {
+    return `Your deposit of ${formatMoney(amt)} was approved`
+  }
+  if (mk === 'deposit_request' && Number.isFinite(amt)) {
+    return `Deposit request of ${formatMoney(amt)} received`
+  }
+  if (mk === 'deposit_rejected' && Number.isFinite(amt)) {
+    const r = meta?.reason
+    return `Your deposit of ${formatMoney(amt)} was rejected${r ? `: ${r}` : ''}`
+  }
+  if ((mk === 'swap_first_charge' || n.kind === 'SWAP_FIRST_CHARGE') && Number.isFinite(amt)) {
+    const sym = (meta as DepositMeta)?.symbol ?? 'position'
+    return `Overnight financing of ${formatMoney(amt)} was accrued on your ${sym} position. It will be settled when the position closes.`
+  }
+  return n.message
+}
 
 const PANEL_WIDTH_DESKTOP = 288
-
-/** Format ISO date to relative time (e.g. "2 min ago", "1 hour ago") */
-function formatRelativeTime(createdAt: string): string {
-  try {
-    const date = new Date(createdAt)
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffSec = Math.floor(diffMs / 1000)
-    const diffMin = Math.floor(diffSec / 60)
-    const diffHour = Math.floor(diffMin / 60)
-    const diffDay = Math.floor(diffHour / 24)
-    if (diffSec < 60) return 'Just now'
-    if (diffMin < 60) return `${diffMin} min ago`
-    if (diffHour < 24) return `${diffHour} hour ago`
-    if (diffDay === 1) return 'Yesterday'
-    if (diffDay < 7) return `${diffDay} days ago`
-    return date.toLocaleDateString()
-  } catch {
-    return ''
-  }
-}
 
 /** Map API kind to display type for badge styling */
 function getKindType(kind: NotificationPushPayload['kind']): 'order' | 'sl' | 'deposit' | 'system' {
   if (kind === 'POSITION_SL' || kind === 'POSITION_LIQUIDATED') return 'sl'
   if (kind === 'POSITION_TP') return 'order'
-  if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED' || kind === 'WITHDRAWAL_APPROVED') return 'deposit'
+  if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED' || kind === 'DEPOSIT_REJECTED' || kind === 'WITHDRAWAL_APPROVED') return 'deposit'
+  if (kind === 'SWAP_FIRST_CHARGE') return 'system'
   if (kind === 'ADMIN_MESSAGE') return 'system'
   return 'system'
 }
@@ -59,12 +76,15 @@ function getTypeLabel(kind: NotificationPushPayload['kind']): string {
   if (kind === 'POSITION_TP') return 'TP'
   if (kind === 'POSITION_LIQUIDATED') return 'LIQ'
   if (kind === 'ADMIN_MESSAGE') return 'Msg'
-  if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED') return 'D'
+  if (kind === 'DEPOSIT_REQUEST' || kind === 'DEPOSIT_APPROVED' || kind === 'DEPOSIT_REJECTED') return 'D'
   if (kind === 'WITHDRAWAL_APPROVED') return 'W'
+  if (kind === 'SWAP_FIRST_CHARGE') return 'Swap'
   return '!'
 }
 
 export function NotificationsPanel() {
+  const formatRelative = useFormatRelative()
+  const formatMoney = useFormatFromUsd()
   const { notificationPanelOpen, setNotificationPanelOpen } = useTerminalStore()
   const { user } = useAuthStore()
   const isMobile = !useMediaQuery('(min-width: 1024px)')
@@ -178,9 +198,11 @@ export function NotificationsPanel() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-text">{n.title}</p>
-                      <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{n.message}</p>
+                      <p className="text-xs text-text-muted mt-0.5 line-clamp-2">
+                        {notificationDisplayMessage(n, formatMoney)}
+                      </p>
                       <p className="text-[11px] text-text-muted/70 mt-1">
-                        {formatRelativeTime(n.createdAt)}
+                        {formatRelative(n.createdAt)}
                       </p>
                     </div>
                   </div>

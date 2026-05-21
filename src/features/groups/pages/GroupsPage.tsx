@@ -12,9 +12,9 @@ import { useMarkupProfiles } from '@/features/adminMarkup/hooks/useMarkup'
 import { useQuery } from '@tanstack/react-query'
 import { listTags } from '@/features/tags/api/tags.api'
 import { getGroupsOverview } from '../api/groups.api'
-import type { UserGroup } from '../types/group'
+import type { ListGroupsParams, UserGroup } from '../types/group'
 import { Plus, X, Building2, CheckCircle, Users } from 'lucide-react'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Skeleton } from '@/shared/ui/loading'
 import { EmptyState } from '@/shared/ui/empty'
@@ -49,14 +49,19 @@ export function GroupsPage() {
     queryFn: () => getGroupsOverview(),
   })
 
+  const listParams = useMemo<ListGroupsParams>(
+    () => ({
+      search: search || undefined,
+      status: status !== 'all' ? status : undefined,
+      page,
+      page_size: pageSize,
+      sort,
+    }),
+    [search, status, page, pageSize, sort]
+  )
+
   // Fetch groups
-  const { data, isLoading, error, refetch } = useGroupsList({
-    search: search || undefined,
-    status: status !== 'all' ? status : undefined,
-    page,
-    page_size: pageSize,
-    sort,
-  })
+  const { data, isLoading, error, refetch } = useGroupsList(listParams)
 
   // Price profile dropdown: use list from groups API, or fallback to markup profiles (same source as Markup page)
   const { data: markupProfiles } = useMarkupProfiles()
@@ -73,25 +78,17 @@ export function GroupsPage() {
     [leverageProfilesData?.items]
   )
 
-  // Local state for groups list; always sync from API so filters (search, status, sort) show correct data
+  /** Same pattern as Admin → Users: local table state synced from the query, then patched immediately on edits. */
   const [groupsState, setGroupsState] = useState<UserGroup[]>([])
-  const groupsFromApi = data?.items ?? []
   useEffect(() => {
-    setGroupsState(groupsFromApi)
-  }, [groupsFromApi])
+    setGroupsState(data?.items ?? [])
+  }, [data])
 
   const displayGroups = groupsState
 
-  const handleGroupUpdate = (
-    groupId: string,
-    updates: Partial<
-      Pick<UserGroup, 'priceProfileId' | 'priceProfile' | 'leverageProfileId' | 'leverageProfile' | 'tagIds'>
-    >
-  ) => {
-    setGroupsState((prev) =>
-      prev.map((g) => (g.id === groupId ? { ...g, ...updates } : g))
-    )
-  }
+  const handleGroupUpdate = useCallback((groupId: string, updates: Partial<UserGroup>) => {
+    setGroupsState((prev) => prev.map((g) => (g.id === groupId ? { ...g, ...updates } : g)))
+  }, [])
 
   const { data: tagsList = [] } = useQuery({
     queryKey: ['admin', 'tags'],
@@ -360,6 +357,9 @@ export function GroupsPage() {
           if (!open) {
             refetch()
           }
+        }}
+        onSaved={() => {
+          void refetch()
         }}
       />
     </ContentShell>

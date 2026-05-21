@@ -23,5 +23,19 @@ pub struct UserGroup {
     pub created_by_user_id: Option<Uuid>,
     /// When true, users in this group do not see the Leverage section in the trading terminal right panel.
     pub hide_leverage_in_terminal: bool,
+    /// Optional IANA timezone default for members (unless overridden per user).
+    #[serde(default)]
+    #[sqlx(default)]
+    pub timezone: Option<String>,
+    /// Optional ISO 4217 display currency default for members (unless overridden per user).
+    #[serde(default)]
+    #[sqlx(default)]
+    pub display_currency: Option<String>,
+    /// When true, swap (overnight financing) may be charged for open positions at rollover (Phase 3 engine).
+    #[serde(default)]
+    pub swap_enabled: bool,
+    /// When true, per-trade fees may be charged at order placement (Phase 2 engine).
+    #[serde(default)]
+    pub fees_enabled: bool,
 }
 

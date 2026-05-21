@@ -55,6 +55,17 @@ export interface User {
   permissionProfileName?: string | null
   /** admin | super_admin | manager | agent | user. Used for Super Admin toggle. */
   role?: string
+  /** Per-user IANA override (admin list). */
+  timezone?: string | null
+  /** Group default IANA (admin list). */
+  groupTimezone?: string | null
+  effectiveTimezone?: string
+  effectiveTimezoneOrigin?: string
+  displayCurrency?: string | null
+  groupDisplayCurrency?: string | null
+  effectiveDisplayCurrency?: string
+  effectiveDisplayCurrencyOrigin?: string
+  platformDisplayCurrency?: string | null
 }
 
 export interface UserWallet {

@@ -1,0 +1,10 @@
+{
+  "timestamp": "1970-01-01T00:00:00Z",
+  "uptimeSeconds": 0,
+  "cpuUsePct": null,
+  "disk": { "mount": "/", "size": 1, "used": 0, "avail": 1, "usePct": 0 },
+  "volume": null,
+  "memory": { "totalMb": 8192, "usedMb": 0, "availMb": 8192, "usePct": 0 },
+  "containers": [],
+  "containerStats": []
+}

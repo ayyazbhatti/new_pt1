@@ -4,7 +4,7 @@ import { ContentShell, PageHeader } from '@/shared/layout'
 import { Button } from '@/shared/ui/button'
 import { useModalStore } from '@/app/store'
 import type { Appointment, AppointmentStatus, AppointmentType } from '../types'
-import { formatDate, formatTime } from '../utils/format'
+import { useFormatDate, useFormatTime } from '@/shared/datetime'
 import { StatusBadge } from '../components/StatusBadge'
 import { ViewAppointmentModal } from '../modals/ViewAppointmentModal'
 import { getUserAppointments } from '../api/appointments.api'
@@ -13,6 +13,8 @@ import { Calendar, MapPin, Video } from 'lucide-react'
 const STORAGE_SEARCH_KEY = 'appointments-page-search'
 
 export function UserAppointmentsPage() {
+  const formatDate = useFormatDate()
+  const formatTime = useFormatTime()
   const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem(STORAGE_SEARCH_KEY) ?? '')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<string>('all')

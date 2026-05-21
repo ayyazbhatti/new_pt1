@@ -15,6 +15,9 @@ import { useGroupsList } from '@/features/groups/hooks/useGroups'
 import { updateUserProfile, updateUserGroup, updateUserPermissionProfile, updateUserRole } from '../api/users.api'
 import { listUsers, type UserResponse, type ListUsersResponse } from '@/shared/api/users.api'
 import { listPermissionProfiles } from '@/features/permissions/api/permissionProfiles.api'
+import { TimezoneSelect } from '@/shared/components/TimezoneSelect'
+import { CurrencySelect } from '@/shared/components/CurrencySelect'
+import { profileQueryKey } from '@/features/userPanel/hooks/useProfile'
 
 const userSchema = z.object({
   firstName: z.string().min(1, 'First name is required'),
@@ -27,6 +30,8 @@ const userSchema = z.object({
   minLeverage: z.number().min(1, 'Min leverage must be at least 1').max(1000, 'Min leverage must be at most 1000'),
   maxLeverage: z.number().min(1, 'Max leverage must be at least 1').max(1000, 'Max leverage must be at most 1000'),
   permissionProfile: z.string().optional(),
+  timezone: z.string().optional(),
+  display_currency: z.string().optional(),
 }).refine((data) => data.minLeverage <= data.maxLeverage, {
   message: 'Min leverage must be less than or equal to max leverage',
   path: ['maxLeverage'],
@@ -76,6 +81,16 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       permissionProfileId: found.permission_profile_id ?? user.permissionProfileId,
       permissionProfileName: found.permission_profile_name ?? user.permissionProfileName,
       role: found.role ?? user.role,
+      timezone: found.timezone ?? user.timezone ?? null,
+      groupTimezone: found.group_timezone ?? user.groupTimezone ?? null,
+      effectiveTimezone: found.effective_timezone ?? user.effectiveTimezone,
+      effectiveTimezoneOrigin: found.effective_timezone_origin ?? user.effectiveTimezoneOrigin,
+      displayCurrency: found.display_currency ?? user.displayCurrency ?? null,
+      groupDisplayCurrency: found.group_display_currency ?? user.groupDisplayCurrency ?? null,
+      effectiveDisplayCurrency: found.effective_display_currency ?? user.effectiveDisplayCurrency,
+      effectiveDisplayCurrencyOrigin:
+        found.effective_display_currency_origin ?? user.effectiveDisplayCurrencyOrigin,
+      platformDisplayCurrency: found.platform_display_currency ?? user.platformDisplayCurrency ?? null,
     }
   }, [user, usersList])
 
@@ -89,6 +104,8 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
   const defaultStatus = (formUser?.status === 'suspended' ? 'disabled' : formUser?.status) || 'active'
   const defaultMinLeverage = formUser?.leverageLimitMin ?? 1
   const defaultMaxLeverage = formUser?.leverageLimitMax ?? 500
+  const defaultTimezone = formUser?.timezone ?? ''
+  const defaultDisplayCurrency = formUser?.displayCurrency ?? ''
 
   const {
     register,
@@ -110,6 +127,8 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       minLeverage: defaultMinLeverage,
       maxLeverage: defaultMaxLeverage,
       permissionProfile: defaultPermissionProfile,
+      timezone: defaultTimezone,
+      display_currency: defaultDisplayCurrency,
     },
   })
 
@@ -127,13 +146,23 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
       minLeverage: defaultMinLeverage,
       maxLeverage: defaultMaxLeverage,
       permissionProfile: defaultPermissionProfile,
+      timezone: defaultTimezone,
+      display_currency: defaultDisplayCurrency,
     })
     const r = formUser.role ?? ''
     if (r === 'admin' || r === 'super_admin') setIsSuperAdmin(r === 'super_admin')
-  }, [formUser?.id, defaultGroup, defaultPermissionProfile, defaultStatus, defaultMinLeverage, defaultMaxLeverage, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country, formUser?.role])
+  }, [formUser?.id, defaultGroup, defaultPermissionProfile, defaultStatus, defaultMinLeverage, defaultMaxLeverage, reset, firstName, lastName, formUser?.email, formUser?.phone, formUser?.country, formUser?.role, defaultTimezone, defaultDisplayCurrency])
 
   const group = watch('group')
   const groups = groupsData?.items || []
+  const selectedGroupTimezone = useMemo(() => {
+    const g = groups.find((x) => x.id === group)
+    return g?.timezone?.trim() || null
+  }, [groups, group])
+  const selectedGroupDisplayCurrency = useMemo(() => {
+    const g = groups.find((x) => x.id === group)
+    return g?.displayCurrency?.trim() || null
+  }, [groups, group])
 
   const onSubmit = async (data: UserFormData) => {
     if (user) {
@@ -151,6 +180,8 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           phone: data.phone || null,
           country: data.country,
           status: data.status as 'active' | 'disabled' | 'suspended',
+          timezone: data.timezone?.trim() ? data.timezone.trim() : null,
+          display_currency: data.display_currency?.trim() ? data.display_currency.trim() : null,
         })
         await updateUserGroup(user.id, {
           group_id: data.group,
@@ -175,6 +206,8 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
           permissionProfileId: permId ?? undefined,
           permissionProfileName,
           role: newRole,
+          timezone: data.timezone?.trim() || null,
+          displayCurrency: data.display_currency?.trim() || null,
         })
         queryClient.setQueryData<ListUsersResponse>(['users'], (old) => {
           if (!old || !('items' in old) || !Array.isArray(old.items)) return old
@@ -197,6 +230,8 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
                     permission_profile_id: permId,
                     permission_profile_name: permissionProfileName ?? null,
                     role: newRole,
+                    timezone: data.timezone?.trim() || null,
+                    display_currency: data.display_currency?.trim() || null,
                   }
                 : u
             ),
@@ -205,6 +240,7 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
         await queryClient.invalidateQueries({ queryKey: ['users'] })
         if (user.id === currentUserId) {
           await refreshUser().catch((e) => console.error('Failed to refresh user after self-update', e))
+          void queryClient.invalidateQueries({ queryKey: profileQueryKey })
         }
         toast.success(`User ${data.firstName} ${data.lastName} updated`)
         closeModal(`edit-user-${user.id}`)
@@ -325,6 +361,55 @@ export function CreateEditUserModal({ user, onUserUpdate }: CreateEditUserModalP
             Super Admin
           </label>
           <span className="text-xs text-text-muted">Can see and manage all tags without assignment.</span>
+        </div>
+      )}
+      {user && (
+        <div className="space-y-2 rounded-lg border border-border bg-surface-1/50 p-3">
+          <label htmlFor="user_timezone_override" className="text-sm font-medium text-text block">
+            Timezone (overrides group)
+          </label>
+          <TimezoneSelect
+            id="user_timezone_override"
+            variant="list"
+            value={watch('timezone') ?? ''}
+            onChange={(v) => setValue('timezone', v || '')}
+            placeholder="Use group / platform default"
+            allowClear
+            disabled={isSubmitting}
+          />
+          <p className="text-xs text-text-muted">
+            Empty uses the group default, then the platform default. Currently effective:{' '}
+            <span className="font-mono text-text">{formUser?.effectiveTimezone ?? '—'}</span>
+            {formUser?.effectiveTimezoneOrigin ? (
+              <span className="text-text-muted"> ({formUser.effectiveTimezoneOrigin})</span>
+            ) : null}
+            <br />
+            Group default:{' '}
+            <span className="font-mono text-text">{selectedGroupTimezone ?? '—'}</span>
+          </p>
+        </div>
+      )}
+      {user && (
+        <div className="space-y-2 rounded-lg border border-border bg-surface-1/50 p-3">
+          <label className="text-sm font-medium text-text block">Display currency (overrides group)</label>
+          <CurrencySelect
+            variant="list"
+            value={watch('display_currency') ?? ''}
+            onChange={(v) => setValue('display_currency', v || '')}
+            placeholder="Use group / platform default"
+            allowClear
+            disabled={isSubmitting}
+          />
+          <p className="text-xs text-text-muted">
+            Currently effective:{' '}
+            <span className="font-mono text-text">{formUser?.effectiveDisplayCurrency ?? '—'}</span>
+            {formUser?.effectiveDisplayCurrencyOrigin ? (
+              <span className="text-text-muted"> ({formUser.effectiveDisplayCurrencyOrigin})</span>
+            ) : null}
+            <br />
+            Group default:{' '}
+            <span className="font-mono text-text">{selectedGroupDisplayCurrency ?? '—'}</span>
+          </p>
         </div>
       )}
       <div className="grid grid-cols-2 gap-4">

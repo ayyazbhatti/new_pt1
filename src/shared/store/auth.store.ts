@@ -57,6 +57,13 @@ export interface RegisterData {
   groupRef?: string
 }
 
+/** Status from {@link http} errors; used to avoid clearing a valid session on transient failures. */
+function getHttpErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  const res = (error as { response?: { status?: number } }).response
+  return typeof res?.status === 'number' ? res.status : undefined
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -87,6 +94,8 @@ export const useAuthStore = create<AuthState>()(
             referralCode: response.user.referralCode,
           },
           isAuthenticated: true,
+          /** Skip AuthGuard's hydrate + redundant /me until next cold load; profile still loads via AppShell query. */
+          isHydrated: true,
         })
         scheduleProactiveAccessTokenRefresh()
         // Connect WebSocket after successful login
@@ -116,6 +125,7 @@ export const useAuthStore = create<AuthState>()(
             referralCode: response.user.referralCode,
           },
           isAuthenticated: true,
+          isHydrated: true,
         })
         scheduleProactiveAccessTokenRefresh()
         // Connect WebSocket after successful registration
@@ -207,13 +217,22 @@ export const useAuthStore = create<AuthState>()(
             }
             scheduleProactiveAccessTokenRefresh()
           } catch (error) {
-            set({
-              accessToken: null,
-              refreshToken: null,
-              user: null,
-              isAuthenticated: false,
-              isHydrated: true,
-            })
+            const status = getHttpErrorStatus(error)
+            // Do not wipe a session that login just established (or a good refresh token) on 5xx / network blips.
+            const clearSession =
+              status === 401 || status === 403 || status === 404
+            if (clearSession) {
+              set({
+                accessToken: null,
+                refreshToken: null,
+                user: null,
+                isAuthenticated: false,
+                isHydrated: true,
+              })
+            } else {
+              console.warn('[auth] hydrateFromStorage: GET /api/auth/me failed; keeping session', error)
+              set({ isHydrated: true })
+            }
           }
         } else {
           set({ isHydrated: true })

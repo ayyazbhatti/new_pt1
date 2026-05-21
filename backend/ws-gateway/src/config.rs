@@ -50,8 +50,9 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Config {
             server: ServerConfig {
+                // Default 3003 matches Vite `/ws` proxy, `scripts/start-all.sh`, deploy compose, and `getWsGatewayUrl()`.
                 ws_port: env::var("WS_PORT")
-                    .unwrap_or_else(|_| "9001".to_string())
+                    .unwrap_or_else(|_| "3003".to_string())
                     .parse()?,
                 http_port: env::var("HTTP_PORT")
                     .unwrap_or_else(|_| "9002".to_string())

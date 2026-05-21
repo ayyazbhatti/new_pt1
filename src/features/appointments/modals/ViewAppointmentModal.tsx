@@ -1,5 +1,5 @@
 import type { Appointment } from '../types'
-import { formatDateTime } from '../utils/format'
+import { useFormatDateTime } from '@/shared/datetime'
 import { StatusBadge } from '../components/StatusBadge'
 import { Button } from '@/shared/ui/button'
 import { useModalStore } from '@/app/store'
@@ -10,6 +10,7 @@ interface ViewAppointmentModalProps {
 }
 
 export function ViewAppointmentModal({ appointment }: ViewAppointmentModalProps) {
+  const formatDateTime = useFormatDateTime()
   const closeModal = useModalStore((s) => s.closeModal)
 
   return (

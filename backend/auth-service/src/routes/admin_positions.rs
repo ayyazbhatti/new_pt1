@@ -29,6 +29,31 @@ use std::str::FromStr;
 
 const POS_BY_ID_PREFIX: &str = "pos:by_id:";
 
+async fn attach_admin_position_trading_costs(pool: &PgPool, items: &mut [AdminPosition]) {
+    let ids: Vec<Uuid> = items.iter().filter_map(|p| Uuid::parse_str(&p.id).ok()).collect();
+    if ids.is_empty() {
+        return;
+    }
+    let rows = sqlx::query_as::<_, (Uuid, Decimal, Decimal)>(
+        r#"SELECT id, accumulated_swap_usd, accumulated_fees_usd FROM positions WHERE id = ANY($1)"#,
+    )
+    .bind(ids.as_slice())
+    .fetch_all(pool)
+    .await;
+    let Ok(rows) = rows else {
+        return;
+    };
+    let m: HashMap<Uuid, (Decimal, Decimal)> = rows.into_iter().map(|(id, s, f)| (id, (s, f))).collect();
+    for p in items.iter_mut() {
+        if let Ok(uid) = Uuid::parse_str(&p.id) {
+            if let Some((s, f)) = m.get(&uid) {
+                p.accumulated_swap_usd = s.to_string().parse().unwrap_or(0.0);
+                p.accumulated_fees_usd = f.to_string().parse().unwrap_or(0.0);
+            }
+        }
+    }
+}
+
 async fn list_closed_positions_admin(
     pool: &PgPool,
     admin_state: &AdminTradingState,
@@ -250,6 +275,8 @@ async fn list_closed_positions_admin(
                     opened_at: format_ts_ms(opened_at_ms),
                     closed_at: Some(format_ts_ms(closed_at_ms)),
                     last_updated_at: format_ts_ms(updated_at_ms),
+                    accumulated_swap_usd: 0.0,
+                    accumulated_fees_usd: 0.0,
                 },
             ))
         })
@@ -277,12 +304,13 @@ async fn list_closed_positions_admin(
     keyed.sort_by(|a, b| b.0.cmp(&a.0));
     let total = keyed.len() as i64;
     let total_realized_pnl: f64 = keyed.iter().map(|(_, p)| p.pnl).sum();
-    let items: Vec<AdminPosition> = keyed
+    let mut items: Vec<AdminPosition> = keyed
         .into_iter()
         .skip(offset as usize)
         .take(limit as usize)
         .map(|(_, p)| p)
         .collect();
+    attach_admin_position_trading_costs(&pool, &mut items).await;
     let has_more = offset + (items.len() as i64) < total;
     let next_cursor = if has_more {
         Some((offset + limit).to_string())
@@ -563,6 +591,8 @@ async fn list_admin_positions(
                     opened_at,
                     closed_at: None,
                     last_updated_at,
+                    accumulated_swap_usd: 0.0,
+                    accumulated_fees_usd: 0.0,
                 },
             ))
         })
@@ -625,12 +655,13 @@ async fn list_admin_positions(
         };
     }
 
-    let page_items: Vec<AdminPosition> = keyed
+    let mut page_items: Vec<AdminPosition> = keyed
         .into_iter()
         .skip(offset as usize)
         .take(limit as usize)
         .map(|(_, p)| p)
         .collect();
+    attach_admin_position_trading_costs(&pool, &mut page_items).await;
 
     let has_more = offset + (page_items.len() as i64) < total;
     let next_cursor = if has_more {

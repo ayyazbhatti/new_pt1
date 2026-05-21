@@ -19,11 +19,14 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
-use crate::routes::deposits::get_free_margin_from_db_fast;
+use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin_from_db_fast};
+use crate::routes::orders::{compute_order_margin_details, PlaceOrderError, MIN_REQUIRED_MARGIN_USD};
 use crate::routes::scoped_access;
+use crate::services::bonus_service;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use redis::AsyncCommands;
+use redis_model::keys::Keys;
 
 #[derive(Clone)]
 pub struct AdminTradingState {
@@ -90,6 +93,8 @@ pub struct AdminPosition {
     pub opened_at: String,
     pub closed_at: Option<String>,
     pub last_updated_at: String,
+    pub accumulated_swap_usd: f64,
+    pub accumulated_fees_usd: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -502,10 +507,27 @@ async fn create_admin_order(
     let order_type_lower = req.order_type.to_lowercase();
 
     // Get user and symbol info
-    let user_row = sqlx::query!(
-        r#"SELECT COALESCE(first_name, '') as first_name, COALESCE(last_name, '') as last_name, email, group_id, COALESCE(account_type, 'hedging') as "account_type!" FROM users WHERE id = $1"#,
-        user_id
+    #[derive(sqlx::FromRow)]
+    struct AdminCreateTargetUser {
+        first_name: String,
+        last_name: String,
+        email: String,
+        group_id: Option<Uuid>,
+        account_type: String,
+        min_leverage: Option<i32>,
+        max_leverage: Option<i32>,
+        trading_access: Option<String>,
+    }
+    let user_row = sqlx::query_as::<_, AdminCreateTargetUser>(
+        r#"SELECT COALESCE(first_name, '') AS first_name,
+                  COALESCE(last_name, '') AS last_name,
+                  email, group_id,
+                  COALESCE(account_type, 'hedging') AS account_type,
+                  min_leverage, max_leverage,
+                  COALESCE(trading_access, 'full') AS trading_access
+           FROM users WHERE id = $1"#,
     )
+    .bind(user_id)
     .fetch_optional(&pool)
     .await
     .map_err(|e| {
@@ -547,14 +569,138 @@ async fn create_admin_order(
         "Unknown".to_string()
     };
 
-    // Insert order (schema: reference nullable, no time_in_force column)
+    let side_upper = req.side.to_uppercase();
+    let order_type_upper = req.order_type.to_uppercase();
+    if user_row.trading_access.as_deref().unwrap_or("full") != "full" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse::new(
+                "TRADING_DISABLED".to_string(),
+                "Trading is disabled for this user.".to_string(),
+            )),
+        ));
+    }
+
+    let margin = compute_order_margin_details(
+        &pool,
+        admin_state.redis.as_ref(),
+        user_id,
+        user_row.group_id,
+        &symbol_row.code,
+        &side_upper,
+        &order_type_upper,
+        size,
+        price,
+        user_row.min_leverage,
+        user_row.max_leverage,
+        Some(user_row.account_type.clone()),
+    )
+    .await
+    .map_err(|e| {
+        let msg = match &e {
+            PlaceOrderError::LeverageConfigurationInvalid { message } => message.clone(),
+            PlaceOrderError::InsufficientMargin {
+                required_margin,
+                free_margin,
+                estimated_fee_usd,
+                total_required_usd,
+            } => format!(
+                "Insufficient free margin: required {} (margin {} + fee {}) available {}",
+                total_required_usd, required_margin, estimated_fee_usd, free_margin
+            ),
+            PlaceOrderError::MinimumMarginNotMet {
+                required_margin,
+                min_required_margin,
+            } => format!(
+                "Minimum margin: required {} min {}",
+                required_margin, min_required_margin
+            ),
+            PlaceOrderError::TradingRestricted { message } => message.clone(),
+            PlaceOrderError::BonusLock(m) => m.clone(),
+            PlaceOrderError::Status(_) => "Order margin validation failed".to_string(),
+        };
+        let code = match &e {
+            PlaceOrderError::InsufficientMargin { .. } => "INSUFFICIENT_FREE_MARGIN",
+            PlaceOrderError::MinimumMarginNotMet { .. } => "MIN_REQUIRED_MARGIN_NOT_MET",
+            PlaceOrderError::LeverageConfigurationInvalid { .. } => "LEVERAGE_CONFIGURATION",
+            PlaceOrderError::TradingRestricted { .. } => "TRADING_DISABLED",
+            PlaceOrderError::BonusLock(_) => "BONUS_LOCK",
+            PlaceOrderError::Status(_) => "ORDER_MARGIN",
+        };
+        let status = match &e {
+            PlaceOrderError::InsufficientMargin { .. } => StatusCode::FORBIDDEN,
+            PlaceOrderError::TradingRestricted { .. } => StatusCode::FORBIDDEN,
+            PlaceOrderError::MinimumMarginNotMet { .. } | PlaceOrderError::LeverageConfigurationInvalid { .. } => {
+                StatusCode::BAD_REQUEST
+            }
+            PlaceOrderError::Status(s) => *s,
+            PlaceOrderError::BonusLock(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(ErrorResponse::new(code.to_string(), msg)))
+    })?;
+
+    let required_margin = margin.required_margin;
+    let min_required = Decimal::from(MIN_REQUIRED_MARGIN_USD);
+    if required_margin < min_required {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "MIN_REQUIRED_MARGIN_NOT_MET".to_string(),
+                format!(
+                    "Estimated margin ({}) is below minimum {}.",
+                    required_margin, min_required
+                ),
+            )),
+        ));
+    }
+
+    let fm = get_free_margin_from_db_fast(&pool, user_id).await.unwrap_or(Decimal::ZERO);
+    if required_margin > fm {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse::new(
+                "INSUFFICIENT_FREE_MARGIN".to_string(),
+                format!(
+                    "Required margin {} exceeds free margin {}.",
+                    required_margin, fm
+                ),
+            )),
+        ));
+    }
+
+    let mut tx = pool.begin().await.map_err(|e| {
+        error!("admin create order: begin tx: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new(
+                "INTERNAL_ERROR".to_string(),
+                "Database error".to_string(),
+            )),
+        )
+    })?;
+
+    let alloc = bonus_service::lock_margin(&mut tx, user_id, required_margin)
+        .await
+        .map_err(|e| {
+            let (code, status) = match &e {
+                crate::services::bonus_service::BonusError::InsufficientMargin => {
+                    ("INSUFFICIENT_FREE_MARGIN", StatusCode::FORBIDDEN)
+                }
+                _ => ("BONUS_LOCK", StatusCode::INTERNAL_SERVER_ERROR),
+            };
+            (
+                status,
+                Json(ErrorResponse::new(code.to_string(), e.to_string())),
+            )
+        })?;
+
     sqlx::query(
         r#"
         INSERT INTO orders (
             id, user_id, symbol_id, side, type, size, price, stop_price,
-            status, reference, created_at, updated_at
+            status, reference, created_at, updated_at, margin_from_cash, margin_from_bonus
         )
-        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12)
+        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12, $13, $14)
         "#,
     )
     .bind(order_id)
@@ -569,7 +715,9 @@ async fn create_admin_order(
     .bind(Some("admin"))
     .bind(now)
     .bind(now)
-    .execute(&pool)
+    .bind(alloc.from_cash)
+    .bind(alloc.from_bonus)
+    .execute(&mut *tx)
     .await
     .map_err(|e| {
         error!("Failed to insert order: {}", e);
@@ -578,6 +726,19 @@ async fn create_admin_order(
             Json(ErrorResponse::new("INTERNAL_ERROR".to_string(), "Failed to create order".to_string())),
         )
     })?;
+
+    tx.commit().await.map_err(|e| {
+        error!("admin create order: commit: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new(
+                "INTERNAL_ERROR".to_string(),
+                "Failed to commit order".to_string(),
+            )),
+        )
+    })?;
+
+    compute_and_cache_account_summary(&pool, admin_state.redis.as_ref(), user_id).await;
 
     // Publish to NATS as PlaceOrderCommand so order-engine can deserialize and process
     let side = match side_lower.as_str() {
@@ -620,7 +781,7 @@ async fn create_admin_order(
         .and_then(|p| Decimal::try_from(p).ok());
     let tp = req.take_profit.and_then(|p| Decimal::try_from(p).ok());
 
-    let account_type = if user_row.account_type == "netting" {
+    let account_type_cmd = if margin.account_type.as_deref() == Some("netting") {
         Some("netting".to_string())
     } else {
         Some("hedging".to_string())
@@ -640,10 +801,12 @@ async fn create_admin_order(
         idempotency_key: format!("admin:{}", order_id),
         ts: now,
         group_id: user_row.group_id.map(|g| g.to_string()),
-        min_leverage: None,
-        max_leverage: None,
-        leverage_tiers: None,
-        account_type,
+        min_leverage: Some(margin.user_min_resolved),
+        max_leverage: Some(margin.user_max_resolved),
+        leverage_tiers: margin.leverage_tiers.clone(),
+        account_type: account_type_cmd,
+        margin_from_cash: Some(alloc.from_cash),
+        margin_from_bonus: Some(alloc.from_bonus),
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd).map_err(|e| {
@@ -661,22 +824,26 @@ async fn create_admin_order(
         )
     })?;
 
-    // Sync balance to Redis so order-engine validation sees sufficient balance.
-    // For admin orders, use a minimum (100_000) when user has 0 or no balance so bulk position works for demo/new users.
-    let free_margin_raw = get_free_margin_from_db_fast(&pool, user_id).await;
-    let free_margin = match free_margin_raw {
-        None => rust_decimal::Decimal::from(100_000),
-        Some(v) if v <= rust_decimal::Decimal::ZERO => rust_decimal::Decimal::from(100_000),
-        Some(v) => v,
-    };
+    // Sync balance to Redis so order-engine validation matches post-lock summary.
     if let Ok(mut conn_bal) = admin_state.redis.get().await {
+        let summary_key = Keys::account_summary(user_id);
+        let equity_val: Option<String> = conn_bal.hget(&summary_key, "equity").await.ok().flatten();
+        let margin_used_val: Option<String> = conn_bal.hget(&summary_key, "margin_used").await.ok().flatten();
+        let free_margin_synced: String = conn_bal
+            .hget(&summary_key, "free_margin")
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| fm.to_string());
+        let equity = equity_val.as_deref().unwrap_or(&free_margin_synced);
+        let margin_used = margin_used_val.as_deref().unwrap_or("0");
         let balance_json = serde_json::json!({
             "currency": "USD",
-            "available": free_margin.to_string(),
+            "available": free_margin_synced,
             "locked": "0",
-            "equity": free_margin.to_string(),
-            "margin_used": "0",
-            "free_margin": free_margin.to_string(),
+            "equity": equity,
+            "margin_used": margin_used,
+            "free_margin": free_margin_synced,
             "updated_at": now.timestamp_millis()
         });
         let balance_key = format!("user:{}:balance", user_id);
@@ -723,7 +890,7 @@ async fn create_admin_order(
         "order": {
             "id": order_id.to_string(),
             "userId": user_id.to_string(),
-            "userName": format!("{} {}", user_row.first_name.clone().unwrap_or_default(), user_row.last_name.clone().unwrap_or_default()),
+            "userName": format!("{} {}", user_row.first_name, user_row.last_name),
             "userEmail": user_row.email.clone(),
             "groupId": user_row.group_id.map(|g| g.to_string()).unwrap_or_default(),
             "groupName": group_name,
@@ -779,8 +946,8 @@ async fn create_admin_order(
         user_id: user_id.to_string(),
         user_name: format!(
             "{} {}",
-            user_row.first_name.clone().unwrap_or_default(),
-            user_row.last_name.clone().unwrap_or_default()
+            user_row.first_name,
+            user_row.last_name
         ),
         user_email: Some(user_row.email.clone()),
         group_id: user_row.group_id.map(|g| g.to_string()).unwrap_or_default(),

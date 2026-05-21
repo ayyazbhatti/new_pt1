@@ -20,6 +20,7 @@ import { useWalletStore } from '@/shared/store/walletStore'
 import { fetchDepositHistory, fetchBalance, type DepositHistoryItem } from '@/features/wallet/api'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { cn } from '@/shared/utils'
+import { useCurrencyCode, useFormatConverted, useFormatFromUsd } from '@/shared/currency'
 
 function formatDate(iso: string): string {
   try {
@@ -78,6 +79,9 @@ export function UserDepositPage() {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const { balance, currency, setWalletData, setLoading } = useWalletStore()
+  const formatMoney = useFormatFromUsd()
+  const formatConverted = useFormatConverted()
+  const displayCurrencyCode = useCurrencyCode()
   const { submitDeposit, isSubmitting } = useDepositFlow()
   const [amount, setAmount] = useState('')
   const [note, setNote] = useState('')
@@ -121,9 +125,9 @@ export function UserDepositPage() {
       if (isNaN(numAmount)) {
         newErrors.amount = 'Amount must be a number'
       } else if (numAmount < currentMin) {
-        newErrors.amount = `Minimum amount is $${currentMin.toLocaleString()}`
+        newErrors.amount = `Minimum amount is ${fmtUsdLimit(currentMin)} USD`
       } else if (numAmount > currentMax) {
-        newErrors.amount = `Maximum amount is $${currentMax.toLocaleString()}`
+        newErrors.amount = `Maximum amount is ${fmtUsdLimit(currentMax)} USD`
       } else {
         const decimals = amount.split('.')[1]
         if (decimals && decimals.length > 2) {
@@ -158,6 +162,19 @@ export function UserDepositPage() {
 
   const canSubmit = selectedMethod === 'request'
   const isValid = amount && !errors.amount && !errors.note && parseFloat(amount) >= currentMin && parseFloat(amount) <= currentMax
+
+  const fmtUsdLimit = (v: number) =>
+    `$${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+
+  const depositAmountNum = parseFloat(amount)
+  const depositConvertedPreview =
+    displayCurrencyCode !== 'USD' &&
+    amount.trim() !== '' &&
+    !Number.isNaN(depositAmountNum) ? (
+      <p className="text-xs text-text-muted">
+        ≈ {formatMoney(depositAmountNum)} in your currency.
+      </p>
+    ) : null
 
   return (
     <ContentShell>
@@ -211,7 +228,7 @@ export function UserDepositPage() {
                         <p className="mt-0.5 text-xs text-text-muted">{method.subtext}</p>
                       )}
                       <p className="mt-1 text-xs text-text-muted">
-                        Min: ${method.min.toLocaleString()} • Max: ${method.max.toLocaleString()}
+                        Min: {fmtUsdLimit(method.min)} • Max: {fmtUsdLimit(method.max)} USD
                       </p>
                     </div>
                   </div>
@@ -228,7 +245,10 @@ export function UserDepositPage() {
             <div className="mb-4 flex items-center justify-between rounded-lg border border-border bg-surface-2/40 px-3 py-2">
               <span className="text-sm text-text-muted">Balance</span>
               <span className="font-semibold text-text">
-                ${(balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency ?? 'USD'}
+                {formatMoney(balance ?? 0)}
+                <span className="ml-1 text-xs font-normal text-text-muted">
+                  ({currency ?? 'USD'} account)
+                </span>
               </span>
             </div>
 
@@ -252,8 +272,9 @@ export function UserDepositPage() {
                 </div>
                 {errors.amount && <p className="text-xs text-danger">{errors.amount}</p>}
                 <p className="text-xs text-text-muted">
-                  Min: ${currentMin.toLocaleString()} • Max: ${currentMax.toLocaleString()}
+                  Min: {fmtUsdLimit(currentMin)} • Max: {fmtUsdLimit(currentMax)} USD
                 </p>
+                {depositConvertedPreview}
               </div>
 
               <div className="space-y-1.5">
@@ -328,7 +349,7 @@ export function UserDepositPage() {
                 <li key={item.id} className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-surface-2/20">
                   <div className="flex items-center gap-4 min-w-0">
                     <span className="font-semibold text-text">
-                      ${item.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatConverted(item.amount, item.currency)}
                     </span>
                     <span className="text-sm text-text-muted">{formatDate(item.createdAt)}</span>
                   </div>

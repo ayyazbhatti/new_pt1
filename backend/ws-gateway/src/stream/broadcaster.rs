@@ -17,20 +17,30 @@ fn try_dispatch_conn(
     conn_id: Uuid,
     msg: ServerMessage,
 ) {
-    let Some(tx) = connection_txs.get(&conn_id) else {
+    let Some(tx_ref) = connection_txs.get(&conn_id) else {
         return;
     };
-    match tx.try_send(msg) {
+    let sender = tx_ref.value().clone();
+    drop(tx_ref);
+    match sender.try_send(msg) {
         Ok(()) => {}
         Err(TrySendError::Full(m)) => {
             if matches!(m, ServerMessage::Tick { .. }) {
                 // expected under high tick rate
+            } else if matches!(
+                &m,
+                ServerMessage::OrderUpdate { .. } | ServerMessage::PositionUpdate { .. }
+            ) {
+                // Avoid dropping fills / position opens when the queue is full of ticks.
+                let sender2 = sender.clone();
+                tokio::spawn(async move {
+                    let _ = sender2.send(m).await;
+                });
             } else {
                 debug!("conn {} outbound queue full; dropping non-tick", conn_id);
             }
         }
         Err(TrySendError::Closed(_)) => {
-            drop(tx);
             connection_txs.remove(&conn_id);
             registry.unregister(conn_id);
         }

@@ -27,9 +27,45 @@ use stream::redis_subscriber::RedisSubscriber;
 use stream::broadcaster::Broadcaster;
 use health::health::create_health_router;
 
+/// Apply `JWT_SECRET` / `JWT_ISSUER` from a `.env` file **even if** those vars are already set in the
+/// process environment (IDE / shell). `dotenv::from_path` skips keys that already exist, which is a
+/// common cause of WebSocket `InvalidSignature` when ws-gateway inherits a stale `JWT_SECRET`.
+fn force_jwt_from_env_file(path: &std::path::Path) {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for raw in contents.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim();
+        let Some((key_raw, val_raw)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key_raw.trim();
+        if key != "JWT_SECRET" && key != "JWT_ISSUER" {
+            continue;
+        }
+        let mut val = val_raw.trim();
+        if (val.starts_with('"') && val.ends_with('"')) || (val.starts_with('\'') && val.ends_with('\'')) {
+            val = &val[1..val.len() - 1];
+        }
+        if let Some(i) = val.find(" #") {
+            val = val[..i].trim_end();
+        }
+        std::env::set_var(key, val);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load environment variables
+    // Align JWT with auth-service: read `backend/auth-service/.env` and force-set JWT_* so they
+    // override any inherited environment (RustRover / launch.json / shell exports).
+    let auth_env = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../auth-service/.env");
+    if auth_env.is_file() {
+        force_jwt_from_env_file(&auth_env);
+    }
     dotenv::dotenv().ok();
 
     // Initialize tracing
@@ -42,7 +78,7 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let config = Config::from_env()?;
-    info!("Configuration loaded");
+    info!("Configuration loaded (JWT_ISSUER={}, JWT_SECRET_len={})", config.auth.jwt_issuer, config.auth.jwt_secret.len());
 
     // Initialize components
     let registry = Arc::new(ConnectionRegistry::new());

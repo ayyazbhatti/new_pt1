@@ -37,6 +37,12 @@ export interface AccountSummaryResponse {
   stopOutLevelThreshold?: number | null
   realizedPnl: number
   unrealizedPnl: number
+  /** Non-withdrawable bonus pool (counts toward equity / free margin). */
+  bonus: number
+  /** Lifetime swap paid (USD), from settlement transactions. */
+  totalSwapPaidUsd?: number
+  /** Lifetime trading fees paid (USD), from fee debits. */
+  totalFeesPaidUsd?: number
   updatedAt: string
 }
 

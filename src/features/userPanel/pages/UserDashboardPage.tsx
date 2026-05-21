@@ -2,8 +2,10 @@ import { Link } from 'react-router-dom'
 import { ContentShell, PageHeader } from '@/shared/layout'
 import { Card } from '@/shared/ui/card'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import {
   Wallet,
+  Gift,
   TrendingUp,
   PieChart,
   ArrowDownToLine,
@@ -13,6 +15,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import { useFormatFromUsd } from '@/shared/currency'
 
 function StatCard({
   title,
@@ -72,6 +75,13 @@ function QuickActionCard({
 
 export function UserDashboardPage() {
   const user = useAuthStore((state) => state.user)
+  const { accountSummary, isLoading: summaryLoading } = useAccountSummary()
+  const formatMoney = useFormatFromUsd()
+
+  const fmtBalance = (n: number | null | undefined) => {
+    if (n == null || Number.isNaN(n)) return '—'
+    return formatMoney(n)
+  }
 
   return (
     <ContentShell>
@@ -90,28 +100,34 @@ export function UserDashboardPage() {
       {/* Balance overview */}
       <section className="mb-6 sm:mb-8">
         <h2 className="mb-3 text-base font-semibold text-text sm:mb-4 sm:text-lg">Account overview</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-2 xl:grid-cols-4">
           <StatCard
-            title="Balance"
-            value="—"
-            subtext="Available to trade"
+            title="Cash balance"
+            value={summaryLoading && !accountSummary ? '…' : fmtBalance(accountSummary?.balance)}
+            subtext="Withdrawable cash (available to trade)"
             icon={Wallet}
           />
           <StatCard
+            title="Bonus"
+            value={summaryLoading && !accountSummary ? '…' : fmtBalance(accountSummary?.bonus)}
+            subtext="Bonus funds are used for trading. Profits from bonus trades become withdrawable cash."
+            icon={Gift}
+          />
+          <StatCard
             title="Equity"
-            value="—"
-            subtext="Balance + P/L"
+            value={summaryLoading && !accountSummary ? '…' : fmtBalance(accountSummary?.equity)}
+            subtext="Cash + bonus + unrealized P/L"
             icon={TrendingUp}
           />
           <StatCard
             title="Margin used"
-            value="—"
+            value={summaryLoading && !accountSummary ? '…' : fmtBalance(accountSummary?.marginUsed)}
             subtext="In open positions"
             icon={PieChart}
           />
         </div>
         <p className="mt-2 text-xs text-text-muted">
-          Values will load when connected to the backend.
+          {accountSummary ? `Updated ${accountSummary.updatedAt || 'recently'}.` : 'Sign in and connect to load live balances.'}
         </p>
       </section>
 

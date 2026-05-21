@@ -207,6 +207,17 @@ impl PositionHandler {
                     .and_then(|v| v.as_str())
                     .and_then(|s| Decimal::from_str_exact(s).ok())
                     .unwrap_or(Decimal::ZERO);
+
+                let margin_from_cash: Decimal = result
+                    .get("margin_from_cash")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Decimal::from_str_exact(s).ok())
+                    .unwrap_or(Decimal::ZERO);
+                let margin_from_bonus: Decimal = result
+                    .get("margin_from_bonus")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Decimal::from_str_exact(s).ok())
+                    .unwrap_or(Decimal::ZERO);
                 
                 // Publish position closed event
                 let pos_side = if side == "LONG" {
@@ -226,6 +237,8 @@ impl PositionHandler {
                     correlation_id: correlation_id.clone(),
                     ts: now(),
                     trigger_reason: None, // Manual close, not SL/TP trigger
+                    margin_from_cash: Some(margin_from_cash),
+                    margin_from_bonus: Some(margin_from_bonus),
                 };
                 
                 // Publish to NATS
@@ -585,6 +598,16 @@ impl PositionHandler {
                         .and_then(|v| v.as_str())
                         .and_then(|s| Decimal::from_str_exact(s).ok())
                         .unwrap_or(Decimal::ZERO);
+                    let margin_from_cash: Decimal = result
+                        .get("margin_from_cash")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                        .unwrap_or(Decimal::ZERO);
+                    let margin_from_bonus: Decimal = result
+                        .get("margin_from_bonus")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Decimal::from_str_exact(s).ok())
+                        .unwrap_or(Decimal::ZERO);
                     let pos_side = if side.eq_ignore_ascii_case("LONG") {
                         contracts::enums::PositionSide::Long
                     } else {
@@ -616,6 +639,8 @@ impl PositionHandler {
                         correlation_id: correlation_id.clone(),
                         ts: now(),
                         trigger_reason: Some(reason.to_string()),
+                        margin_from_cash: Some(margin_from_cash),
+                        margin_from_bonus: Some(margin_from_bonus),
                     };
                     if self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &event).await.is_err() {
                         warn!("Close all: failed to publish position closed for {}", position_id);

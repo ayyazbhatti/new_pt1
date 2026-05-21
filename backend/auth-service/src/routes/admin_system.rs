@@ -46,7 +46,7 @@ async fn get_system_stats(
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
-                "error": { "code": "STATS_UNAVAILABLE", "message": "System stats not configured (STATS_FILE not set)" }
+                "error": { "code": "STATS_UNAVAILABLE", "message": "System stats not configured (SYSTEM_STATS_FILE empty)" }
             })),
         ));
     }

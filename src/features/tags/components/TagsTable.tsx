@@ -3,7 +3,7 @@ import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
 import { Button } from '@/shared/ui/button'
 import type { Tag } from '../types/tag'
-import { formatDateTime } from '@/shared/utils/time'
+import { useFormatDateTime } from '@/shared/datetime'
 import { Pencil, Trash2 } from 'lucide-react'
 import { useCanAccess } from '@/shared/utils/permissions'
 
@@ -16,6 +16,7 @@ interface TagsTableProps {
 }
 
 export function TagsTable({ tags, onEdit, onDelete, hasActiveFilters }: TagsTableProps) {
+  const formatDateTime = useFormatDateTime()
   const canEdit = useCanAccess('tags:edit')
   const canDelete = useCanAccess('tags:delete')
 
@@ -139,7 +140,7 @@ export function TagsTable({ tags, onEdit, onDelete, hasActiveFilters }: TagsTabl
         )
       },
     },
-  ], [canEdit, canDelete, onEdit, onDelete])
+  ], [canEdit, canDelete, onEdit, onDelete, formatDateTime])
 
   if (tags.length === 0) {
     return (

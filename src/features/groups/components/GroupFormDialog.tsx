@@ -1,6 +1,8 @@
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef } from 'react'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
@@ -9,6 +11,10 @@ import { UserGroup, CreateGroupPayload, UpdateGroupPayload } from '../types/grou
 import { useCreateGroup, useUpdateGroup } from '../hooks/useGroups'
 import { Spinner } from '@/shared/ui/loading'
 import { Label } from '@/shared/ui/label'
+import { TimezoneSelect } from '@/shared/components/TimezoneSelect'
+import { CurrencySelect } from '@/shared/components/CurrencySelect'
+import { getGeneralSettings } from '@/features/settings/api/generalSettings.api'
+import { getGroupOpenPositionsCount } from '../api/groups.api'
 
 const groupSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(40, 'Name must be at most 40 characters'),
@@ -18,6 +24,10 @@ const groupSchema = z.object({
   stop_out_level: z.number().min(0).max(1000).optional().nullable(),
   signup_slug: z.string().max(20).optional().nullable(),
   hide_leverage_in_terminal: z.boolean().optional(),
+  timezone: z.string().optional().nullable(),
+  display_currency: z.string().nullable().optional(),
+  swap_enabled: z.boolean().optional(),
+  fees_enabled: z.boolean().optional(),
 })
 
 type GroupFormData = z.infer<typeof groupSchema>
@@ -27,11 +37,24 @@ interface GroupFormDialogProps {
   initial?: UserGroup
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** After successful create/update; use to patch parent table (Admin Users pattern). */
+  onSaved?: (group: UserGroup) => void
 }
 
-export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupFormDialogProps) {
+export function GroupFormDialog({ mode, initial, open, onOpenChange, onSaved }: GroupFormDialogProps) {
   const createGroup = useCreateGroup()
   const updateGroup = useUpdateGroup()
+
+  const { data: generalSettings } = useQuery({
+    queryKey: ['admin', 'settings', 'general'],
+    queryFn: getGeneralSettings,
+    enabled: open,
+    staleTime: 60_000,
+  })
+  const platformDefaultTimezone = generalSettings?.timezone ?? 'UTC'
+  const platformDefaultCurrency = generalSettings?.currency ?? 'USD'
+
+  const baselineSwapEnabledRef = useRef(false)
 
   const {
     register,
@@ -42,26 +65,62 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
     reset,
   } = useForm<GroupFormData>({
     resolver: zodResolver(groupSchema),
-    defaultValues: initial
-      ? {
-          name: initial.name,
-          description: initial.description || '',
-          status: initial.status,
-          margin_call_level: initial.marginCallLevel ?? undefined,
-          stop_out_level: initial.stopOutLevel ?? undefined,
-          signup_slug: initial.signupSlug ?? '',
-          hide_leverage_in_terminal: initial.hideLeverageInTerminal ?? false,
-        }
-      : {
-          name: '',
-          description: '',
-          status: 'active',
-          margin_call_level: undefined,
-          stop_out_level: undefined,
-          signup_slug: '',
-          hide_leverage_in_terminal: false,
-        },
+    defaultValues: {
+      name: '',
+      description: '',
+      status: 'active',
+      margin_call_level: undefined,
+      stop_out_level: undefined,
+      signup_slug: '',
+      hide_leverage_in_terminal: false,
+      timezone: '',
+      display_currency: '',
+      swap_enabled: false,
+      fees_enabled: false,
+    },
   })
+
+  const { data: openPositionsCount = 0 } = useQuery({
+    queryKey: ['admin', 'groups', initial?.id, 'open-positions-count'],
+    queryFn: () => getGroupOpenPositionsCount(initial!.id),
+    enabled: open && mode === 'edit' && !!initial?.id,
+    staleTime: 30_000,
+  })
+
+  useEffect(() => {
+    if (!open) return
+    if (initial && (mode === 'edit' || mode === 'view')) {
+      baselineSwapEnabledRef.current = !!initial.swapEnabled
+      reset({
+        name: initial.name,
+        description: initial.description || '',
+        status: initial.status,
+        margin_call_level: initial.marginCallLevel ?? undefined,
+        stop_out_level: initial.stopOutLevel ?? undefined,
+        signup_slug: initial.signupSlug ?? '',
+        hide_leverage_in_terminal: initial.hideLeverageInTerminal ?? false,
+        timezone: initial.timezone ?? '',
+        display_currency: initial.displayCurrency ?? '',
+        swap_enabled: initial.swapEnabled ?? false,
+        fees_enabled: initial.feesEnabled ?? false,
+      })
+    } else if (open && mode === 'create') {
+      baselineSwapEnabledRef.current = false
+      reset({
+        name: '',
+        description: '',
+        status: 'active',
+        margin_call_level: undefined,
+        stop_out_level: undefined,
+        signup_slug: '',
+        hide_leverage_in_terminal: false,
+        timezone: '',
+        display_currency: '',
+        swap_enabled: false,
+        fees_enabled: false,
+      })
+    }
+  }, [open, initial?.id, mode, initial, reset])
 
   const onSubmit = async (data: GroupFormData) => {
     if (mode === 'view') {
@@ -78,12 +137,18 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
         stop_out_level: data.stop_out_level ?? null,
         signup_slug: data.signup_slug?.trim() || null,
         hide_leverage_in_terminal: data.hide_leverage_in_terminal ?? null,
+        timezone: data.timezone?.trim() ? data.timezone.trim() : null,
+        display_currency: data.display_currency?.trim() ? data.display_currency.trim() : null,
+        swap_enabled: data.swap_enabled ?? false,
+        fees_enabled: data.fees_enabled ?? false,
       }
 
       if (mode === 'create') {
-        await createGroup.mutateAsync(payload as CreateGroupPayload)
+        const created = await createGroup.mutateAsync(payload as CreateGroupPayload)
+        onSaved?.(created)
       } else if (initial) {
-        await updateGroup.mutateAsync({ id: initial.id, payload })
+        const updated = await updateGroup.mutateAsync({ id: initial.id, payload })
+        onSaved?.(updated)
       }
 
       onOpenChange(false)
@@ -199,6 +264,89 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange }: GroupForm
           <Label htmlFor="hide_leverage_in_terminal" className="text-sm font-normal cursor-pointer">
             Hide leverage section in user trading terminal
           </Label>
+        </div>
+
+        <div className="rounded-lg border border-border p-3 space-y-3">
+          <div className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              id="swap_enabled"
+              checked={watch('swap_enabled') ?? false}
+              onChange={(e) => setValue('swap_enabled', e.target.checked)}
+              disabled={isLoading || isReadOnly}
+              className="h-4 w-4 mt-1 rounded border-border"
+            />
+            <div className="min-w-0 flex-1">
+              <Label htmlFor="swap_enabled" className="text-sm font-normal cursor-pointer">
+                Swap (overnight financing)
+              </Label>
+              <p className="text-xs text-text-muted mt-1">
+                Charges overnight financing on open positions at rollover time per configured swap rules.
+              </p>
+              {openPositionsCount > 0 &&
+                (watch('swap_enabled') ?? false) &&
+                !baselineSwapEnabledRef.current && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 font-medium">
+                    {openPositionsCount} open position(s) in this group will be charged at the next rollover after swap
+                    is enabled.
+                  </p>
+                )}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              id="fees_enabled"
+              checked={watch('fees_enabled') ?? false}
+              onChange={(e) => setValue('fees_enabled', e.target.checked)}
+              disabled={isLoading || isReadOnly}
+              className="h-4 w-4 mt-1 rounded border-border"
+            />
+            <div className="min-w-0 flex-1">
+              <Label htmlFor="fees_enabled" className="text-sm font-normal cursor-pointer">
+                Trading fees
+              </Label>
+              <p className="text-xs text-text-muted mt-1">
+                Charges a percentage fee on each new trade per configured fee rules (at order placement when Phase 2
+                is active).
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="group_timezone">Timezone</Label>
+          <TimezoneSelect
+            id="group_timezone"
+            variant="list"
+            value={watch('timezone') ?? ''}
+            onChange={(v) => setValue('timezone', v || null)}
+            placeholder="Use platform default"
+            allowClear
+            disabled={isLoading || isReadOnly}
+          />
+          <p className="text-xs text-text-muted">
+            Members of this group will use this timezone by default. Individual users can override this. Leave empty to
+            use the platform default ({platformDefaultTimezone}).
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="group_display_currency">Display currency</Label>
+          <CurrencySelect
+            id="group_display_currency"
+            variant="list"
+            value={watch('display_currency') ?? ''}
+            onChange={(v) => setValue('display_currency', v || null)}
+            placeholder="Use platform default"
+            allowClear
+            disabled={isLoading || isReadOnly}
+          />
+          <p className="text-xs text-text-muted">
+            Members of this group will see balances and prices converted to this currency unless their user-level
+            currency override is set. Leave empty to use the platform default ({platformDefaultCurrency}).
+          </p>
         </div>
         <p className="text-xs text-text-muted">
           When checked, users in this group will not see the Leverage collapse in the right panel of the trading terminal.

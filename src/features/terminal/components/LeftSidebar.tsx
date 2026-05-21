@@ -15,6 +15,7 @@ import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
 import { fetchBalance } from '@/features/wallet/api'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAccountSummary, accountSummaryQueryKey } from '@/features/wallet/hooks/useAccountSummary'
+import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
 import { useThemeStore } from '@/shared/store/themeStore'
 import { updateTerminalPreferences } from '@/features/terminal/api/preferences.api'
 import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks'
@@ -80,6 +81,10 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const queryClient = useQueryClient()
   const { accountSummary, isLoading: accountSummaryLoading } = useAccountSummary()
+  const formatMoney = useFormatFromUsd()
+  const formatSigned = useFormatSignedFromUsd()
+  const formatMoneyRef = useRef(formatMoney)
+  formatMoneyRef.current = formatMoney
   const theme = useThemeStore((s) => s.theme)
   const toggleTheme = useThemeStore((s) => s.toggleTheme)
   const wsState = useWebSocketState()
@@ -226,13 +231,14 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
               free_margin: Number(pl.free_margin ?? pl.freeMargin ?? 0),
             })
 
-            if (!isInitialLoad && currentBalance !== newBalance) {
-              const isIncrease = newBalance > currentBalance
-              const msg = isIncrease
-                ? `Deposit approved – balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                : `Balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              toast.success(msg, { duration: 3000 })
-            }
+                if (!isInitialLoad && currentBalance !== newBalance) {
+                  const isIncrease = newBalance > currentBalance
+                  const balLabel = formatMoneyRef.current(newBalance)
+                  const msg = isIncrease
+                    ? `Deposit approved – balance updated: ${balLabel}`
+                    : `Balance updated: ${balLabel}`
+                  toast.success(msg, { duration: 3000 })
+                }
           } else {
             console.warn('⏭️ [LeftSidebar] Skipping wallet.balance.updated (different user)', { eventUserId, currentUserId })
           }
@@ -415,12 +421,11 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                 ) : (
                   <div className="flex items-baseline gap-2">
                     <span className="text-xl font-bold text-text tracking-tight">
-                      ${displayBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatMoney(displayBalance)}
                     </span>
                     {displayEquity !== displayBalance && (
                       <span className={`text-xs font-medium ${displayEquity >= displayBalance ? 'text-success' : 'text-danger'}`}>
-                        {displayEquity >= displayBalance ? '+' : ''}
-                        ${(displayEquity - displayBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatSigned(displayEquity - displayBalance)}
                       </span>
                     )}
                   </div>
@@ -432,7 +437,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                       <Skeleton className="h-4 w-20" />
                     ) : (
                       <span className="text-xs font-semibold text-text/80">
-                        ${displayEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatMoney(displayEquity)}
                       </span>
                     )}
                   </div>
@@ -442,7 +447,7 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                       <Skeleton className="h-4 w-16" />
                     ) : (
                       <span className="text-xs font-semibold text-text/80">
-                        ${displayMargin.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatMoney(displayMargin)}
                       </span>
                     )}
                   </div>

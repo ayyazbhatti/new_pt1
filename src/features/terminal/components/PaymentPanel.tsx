@@ -5,23 +5,10 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchDepositHistory, type DepositHistoryItem } from '@/features/wallet/api'
 import { cn } from '@/shared/utils'
 import { Spinner } from '@/shared/ui/loading'
+import { useFormatDateTime } from '@/shared/datetime'
+import { useFormatConverted } from '@/shared/currency'
 
 const PANEL_WIDTH_DESKTOP = 288
-
-function formatDate(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return iso
-  }
-}
 
 function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase()
@@ -50,6 +37,8 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function PaymentPanel() {
+  const formatDateTime = useFormatDateTime()
+  const formatConv = useFormatConverted()
   const { paymentPanelOpen, setPaymentPanelOpen } = useTerminalStore()
   const isMobile = !useMediaQuery('(min-width: 1024px)')
   const { data: deposits, isLoading, error, refetch, isError } = useQuery({
@@ -144,7 +133,7 @@ export function PaymentPanel() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold text-text">
-                          ${item.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {formatConv(item.amount, item.currency)}
                         </span>
                         <span className="text-xs text-text-muted">{item.currency}</span>
                       </div>
@@ -155,7 +144,7 @@ export function PaymentPanel() {
                     <StatusBadge status={item.status} />
                   </div>
                   <p className="text-[11px] text-text-muted/80 mt-2">
-                    {formatDate(item.createdAt)}
+                    {formatDateTime(item.createdAt)}
                   </p>
                 </li>
               ))}

@@ -33,6 +33,12 @@ interface TerminalStore {
   /** Mobile bottom nav tab (only used when viewport < 1024px). */
   mobileTab: 'quotes' | 'chart' | 'trade' | 'positions' | 'account' | 'history'
   setMobileTab: (tab: 'quotes' | 'chart' | 'trade' | 'positions' | 'account' | 'history') => void
+  /**
+   * Incremented when the user places an order or a fill is observed so BottomDock can
+   * reconcile open positions (event-driven; not polling).
+   */
+  openPositionsRefreshNonce: number
+  requestOpenPositionsRefresh: () => void
   setSymbols: (symbols: MockSymbol[]) => void
   setLoading: (loading: boolean) => void
   setSelectedSymbol: (symbol: MockSymbol) => void
@@ -288,6 +294,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       localStorage.setItem(STORAGE_KEY_MOBILE_TAB, tab)
     } catch {}
     set({ mobileTab: tab })
+  },
+  openPositionsRefreshNonce: 0,
+  requestOpenPositionsRefresh: () => {
+    set((s) => ({ openPositionsRefreshNonce: s.openPositionsRefreshNonce + 1 }))
   },
   getFilteredSymbols: () => {
     const { searchQuery, activeTab, watchlist, symbols } = get()

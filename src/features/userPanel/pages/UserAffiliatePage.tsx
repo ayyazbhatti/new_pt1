@@ -16,6 +16,7 @@ import { useMyCommissions } from '../hooks/useMyCommissions'
 import { toast } from '@/shared/components/common'
 import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
+import { useFormatConverted, useFormatFromUsd } from '@/shared/currency'
 
 type UserTab = 'overview' | 'referrals' | 'commissions'
 
@@ -151,6 +152,8 @@ export function UserAffiliatePage() {
 
   const { data: referrals = [], isLoading: referralsLoading } = useMyReferrals()
   const { data: commissions = [], isLoading: commissionsLoading } = useMyCommissions()
+  const formatConverted = useFormatConverted()
+  const formatMoney = useFormatFromUsd()
 
   const isEnrolled = Boolean(user?.referralCode)
   const refCode = user?.referralCode || (user?.id ? user.id.slice(0, 8) : '')
@@ -165,24 +168,26 @@ export function UserAffiliatePage() {
     () => referrals.filter((r) => (r as { active?: boolean }).active !== false).length,
     [referrals]
   )
-  const { totalCommission, paidCommission } = useMemo(() => {
+  const commissionTotals = useMemo(() => {
+    if (commissions.length === 0) return null
+    const sourceCurrency = commissions[0]!.currency
     const total = commissions.reduce((sum, c) => sum + c.amount, 0)
     const paid = commissions
       .filter((c) => c.status === 'completed' || c.paidAt != null)
       .reduce((sum, c) => sum + c.amount, 0)
-    return {
-      totalCommission: new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: commissions[0]?.currency ?? 'USD',
-        minimumFractionDigits: 2,
-      }).format(total),
-      paidCommission: new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: commissions[0]?.currency ?? 'USD',
-        minimumFractionDigits: 2,
-      }).format(paid),
-    }
+    return { total, paid, sourceCurrency }
   }, [commissions])
+
+  const totalCommission = commissionsLoading
+    ? '…'
+    : commissionTotals
+      ? formatConverted(commissionTotals.total, commissionTotals.sourceCurrency)
+      : formatMoney(0)
+  const paidCommission = commissionsLoading
+    ? '…'
+    : commissionTotals
+      ? formatConverted(commissionTotals.paid, commissionTotals.sourceCurrency)
+      : formatMoney(0)
 
   const handleCopy = () => {
     navigator.clipboard
@@ -500,7 +505,7 @@ export function UserAffiliatePage() {
                     <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-400">
                       {r.createdAt ? format(new Date(r.createdAt), 'PP') : '—'}
                     </td>
-                    <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-300">$0.00</td>
+                    <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-300">{formatMoney(0)}</td>
                   </tr>
                 ))}
                 {referrals.length === 0 && (
@@ -550,11 +555,7 @@ export function UserAffiliatePage() {
                   commissions.map((c) => (
                     <tr key={c.id} className="hover:bg-slate-700/50">
                       <td className="px-3 sm:px-4 md:px-6 py-3 font-mono text-white">
-                        {new Intl.NumberFormat('en-US', {
-                          style: 'currency',
-                          currency: c.currency,
-                          minimumFractionDigits: 2,
-                        }).format(c.amount)}
+                        {formatConverted(c.amount, c.currency)}
                       </td>
                       <td className="px-3 sm:px-4 md:px-6 py-3 text-slate-300">
                         {c.referredUserEmail ?? '—'}

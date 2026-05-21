@@ -10,7 +10,7 @@ import { cn } from '@/shared/utils'
 import type { Manager } from '../types/manager'
 import type { UpdateManagerPayload } from '../api/managers.api'
 import { setManagerTags } from '../api/managers.api'
-import { formatDateTime } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
 import { useModalStore } from '@/app/store'
 import { EditManagerModal } from '../modals/EditManagerModal'
 import { DeleteManagerModal } from '../modals/DeleteManagerModal'
@@ -40,6 +40,7 @@ export function ManagersTable({
   const openModal = useModalStore((state) => state.openModal)
   const canEditManagers = useCanAccess('managers:edit')
   const canDeleteManagers = useCanAccess('managers:delete')
+  const formatDateTime = useFormatDateTime()
   const [openTagsManagerId, setOpenTagsManagerId] = useState<string | null>(null)
   const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
   const [updatingTagsManagerId, setUpdatingTagsManagerId] = useState<string | null>(null)

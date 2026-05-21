@@ -9,6 +9,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::models::user::User;
+use crate::models::user_row_sql::USERS_ROW_SQL;
 use crate::redis_pool::RedisPool;
 use crate::services::open_positions_redis;
 
@@ -128,9 +129,9 @@ fn empty_section() -> serde_json::Value {
 }
 
 async fn fetch_profile(pool: &PgPool, user_id: Uuid) -> Result<serde_json::Value> {
-    let user = sqlx::query_as::<_, User>(
-        "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL",
-    )
+    let user = sqlx::query_as::<_, User>(&format!(
+        "SELECT {USERS_ROW_SQL} FROM users WHERE id = $1 AND deleted_at IS NULL",
+    ))
     .bind(user_id)
     .fetch_optional(pool)
     .await?

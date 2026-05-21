@@ -145,6 +145,8 @@ pub async fn place_order(
         max_leverage: None,
         leverage_tiers: None,
         account_type: Some(account_type),
+        margin_from_cash: None,
+        margin_from_bonus: None,
     };
 
     // Publish to NATS

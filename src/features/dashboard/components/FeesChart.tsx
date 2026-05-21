@@ -9,7 +9,7 @@ import {
   YAxis,
 } from 'recharts'
 import type { DailyFee } from '../api/dashboard.api'
-import { formatCurrency } from '@/features/adminFinance/utils/formatters'
+import type { FormatMoneyFn } from './RevenueChart'
 
 /** Matches `tailwind.config.js` theme.extend.colors.accent */
 const COLOR_ACCENT = '#3b82f6'
@@ -33,15 +33,16 @@ interface FeeTooltipProps {
   active?: boolean
   payload?: { value: number }[]
   label?: string
+  formatMoney: FormatMoneyFn
 }
 
-function FeeTooltip({ active, payload, label }: FeeTooltipProps) {
+function FeeTooltip({ active, payload, label, formatMoney }: FeeTooltipProps) {
   if (!active || !payload?.length || !label) return null
   const v = Number(payload[0]?.value ?? 0)
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-xs shadow-md">
       <p className="mb-1 font-medium text-text">{shortMonthDay(label)}</p>
-      <p className="text-text">Net fees: {formatCurrency(v, 'USD')}</p>
+      <p className="text-text">Net fees: {formatMoney(v)}</p>
     </div>
   )
 }
@@ -49,9 +50,10 @@ function FeeTooltip({ active, payload, label }: FeeTooltipProps) {
 export interface FeesChartProps {
   data: DailyFee[]
   loading?: boolean
+  formatMoney: FormatMoneyFn
 }
 
-export function FeesChart({ data, loading }: FeesChartProps) {
+export function FeesChart({ data, loading, formatMoney }: FeesChartProps) {
   const hasFees = data.some((d) => d.fees !== 0)
 
   if (loading) {
@@ -91,7 +93,7 @@ export function FeesChart({ data, loading }: FeesChartProps) {
             tickLine={false}
             width={56}
           />
-          <Tooltip content={<FeeTooltip />} />
+          <Tooltip content={<FeeTooltip formatMoney={formatMoney} />} />
           <Area
             type="monotone"
             dataKey="fees"

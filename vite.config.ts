@@ -120,8 +120,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ws-health/, '/health'),
       },
+      // Use http:// target + ws:true so Node's proxy can perform the upgrade (ws:// targets often fail).
       '/ws': {
-        target: 'ws://127.0.0.1:3003',
+        target: 'http://127.0.0.1:3003',
+        changeOrigin: true,
         ws: true,
       },
       // data-provider HTTP (chart MMDPS history, /prices) — matches production nginx `/dp/`

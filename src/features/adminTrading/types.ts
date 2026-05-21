@@ -54,6 +54,10 @@ export interface AdminPosition {
   liquidationPrice: number
   pnl: number
   pnlPercent: number
+  /** Accrued swap (USD) on this position; positive = cost to user. */
+  accumulatedSwapUsd?: number
+  /** Placement fees attributed to this position (USD). */
+  accumulatedFeesUsd?: number
   status: PositionStatus
   stopLoss?: number
   takeProfit?: number

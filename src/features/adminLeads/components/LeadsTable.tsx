@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/shared/ui/table'
@@ -12,7 +13,7 @@ import { ConvertLeadModal } from '../modals/ConvertLeadModal'
 import { AssignOwnerModal } from '../modals/AssignOwnerModal'
 import { DeleteLeadModal } from '../modals/DeleteLeadModal'
 import { Eye, Pencil, UserPlus, Trash2 } from 'lucide-react'
-import { formatRelative, formatDateTime } from '../utils/formatDate'
+import { useFormatDateTime, useFormatRelative } from '@/shared/datetime'
 import type { Lead } from '../types/leads'
 
 interface LeadsTableProps {
@@ -30,6 +31,8 @@ interface LeadsTableProps {
 
 export function LeadsTable({ leads, pagination, onMutationSuccess }: LeadsTableProps) {
   const navigate = useNavigate()
+  const formatDateTime = useFormatDateTime()
+  const formatRelative = useFormatRelative()
   const openModal = useModalStore((state) => state.openModal)
   const onSuccess = onMutationSuccess ?? (() => {})
 
@@ -74,7 +77,7 @@ export function LeadsTable({ leads, pagination, onMutationSuccess }: LeadsTableP
     )
   }
 
-  const columns: ColumnDef<Lead>[] = [
+  const columns: ColumnDef<Lead>[] = useMemo(() => [
     {
       accessorKey: 'id',
       header: 'Lead ID',
@@ -277,7 +280,17 @@ export function LeadsTable({ leads, pagination, onMutationSuccess }: LeadsTableP
         )
       },
     },
-  ]
+  ], [
+    navigate,
+    openModal,
+    onSuccess,
+    canEdit,
+    canConvert,
+    canAssign,
+    canDelete,
+    formatDateTime,
+    formatRelative,
+  ])
 
   return (
     <DataTable

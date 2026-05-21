@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from '@/shared/ui/select'
 import { useModalStore } from '@/app/store'
-import { formatDateTime } from '../utils/format'
+import { useFormatDateTime } from '@/shared/datetime'
 
 const REMINDER_TYPES: ReminderType[] = ['24h', '2h', '1h', '15m', 'custom']
 
@@ -21,6 +21,7 @@ interface SendReminderModalProps {
 
 export function SendReminderModal({ appointment, onSubmit, submitting = false }: SendReminderModalProps) {
   const closeModal = useModalStore((s) => s.closeModal)
+  const formatDateTime = useFormatDateTime()
   const [reminder_type, setReminderType] = useState<ReminderType>('24h')
   const [subject, setSubject] = useState('')
   const [message, setMessage] = useState('')
@@ -30,7 +31,7 @@ export function SendReminderModal({ appointment, onSubmit, submitting = false }:
     setMessage(
       `Hi${appointment.user_name ? ` ${appointment.user_name}` : ''},\n\nThis is a reminder for your appointment "${appointment.title}" scheduled for ${formatDateTime(appointment.scheduled_at)} (${appointment.duration_minutes} min).\n\n${appointment.meeting_link ? `Join here: ${appointment.meeting_link}\n\n` : ''}Best regards`
     )
-  }, [appointment])
+  }, [appointment, formatDateTime])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

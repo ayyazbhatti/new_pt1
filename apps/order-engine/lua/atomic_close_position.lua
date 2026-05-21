@@ -85,6 +85,23 @@ else
     pnl = (entry_price - tonumber(exit_price)) * actual_close_size
 end
 
+-- Margin split for this close (proportional on partial)
+local mfc_full = 0
+local mfb_full = 0
+if is_new_format then
+    mfc_full = tonumber(redis.call('HGET', pos_key_new, 'margin_from_cash') or "0") or 0
+    mfb_full = tonumber(redis.call('HGET', pos_key_new, 'margin_from_bonus') or "0") or 0
+else
+    mfc_full = tonumber(position.margin_from_cash or "0") or 0
+    mfb_full = tonumber(position.margin_from_bonus or "0") or 0
+end
+local ratio = 0
+if current_size > 0 then
+    ratio = actual_close_size / current_size
+end
+local margin_close_cash = mfc_full * ratio
+local margin_close_bonus = mfb_full * ratio
+
 -- Update position
 if actual_close_size >= current_size then
     -- Full close
@@ -135,6 +152,8 @@ else
         redis.call('HSET', pos_key_new, 'updated_at', timestamp_ms)
         local new_realized_pnl = tonumber(position.realized_pnl or "0") + pnl
         redis.call('HSET', pos_key_new, 'realized_pnl', tostring(new_realized_pnl))
+        redis.call('HSET', pos_key_new, 'margin_from_cash', tostring(mfc_full - margin_close_cash))
+        redis.call('HSET', pos_key_new, 'margin_from_bonus', tostring(mfb_full - margin_close_bonus))
         -- Indexes remain (position still open)
     else
     position.size = tostring(current_size - actual_close_size)
@@ -155,34 +174,16 @@ end
 --     redis.call('SREM', old_positions_key, position_id)
 -- end
 
--- Update balance
-local user_id = position.user_id
-local balance_key = 'user:' .. user_id .. ':balance'
-local balance_json = redis.call('GET', balance_key)
-local balance = balance_json and cjson.decode(balance_json) or {
-    currency = "USD",
-    available = "10000.0",
-    locked = "0",
-    equity = "10000.0",
-    margin_used = "0",
-    free_margin = "10000.0"
-}
-
-balance.available = tostring(tonumber(balance.available) + pnl)
-balance.equity = tostring(tonumber(balance.equity) + pnl)
-balance.free_margin = tostring(tonumber(balance.equity) - tonumber(balance.margin_used))
-balance.updated_at = timestamp_ms
-
-redis.call('SET', balance_key, cjson.encode(balance))
-
--- Return result
+-- Return result (wallet PnL is applied in auth-service from DB; do not mutate Redis balance here)
 local result = {
     success = true,
     position_id = position_id,
     closed_size = tostring(actual_close_size),
     exit_price = exit_price,
     realized_pnl = tostring(pnl),
-    is_full_close = (actual_close_size >= current_size)
+    is_full_close = (actual_close_size >= current_size),
+    margin_from_cash = tostring(margin_close_cash),
+    margin_from_bonus = tostring(margin_close_bonus)
 }
 
 return cjson.encode(result)

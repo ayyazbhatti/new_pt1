@@ -6,19 +6,27 @@ import { Transaction } from '../types/finance'
 import { useModalStore } from '@/app/store'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { ApproveRejectModal } from './ApproveRejectModal'
-import { formatDateTime, formatCurrency } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
+import { useFormatConverted } from '@/shared/currency'
 import { CheckCircle, X } from 'lucide-react'
+import { feeSwapSubtitle, type FeeSwapMethodDetails } from '@/shared/finance/transactionPresentation'
 
 interface TransactionDetailsModalProps {
   transaction: Transaction
 }
 
 export function TransactionDetailsModal({ transaction }: TransactionDetailsModalProps) {
+  const formatDateTime = useFormatDateTime()
+  const formatConv = useFormatConverted()
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
   const canApprove = useCanAccess('deposits:approve')
   const canReject = useCanAccess('deposits:reject')
   const [adminNotes, setAdminNotes] = useState(transaction.adminNotes || '')
+  const t = transaction.type.toLowerCase()
+  const feeSwapMeta = (transaction.methodDetails ?? {}) as FeeSwapMethodDetails
+  const feeSwapSub =
+    t === 'fee' || t === 'swap' ? feeSwapSubtitle(t, transaction.amount, feeSwapMeta) : ''
 
   const getStatusBadge = (status: string) => {
     const variants: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
@@ -93,13 +101,13 @@ export function TransactionDetailsModal({ transaction }: TransactionDetailsModal
           <div>
             <div className="text-xs text-text-muted mb-1">Amount</div>
             <div className="font-mono font-semibold text-text">
-              {formatCurrency(transaction.amount, transaction.currency)}
+              {formatConv(transaction.amount, transaction.currency)}
             </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Fee</div>
             <div className="font-mono text-text">
-              {formatCurrency(transaction.fee, transaction.currency)}
+              {formatConv(transaction.fee, transaction.currency)}
             </div>
           </div>
           <div>
@@ -110,7 +118,7 @@ export function TransactionDetailsModal({ transaction }: TransactionDetailsModal
               }`}
             >
               {transaction.netAmount >= 0 ? '+' : ''}
-              {formatCurrency(transaction.netAmount, transaction.currency)}
+              {formatConv(transaction.netAmount, transaction.currency)}
             </div>
           </div>
           <div>
@@ -119,6 +127,16 @@ export function TransactionDetailsModal({ transaction }: TransactionDetailsModal
           </div>
         </div>
       </Card>
+
+      {(t === 'fee' || t === 'swap') && (
+        <Card className="p-4 bg-surface-2">
+          <div className="text-sm font-semibold text-text mb-2">Trading cost</div>
+          {feeSwapSub ? <p className="text-sm text-text-muted mb-3">{feeSwapSub}</p> : null}
+          <div className="text-xs font-mono text-text-muted whitespace-pre-wrap break-all bg-surface-1 rounded p-2 max-h-40 overflow-auto">
+            {JSON.stringify(transaction.methodDetails ?? {}, null, 2)}
+          </div>
+        </Card>
+      )}
 
       {transaction.methodDetails && (
         <Card className="p-4 bg-surface-2">

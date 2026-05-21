@@ -19,11 +19,11 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 use dashmap::DashMap;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 /// (symbol, group_id) -> (bid, ask). Used for tick-driven account summary so unrealized PnL uses live price.
 pub type PriceOverrides = HashMap<(String, String), (Decimal, Decimal)>;
@@ -34,6 +34,7 @@ use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
 use crate::services::affiliate_commission_service;
+use crate::services::fx_rates::{self, FxRatesSnapshot};
 use crate::services::user_events_service::{extract_client_meta, record_user_event_fail_open};
 use crate::services::ledger_service;
 use crate::services::email_config_service::{send_email_html_sync, EmailConfigService};
@@ -50,6 +51,143 @@ static STOP_OUT_NATS: OnceLock<Arc<async_nats::Client>> = OnceLock::new();
 /// Register NATS client for stop-out. Call from main after connecting to NATS.
 pub fn register_stop_out_nats(client: Arc<async_nats::Client>) {
     let _ = STOP_OUT_NATS.set(client);
+}
+
+/// Redis pool for FX + position aggregates when callers (e.g. `place_order`) only have `PgPool`.
+static POSITION_AGGREGATION_REDIS: OnceLock<Arc<crate::redis_pool::RedisPool>> = OnceLock::new();
+
+fn register_position_aggregation_redis(deposits_state: &DepositsState) {
+    let _ = POSITION_AGGREGATION_REDIS.get_or_init(|| Arc::clone(&deposits_state.redis));
+}
+
+#[derive(Debug)]
+struct FxRatesUnavailable;
+
+impl std::fmt::Display for FxRatesUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "USD FX rate snapshot is not available; refusing account summary until fx:rates:usd is populated"
+        )
+    }
+}
+
+impl std::error::Error for FxRatesUnavailable {}
+
+fn account_summary_http_status(e: &anyhow::Error) -> StatusCode {
+    if e.downcast_ref::<FxRatesUnavailable>().is_some() {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+struct SymbolQuoteByCodeCache {
+    map: HashMap<String, String>,
+    loaded_at: Instant,
+}
+
+static SYMBOL_QUOTE_BY_CODE: OnceLock<RwLock<SymbolQuoteByCodeCache>> = OnceLock::new();
+
+fn symbol_quote_by_code_cell() -> &'static RwLock<SymbolQuoteByCodeCache> {
+    SYMBOL_QUOTE_BY_CODE.get_or_init(|| {
+        RwLock::new(SymbolQuoteByCodeCache {
+            map: HashMap::new(),
+            loaded_at: Instant::now() - Duration::from_secs(3600),
+        })
+    })
+}
+
+/// Uppercased symbol `code` → uppercased `quote_currency`. Refreshed from DB every 5 minutes.
+async fn get_symbol_code_to_quote_currency_map(
+    pool: &PgPool,
+) -> Result<Arc<HashMap<String, String>>, sqlx::Error> {
+    const TTL: Duration = Duration::from_secs(300);
+    let cell = symbol_quote_by_code_cell();
+    {
+        let g = cell.read().await;
+        if !g.map.is_empty() && g.loaded_at.elapsed() < TTL {
+            return Ok(Arc::new(g.map.clone()));
+        }
+    }
+    let mut w = cell.write().await;
+    if !w.map.is_empty() && w.loaded_at.elapsed() < TTL {
+        return Ok(Arc::new(w.map.clone()));
+    }
+    #[derive(sqlx::FromRow)]
+    struct SymRow {
+        code: String,
+        quote_currency: String,
+    }
+    let rows = sqlx::query_as::<_, SymRow>("SELECT code, quote_currency FROM symbols")
+        .fetch_all(pool)
+        .await?;
+    let mut m = HashMap::with_capacity(rows.len());
+    for r in rows {
+        let code = r.code.trim().to_ascii_uppercase();
+        let qc = r.quote_currency.trim().to_ascii_uppercase();
+        m.insert(code, qc);
+    }
+    w.map = m.clone();
+    w.loaded_at = Instant::now();
+    Ok(Arc::new(m))
+}
+
+fn quote_currency_supported(snapshot: &FxRatesSnapshot, quote: &str) -> bool {
+    fx_rates::convert_with_rates(Decimal::ONE, quote, "USD", &snapshot.rates).is_ok()
+}
+
+/// Sum of `accumulated_swap_usd` on open positions (already USD); subtract from unrealized for net display.
+async fn sum_open_accumulated_swap_usd(pool: &PgPool, user_id: Uuid) -> Result<Decimal, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"SELECT COALESCE(SUM(accumulated_swap_usd), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}
+
+async fn sum_closed_realized_pnl_usd(
+    pool: &PgPool,
+    snapshot: &FxRatesSnapshot,
+    user_id: Uuid,
+) -> Result<Decimal, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct ClosedPnlRow {
+        pnl: Decimal,
+        bonus_loss_absorbed: Option<Decimal>,
+        quote_currency: String,
+    }
+    let rows = sqlx::query_as::<_, ClosedPnlRow>(
+        r#"
+        SELECT p.pnl, p.bonus_loss_absorbed, s.quote_currency
+        FROM positions p
+        INNER JOIN symbols s ON s.id = p.symbol_id
+        WHERE p.user_id = $1 AND p.status = 'closed'::position_status
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut sum = Decimal::ZERO;
+    for row in rows {
+        let raw = row.pnl + row.bonus_loss_absorbed.unwrap_or(Decimal::ZERO);
+        let q = row.quote_currency.trim();
+        if !quote_currency_supported(snapshot, q) {
+            warn!(
+                user_id = %user_id,
+                quote = %q,
+                "closed position row skipped in realized PnL sum (quote not in FX snapshot)"
+            );
+            continue;
+        }
+        match fx_rates::convert_with_rates(raw, q, "USD", &snapshot.rates) {
+            Ok(v) => sum += v,
+            Err(e) => warn!(user_id = %user_id, error = %e, "closed position FX conversion failed; skipping row"),
+        }
+    }
+    Ok(sum)
 }
 
 /// If margin_level < stop_out_threshold, set cooldown key and publish cmd.position.close_all. Called from compute_and_cache_account_summary_with_prices.
@@ -325,6 +463,9 @@ async fn create_deposit_request(
             .bind(false)
             .bind(now)
             .bind(serde_json::json!({
+                "kind": "deposit_request",
+                "amount_usd": amount.to_string(),
+                "currency": "USD",
                 "transactionId": transaction_id.to_string(),
                 "userId": user_id.to_string(),
                 "amount": req.amount,
@@ -341,6 +482,9 @@ async fn create_deposit_request(
                 "createdAt": now.to_rfc3339(),
                 "read": false,
                 "meta": {
+                    "kind": "deposit_request",
+                    "amount_usd": amount.to_string(),
+                    "currency": "USD",
                     "transactionId": transaction_id.to_string(),
                     "userId": user_id.to_string(),
                     "amount": req.amount,
@@ -392,106 +536,70 @@ pub struct WalletBalanceResponse {
 
 // Helper function to calculate wallet balance (reusable)
 pub async fn calculate_wallet_balance(pool: &PgPool, user_id: Uuid) -> anyhow::Result<WalletBalanceResponse> {
-    // Calculate balance using formula: Balance = deposits - withdrawals + total realised net profit and loss
-    
-    // 1. Calculate total deposits (completed or approved)
-    let total_deposits: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
+    let wallet_row = sqlx::query(
         r#"
-        SELECT COALESCE(SUM(net_amount), 0)
-        FROM transactions
-        WHERE user_id = $1 
-          AND type = 'deposit'::transaction_type
-          AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status)
-          AND currency = 'USD'
-        "#
+        SELECT COALESCE(available_balance, 0), COALESCE(locked_balance, 0), COALESCE(bonus_balance, 0)
+        FROM wallets
+        WHERE user_id = $1 AND wallet_type = 'spot'::wallet_type AND currency = 'USD'
+        "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    let deposits = total_deposits.unwrap_or(Decimal::ZERO);
 
-    // 2. Calculate total withdrawals (completed withdrawals only)
-    let total_withdrawals: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-        r#"
-        SELECT COALESCE(SUM(net_amount), 0)
-        FROM transactions
-        WHERE user_id = $1 
-          AND type = 'withdrawal'::transaction_type
-          AND status = 'completed'::transaction_status
-          AND currency = 'USD'
-        "#
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-    let withdrawals = total_withdrawals.unwrap_or(Decimal::ZERO);
+    let (available_balance, locked_balance, bonus_balance) = if let Some(row) = wallet_row {
+        (
+            row.get::<Decimal, _>(0),
+            row.get::<Decimal, _>(1),
+            row.get::<Decimal, _>(2),
+        )
+    } else {
+        (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO)
+    };
 
-    // 3. Calculate total realized PnL (from closed positions)
-    let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-        r#"
-        SELECT COALESCE(SUM(pnl), 0)
-        FROM positions
-        WHERE user_id = $1 
-          AND status = 'closed'::position_status
-        "#
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-    let realized_pnl = total_realized_pnl.unwrap_or(Decimal::ZERO);
+    let cash_total = available_balance + locked_balance;
 
-    // 4. Calculate balance: deposits - withdrawals + realized_pnl
-    let balance = deposits - withdrawals + realized_pnl;
-
-    // 5. Calculate unrealized PnL (from open positions)
+    // Unrealized PnL and margin from open positions (same source as before for margin math)
     let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
         r#"
         SELECT COALESCE(SUM(pnl), 0)
         FROM positions
-        WHERE user_id = $1 
+        WHERE user_id = $1
           AND status = 'open'::position_status
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
     let unrealized_pnl = total_unrealized_pnl.unwrap_or(Decimal::ZERO);
 
-    // 6. Calculate margin used (from open positions)
     let total_margin_used: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
         r#"
         SELECT COALESCE(SUM(margin_used), 0)
         FROM positions
-        WHERE user_id = $1 
+        WHERE user_id = $1
           AND status = 'open'::position_status
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
     let margin_used = total_margin_used.unwrap_or(Decimal::ZERO);
 
-    // 7. Calculate equity = balance + unrealized_pnl
-    let equity = balance + unrealized_pnl;
+    // Equity: spot wallet cash + bonus pool + mark-to-market on open positions
+    let equity = cash_total + bonus_balance + unrealized_pnl;
 
-    // 8. Calculate available balance = balance - margin_used (locked in positions)
-    let available = if balance >= margin_used {
-        balance - margin_used
+    let free_margin = if equity >= margin_used {
+        equity - margin_used
     } else {
         Decimal::ZERO
     };
 
-    // 9. Calculate free margin = available balance
-    let free_margin = available;
-
-    // 10. Locked = margin_used
-    let locked = margin_used;
-
     Ok(WalletBalanceResponse {
         user_id: user_id.to_string(),
         currency: "USD".to_string(),
-        available: available.to_string().parse::<f64>().unwrap_or(0.0),
-        locked: locked.to_string().parse::<f64>().unwrap_or(0.0),
+        available: available_balance.to_string().parse::<f64>().unwrap_or(0.0),
+        locked: locked_balance.to_string().parse::<f64>().unwrap_or(0.0),
         equity: equity.to_string().parse::<f64>().unwrap_or(0.0),
         margin_used: margin_used.to_string().parse::<f64>().unwrap_or(0.0),
         free_margin: free_margin.to_string().parse::<f64>().unwrap_or(0.0),
@@ -521,6 +629,12 @@ pub struct AccountSummary {
     pub stop_out_level_threshold: Option<f64>,
     pub realized_pnl: f64,
     pub unrealized_pnl: f64,
+    /// Non-withdrawable bonus pool (still counts toward equity / free margin).
+    pub bonus: f64,
+    /// Lifetime swap paid (positive USD), from completed `swap` transactions (settlement rows).
+    pub total_swap_paid_usd: f64,
+    /// Lifetime trading fees paid (positive USD), from completed `fee` transactions (debits).
+    pub total_fees_paid_usd: f64,
     pub updated_at: String,
 }
 
@@ -649,21 +763,23 @@ pub(crate) async fn get_price_from_redis(
 }
 
 /// Fetches position-derived aggregates from Redis (same source as Positions tab).
-/// Returns (margin_used, unrealized_pnl, realized_pnl). Uses "margin" and "status" from pos:by_id:* hashes.
-/// When `price_overrides` is set, unrealized PnL for open positions is computed from (bid, ask) for (symbol, group_id) instead of stored value.
-/// When `price_overrides` is None, tries to read current price from Redis (prices:SYMBOL:GROUP_ID, written by order-engine) so UnR PnL is not stuck at 0.
-/// `margin_calculation_type`: "hedged" = sum of all position margins; "net" = per (symbol, group_id) net size then margin = |net_size|*price/leverage, sum.
+/// Returns `(margin_used, unrealized_pnl, realized_pnl)` **in USD** using `snapshot` FX rates.
+/// Redis hashes expose instrument `symbol` (code string), not `symbol_id`; quote currency is resolved via DB `symbols.code`.
+/// Returns `None` when Redis position index is unavailable (caller may fall back to DB aggregates).
 async fn fetch_position_aggregates_from_redis(
+    pool: &PgPool,
     redis: &crate::redis_pool::RedisPool,
     user_id: Uuid,
     price_overrides: Option<&PriceOverrides>,
     margin_calculation_type: &str,
-) -> Option<(Decimal, Decimal, Decimal)> {
+    snapshot: &FxRatesSnapshot,
+) -> anyhow::Result<Option<(Decimal, Decimal, Decimal)>> {
+    let symbol_map = get_symbol_code_to_quote_currency_map(pool).await?;
     let mut conn = match redis.get().await {
         Ok(c) => c,
         Err(_) => {
             warn!("Account summary: Redis unavailable (circuit open?) for user {}", user_id);
-            return None;
+            return Ok(None);
         }
     };
     let positions_key = Keys::positions_set(user_id);
@@ -671,15 +787,15 @@ async fn fetch_position_aggregates_from_redis(
         Ok(ids) => ids,
         Err(e) => {
             warn!("Account summary: Redis SMEMBERS pos set failed for user {}: {}", user_id, e);
-            return None;
+            return Ok(None);
         }
     };
     let mut margin_used = Decimal::ZERO;
     let mut unrealized_pnl = Decimal::ZERO;
     let mut realized_pnl = Decimal::ZERO;
-    // For net margin: group by (symbol, group_id) -> (total_abs_size, net_signed_size, total_margin)
+    // Net margin: group by (symbol, group_id) -> (total_abs_size, net_signed_size, total_margin_quote, quote_currency)
     type NetKey = (String, String);
-    let mut net_groups: HashMap<NetKey, (Decimal, Decimal, Decimal)> = HashMap::new();
+    let mut net_groups: HashMap<NetKey, (Decimal, Decimal, Decimal, String)> = HashMap::new();
 
     for pos_id_str in position_ids {
         let pos_id = match Uuid::parse_str(&pos_id_str) {
@@ -687,6 +803,31 @@ async fn fetch_position_aggregates_from_redis(
             Err(_) => continue,
         };
         let pos_key = Keys::position_by_id(pos_id);
+        let symbol_code: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
+        let sym_key = symbol_code.trim().to_ascii_uppercase();
+        let Some(quote_currency_owned) = symbol_map.get(&sym_key).cloned() else {
+            if sym_key.is_empty() {
+                warn!(position_id = %pos_id, "position hash missing symbol; skipping in aggregates");
+            } else {
+                warn!(
+                    position_id = %pos_id,
+                    symbol = %symbol_code,
+                    "unknown symbol code for FX aggregation; skipping position"
+                );
+            }
+            continue;
+        };
+        let quote_currency = quote_currency_owned.as_str();
+
+        if !quote_currency_supported(snapshot, quote_currency) {
+            warn!(
+                position_id = %pos_id,
+                quote = %quote_currency,
+                "quote currency not in FX snapshot; skipping position in aggregates"
+            );
+            continue;
+        }
+
         let status: Option<String> = conn.hget(&pos_key, "status").await.ok().flatten();
         let status = status.as_deref().unwrap_or("");
         let margin_str: Option<String> = conn.hget(&pos_key, "margin").await.ok().flatten();
@@ -699,11 +840,26 @@ async fn fetch_position_aggregates_from_redis(
             .as_deref()
             .and_then(|s| Decimal::from_str(s).ok())
             .unwrap_or(Decimal::ZERO);
-        realized_pnl += real;
+
+        let real_usd = match fx_rates::convert_with_rates(real, quote_currency, "USD", &snapshot.rates) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    position_id = %pos_id,
+                    error = %e,
+                    "realized_pnl FX conversion failed after preflight; skipping position"
+                );
+                continue;
+            }
+        };
 
         let is_open = status.eq_ignore_ascii_case("open");
-        if is_open {
-            if margin_calculation_type.eq_ignore_ascii_case("net") {
+        if !is_open {
+            realized_pnl += real_usd;
+            continue;
+        }
+
+        if margin_calculation_type.eq_ignore_ascii_case("net") {
                 let symbol: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
                 let group_id: String = conn.hget(&pos_key, "group_id").await.ok().flatten().unwrap_or_default();
                 let size_str: Option<String> = conn.hget(&pos_key, "size").await.ok().flatten();
@@ -717,28 +873,56 @@ async fn fetch_position_aggregates_from_redis(
                     Some("SHORT") => -size,
                     _ => size,
                 };
-                let entry = net_groups.entry((symbol, group_id)).or_insert((Decimal::ZERO, Decimal::ZERO, Decimal::ZERO));
-                entry.0 += size;           // total_abs_size (we use size as abs for long/short)
-                entry.1 += signed;         // net_signed_size
-                entry.2 += margin;         // total_margin (hedged sum for this symbol group)
+                let entry = net_groups
+                    .entry((symbol, group_id))
+                    .or_insert_with(|| (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO, quote_currency_owned.clone()));
+                entry.0 += size;
+                entry.1 += signed;
+                entry.2 += margin;
             } else {
-                margin_used += margin;
+                let m_usd = match fx_rates::convert_with_rates(margin, quote_currency, "USD", &snapshot.rates) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            position_id = %pos_id,
+                            error = %e,
+                            "margin FX conversion failed after preflight; skipping open metrics for position"
+                        );
+                        continue;
+                    }
+                };
+                margin_used += m_usd;
             }
 
-            let unreal: Decimal = if let Some(overrides) = price_overrides {
+            let unreal_quote: Decimal = if let Some(overrides) = price_overrides {
                 let symbol: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
                 let group_id: String = conn.hget(&pos_key, "group_id").await.ok().flatten().unwrap_or_default();
                 let key = (symbol.clone(), group_id.clone());
                 let (bid, ask) = if let Some(&(b, a)) = overrides.get(&key) {
                     (b, a)
                 } else {
-                    // Overrides only contain the tick's symbol; for other symbols fall back to Redis price so UnR Net PnL is always sum of ALL open positions
                     match get_price_from_redis(redis, &symbol, &group_id).await {
                         Some((b, a)) => (b, a),
                         None => {
                             let stored_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
-                            let stored: Decimal = stored_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO);
-                            unrealized_pnl += stored;
+                            let stored: Decimal = stored_str
+                                .as_deref()
+                                .and_then(|s| Decimal::from_str(s).ok())
+                                .unwrap_or(Decimal::ZERO);
+                            let u_usd = match fx_rates::convert_with_rates(
+                                stored,
+                                quote_currency,
+                                "USD",
+                                &snapshot.rates,
+                            ) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    warn!(position_id = %pos_id, error = %e, "stored unrealized FX conversion failed");
+                                    continue;
+                                }
+                            };
+                            unrealized_pnl += u_usd;
+                            realized_pnl += real_usd;
                             continue;
                         }
                     }
@@ -759,14 +943,16 @@ async fn fetch_position_aggregates_from_redis(
                     Some("SHORT") => (avg_price - ask) * size,
                     _ => {
                         let unreal_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
-                        unreal_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO)
+                        unreal_str
+                            .as_deref()
+                            .and_then(|s| Decimal::from_str(s).ok())
+                            .unwrap_or(Decimal::ZERO)
                     }
                 }
             } else {
-                // No overrides: compute from Redis price key (order-engine writes prices:SYMBOL:GROUP on each tick) so UnR PnL is not stuck at 0
                 let symbol: String = conn.hget(&pos_key, "symbol").await.ok().flatten().unwrap_or_default();
                 let group_id: String = conn.hget(&pos_key, "group_id").await.ok().flatten().unwrap_or_default();
-                let unreal = if let Some((bid, ask)) = get_price_from_redis(redis, &symbol, &group_id).await {
+                if let Some((bid, ask)) = get_price_from_redis(redis, &symbol, &group_id).await {
                     let size_str: Option<String> = conn.hget(&pos_key, "size").await.ok().flatten();
                     let size: Decimal = size_str
                         .as_deref()
@@ -783,115 +969,241 @@ async fn fetch_position_aggregates_from_redis(
                         Some("SHORT") => (avg_price - ask) * size,
                         _ => {
                             let unreal_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
-                            unreal_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO)
+                            unreal_str
+                                .as_deref()
+                                .and_then(|s| Decimal::from_str(s).ok())
+                                .unwrap_or(Decimal::ZERO)
                         }
                     }
                 } else {
                     let unreal_str: Option<String> = conn.hget(&pos_key, "unrealized_pnl").await.ok().flatten();
-                    unreal_str.as_deref().and_then(|s| Decimal::from_str(s).ok()).unwrap_or(Decimal::ZERO)
-                };
-                unreal
+                    unreal_str
+                        .as_deref()
+                        .and_then(|s| Decimal::from_str(s).ok())
+                        .unwrap_or(Decimal::ZERO)
+                }
             };
-            unrealized_pnl += unreal;
-        }
+
+            let unreal_usd = match fx_rates::convert_with_rates(unreal_quote, quote_currency, "USD", &snapshot.rates)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        position_id = %pos_id,
+                        error = %e,
+                        "unrealized PnL FX conversion failed after preflight; skipping open metrics for position"
+                    );
+                    if !margin_calculation_type.eq_ignore_ascii_case("net") {
+                        if let Ok(m_rollback) =
+                            fx_rates::convert_with_rates(margin, quote_currency, "USD", &snapshot.rates)
+                        {
+                            margin_used -= m_rollback;
+                        }
+                    }
+                    continue;
+                }
+            };
+            unrealized_pnl += unreal_usd;
+            realized_pnl += real_usd;
     }
 
     if margin_calculation_type.eq_ignore_ascii_case("net") && !net_groups.is_empty() {
-        for (_key, (total_abs_size, net_signed_size, total_margin)) in net_groups {
+        for (_key, (total_abs_size, net_signed_size, total_margin, qcy)) in net_groups {
             if total_abs_size > Decimal::ZERO {
                 let net_ratio = (net_signed_size.abs() / total_abs_size).min(Decimal::ONE);
-                margin_used += net_ratio * total_margin;
+                let margin_quote = net_ratio * total_margin;
+                let q = qcy.as_str();
+                if !quote_currency_supported(snapshot, q) {
+                    warn!(quote = %q, "net margin group quote not in FX snapshot; skipping group");
+                    continue;
+                }
+                match fx_rates::convert_with_rates(margin_quote, q, "USD", &snapshot.rates) {
+                    Ok(usd) => margin_used += usd,
+                    Err(e) => warn!(error = %e, "net margin group FX conversion failed; skipping group"),
+                }
             }
         }
     }
 
-    Some((margin_used, unrealized_pnl, realized_pnl))
+    let swap_open = sum_open_accumulated_swap_usd(pool, user_id)
+        .await
+        .unwrap_or(Decimal::ZERO);
+    let unrealized_pnl = unrealized_pnl - swap_open;
+
+    Ok(Some((margin_used, unrealized_pnl, realized_pnl)))
 }
 
-/// DB fallback for position aggregates. Returns (margin_used, realized_pnl, unrealized_pnl).
-/// When margin_calculation_type is "net", margin_used is computed per symbol (net size then sum of net margins).
+/// DB fallback for position aggregates. Returns `(margin_used, realized_pnl, unrealized_pnl)` in **USD**.
 async fn fetch_position_aggregates_from_db(
     pool: &PgPool,
     user_id: Uuid,
     margin_calculation_type: &str,
+    snapshot: &FxRatesSnapshot,
 ) -> anyhow::Result<(Decimal, Decimal, Decimal)> {
-    let total_realized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-        r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status"#,
+    let total_realized_pnl = sum_closed_realized_pnl_usd(pool, snapshot, user_id).await?;
+
+    #[derive(sqlx::FromRow)]
+    struct OpenPosRow {
+        symbol_id: Uuid,
+        size: Decimal,
+        side: String,
+        margin_used: Decimal,
+        pnl: Decimal,
+        quote_currency: String,
+    }
+    let open_rows = sqlx::query_as::<_, OpenPosRow>(
+        r#"
+        SELECT
+            p.symbol_id,
+            p.size,
+            LOWER(p.side::text) AS "side!",
+            p.margin_used,
+            p.pnl,
+            s.quote_currency
+        FROM positions p
+        INNER JOIN symbols s ON s.id = p.symbol_id
+        WHERE p.user_id = $1 AND p.status = 'open'::position_status
+        "#,
     )
     .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-    let total_unrealized_pnl: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-        r#"SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
 
-    let total_margin_used = if margin_calculation_type.eq_ignore_ascii_case("net") {
-        #[derive(sqlx::FromRow)]
-        struct SymbolMarginRow {
+    let mut total_unrealized_pnl = Decimal::ZERO;
+    let mut total_margin_used = Decimal::ZERO;
+
+    if margin_calculation_type.eq_ignore_ascii_case("net") {
+        struct NetAcc {
             total_abs_size: Decimal,
             net_signed_size: Decimal,
             total_margin: Decimal,
+            quote_currency: String,
         }
-        let rows = sqlx::query_as::<_, SymbolMarginRow>(
-            r#"
-            SELECT
-                COALESCE(SUM(size), 0)::numeric AS total_abs_size,
-                COALESCE(SUM(CASE WHEN side = 'long' THEN size ELSE -size END), 0)::numeric AS net_signed_size,
-                COALESCE(SUM(margin_used), 0)::numeric AS total_margin
-            FROM positions
-            WHERE user_id = $1 AND status = 'open'::position_status
-            GROUP BY symbol_id
-            "#,
-        )
-        .bind(user_id)
-        .fetch_all(pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| {
-                if r.total_abs_size > Decimal::ZERO {
-                    (r.net_signed_size.abs() / r.total_abs_size).min(Decimal::ONE) * r.total_margin
-                } else {
-                    Decimal::ZERO
+        let mut by_symbol: HashMap<Uuid, NetAcc> = HashMap::new();
+        for row in &open_rows {
+            let q = row.quote_currency.trim().to_string();
+            let acc = by_symbol.entry(row.symbol_id).or_insert_with(|| NetAcc {
+                total_abs_size: Decimal::ZERO,
+                net_signed_size: Decimal::ZERO,
+                total_margin: Decimal::ZERO,
+                quote_currency: q.clone(),
+            });
+            acc.total_abs_size += row.size;
+            let signed = if row.side.eq_ignore_ascii_case("long") {
+                row.size
+            } else {
+                -row.size
+            };
+            acc.net_signed_size += signed;
+            acc.total_margin += row.margin_used;
+        }
+        for (sym_id, acc) in by_symbol {
+            let q = acc.quote_currency.as_str();
+            if acc.total_abs_size > Decimal::ZERO {
+                let net_ratio = (acc.net_signed_size.abs() / acc.total_abs_size).min(Decimal::ONE);
+                let margin_quote = net_ratio * acc.total_margin;
+                if !quote_currency_supported(snapshot, q) {
+                    warn!(symbol_id = %sym_id, quote = %q, "net margin DB group skipped (FX quote unsupported)");
+                    continue;
                 }
-            })
-            .fold(Decimal::ZERO, |a, b| a + b)
+                match fx_rates::convert_with_rates(margin_quote, q, "USD", &snapshot.rates) {
+                    Ok(usd) => total_margin_used += usd,
+                    Err(e) => warn!(error = %e, "net margin DB group FX conversion failed"),
+                }
+            }
+        }
     } else {
-        sqlx::query_scalar::<_, Decimal>(
-            r#"SELECT COALESCE(SUM(margin_used), 0) FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?
-        .unwrap_or(Decimal::ZERO)
-    };
+        for row in &open_rows {
+            let q = row.quote_currency.trim();
+            if !quote_currency_supported(snapshot, q) {
+                warn!(user_id = %user_id, quote = %q, "open position margin skipped (FX quote unsupported)");
+                continue;
+            }
+            match fx_rates::convert_with_rates(row.margin_used, q, "USD", &snapshot.rates) {
+                Ok(usd) => total_margin_used += usd,
+                Err(e) => warn!(user_id = %user_id, error = %e, "open position margin FX conversion failed"),
+            }
+        }
+    }
 
-    Ok((
-        total_margin_used,
-        total_realized_pnl.unwrap_or(Decimal::ZERO),
-        total_unrealized_pnl.unwrap_or(Decimal::ZERO),
-    ))
+    for row in &open_rows {
+        let q = row.quote_currency.trim();
+        if !quote_currency_supported(snapshot, q) {
+            warn!(user_id = %user_id, quote = %q, "open position unrealized skipped (FX quote unsupported)");
+            continue;
+        }
+        match fx_rates::convert_with_rates(row.pnl, q, "USD", &snapshot.rates) {
+            Ok(usd) => total_unrealized_pnl += usd,
+            Err(e) => warn!(user_id = %user_id, error = %e, "open position unrealized FX conversion failed"),
+        }
+    }
+
+    let swap_open = sum_open_accumulated_swap_usd(pool, user_id)
+        .await
+        .unwrap_or(Decimal::ZERO);
+    total_unrealized_pnl -= swap_open;
+
+    Ok((total_margin_used, total_realized_pnl, total_unrealized_pnl))
 }
 
 /// Fast DB-only free margin for place_order when Redis cache is cold.
-/// Uses 2 queries so we don't block the request on full compute_and_cache_account_summary.
+/// Uses a small set of queries; requires `POSITION_AGGREGATION_REDIS` (see router setup) and populated `fx:rates:usd`.
 pub(crate) async fn get_free_margin_from_db_fast(pool: &PgPool, user_id: Uuid) -> Option<Decimal> {
-    let balance: Option<Decimal> = sqlx::query_scalar(
+    let redis = POSITION_AGGREGATION_REDIS.get()?;
+    let fx_snapshot = match fx_rates::get_cached_snapshot(redis.as_ref()).await {
+        Ok(Some(s)) => s,
+        _ => return None,
+    };
+
+    let deposits = sqlx::query_scalar::<_, Decimal>(
         r#"
-        SELECT
-            (SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE user_id = $1 AND type = 'deposit'::transaction_type AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status) AND currency = 'USD')
-            - (SELECT COALESCE(SUM(net_amount), 0) FROM transactions WHERE user_id = $1 AND type = 'withdrawal'::transaction_type AND status = 'completed'::transaction_status AND currency = 'USD')
-            + (SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE user_id = $1 AND status = 'closed'::position_status)
+        SELECT COALESCE(SUM(net_amount), 0)
+        FROM transactions
+        WHERE user_id = $1
+          AND type = 'deposit'::transaction_type
+          AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status)
+          AND currency = 'USD'
         "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await
     .ok()
-    .flatten();
-    let balance = balance.unwrap_or(Decimal::ZERO);
+    .flatten()
+    .unwrap_or(Decimal::ZERO);
+
+    let withdrawals = sqlx::query_scalar::<_, Decimal>(
+        r#"
+        SELECT COALESCE(SUM(net_amount), 0)
+        FROM transactions
+        WHERE user_id = $1
+          AND type = 'withdrawal'::transaction_type
+          AND status = 'completed'::transaction_status
+          AND currency = 'USD'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(Decimal::ZERO);
+
+    let closed_realized_usd = sum_closed_realized_pnl_usd(pool, &fx_snapshot, user_id)
+        .await
+        .ok()?;
+
+    let balance = deposits - withdrawals + closed_realized_usd;
+
+    let bonus_balance: Decimal = sqlx::query_scalar(
+        r#"SELECT COALESCE(bonus_balance, 0) FROM wallets WHERE user_id = $1 AND wallet_type = 'spot'::wallet_type AND currency = 'USD'"#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(Decimal::ZERO);
 
     let margin_calculation_type: String = sqlx::query_scalar::<_, String>(
         "SELECT COALESCE(margin_calculation_type, 'hedged') FROM users WHERE id = $1",
@@ -903,11 +1215,21 @@ pub(crate) async fn get_free_margin_from_db_fast(pool: &PgPool, user_id: Uuid) -
     .flatten()
     .unwrap_or_else(|| "hedged".to_string());
 
-    let (margin_used, unrealized_pnl) = match fetch_position_aggregates_from_db(pool, user_id, &margin_calculation_type).await {
+    let (margin_used, unrealized_pnl) = match fetch_position_aggregates_from_db(
+        pool,
+        user_id,
+        &margin_calculation_type,
+        &fx_snapshot,
+    )
+    .await
+    {
         Ok((m, _real, unreal)) => (m, unreal),
         Err(_) => {
             #[derive(sqlx::FromRow)]
-            struct OpenRow { margin_used: Option<Decimal>, pnl: Option<Decimal> }
+            struct OpenRow {
+                margin_used: Option<Decimal>,
+                pnl: Option<Decimal>,
+            }
             let open: Option<OpenRow> = sqlx::query_as(
                 r#"SELECT COALESCE(SUM(margin_used), 0)::numeric AS margin_used, COALESCE(SUM(pnl), 0)::numeric AS pnl FROM positions WHERE user_id = $1 AND status = 'open'::position_status"#,
             )
@@ -920,7 +1242,7 @@ pub(crate) async fn get_free_margin_from_db_fast(pool: &PgPool, user_id: Uuid) -
                 .unwrap_or((Decimal::ZERO, Decimal::ZERO))
         }
     };
-    let equity = balance + unrealized_pnl;
+    let equity = balance + bonus_balance + unrealized_pnl;
     let free_margin = if equity >= margin_used {
         equity - margin_used
     } else {
@@ -1645,6 +1967,9 @@ pub async fn compute_and_cache_account_summary_with_prices(
                         ("liquidation_level", "0".to_string()),
                         ("realized_pnl", summary_with_threshold.realized_pnl.to_string()),
                         ("unrealized_pnl", summary_with_threshold.unrealized_pnl.to_string()),
+                        ("bonus", summary_with_threshold.bonus.to_string()),
+                        ("total_swap_paid_usd", summary_with_threshold.total_swap_paid_usd.to_string()),
+                        ("total_fees_paid_usd", summary_with_threshold.total_fees_paid_usd.to_string()),
                         ("updated_at", summary_with_threshold.updated_at.clone()),
                     ]).await;
                     let should_pub = COORDINATOR
@@ -1699,66 +2024,99 @@ pub(crate) async fn compute_account_summary_inner(
     .await?
     .unwrap_or_else(|| "hedged".to_string());
 
-    // Deposits and withdrawals always from DB
-    let total_deposits: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-        r#"
-        SELECT COALESCE(SUM(net_amount), 0)
-        FROM transactions
-        WHERE user_id = $1 AND type = 'deposit'::transaction_type
-          AND (status = 'completed'::transaction_status OR status = 'approved'::transaction_status) AND currency = 'USD'
-        "#,
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-    let deposits = total_deposits.unwrap_or(Decimal::ZERO);
+    let Some(redis_pool) = redis else {
+        return Err(anyhow::anyhow!(
+            "Redis is required to load USD FX snapshot for account summary"
+        ));
+    };
 
-    let total_withdrawals: Option<Decimal> = sqlx::query_scalar::<_, Decimal>(
-        r#"
-        SELECT COALESCE(SUM(net_amount), 0)
-        FROM transactions
-        WHERE user_id = $1 AND type = 'withdrawal'::transaction_type
-          AND status = 'completed'::transaction_status AND currency = 'USD'
-        "#,
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-    let withdrawals = total_withdrawals.unwrap_or(Decimal::ZERO);
+    let fx_snapshot = match fx_rates::get_cached_snapshot(redis_pool).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return Err(anyhow::Error::new(FxRatesUnavailable)),
+        Err(e) => return Err(anyhow::anyhow!("failed to read FX snapshot from Redis: {}", e)),
+    };
 
-    // Position-derived metrics: prefer Redis (same source as Positions tab) so margin/PnL match UI
-    let (realized_pnl, unrealized_pnl, margin_used) = if let Some(rd) = redis {
-        if let Some((margin, unreal, real)) =
-            fetch_position_aggregates_from_redis(rd, user_id, price_overrides, &margin_calculation_type).await
-        {
-            (real, unreal, margin)
-        } else {
-            // Redis miss or error: fall back to DB
+    // Position-derived metrics: prefer Redis (same source as Positions tab) so margin/PnL match UI.
+    // All position-derived amounts are summed in USD using the shared FX snapshot.
+    let (margin_used, unrealized_pnl, _realized_from_open_positions_usd) = match fetch_position_aggregates_from_redis(
+        pool,
+        redis_pool,
+        user_id,
+        price_overrides,
+        &margin_calculation_type,
+        &fx_snapshot,
+    )
+    .await?
+    {
+        Some(t) => t,
+        None => {
             info!(
                 "Account summary: using DB fallback for position aggregates (user {}). Ensure auth-service uses same Redis as order-engine.",
                 user_id
             );
-            let (total_margin_used, total_realized_pnl, total_unrealized_pnl) =
-                fetch_position_aggregates_from_db(pool, user_id, &margin_calculation_type).await?;
-            (
-                total_realized_pnl,
-                total_unrealized_pnl,
-                total_margin_used,
+            fetch_position_aggregates_from_db(
+                pool,
+                user_id,
+                &margin_calculation_type,
+                &fx_snapshot,
             )
+            .await?
         }
-    } else {
-        let (total_margin_used, total_realized_pnl, total_unrealized_pnl) =
-            fetch_position_aggregates_from_db(pool, user_id, &margin_calculation_type).await?;
-        (
-            total_realized_pnl,
-            total_unrealized_pnl,
-            total_margin_used,
-        )
     };
 
-    let balance = deposits - withdrawals + realized_pnl;
+    let realized_pnl: Decimal = sum_closed_realized_pnl_usd(pool, &fx_snapshot, user_id).await?;
 
-    let equity = balance + unrealized_pnl;
+    let bonus_balance: Decimal = sqlx::query_scalar(
+        r#"SELECT COALESCE(bonus_balance, 0) FROM wallets WHERE user_id = $1 AND wallet_type = 'spot'::wallet_type AND currency = 'USD'"#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or(Decimal::ZERO);
+
+    let wallet_cash: Option<(Decimal, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(available_balance, 0), COALESCE(locked_balance, 0)
+        FROM wallets
+        WHERE user_id = $1 AND wallet_type = 'spot'::wallet_type AND currency = 'USD'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let (available_balance, locked_balance) = wallet_cash.unwrap_or((Decimal::ZERO, Decimal::ZERO));
+    let balance = available_balance + locked_balance;
+
+    let total_swap_paid_usd: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(-amount), 0)
+        FROM transactions
+        WHERE user_id = $1
+          AND type = 'swap'::transaction_type
+          AND status = 'completed'::transaction_status
+          AND currency = 'USD'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    let total_fees_paid_usd: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(-amount), 0)
+        FROM transactions
+        WHERE user_id = $1
+          AND type = 'fee'::transaction_type
+          AND status = 'completed'::transaction_status
+          AND currency = 'USD'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    let equity = balance + bonus_balance + unrealized_pnl;
     let free_margin = if equity >= margin_used {
         equity - margin_used
     } else {
@@ -1784,6 +2142,9 @@ pub(crate) async fn compute_account_summary_inner(
         stop_out_level_threshold: None,
         realized_pnl: to_f64(realized_pnl),
         unrealized_pnl: to_f64(unrealized_pnl),
+        bonus: to_f64(bonus_balance),
+        total_swap_paid_usd: to_f64(total_swap_paid_usd),
+        total_fees_paid_usd: to_f64(total_fees_paid_usd),
         updated_at: Utc::now().to_rfc3339(),
     })
 }
@@ -1888,6 +2249,13 @@ async fn get_account_summary(
             (balance, equity, margin_used, free_margin, margin_level, realized_pnl, unrealized_pnl, updated_at)
         {
             let balance_f: f64 = bal.parse().unwrap_or(0.0);
+            let bonus_f: f64 = conn
+                .hget::<_, _, Option<String>>(&key, "bonus")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
             let threshold = margin_call_level_threshold
                 .and_then(|s| s.parse::<f64>().ok());
             let threshold = if threshold.is_some() {
@@ -1905,6 +2273,20 @@ async fn get_account_summary(
             } else {
                 None
             };
+            let total_swap_f: f64 = conn
+                .hget::<_, _, Option<String>>(&key, "total_swap_paid_usd")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+            let total_fees_f: f64 = conn
+                .hget::<_, _, Option<String>>(&key, "total_fees_paid_usd")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
             return Ok(Json(AccountSummary {
                 user_id: user_id.to_string(),
                 balance: balance_f,
@@ -1916,6 +2298,9 @@ async fn get_account_summary(
                 stop_out_level_threshold: stop_out,
                 realized_pnl: realized_pnl.parse().unwrap_or(0.0),
                 unrealized_pnl: unrealized_pnl.parse().unwrap_or(0.0),
+                bonus: bonus_f,
+                total_swap_paid_usd: total_swap_f,
+                total_fees_paid_usd: total_fees_f,
                 updated_at,
             }));
         }
@@ -1941,7 +2326,7 @@ async fn get_account_summary(
         }
         Err(e) => {
             error!("Failed to compute account summary for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(account_summary_http_status(&e))
         }
     }
 }
@@ -1969,6 +2354,13 @@ pub async fn get_account_summary_for_user(
             (balance, equity, margin_used, free_margin, margin_level, realized_pnl, unrealized_pnl, updated_at)
         {
             let balance_f: f64 = bal.parse().unwrap_or(0.0);
+            let bonus_f: f64 = conn
+                .hget::<_, _, Option<String>>(&key, "bonus")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
             let threshold = margin_call_level_threshold.and_then(|s| s.parse::<f64>().ok());
             let threshold = if threshold.is_some() {
                 threshold
@@ -1985,6 +2377,20 @@ pub async fn get_account_summary_for_user(
             } else {
                 None
             };
+            let total_swap_f: f64 = conn
+                .hget::<_, _, Option<String>>(&key, "total_swap_paid_usd")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+            let total_fees_f: f64 = conn
+                .hget::<_, _, Option<String>>(&key, "total_fees_paid_usd")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
             return Ok(AccountSummary {
                 user_id: user_id.to_string(),
                 balance: balance_f,
@@ -1996,6 +2402,9 @@ pub async fn get_account_summary_for_user(
                 stop_out_level_threshold: stop_out,
                 realized_pnl: realized_pnl.parse().unwrap_or(0.0),
                 unrealized_pnl: unrealized_pnl.parse().unwrap_or(0.0),
+                bonus: bonus_f,
+                total_swap_paid_usd: total_swap_f,
+                total_fees_paid_usd: total_fees_f,
                 updated_at,
             });
         }
@@ -2020,7 +2429,7 @@ pub async fn get_account_summary_for_user(
         }
         Err(e) => {
             error!("Failed to compute account summary for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(account_summary_http_status(&e))
         }
     }
 }
@@ -2688,6 +3097,10 @@ async fn approve_deposit(
     .bind(false)
     .bind(now)
     .bind(serde_json::json!({
+        "kind": "deposit_approved",
+        "amount_usd": amount.to_string(),
+        "balance_usd": main_balance.to_string(),
+        "currency": "USD",
         "transactionId": transaction_id.to_string(),
         "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
     }))
@@ -2703,6 +3116,10 @@ async fn approve_deposit(
         "createdAt": now.to_rfc3339(),
         "read": false,
         "meta": {
+            "kind": "deposit_approved",
+            "amount_usd": amount.to_string(),
+            "balance_usd": main_balance.to_string(),
+            "currency": "USD",
             "transactionId": transaction_id.to_string(),
             "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
         }
@@ -2874,6 +3291,9 @@ async fn reject_deposit(
     .bind(false)
     .bind(now)
     .bind(serde_json::json!({
+        "kind": "deposit_rejected",
+        "amount_usd": amount.to_string(),
+        "currency": "USD",
         "transactionId": transaction_id.to_string(),
         "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
         "reason": req.reason,
@@ -2890,6 +3310,9 @@ async fn reject_deposit(
         "createdAt": now.to_rfc3339(),
         "read": false,
         "meta": {
+            "kind": "deposit_rejected",
+            "amount_usd": amount.to_string(),
+            "currency": "USD",
             "transactionId": transaction_id.to_string(),
             "amount": amount.to_string().parse::<f64>().unwrap_or(0.0),
             "reason": req.reason,
@@ -3252,6 +3675,50 @@ async fn enrich_open_position_unrealized_pnl<C>(
     }
 }
 
+async fn merge_accumulated_costs_from_db(pool: &PgPool, positions: &mut [serde_json::Value]) {
+    let ids: Vec<Uuid> = positions
+        .iter()
+        .filter_map(|p| {
+            p.get("id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+        })
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let rows: Result<Vec<(Uuid, Decimal, Decimal)>, sqlx::Error> = sqlx::query_as(
+        "SELECT id, accumulated_swap_usd, accumulated_fees_usd FROM positions WHERE id = ANY($1)",
+    )
+    .bind(ids.as_slice())
+    .fetch_all(pool)
+    .await;
+    let Ok(rows) = rows else {
+        return;
+    };
+    let m: HashMap<Uuid, (Decimal, Decimal)> = rows.into_iter().map(|(id, s, f)| (id, (s, f))).collect();
+    for p in positions.iter_mut() {
+        if let Some(obj) = p.as_object_mut() {
+            if let Some(id) = obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+            {
+                if let Some((s, f)) = m.get(&id) {
+                    obj.insert(
+                        "accumulatedSwapUsd".to_string(),
+                        serde_json::Value::String(s.to_string()),
+                    );
+                    obj.insert(
+                        "accumulatedFeesUsd".to_string(),
+                        serde_json::Value::String(f.to_string()),
+                    );
+                }
+            }
+        }
+    }
+}
+
 async fn get_user_positions(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
@@ -3319,6 +3786,8 @@ async fn get_user_positions(
         positions.push(hash_to_position_json(&pos_id_str, pos_data));
     }
 
+    merge_accumulated_costs_from_db(&pool, &mut positions).await;
+
     if status_filter == "closed" {
         positions.sort_by(|a, b| {
             let a_ts = a
@@ -3353,6 +3822,7 @@ pub fn create_deposits_router(
     pool: PgPool,
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
+    register_position_aggregation_redis(&deposits_state);
     Router::new()
         .route("/request", post(create_deposit_request))
         .route("/direct", post(create_direct_deposit))
@@ -3374,6 +3844,7 @@ pub fn create_wallet_router(
     pool: PgPool,
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
+    register_position_aggregation_redis(&deposits_state);
     Router::new()
         .route("/balance", get(get_wallet_balance))
         .layer(axum::middleware::from_fn(auth_middleware))
@@ -3449,6 +3920,7 @@ pub fn create_account_router(
     pool: PgPool,
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
+    register_position_aggregation_redis(&deposits_state);
     Router::new()
         .route("/summary", get(get_account_summary))
         .route("/deposits", get(list_my_deposits))
@@ -3467,6 +3939,7 @@ pub fn create_notifications_router(
     pool: PgPool,
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
+    register_position_aggregation_redis(&deposits_state);
     Router::new()
         .route("/read-all", post(mark_all_notifications_read))
         .route("/:id/read", patch(mark_notification_read))
@@ -3743,6 +4216,7 @@ pub fn create_positions_router(
     pool: PgPool,
     deposits_state: DepositsState,
 ) -> Router<PgPool> {
+    register_position_aggregation_redis(&deposits_state);
     Router::new()
         .route("/:user_id/positions/:position_id/sltp", put(update_position_sltp)) // More specific route first
         .route("/:user_id/positions/:position_id/close", post(close_position)) // Close position route
@@ -3756,5 +4230,53 @@ pub fn create_positions_router(
             }
         }))
         .with_state(pool)
+}
+
+#[cfg(test)]
+mod position_aggregate_tests {
+    use super::quote_currency_supported;
+    use crate::services::fx_rates::{self, FxRatesSnapshot};
+    use chrono::Utc;
+    use rust_decimal::Decimal;
+    use std::collections::HashMap;
+
+    fn sample_snapshot() -> FxRatesSnapshot {
+        let mut rates = HashMap::new();
+        rates.insert("USD".into(), Decimal::ONE);
+        rates.insert("HUF".into(), Decimal::from(360));
+        FxRatesSnapshot {
+            rates,
+            fetched_at: Utc::now(),
+            source: "test".into(),
+            is_stale: false,
+        }
+    }
+
+    #[test]
+    fn aggregate_converts_huf_pnl_to_usd() {
+        let s = sample_snapshot();
+        let huf_pnl = fx_rates::convert_with_rates(Decimal::from(3600), "HUF", "USD", &s.rates).unwrap();
+        let usd_pnl = fx_rates::convert_with_rates(Decimal::from(20), "USD", "USD", &s.rates).unwrap();
+        assert_eq!(huf_pnl + usd_pnl, Decimal::from(30));
+    }
+
+    #[test]
+    fn aggregate_handles_missing_currency_gracefully() {
+        let s = sample_snapshot();
+        assert!(!quote_currency_supported(&s, "XYZ"));
+    }
+
+    #[test]
+    fn aggregate_empty_snapshot_rejects_non_usd_quotes() {
+        // Same-currency short-circuit (USD→USD) does not require the map; cross-currency does.
+        let snap = FxRatesSnapshot {
+            rates: HashMap::new(),
+            fetched_at: Utc::now(),
+            source: "empty".into(),
+            is_stale: false,
+        };
+        assert!(quote_currency_supported(&snap, "USD"));
+        assert!(!quote_currency_supported(&snap, "HUF"));
+    }
 }
 

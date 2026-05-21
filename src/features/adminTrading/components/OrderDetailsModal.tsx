@@ -67,7 +67,7 @@ export function OrderDetailsModal() {
           {order.price && (
             <div>
               <div className="text-xs text-text-muted mb-1">Price</div>
-              <div className="text-sm font-mono text-text">${order.price.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{order.price.toFixed(2)}</div>
             </div>
           )}
           {order.filledSize && (
@@ -79,7 +79,7 @@ export function OrderDetailsModal() {
           {order.averagePrice && (
             <div>
               <div className="text-xs text-text-muted mb-1">Average Price</div>
-              <div className="text-sm font-mono text-text">${order.averagePrice.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{order.averagePrice.toFixed(2)}</div>
             </div>
           )}
           <div>

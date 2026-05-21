@@ -2,13 +2,16 @@ import { Card } from '@/shared/ui/card'
 import { Badge } from '@/shared/ui/badge'
 import { MarginEvent } from '../types/adminTrading'
 import { useModalStore } from '@/app/store'
-import { formatDateTime } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
+import { useFormatFromUsd } from '@/shared/currency'
 
 interface EventDetailsModalProps {
   event: MarginEvent
 }
 
 export function EventDetailsModal({ event }: EventDetailsModalProps) {
+  const formatDateTime = useFormatDateTime()
+  const formatMoney = useFormatFromUsd()
   const closeModal = useModalStore((state) => state.closeModal)
 
   const getTypeBadge = (type: string) => {
@@ -83,21 +86,21 @@ export function EventDetailsModal({ event }: EventDetailsModalProps) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <div className="text-xs text-text-muted mb-1">Equity</div>
-            <div className="font-mono text-text">${event.equity.toFixed(2)}</div>
+            <div className="font-mono text-text">{formatMoney(event.equity)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Margin</div>
-            <div className="font-mono text-text">${event.margin.toFixed(2)}</div>
+            <div className="font-mono text-text">{formatMoney(event.margin)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Free Margin</div>
             <div className={`font-mono ${event.freeMargin < 0 ? 'text-danger' : 'text-text'}`}>
-              ${event.freeMargin.toFixed(2)}
+              {formatMoney(event.freeMargin)}
             </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Maintenance</div>
-            <div className="font-mono text-text">${event.maintenance.toFixed(2)}</div>
+            <div className="font-mono text-text">{formatMoney(event.maintenance)}</div>
           </div>
         </div>
       </Card>

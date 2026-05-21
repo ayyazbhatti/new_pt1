@@ -3,15 +3,18 @@ use axum::{
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},
+    Extension,
     Router,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
+use crate::redis_pool::RedisPool;
 use crate::services::admin_swap_service::AdminSwapService;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
@@ -72,11 +75,13 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
-pub fn create_admin_swap_router(pool: PgPool) -> Router<PgPool> {
+pub fn create_admin_swap_router(pool: PgPool, redis: Arc<RedisPool>) -> Router<PgPool> {
     Router::new()
         .route("/rules", get(list_rules).post(create_rule))
         .route("/rules/:id", get(get_rule).put(update_rule).delete(delete_rule))
+        .route("/run-now", post(run_swap_now))
         .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(Extension(redis))
         .with_state(pool)
 }
 
@@ -251,7 +256,7 @@ async fn list_rules(
     let page = params.get("page").and_then(|s| s.parse::<i64>().ok());
     let page_size = params.get("page_size").and_then(|s| s.parse::<i64>().ok());
 
-    let service = AdminSwapService::new(pool);
+    let service = AdminSwapService::new(pool.clone());
     let (rows, total) = service
         .list_rules(
             group_id,
@@ -341,7 +346,7 @@ async fn create_rule(
     let updated_by = Some(claims.email.as_str());
     let created_by_user_id = Some(claims.sub);
 
-    let service = AdminSwapService::new(pool);
+    let service = AdminSwapService::new(pool.clone());
     let rule = service
         .create_rule(
             payload.group_id,
@@ -392,7 +397,7 @@ async fn update_rule(
     let triple_day_opt = payload.triple_day.as_ref().map(|o| o.as_deref());
     let notes_opt = payload.notes.as_ref().map(|o| o.as_deref());
 
-    let service = AdminSwapService::new(pool);
+    let service = AdminSwapService::new(pool.clone());
     let rule = service
         .update_rule(
             id,
@@ -437,7 +442,7 @@ async fn delete_rule(
         .await
         .map_err(permission_denied_to_response)?;
 
-    let service = AdminSwapService::new(pool);
+    let service = AdminSwapService::new(pool.clone());
     service.delete_rule(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
@@ -451,6 +456,30 @@ async fn delete_rule(
     })?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn run_swap_now(
+    State(pool): State<PgPool>,
+    Extension(redis): Extension<Arc<RedisPool>>,
+    claims: axum::extract::Extension<Claims>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "swap:edit")
+        .await
+        .map_err(permission_denied_to_response)?;
+    let n = crate::services::swap_engine::run_rollover_tick(&pool, redis.as_ref(), true)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        code: "SWAP_RUN_FAILED".to_string(),
+                        message: e.to_string(),
+                    },
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({ "charged": n })))
 }
 
 async fn get_swap_rule_tags(

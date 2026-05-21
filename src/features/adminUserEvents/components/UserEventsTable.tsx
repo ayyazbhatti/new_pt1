@@ -1,21 +1,13 @@
 import { useMemo } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
 import { DataTable } from '@/shared/ui/table'
 import { EventTypeBadge } from './EventTypeBadge'
 import { DeviceBadge } from './DeviceBadge'
 import type { UserEventItem } from '../types'
+import { useFormatDateTimeSeconds } from '@/shared/datetime'
 
 interface UserEventsTableProps {
   items: UserEventItem[]
-}
-
-function formatDateTime(iso: string): string {
-  try {
-    return format(new Date(iso), 'MMM d, yyyy HH:mm:ss')
-  } catch {
-    return iso
-  }
 }
 
 function truncateUa(ua?: string | null, max = 48): string {
@@ -24,6 +16,7 @@ function truncateUa(ua?: string | null, max = 48): string {
 }
 
 export function UserEventsTable({ items }: UserEventsTableProps) {
+  const formatDateTime = useFormatDateTimeSeconds()
   const columns = useMemo<ColumnDef<UserEventItem>[]>(
     () => [
       {
@@ -105,7 +98,7 @@ export function UserEventsTable({ items }: UserEventsTableProps) {
         ),
       },
     ],
-    []
+    [formatDateTime],
   )
 
   return <DataTable data={items} columns={columns} disablePagination dense />

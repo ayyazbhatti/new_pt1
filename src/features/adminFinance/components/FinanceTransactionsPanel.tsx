@@ -12,7 +12,9 @@ import { TransactionDetailsModal } from '../modals/TransactionDetailsModal'
 import { ApproveRejectModal } from '../modals/ApproveRejectModal'
 import { Eye, CheckCircle, X, Loader2 } from 'lucide-react'
 import { toast } from '@/shared/components/common'
-import { formatDateTime, formatCurrency } from '../utils/formatters'
+import { useFormatConverted, useFormatSignedFromUsd } from '@/shared/currency'
+import { TradingTransactionTypeDisplay } from '@/shared/components/TradingTransactionTypeDisplay'
+import { useFormatDateTime } from '@/shared/datetime'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchTransactions, Transaction as ApiTransaction, PaginatedTransactions } from '../api/finance.api'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
@@ -22,6 +24,9 @@ const FINANCE_TRANSACTIONS_QUERY_KEY = ['finance-transactions']
 
 export function FinanceTransactionsPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const formatDateTime = useFormatDateTime()
+  const formatConv = useFormatConverted()
+  const formatSigned = useFormatSignedFromUsd()
   const queryClient = useQueryClient()
   const canApprove = useCanAccess('deposits:approve')
   const canReject = useCanAccess('deposits:reject')
@@ -51,7 +56,6 @@ export function FinanceTransactionsPanel() {
   })
 
   const total = paginated?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const apiTransactions = paginated?.items ?? []
 
   // Subscribe to WebSocket events for real-time updates
@@ -196,11 +200,7 @@ export function FinanceTransactionsPanel() {
     return <Badge variant={variants[status] || 'neutral'}>{displayStatus}</Badge>
   }
 
-  const getTypeLabel = (type: string) => {
-    return type.charAt(0).toUpperCase() + type.slice(1)
-  }
-
-  const columns: ColumnDef<Transaction>[] = [
+  const columns: ColumnDef<Transaction>[] = useMemo(() => [
     {
       accessorKey: 'id',
       header: 'Tx ID',
@@ -235,11 +235,15 @@ export function FinanceTransactionsPanel() {
       accessorKey: 'type',
       header: 'Type',
       cell: ({ row }) => {
-        const type = row.getValue('type') as string
-        const isWithdrawal = type.toLowerCase() === 'withdrawal'
+        const tx = row.original
+        const type = (row.getValue('type') as string).toLowerCase()
+        const isWithdrawal = type === 'withdrawal'
+        if (type === 'fee' || type === 'swap') {
+          return <TradingTransactionTypeDisplay type={tx.type} amount={tx.amount} methodDetails={tx.methodDetails} />
+        }
         return (
           <span className={`capitalize ${isWithdrawal ? 'text-danger font-semibold' : ''}`}>
-            {getTypeLabel(type)}
+            {type.charAt(0).toUpperCase() + type.slice(1)}
           </span>
         )
       },
@@ -249,15 +253,21 @@ export function FinanceTransactionsPanel() {
       header: 'Amount',
       cell: ({ row }) => {
         const tx = row.original
-        const isWithdrawal = tx.type.toLowerCase() === 'withdrawal'
-        // Withdrawals should be red, otherwise use normal logic (positive=green, negative=red)
+        const t = tx.type.toLowerCase()
+        const isWithdrawal = t === 'withdrawal'
+        if (t === 'fee' || t === 'swap') {
+          return (
+            <span className={`font-mono font-semibold text-right block ${tx.netAmount >= 0 ? 'text-success' : 'text-danger'}`}>
+              {formatSigned(tx.netAmount)}
+            </span>
+          )
+        }
         const color = isWithdrawal ? 'text-danger' : (tx.netAmount >= 0 ? 'text-success' : 'text-danger')
-        // Withdrawals should show minus sign, deposits/adjustments show plus for positive
         const sign = isWithdrawal ? '-' : (tx.netAmount >= 0 ? '+' : '')
         return (
           <span className={`font-mono font-semibold ${color} text-right block`}>
             {sign}
-            {formatCurrency(Math.abs(tx.netAmount), tx.currency)}
+            {formatConv(Math.abs(tx.netAmount), tx.currency)}
           </span>
         )
       },
@@ -328,7 +338,7 @@ export function FinanceTransactionsPanel() {
         )
       },
     },
-  ]
+  ], [formatDateTime, formatConv, formatSigned, openModal, canApprove, canReject])
 
   if (isLoading) {
     return (
@@ -361,6 +371,7 @@ export function FinanceTransactionsPanel() {
             <SelectItem value="withdrawal">Withdrawal</SelectItem>
             <SelectItem value="adjustment">Adjustment</SelectItem>
             <SelectItem value="fee">Fee</SelectItem>
+            <SelectItem value="swap">Swap</SelectItem>
             <SelectItem value="rebate">Rebate</SelectItem>
           </SelectContent>
         </Select>
@@ -419,52 +430,20 @@ export function FinanceTransactionsPanel() {
           Clear
         </Button>
       </div>
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <p className="text-sm text-text-muted">
-          {total === 0
-            ? 'No transactions'
-            : `Showing ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total} transactions`}
-        </p>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-text-muted">Per page</span>
-          <Select
-            value={String(pageSize)}
-            onValueChange={(v) => {
-              setPageSize(Number(v))
-              setPage(1)
-            }}
-          >
-            <SelectTrigger className="w-[70px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="10">10</SelectItem>
-              <SelectItem value="20">20</SelectItem>
-              <SelectItem value="50">50</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            Previous
-          </Button>
-          <span className="text-sm px-2">
-            Page {page} of {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          >
-            Next
-          </Button>
-        </div>
-      </div>
-      <DataTable data={transactions} columns={columns} />
+      <DataTable
+        data={transactions}
+        columns={columns}
+        pagination={{
+          page,
+          pageSize,
+          total,
+          onPageChange: setPage,
+          onPageSizeChange: (size) => {
+            setPageSize(size)
+            setPage(1)
+          },
+        }}
+      />
     </div>
   )
 }

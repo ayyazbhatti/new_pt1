@@ -21,6 +21,7 @@ import { useAdminWebSocket } from '../hooks/useAdminWebSocket'
 import { useAdminTradingLivePrices } from '../hooks/useAdminTradingLivePrices'
 import { useTradingLookups } from '../hooks/useTradingLookups'
 import { toast } from '@/shared/components/common'
+import { useFormatFromUsd } from '@/shared/currency'
 import { TradingTablePagination, PAGE_SIZE } from '../components/TradingTablePagination'
 import { TabListQuery, tabListQueryKey, toTradingFilters } from '../types'
 
@@ -311,8 +312,7 @@ export function AdminTradingPage() {
 
   useAdminTradingLivePrices(positionsArray)
 
-  const formatCurrency = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(n)
+  const formatMoney = useFormatFromUsd()
 
   const tabCount = (loading: boolean, total: number | null) =>
     loading ? '(…)' : `(${total ?? '—'})`
@@ -352,7 +352,7 @@ export function AdminTradingPage() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-text-muted">Exposure</p>
             <p className="mt-1 text-lg font-bold text-text">
-              {overallExposure !== null ? formatCurrency(overallExposure) : '—'}
+              {overallExposure !== null ? formatMoney(overallExposure) : '—'}
             </p>
             <p className="mt-0.5 text-xs text-text-muted">Total margin (all open, filtered)</p>
           </div>
@@ -372,7 +372,7 @@ export function AdminTradingPage() {
                     : 'text-red-600'
               }`}
             >
-              {overallLivePnl !== null ? formatCurrency(overallLivePnl) : '—'}
+              {overallLivePnl !== null ? formatMoney(overallLivePnl) : '—'}
             </p>
             <p className="mt-0.5 text-xs text-text-muted">Unrealized total (all open, filtered)</p>
           </div>
@@ -402,7 +402,7 @@ export function AdminTradingPage() {
                     : 'text-red-600'
               }`}
             >
-              {overallRealizedPnl !== null ? formatCurrency(overallRealizedPnl) : '—'}
+              {overallRealizedPnl !== null ? formatMoney(overallRealizedPnl) : '—'}
             </p>
             <p className="mt-0.5 text-xs text-text-muted">Closed positions (filtered)</p>
           </div>

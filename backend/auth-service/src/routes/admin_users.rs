@@ -86,6 +86,12 @@ pub struct UpdateUserProfileRequest {
     pub country: Option<String>,
     /// One of: active, disabled, suspended
     pub status: Option<String>,
+    /// Omitted = no change; JSON null = clear; string = set.
+    #[serde(default)]
+    pub timezone: Option<Option<String>>,
+    /// Omitted = no change; JSON null = clear; string = set.
+    #[serde(default)]
+    pub display_currency: Option<Option<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -719,6 +725,34 @@ async fn update_user_profile(
     let country = payload.country.as_deref().map(|s| s.trim());
     let status = payload.status.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
 
+    let update_tz = payload.timezone.is_some();
+    let tz_bind: Option<String> = match &payload.timezone {
+        None => None,
+        Some(None) => None,
+        Some(Some(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+    };
+
+    let update_dc = payload.display_currency.is_some();
+    let dc_bind: Option<String> = match &payload.display_currency {
+        None => None,
+        Some(None) => None,
+        Some(Some(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+    };
+
     let rows = sqlx::query(
         r#"
         UPDATE users SET
@@ -728,8 +762,10 @@ async fn update_user_profile(
             phone = COALESCE($4, phone),
             country = COALESCE($5, country),
             status = COALESCE($6::user_status, status),
+            timezone = CASE WHEN $7 THEN $8 ELSE timezone END,
+            display_currency = CASE WHEN $9 THEN $10 ELSE display_currency END,
             updated_at = NOW()
-        WHERE id = $7 AND deleted_at IS NULL
+        WHERE id = $11 AND deleted_at IS NULL
         "#,
     )
     .bind(first_name)
@@ -738,6 +774,10 @@ async fn update_user_profile(
     .bind(phone)
     .bind(country)
     .bind(status)
+    .bind(update_tz)
+    .bind(tz_bind)
+    .bind(update_dc)
+    .bind(dc_bind)
     .bind(user_id)
     .execute(&pool)
     .await

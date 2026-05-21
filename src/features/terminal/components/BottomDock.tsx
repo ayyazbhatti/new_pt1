@@ -1,6 +1,6 @@
-import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, AlertCircle, Maximize2, Minimize2, Search, MoreVertical } from 'lucide-react'
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { createPortal } from 'react-dom'
+import { Columns, Download, Wallet, TrendingUp, Shield, DollarSign, Gift, Gauge, ArrowUpRight, ArrowDownRight, X, Edit, Trash2, XCircle, Package, FileText, History, AlertCircle, Maximize2, Minimize2, Search, MoreVertical, ChevronDown } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
+import { createPortal, flushSync } from 'react-dom'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -18,8 +18,17 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { useWalletStore } from '@/shared/store/walletStore'
 import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
 import { wsClient } from '@/shared/ws/wsClient'
+import { getWsGatewayUrl } from '@/shared/ws/wsGatewayUrl'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { useTerminalStore } from '../store/terminalStore'
+import { useFormatDateTime, useFormatDateTimeSeconds, useFormatTime } from '@/shared/datetime'
+import { useFormatFromUsd, useFormatSignedFromUsd, useFormatConverted, useFormatAmount } from '@/shared/currency'
+import type { MockSymbol } from '@/shared/mock/terminalMock'
+import {
+  openPositionPnlParts,
+  closedPositionPnlParts,
+  PositionPnLBreakdown,
+} from '@/shared/components/PositionPnLBreakdown'
 
 /** User-friendly message for close position errors (403 = trading disabled, else use API message). */
 function closePositionErrorMessage(err: unknown): string {
@@ -32,11 +41,26 @@ function closePositionErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Failed to close position'
 }
 
+/** Normalize position id so optimistic remove / tombstones match REST + WS regardless of UUID casing. */
+function canonicalPositionId(id: string): string {
+  return id.trim().toLowerCase()
+}
+
 function copyToClipboard(text: string, label: string) {
   void navigator.clipboard.writeText(text).then(
     () => toast.success(`${label} copied`),
     () => toast.error('Failed to copy')
   )
+}
+
+function resolveQuoteCurrency(posSymbol: string, symbols: MockSymbol[]): string {
+  const key = posSymbol.trim().toUpperCase()
+  const s = symbols.find(
+    (x) =>
+      x.code.toUpperCase() === key ||
+      (x.priceLookupKey != null && String(x.priceLookupKey).toUpperCase() === key),
+  )
+  return s?.quoteCurrency ?? 'USD'
 }
 
 const WS_POSITION_GRACE_MS = 5000
@@ -49,16 +73,17 @@ function mergePositions(
   graceMs: number,
 ): Position[] {
   const now = Date.now()
-  const restById = new Map(restPositions.map((p) => [p.id, p]))
+  const restById = new Map(restPositions.map((p) => [canonicalPositionId(p.id), p]))
   const merged: Position[] = [...restPositions]
 
   for (const local of currentPositions) {
-    if (restById.has(local.id)) continue
+    const localKey = canonicalPositionId(local.id)
+    if (restById.has(localKey)) continue
     if (local.status !== 'OPEN') continue
-    const appendedAt = wsAppendedAt.get(local.id)
+    const appendedAt = wsAppendedAt.get(localKey)
     if (appendedAt == null) continue
     if (now - appendedAt > graceMs) {
-      wsAppendedAt.delete(local.id)
+      wsAppendedAt.delete(localKey)
       continue
     }
     merged.push(local)
@@ -69,6 +94,28 @@ function mergePositions(
   }
 
   return merged
+}
+
+/** After client-side close, GET open positions can briefly still return OPEN (Redis lag). Omit those rows until the server catches up. */
+const POSITION_CLOSE_TOMBSTONE_MS = 25_000
+const POSITION_CLOSE_TOMBSTONE_MAX_MS = 60_000
+
+function filterRestAfterClientClose(rest: Position[], tombstones: Map<string, number>): Position[] {
+  const now = Date.now()
+  for (const [id, ts] of tombstones.entries()) {
+    if (now - ts > POSITION_CLOSE_TOMBSTONE_MAX_MS) tombstones.delete(id)
+  }
+  const filtered = rest.filter((p) => {
+    const key = canonicalPositionId(p.id)
+    const ts = tombstones.get(key)
+    if (ts == null) return true
+    if (p.status === 'OPEN' && now - ts < POSITION_CLOSE_TOMBSTONE_MS) return false
+    return true
+  })
+  for (const id of Array.from(tombstones.keys())) {
+    if (!rest.some((p) => canonicalPositionId(p.id) === id)) tombstones.delete(id)
+  }
+  return filtered
 }
 
 export interface BottomDockProps {
@@ -123,10 +170,21 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const bottomDockRef = useRef<HTMLDivElement>(null)
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
   const { accountSummary } = useAccountSummary()
+  const formatDateTime = useFormatDateTime()
+  const formatDateTimeSeconds = useFormatDateTimeSeconds()
+  const formatTime = useFormatTime()
+  const formatMoney = useFormatFromUsd()
+  const formatSigned = useFormatSignedFromUsd()
+  const formatConv = useFormatConverted()
+  const formatAmt = useFormatAmount()
+  const formatMoneyRef = useRef(formatMoney)
+  formatMoneyRef.current = formatMoney
+  const terminalSymbols = useTerminalStore((s) => s.symbols)
   const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
   const canClosePosition = tradingAccess !== 'disabled'
   const [formulaTooltip, setFormulaTooltip] = useState<{ formula: string; rect: DOMRect } | null>(null)
   const [expandedPositionId, setExpandedPositionId] = useState<string | null>(null)
+  const [expandedHistoryPositionId, setExpandedHistoryPositionId] = useState<string | null>(null)
   const [actionMenuPositionId, setActionMenuPositionId] = useState<string | null>(null)
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressHandledRef = useRef(false)
@@ -134,6 +192,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const visibleDockTabRef = useRef(effectiveTab ?? activeTab)
   visibleDockTabRef.current = effectiveTab ?? activeTab
   const setMobileTab = useTerminalStore((s) => s.setMobileTab)
+  const openPositionsRefreshNonce = useTerminalStore((s) => s.openPositionsRefreshNonce)
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const lastWsMessageAtRef = useRef<number>(Date.now())
@@ -147,6 +206,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const [closeProfitableOnlyLoading, setCloseProfitableOnlyLoading] = useState(false)
   /** When WS appended an open row before REST/Redis lists it; used to avoid stale GET wiping the row. */
   const wsAppendedAtRef = useRef<Map<string, number>>(new Map())
+  /** Position ids we closed locally; suppress stale OPEN from REST for a short window (mergePositions re-add bug). */
+  const positionCloseTombstonesRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     const el = bottomDockRef.current
@@ -188,21 +249,19 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         const bTime = b.opened_at || b.updated_at || 0
         return bTime - aTime
       })
-    return open.map(pos => {
+    return open.map((pos) => {
       const sizeNum = parseFloat(pos.size || '0')
       const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
       const symbolKey = normalizeSymbolKey(pos.symbol)
       let priceData = livePrices.get(symbolKey)
       if (!priceData) priceData = livePrices.get(pos.symbol.toUpperCase())
       const livePrice = priceData
-        ? (pos.side === 'LONG' ? parseFloat(priceData.bid) : parseFloat(priceData.ask))
+        ? pos.side === 'LONG'
+          ? parseFloat(priceData.bid)
+          : parseFloat(priceData.ask)
         : null
-      const unrealizedPnl = livePrice !== null
-        ? (pos.side === 'LONG'
-            ? (livePrice - entryPrice) * sizeNum
-            : (entryPrice - livePrice) * sizeNum)
-        : parseFloat(pos.unrealized_pnl || '0')
-      return { position: pos, livePrice, unrealizedPnl, sizeNum, entryPrice }
+      const { market: marketPnl, net: unrealizedPnl } = openPositionPnlParts(pos, livePrice, sizeNum, entryPrice)
+      return { position: pos, livePrice, unrealizedPnl, marketPnl, sizeNum, entryPrice }
     })
   }, [positions, livePrices])
 
@@ -241,8 +300,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     if (!silent) setPositionsLoading(true)
     try {
       const data = await getOpenPositions()
+      const filtered = filterRestAfterClientClose(data, positionCloseTombstonesRef.current)
       setPositions((current) =>
-        mergePositions(data, current, wsAppendedAtRef.current, WS_POSITION_GRACE_MS)
+        mergePositions(filtered, current, wsAppendedAtRef.current, WS_POSITION_GRACE_MS)
       )
       return data
     } catch (error: unknown) {
@@ -326,6 +386,19 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     }
   }, [])
 
+  // Place order / fill observed elsewhere in terminal: reconcile lists (event-driven, not polling).
+  useEffect(() => {
+    if (openPositionsRefreshNonce === 0) return
+    void fetchOpenPositions(true)
+    void fetchOrders(true)
+    const t = window.setTimeout(() => void fetchOpenPositions(true), 450)
+    const t2 = window.setTimeout(() => void fetchOpenPositions(true), 1100)
+    return () => {
+      window.clearTimeout(t)
+      window.clearTimeout(t2)
+    }
+  }, [openPositionsRefreshNonce, fetchOpenPositions, fetchOrders])
+
   // Initial fetch on mount — open positions only; closed history loads when tab is opened.
   useEffect(() => {
     void fetchOpenPositions()
@@ -334,11 +407,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
 
   // WebSocket for real-time position/order updates with reconnection (no polling)
   useEffect(() => {
-    const wsUrl =
-      import.meta.env.VITE_WS_URL ||
-      (typeof location !== 'undefined'
-        ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?group=default`
-        : 'ws://localhost:3003/ws?group=default')
+    const wsUrl = getWsGatewayUrl()
     let reconnectAttempts = 0
     const maxReconnectAttempts = 30
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
@@ -440,9 +509,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 })
                 if (!isInitialLoad && currentBalance !== newBalance) {
                   const isIncrease = newBalance > currentBalance
+                  const balLabel = formatMoneyRef.current(newBalance)
                   const msg = isIncrease
-                    ? `Deposit approved – balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                    : `Balance updated: $${newBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    ? `Deposit approved – balance updated: ${balLabel}`
+                    : `Balance updated: ${balLabel}`
                   toast.success(msg, { duration: 3000 })
                 }
               }
@@ -453,16 +523,19 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
           }
 
           if (data.type === 'position_update') {
-            const positionId = data.position_id
+            const positionId = data.position_id as string
             if (!positionId) return
+            const pid = canonicalPositionId(positionId)
             const positionStatus = (data.status || 'OPEN').toUpperCase() as 'OPEN' | 'CLOSED' | 'LIQUIDATED'
             const isOpen = positionStatus === 'OPEN'
 
             setPositions(prev => {
-              const existing = prev.findIndex(p => p.id === positionId)
+              const existing = prev.findIndex((p) => canonicalPositionId(p.id) === pid)
               if (existing >= 0) {
                 if (positionStatus === 'CLOSED' || positionStatus === 'LIQUIDATED') {
-                  wsAppendedAtRef.current.delete(positionId)
+                  wsAppendedAtRef.current.delete(pid)
+                  positionCloseTombstonesRef.current.set(pid, Date.now())
+                  return prev.filter((p) => canonicalPositionId(p.id) !== pid)
                 }
                 const updated = [...prev]
                 updated[existing] = {
@@ -478,6 +551,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 return updated
               }
               if (isOpen) {
+                const tombTs = positionCloseTombstonesRef.current.get(pid)
+                if (tombTs != null && Date.now() - tombTs < POSITION_CLOSE_TOMBSTONE_MS) {
+                  return prev
+                }
                 const newPosition: Position = {
                   id: positionId,
                   user_id: '',
@@ -499,7 +576,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   updated_at: Date.now(),
                   closed_at: undefined,
                 }
-                wsAppendedAtRef.current.set(newPosition.id, Date.now())
+                wsAppendedAtRef.current.set(pid, Date.now())
                 setTimeout(() => {
                   void fetchOpenPositions(true)
                   void fetchOrders(true)
@@ -507,8 +584,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 return [...prev, newPosition]
               }
               if (positionStatus === 'CLOSED' || positionStatus === 'LIQUIDATED') {
-                wsAppendedAtRef.current.delete(positionId)
-                return prev.filter(p => p.id !== positionId)
+                wsAppendedAtRef.current.delete(pid)
+                positionCloseTombstonesRef.current.set(pid, Date.now())
+                return prev.filter((p) => canonicalPositionId(p.id) !== pid)
               }
               return prev
             })
@@ -749,7 +827,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     <Skeleton className="h-4 w-12" variant="text" />
                     <Skeleton className="h-4 w-12" variant="text" />
                     <Skeleton className="h-4 w-12" variant="text" />
-                    <Skeleton className="h-4 w-12" variant="text" />
+                    <Skeleton className="h-4 w-28" variant="text" />
                     <Skeleton className="h-4 w-16" variant="text" />
                   </div>
                 ))}
@@ -761,10 +839,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   {/* Account Summary - flat label/value list, no card border */}
                   <section className="space-y-2 py-1">
                     {[
-                      { label: 'Balance', value: accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—', valueClass: 'text-text' },
-                      { label: 'Equity', value: accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—', valueClass: 'text-text' },
-                      { label: 'Margin', value: accountSummary != null ? `$${(accountSummary.marginLevel === 'inf' ? 0 : accountSummary.marginUsed).toFixed(2)}` : '—', valueClass: 'text-text' },
-                      { label: 'Free Margin', value: accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—', valueClass: 'text-text' },
+                      { label: 'Balance', value: accountSummary != null ? formatMoney(accountSummary.balance) : '—', valueClass: 'text-text' },
+                      { label: 'Equity', value: accountSummary != null ? formatMoney(accountSummary.equity) : '—', valueClass: 'text-text' },
+                      { label: 'Margin', value: accountSummary != null ? formatMoney(accountSummary.marginLevel === 'inf' ? 0 : accountSummary.marginUsed) : '—', valueClass: 'text-text' },
+                      { label: 'Free Margin', value: accountSummary != null ? formatMoney(accountSummary.freeMargin) : '—', valueClass: 'text-text' },
                       { label: 'Margin Level (%)', value: accountSummary != null ? (accountSummary.marginLevel === 'inf' ? '∞' : `${accountSummary.marginLevel}%`) : '—', valueClass: 'text-accent font-semibold' },
                       { label: 'Total Positions', value: String(openPositionsWithComputed.length), valueClass: 'text-text' },
                     ].map(({ label, value, valueClass }) => (
@@ -834,7 +912,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     </div>
                   ) : (
                     <>
-                  {mobileFilteredPositions.map(({ position: pos, livePrice, unrealizedPnl, sizeNum, entryPrice }) => {
+                  {mobileFilteredPositions.map(({ position: pos, livePrice, unrealizedPnl, marketPnl, sizeNum, entryPrice }) => {
+                    const posQuote = resolveQuoteCurrency(pos.symbol, terminalSymbols)
+                    const marginNum = parseFloat(pos.margin || '0')
                     const openEditPositionPopup = () => {
                       const currentPos = positions.find(p => p.id === pos.id)
                       if (!currentPos) return
@@ -861,12 +941,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       setEditDialogOpen(true)
                     }
                     const ts = pos.opened_at != null ? (pos.opened_at < 1e12 ? pos.opened_at * 1000 : pos.opened_at) : Date.now()
-                    const openedAtStr = new Date(ts).toLocaleString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
-                    const d = new Date(ts)
-                    const openedAtLongStr = `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} at ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })}`
-                    const currentStr = livePrice != null ? livePrice.toFixed(5) : '—'
+                    const openedAtStr = formatDateTimeSeconds(ts)
+                    const openedAtLongStr = formatDateTimeSeconds(ts)
+                    const currentStr = livePrice != null ? formatConv(livePrice, posQuote) : '—'
                     const isExpanded = expandedPositionId === pos.id
-                    const marginNum = parseFloat(pos.margin || '0')
                     const hasValidSl = pos.sl != null && String(pos.sl).trim() !== '' && pos.sl !== 'null' && !Number.isNaN(Number(pos.sl))
                     const hasValidTp = pos.tp != null && String(pos.tp).trim() !== '' && pos.tp !== 'null' && !Number.isNaN(Number(pos.tp))
                     const handleRowClick = () => {
@@ -918,32 +996,38 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               <span className="font-bold text-text ml-1">{sizeNum.toFixed(8)}</span>
                             </div>
                             <div className="text-xs text-slate-600 dark:text-muted font-mono mt-0.5">
-                              {entryPrice.toFixed(5)} → {currentStr}
+                              {formatConv(entryPrice, posQuote)} → {currentStr}
                             </div>
                           </div>
                           <div className="text-right shrink-0">
                             <div className="text-[11px] text-slate-600 dark:text-muted">{openedAtStr}</div>
-                            <div className={cn('text-sm font-semibold', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
-                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(4)}
+                            <div className={cn('text-sm font-semibold whitespace-nowrap tabular-nums', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
+                              {formatSigned(unrealizedPnl)}
                             </div>
                           </div>
                         </div>
                         {isExpanded && (
                           <div className="pt-3 pb-2 space-y-2 border-t border-slate-200 dark:border-white/5 mt-2" onClick={(e) => e.stopPropagation()}>
-                            <div className={cn('text-lg font-bold', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
-                              {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(4)}
+                            <div>
+                              <div className="text-xs font-semibold text-slate-600 dark:text-muted mb-1">P&L breakdown</div>
+                              <PositionPnLBreakdown
+                                marketPnlUsd={marketPnl}
+                                accumulatedSwapUsd={pos.accumulatedSwapUsd}
+                                accumulatedFeesUsd={pos.accumulatedFeesUsd}
+                                netPnlUsd={unrealizedPnl}
+                              />
                             </div>
                             <div className="text-xs text-slate-600 dark:text-muted font-mono">
-                              {entryPrice.toFixed(4)} → {livePrice != null ? livePrice.toFixed(4) : '—'}
+                              {formatConv(entryPrice, posQuote)} → {livePrice != null ? formatConv(livePrice, posQuote) : '—'}
                             </div>
                             <div className="text-xs text-slate-600 dark:text-muted">{openedAtLongStr}</div>
                             <div className="flex justify-between gap-4 text-xs">
                               <div className="space-y-1 text-slate-600 dark:text-muted">
-                                {hasValidSl && <div>S/L {Number(pos.sl).toFixed(2)}</div>}
-                                <div>Margin {Number.isFinite(marginNum) ? marginNum.toFixed(4) : '—'}</div>
+                                {hasValidSl && <div>S/L {formatConv(Number(pos.sl), posQuote)}</div>}
+                                <div>Margin {Number.isFinite(marginNum) ? formatMoney(marginNum) : '—'}</div>
                               </div>
                               <div className="space-y-1 text-slate-600 dark:text-muted text-right">
-                                {hasValidTp && <div>T/P {Number(pos.tp).toFixed(2)}</div>}
+                                {hasValidTp && <div>T/P {formatConv(Number(pos.tp), posQuote)}</div>}
                                 <div className="font-mono">PID {pos.id.slice(0, 8)}</div>
                               </div>
                             </div>
@@ -1057,9 +1141,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Margin</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Entry</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Current</th>
-                    <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">P&L</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest whitespace-nowrap">P&L</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">S/L</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">T/P</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest whitespace-nowrap">Opened</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Actions</th>
                   </tr>
                 </thead>
@@ -1082,7 +1167,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       const sizeNum = parseFloat(pos.size || '0')
                       const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
                       const marginNum = parseFloat(pos.margin || '0')
-                      
+                      const posQuote = resolveQuoteCurrency(pos.symbol, terminalSymbols)
+
                       // Get live price for this symbol
                       // Normalize symbol key to match price stream format (USDT -> USD)
                       const symbolKey = normalizeSymbolKey(pos.symbol)
@@ -1093,19 +1179,24 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                         priceData = livePrices.get(pos.symbol.toUpperCase())
                       }
                       // Use bid for LONG positions, ask for SHORT positions
-                      const livePrice = priceData 
-                        ? (pos.side === 'LONG' ? parseFloat(priceData.bid) : parseFloat(priceData.ask))
+                      const livePrice = priceData
+                        ? pos.side === 'LONG'
+                          ? parseFloat(priceData.bid)
+                          : parseFloat(priceData.ask)
                         : null
-                      
-                      // Calculate unrealized P&L based on current price
-                      // For LONG: (current_price - entry_price) × size
-                      // For SHORT: (entry_price - current_price) × size
-                      const unrealizedPnl = livePrice !== null
-                        ? (pos.side === 'LONG' 
-                            ? (livePrice - entryPrice) * sizeNum
-                            : (entryPrice - livePrice) * sizeNum)
-                        : parseFloat(pos.unrealized_pnl || '0') // Fallback to stored value if no live price
-                      
+
+                      const { market: marketPnl, net: unrealizedPnl } = openPositionPnlParts(pos, livePrice, sizeNum, entryPrice)
+                      const rowExpanded = expandedPositionId === pos.id
+
+                      const openedMs =
+                        pos.opened_at != null
+                          ? pos.opened_at < 1e12
+                            ? pos.opened_at * 1000
+                            : pos.opened_at
+                          : null
+                      const openedAtStr =
+                        openedMs != null ? formatDateTimeSeconds(openedMs) : '—'
+
                       const openEditPositionPopup = () => {
                         const currentPos = positions.find(p => p.id === pos.id)
                         if (!currentPos) return
@@ -1140,8 +1231,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                         setEditDialogOpen(true)
                       }
                       return (
+                        <Fragment key={pos.id}>
                         <tr 
-                          key={pos.id} 
                           onClick={openEditPositionPopup}
                           className={cn(
                             "border-b border-slate-200 dark:border-white/5 hover:bg-surface-2/40 transition-all duration-200 cursor-pointer",
@@ -1161,25 +1252,44 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               {pos.side}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-text font-semibold">${marginNum.toFixed(4)}</td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(4)}</td>
+                          <td className="px-4 py-3 text-text font-semibold">{formatMoney(marginNum)}</td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">{formatConv(entryPrice, posQuote)}</td>
                           <td className={cn(
                             "px-4 py-3 font-mono font-bold",
                             livePrice !== null ? "text-accent" : "text-text/40"
                           )}>
                             {livePrice !== null 
-                              ? `$${livePrice.toFixed(4)}` 
+                              ? formatConv(livePrice, posQuote)
                               : <span className="text-text/40">--</span>
                             }
                           </td>
-                          <td className={cn(
-                            "px-4 py-3 font-mono font-bold",
-                            unrealizedPnl >= 0 ? "text-success" : "text-danger"
-                          )}>
-                            {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(4)}
+                          <td
+                            className={cn(
+                              'px-4 py-3 font-mono font-bold whitespace-nowrap tabular-nums',
+                              unrealizedPnl >= 0 ? 'text-success' : 'text-danger',
+                            )}
+                          >
+                            <div className="flex items-center gap-1 justify-end">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setExpandedPositionId((prev) => (prev === pos.id ? null : pos.id))
+                                }}
+                                className="p-1 rounded hover:bg-surface-2 text-slate-600 dark:text-muted shrink-0"
+                                title={rowExpanded ? 'Hide P&L breakdown' : 'Show P&L breakdown'}
+                                aria-expanded={rowExpanded}
+                              >
+                                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', rowExpanded && 'rotate-180')} />
+                              </button>
+                              <span>{formatSigned(unrealizedPnl)}</span>
+                            </div>
                           </td>
-                          <td className="px-4 py-3 font-mono text-text/70">{pos.sl ? `$${parseFloat(pos.sl).toFixed(2)}` : '-'}</td>
-                          <td className="px-4 py-3 font-mono text-text/70">{pos.tp ? `$${parseFloat(pos.tp).toFixed(2)}` : '-'}</td>
+                          <td className="px-4 py-3 font-mono text-text/70">{pos.sl ? formatConv(parseFloat(pos.sl), posQuote) : '-'}</td>
+                          <td className="px-4 py-3 font-mono text-text/70">{pos.tp ? formatConv(parseFloat(pos.tp), posQuote) : '-'}</td>
+                          <td className="px-4 py-3 text-text/90 whitespace-nowrap tabular-nums" title={openedAtStr}>
+                            {openedAtStr}
+                          </td>
                           <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center gap-1">
                               <button
@@ -1208,6 +1318,29 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                             </div>
                           </td>
                         </tr>
+                        {rowExpanded ? (
+                          <tr
+                            className={cn(
+                              'border-b border-slate-200 dark:border-white/5',
+                              index % 2 === 0 ? 'bg-surface/30' : 'bg-surface/50',
+                            )}
+                          >
+                            <td colSpan={12} className="px-4 py-3 bg-surface-2/40">
+                              <div className="max-w-md">
+                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-muted mb-2">
+                                  P&L breakdown
+                                </div>
+                                <PositionPnLBreakdown
+                                  marketPnlUsd={marketPnl}
+                                  accumulatedSwapUsd={pos.accumulatedSwapUsd}
+                                  accumulatedFeesUsd={pos.accumulatedFeesUsd}
+                                  netPnlUsd={unrealizedPnl}
+                                />
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                        </Fragment>
                       )
                     })
                     
@@ -1269,8 +1402,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     const s = (o.status || '').trim().toLowerCase()
                     return s === 'pending' || s === 'cancelling'
                   }).map((order, index) => {
-                    const createdDate = new Date(order.created_at)
-                    const timeStr = createdDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                    const timeStr = formatTime(order.created_at)
                     const statusNorm = (order.status || '').trim().toLowerCase()
                     const isPendingOrder = statusNorm === 'pending'
                     const isCancellingOrder = statusNorm === 'cancelling'
@@ -1405,16 +1537,11 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 </thead>
                 <tbody>
                   {filledOrders.map((order, index) => {
-                    const createdDate = new Date(order.created_at)
-                    const timeStr = createdDate.toLocaleString('en-US', { 
-                      month: 'short', 
-                      day: 'numeric', 
-                      hour: '2-digit', 
-                      minute: '2-digit' 
-                    })
+                    const timeStr = formatDateTime(order.created_at)
                     const filledSize = parseFloat(order.filled_size || order.size || '0')
                     const avgPrice = parseFloat(order.average_price || order.price || '0')
-                    
+                    const orderQuote = resolveQuoteCurrency(order.symbol, terminalSymbols)
+
                     return (
                     <tr 
                       key={order.id} 
@@ -1438,7 +1565,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       </td>
                       <td className="px-4 py-3 text-text font-medium">{order.size}</td>
                         <td className="px-4 py-3 text-text font-medium">{filledSize.toFixed(6)}</td>
-                        <td className="px-4 py-3 font-mono text-text">{avgPrice > 0 ? `$${avgPrice.toFixed(2)}` : '-'}</td>
+                        <td className="px-4 py-3 font-mono text-text">{avgPrice > 0 ? formatAmt(avgPrice, orderQuote) : '-'}</td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
                           {order.status}
@@ -1488,7 +1615,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Direction</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Entry</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Exit</th>
-                    <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">P&L</th>
+                    <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest whitespace-nowrap">P&L</th>
                     <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Status</th>
                       <th className="px-4 py-3 text-left text-[10px] text-slate-600/90 dark:text-muted/80 uppercase font-bold tracking-widest">Closed</th>
                   </tr>
@@ -1506,12 +1633,14 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       const exitPrice = exitPriceValue && exitPriceValue !== 'null' && exitPriceValue !== '' 
                         ? parseFloat(String(exitPriceValue)) 
                         : null
-                      const realizedPnl = parseFloat(pos.realized_pnl || '0')
-                      const closedAt = pos.updated_at ? new Date(pos.updated_at).toLocaleString() : '-'
-                      
+                      const { market: marketPnl, net: netClosedPnl } = closedPositionPnlParts(pos)
+                      const historyExpanded = expandedHistoryPositionId === pos.id
+                      const closedAt = pos.updated_at ? formatDateTime(pos.updated_at) : '-'
+                      const posQuote = resolveQuoteCurrency(pos.symbol, terminalSymbols)
+
                       return (
+                    <Fragment key={pos.id}>
                     <tr 
-                      key={pos.id} 
                       className={cn(
                         "border-b border-slate-200 dark:border-white/5 hover:bg-surface-2/40 transition-all duration-200",
                         index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
@@ -1530,15 +1659,28 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               {pos.side}
                         </span>
                       </td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">${entryPrice.toFixed(4)}</td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">{formatConv(entryPrice, posQuote)}</td>
                           <td className="px-4 py-3 font-mono text-text font-medium">
-                            {exitPrice !== null ? `$${exitPrice.toFixed(4)}` : '-'}
+                            {exitPrice !== null ? formatConv(exitPrice, posQuote) : '-'}
                           </td>
                           <td className={cn(
-                            "px-4 py-3 font-mono font-bold",
-                            realizedPnl >= 0 ? "text-success" : "text-danger"
+                            "px-4 py-3 font-mono font-bold whitespace-nowrap tabular-nums",
+                            netClosedPnl >= 0 ? "text-success" : "text-danger"
                           )}>
-                            {realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(4)}
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedHistoryPositionId((prev) => (prev === pos.id ? null : pos.id))
+                                }
+                                className="p-1 rounded hover:bg-surface-2 text-slate-600 dark:text-muted shrink-0"
+                                title={historyExpanded ? 'Hide P&L breakdown' : 'Show P&L breakdown'}
+                                aria-expanded={historyExpanded}
+                              >
+                                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', historyExpanded && 'rotate-180')} />
+                              </button>
+                              <span>{formatSigned(netClosedPnl)}</span>
+                            </div>
                           </td>
                           <td className="px-4 py-3">
                             <span className={cn(
@@ -1550,6 +1692,24 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                           </td>
                           <td className="px-4 py-3 text-text/70 text-[10px]">{closedAt}</td>
                     </tr>
+                    {historyExpanded ? (
+                      <tr className={cn(index % 2 === 0 ? 'bg-surface/30' : 'bg-surface/50', 'border-b border-slate-200 dark:border-white/5')}>
+                        <td colSpan={9} className="px-4 py-3 bg-surface-2/40">
+                          <div className="max-w-md">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-muted mb-2">
+                              P&L breakdown
+                            </div>
+                            <PositionPnLBreakdown
+                              marketPnlUsd={marketPnl}
+                              accumulatedSwapUsd={pos.accumulatedSwapUsd}
+                              accumulatedFeesUsd={pos.accumulatedFeesUsd}
+                              netPnlUsd={netClosedPnl}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                    </Fragment>
                       )
                     })}
                 </tbody>
@@ -1565,14 +1725,41 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       <div className={cn('shrink-0 h-14 border-t border-slate-200 dark:border-white/5 bg-surface-2 items-center px-4 text-sm overflow-x-auto scrollbar-thin scrollbar-hide', fullHeight ? 'hidden md:flex' : 'flex')}>
         <div className="flex items-center gap-4 min-w-max">
           {([
-            { formula: 'Balance = Deposits − Withdrawals + Realized PnL', icon: Wallet, label: 'Balance ', value: accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—', valueClass: 'text-text' },
-            { formula: 'Equity = Balance + Unrealized PnL', icon: TrendingUp, label: 'Equity ', value: accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—', valueClass: 'text-text' },
-            { formula: 'Margin = Sum of margin used by all open positions', icon: Shield, label: 'Margin ', value: accountSummary != null ? `$${(accountSummary.marginLevel === 'inf' ? 0 : accountSummary.marginUsed).toFixed(2)}` : '—', valueClass: 'text-text' },
-            { formula: 'Free Margin = Equity − Margin', icon: DollarSign, label: 'Free Margin ', value: accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—', valueClass: 'text-text' },
-            { formula: 'Bonus = Credit or promotion (if any)', icon: Gift, label: 'Bonus ', value: '$0.00', valueClass: 'text-text' },
+            {
+              formula:
+                'Balance reflects deposits, withdrawals, closed position P&L, fees paid (at order placement), and swap settlements (when positions close).',
+              icon: Wallet,
+              label: 'Balance ',
+              value: accountSummary != null ? formatMoney(accountSummary.balance) : '—',
+              valueClass: 'text-text',
+            },
+            {
+              formula:
+                'Equity = Balance + Bonus + Unrealized P&L\n\nBalance reflects deposits, withdrawals, closed position P&L, fees paid, and swap settlements.\nUnrealized P&L is net of accrued swap (and fees already taken at placement) on open positions.',
+              icon: TrendingUp,
+              label: 'Equity ',
+              value: accountSummary != null ? formatMoney(accountSummary.equity) : '—',
+              valueClass: 'text-text',
+            },
+            { formula: 'Margin = Sum of margin used by all open positions', icon: Shield, label: 'Margin ', value: accountSummary != null ? formatMoney(accountSummary.marginLevel === 'inf' ? 0 : accountSummary.marginUsed) : '—', valueClass: 'text-text' },
+            {
+              formula: 'Free Margin = Equity − Margin Used\nAvailable to open new positions.',
+              icon: DollarSign,
+              label: 'Free Margin ',
+              value: accountSummary != null ? formatMoney(accountSummary.freeMargin) : '—',
+              valueClass: 'text-text',
+            },
+            { formula: 'Bonus = Non-withdrawable promotional trading credit', icon: Gift, label: 'Bonus ', value: accountSummary != null ? formatMoney(accountSummary.bonus ?? 0) : '—', valueClass: 'text-text' },
             { formula: 'Margin Level = (Equity ÷ Margin) × 100% (∞ when Margin = 0)', icon: Gauge, label: 'Margin Level ', value: accountSummary != null ? (accountSummary.marginLevel === 'inf' ? '∞' : `${accountSummary.marginLevel}%`) : '—', valueClass: 'font-semibold text-accent' },
-            { formula: 'RI PNL (Realized PnL) = Profit/Loss from closed positions', icon: ArrowUpRight, label: 'RI PNL ', value: accountSummary != null ? (accountSummary.realizedPnl >= 0 ? `$${accountSummary.realizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.realizedPnl).toFixed(2)}`) : '—', valueClass: cn(accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success') },
-            { formula: 'UnR Net PNL (Unrealized PnL) = Profit/Loss on open positions (mark-to-market)', icon: ArrowDownRight, label: 'UnR Net PNL ', value: accountSummary != null ? (accountSummary.unrealizedPnl >= 0 ? `$${accountSummary.unrealizedPnl.toFixed(2)}` : `-$${Math.abs(accountSummary.unrealizedPnl).toFixed(2)}`) : '—', valueClass: cn(accountSummary != null && accountSummary.unrealizedPnl < 0 ? 'text-danger' : 'text-success') },
+            { formula: 'RI PNL (Realized PnL) = Profit/Loss from closed positions', icon: ArrowUpRight, label: 'RI PNL ', value: accountSummary != null ? formatSigned(accountSummary.realizedPnl) : '—', valueClass: cn(accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success') },
+            {
+              formula:
+                'Unrealized P&L (net) = sum of net P&L on open positions (market move minus accrued swap; fees already reflected in balance).',
+              icon: ArrowDownRight,
+              label: 'UnR Net PNL ',
+              value: accountSummary != null ? formatSigned(accountSummary.unrealizedPnl) : '—',
+              valueClass: cn(accountSummary != null && accountSummary.unrealizedPnl < 0 ? 'text-danger' : 'text-success'),
+            },
           ] as const).map(({ formula, icon: Icon, label, value, valueClass }, i) => (
             <span key={i} className="contents">
               {i > 0 ? <div className="h-4 w-px bg-border shrink-0" /> : null}
@@ -1592,7 +1779,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
       {formulaTooltip &&
         createPortal(
           <div
-            className="fixed z-[9999] px-2.5 py-1.5 text-xs font-medium text-text bg-surface border border-border rounded shadow-lg whitespace-nowrap pointer-events-none"
+            className="fixed z-[9999] px-2.5 py-2 text-xs font-medium text-text bg-surface border border-border rounded shadow-lg max-w-xs text-left whitespace-pre-line pointer-events-none"
             style={{
               left: formulaTooltip.rect.left + formulaTooltip.rect.width / 2,
               bottom: window.innerHeight - formulaTooltip.rect.top + 6,
@@ -1677,9 +1864,16 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   try {
                     for (const pos of openPositions) {
                       try {
+                        const pk = canonicalPositionId(pos.id)
+                        flushSync(() => {
+                          positionCloseTombstonesRef.current.set(pk, Date.now())
+                          setPositions((prev) => prev.filter((p) => canonicalPositionId(p.id) !== pk))
+                        })
                         await closePosition(pos.id)
                         closed++
                       } catch (err: unknown) {
+                        positionCloseTombstonesRef.current.delete(canonicalPositionId(pos.id))
+                        void fetchOpenPositions(true)
                         failedPositions.push({ id: pos.id, symbol: pos.symbol, error: closePositionErrorMessage(err) })
                       }
                     }
@@ -1751,9 +1945,16 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   try {
                     for (const pos of toClose) {
                       try {
+                        const pk = canonicalPositionId(pos.id)
+                        flushSync(() => {
+                          positionCloseTombstonesRef.current.set(pk, Date.now())
+                          setPositions((prev) => prev.filter((p) => canonicalPositionId(p.id) !== pk))
+                        })
                         await closePosition(pos.id)
                         closed++
                       } catch (err: unknown) {
+                        positionCloseTombstonesRef.current.delete(canonicalPositionId(pos.id))
+                        void fetchOpenPositions(true)
                         failedPositions.push({ id: pos.id, symbol: pos.symbol, error: closePositionErrorMessage(err) })
                       }
                     }
@@ -1813,17 +2014,21 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 onClick={async () => {
                   if (!closePositionId) return
                   const idToClose = closePositionId
+                  const idKey = canonicalPositionId(idToClose)
+                  flushSync(() => {
+                    positionCloseTombstonesRef.current.set(idKey, Date.now())
+                    setPositions((prev) => prev.filter((p) => canonicalPositionId(p.id) !== idKey))
+                  })
+                  setClosePositionDialogOpen(false)
+                  setClosePositionId(null)
                   try {
                     await closePosition(idToClose)
                     toast.success(`Position ${idToClose.slice(0, 8)}... closed successfully`)
-                    setClosePositionDialogOpen(false)
-                    setClosePositionId(null)
-                    // Optimistic update: remove from list immediately so it disappears
-                    setPositions((prev) => prev.filter((p) => p.id !== idToClose))
-                    // Refetch after delay so order-engine has time to process and list stays in sync
-                    setTimeout(() => fetchOpenPositions(true), 500)
-                    setTimeout(() => fetchOpenPositions(true), 1200)
+                    setTimeout(() => void fetchOpenPositions(true), 500)
+                    setTimeout(() => void fetchOpenPositions(true), 1200)
                   } catch (error: unknown) {
+                    positionCloseTombstonesRef.current.delete(idKey)
+                    void fetchOpenPositions(true)
                     toast.error(closePositionErrorMessage(error))
                   }
                 }}
@@ -1903,7 +2108,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     <label className="text-xs text-slate-600 dark:text-muted mb-1 block font-semibold">Stop Loss</label>
                     <div className="grid grid-cols-2 gap-2">
                   <div>
-                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">Price ($)</label>
+                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">
+                          Price ({resolveQuoteCurrency(editingPosition.symbol, terminalSymbols)})
+                        </label>
                         <Input 
                           type="number" 
                           step="0.01" 
@@ -1933,7 +2140,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                         />
                   </div>
                   <div>
-                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">Amount ($)</label>
+                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">
+                          Amount ({resolveQuoteCurrency(editingPosition.symbol, terminalSymbols)} notional)
+                        </label>
                         <Input 
                           type="number" 
                           step="0.01" 
@@ -1970,7 +2179,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     <label className="text-xs text-slate-600 dark:text-muted mb-1 block font-semibold">Take Profit</label>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">Price ($)</label>
+                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">
+                          Price ({resolveQuoteCurrency(editingPosition.symbol, terminalSymbols)})
+                        </label>
                         <Input 
                           type="number" 
                           step="0.01" 
@@ -2000,7 +2211,9 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                         />
                       </div>
                       <div>
-                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">Amount ($)</label>
+                        <label className="text-[10px] text-slate-600 dark:text-muted mb-1 block">
+                          Amount ({resolveQuoteCurrency(editingPosition.symbol, terminalSymbols)} notional)
+                        </label>
                         <Input 
                           type="number" 
                           step="0.01" 

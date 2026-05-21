@@ -1,4 +1,5 @@
 import { normalizeSymbolKey } from '@/shared/utils/symbolKeyNormalize'
+import { getWsGatewayUrl } from '@/shared/ws/wsGatewayUrl'
 
 /**
  * ws-gateway only accepts alphanumeric symbols. MMDPS rows often use `EUR/USD` — normalize to `EURUSD`
@@ -22,11 +23,7 @@ function normalizeWsSubscribeSymbols(symbols: string[]): string[] {
  * Use this when the user is authenticated so they receive their group's markup.
  */
 function getGatewayPriceWsUrl(): string {
-  if (typeof location !== 'undefined') {
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-    return `${protocol}://${location.host}/ws?group=default`
-  }
-  return 'ws://localhost:3003/ws?group=default'
+  return getWsGatewayUrl()
 }
 
 /**

@@ -1,5 +1,5 @@
 import type { AppointmentStatus } from '../types'
-import { getStatusBadgeClasses } from '../utils/format'
+import { getStatusBadgeClasses } from '../utils/appointmentStatusBadges'
 import { cn } from '@/shared/utils'
 
 interface StatusBadgeProps {

@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTerminalStore } from '../store'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { useFormatFromUsd } from '@/shared/currency'
 import { useWebSocketState } from '@/shared/ws/wsHooks'
 import { toast } from '@/shared/components/common'
 import { placeOrder, estimateOrderMargin, clientMarketFallbackMarginUsdOrNull } from '../api/orders.api'
@@ -17,6 +18,7 @@ import { me, getSymbolLeverage } from '@/shared/api/auth.api'
 export function ChartTradingStrip() {
   const { selectedSymbol } = useTerminalStore()
   const { accountSummary } = useAccountSummary()
+  const formatMoney = useFormatFromUsd()
   const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
   const wsState = useWebSocketState()
 
@@ -78,11 +80,11 @@ export function ChartTradingStrip() {
   const marginCalcUnavailable = canEstimateServerMargin && estMarginUsd == null
 
   const estMarginFormatted = useMemo(() => {
-    if (!selectedSymbol) return '$0.00'
-    if (sizeNum <= 0) return '$0.00'
+    if (!selectedSymbol) return formatMoney(0)
+    if (sizeNum <= 0) return formatMoney(0)
     if (estMarginUsd == null) return '—'
-    return `$${estMarginUsd.toFixed(2)}`
-  }, [selectedSymbol, sizeNum, estMarginUsd])
+    return formatMoney(estMarginUsd)
+  }, [selectedSymbol, sizeNum, estMarginUsd, formatMoney])
 
   const insufficientFreeMargin = estMarginUsd != null && estMarginUsd > freeMargin
 
@@ -114,7 +116,7 @@ export function ChartTradingStrip() {
     }
     if (insufficientFreeMargin && estMarginUsd != null) {
       toast.error(
-        `Insufficient funds: required margin $${estMarginUsd.toFixed(2)}, free margin $${freeMargin.toFixed(2)}`
+        `Insufficient funds: required margin ${formatMoney(estMarginUsd)}, free margin ${formatMoney(freeMargin)}`
       )
       return
     }
@@ -128,6 +130,7 @@ export function ChartTradingStrip() {
         idempotency_key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       }
       const res = await placeOrder(payload)
+      useTerminalStore.getState().requestOpenPositionsRefresh()
       toast.success(
         `${side} order submitted: ${size} @ ${selectedSymbol.code}${res.orderId ? ` (${res.orderId.slice(0, 8)}…)` : ''}`,
         { duration: 3000 }
@@ -153,7 +156,7 @@ export function ChartTradingStrip() {
       const free = Number(data?.free_margin)
       const msg = insufficientCode
         ? (Number.isFinite(required) && Number.isFinite(free)
-          ? `Insufficient funds: required margin $${required.toFixed(2)}, free margin $${free.toFixed(2)}`
+          ? `Insufficient funds: required margin ${formatMoney(required)}, free margin ${formatMoney(free)}`
           : 'Insufficient funds/margin to place this order')
         : (typeof data?.error === 'object' && data?.error?.message) || data?.message || (e?.message ?? 'Failed to place order')
       toast.error(msg)

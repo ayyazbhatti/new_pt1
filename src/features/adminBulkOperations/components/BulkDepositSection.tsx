@@ -4,13 +4,14 @@ import { listAllUsers, type UserResponse } from '@/shared/api/users.api'
 import { createDirectDeposit } from '@/features/adminFinance/api/finance.api'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { Button, Input, Label } from '@/shared/ui'
-import { formatCurrency } from '@/features/adminUsers/utils/formatters'
+import { useFormatFromUsd } from '@/shared/currency'
 import { toast } from '@/shared/components/common'
 import { Loader2, CheckSquare, Square, Search, DollarSign } from 'lucide-react'
 import { cn } from '@/shared/utils'
 
 export function BulkDepositSection() {
   const queryClient = useQueryClient()
+  const formatMoney = useFormatFromUsd()
   const canApproveDeposit = useCanAccess('deposits:approve')
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -105,7 +106,7 @@ export function BulkDepositSection() {
 
     if (failed.length === 0) {
       toast.success(
-        `${succeeded} deposit${succeeded === 1 ? '' : 's'} of ${formatCurrency(amountNum, 'USD')} applied successfully.`
+        `${succeeded} deposit${succeeded === 1 ? '' : 's'} of ${formatMoney(amountNum)} applied successfully.`
       )
       setAmount('')
       setNote('')
@@ -277,7 +278,7 @@ export function BulkDepositSection() {
         </Button>
         <span className="text-sm text-text-muted">
           {selectedIds.size > 0 && amount && parseFloat(amount) > 0
-            ? `${formatCurrency(selectedIds.size * parseFloat(amount), 'USD')} total will be deposited to ${selectedIds.size} user(s).`
+            ? `${formatMoney(selectedIds.size * parseFloat(amount))} total will be deposited to ${selectedIds.size} user(s).`
             : 'Select users and enter an amount to proceed.'}
         </span>
       </div>

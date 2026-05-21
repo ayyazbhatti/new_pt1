@@ -1,4 +1,4 @@
-export type TransactionType = 'deposit' | 'withdrawal' | 'adjustment' | 'fee' | 'rebate'
+export type TransactionType = 'deposit' | 'withdrawal' | 'adjustment' | 'fee' | 'rebate' | 'swap'
 export type TransactionStatus = 'pending' | 'approved' | 'rejected' | 'failed' | 'completed'
 export type TransactionMethod = 'card' | 'bank' | 'crypto' | 'manual'
 export type Currency = 'USD' | 'EUR' | 'BTC' | 'USDT'

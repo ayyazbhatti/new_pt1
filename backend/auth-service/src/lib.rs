@@ -28,6 +28,7 @@ use routes::admin_leverage_profiles::create_admin_leverage_profiles_router;
 use routes::admin_symbols::create_admin_symbols_router;
 use routes::admin_markup::create_admin_markup_router;
 use routes::admin_swap::create_admin_swap_router;
+use routes::admin_fees::create_admin_fees_router;
 use routes::admin_users::{create_admin_user_notes_router, create_admin_users_router};
 use routes::admin_managers::create_admin_managers_router;
 use routes::admin_permission_profiles::create_admin_permission_profiles_router;
@@ -43,12 +44,15 @@ use routes::orders::create_orders_router;
 use routes::admin_trading::create_admin_trading_router;
 use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
+use routes::admin_bonus::create_admin_bonus_router;
 use routes::admin_call_records::create_admin_call_records_router;
 use routes::admin_voiso::create_admin_voiso_router;
 use routes::admin_system::create_admin_system_router;
 use routes::symbols::create_symbols_router;
 use routes::finance::create_finance_router;
 use routes::admin_settings::create_admin_settings_router;
+use routes::admin_fx::create_admin_fx_router;
+use routes::fx_rates::create_public_fx_router;
 use routes::appointments::create_appointments_router;
 use routes::user_preferences::create_user_preferences_router;
 use routes::kyc::{create_kyc_router, KycUploadDir};
@@ -70,7 +74,12 @@ pub async fn run_mmdps_sync() -> anyhow::Result<services::admin_symbols_service:
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    // Load environment variables
+    // `JWT_SECRET` from `backend/auth-service/.env` must win over IDE/shell exports or tokens and
+    // ws-gateway verification drift apart (`InvalidSignature`).
+    let auth_env = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+    if auth_env.is_file() {
+        crate::utils::forced_env::force_jwt_from_env_file(&auth_env);
+    }
     dotenv::dotenv().ok();
 
     // Fail fast on missing/weak JWT_SECRET rather than discovering it on first request.
@@ -83,6 +92,12 @@ pub async fn run() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "auth_service=debug,tower_http=debug,axum=debug".into()),
         )
         .init();
+
+    info!(
+        "JWT configured (issuer={:?}, JWT_SECRET_len={})",
+        env::var("JWT_ISSUER").unwrap_or_else(|_| "newpt".to_string()),
+        env::var("JWT_SECRET").map(|s| s.len()).unwrap_or(0)
+    );
 
     // Get database URL
     let database_url = env::var("DATABASE_URL")
@@ -103,6 +118,11 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("Connecting to Redis at {}", redis_url);
     let redis_pool = redis_pool::RedisPool::new(&redis_url).await?;
     tracing::info!("Redis pool ready (connection-manager + circuit breaker)");
+
+    let fx_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("reqwest client for FX rates");
 
     // Bootstrap Redis for per-group price stream (price:groups + symbol:markup:*)
     let markup_service = services::admin_markup_service::AdminMarkupService::new(pool.clone());
@@ -278,6 +298,10 @@ pub async fn run() -> anyhow::Result<()> {
         .nest("/api/admin/orders", create_admin_trading_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/positions", create_admin_positions_router(pool.clone(), admin_trading_state.clone()))
         .nest("/api/admin/audit", create_admin_audit_router(pool.clone()))
+        .nest(
+            "/api/admin/bonus",
+            create_admin_bonus_router(pool.clone(), deposits_state.clone()),
+        )
         .nest("/api/admin/call-records", create_admin_call_records_router(pool.clone()))
 .nest("/api/admin/voiso", create_admin_voiso_router(pool.clone()))
 .nest("/api/admin/system", create_admin_system_router(pool.clone()))
@@ -288,8 +312,12 @@ pub async fn run() -> anyhow::Result<()> {
         .nest("/api/admin/symbols", create_admin_symbols_router(pool.clone()))
         .nest("/api/admin/markup", create_admin_markup_router(pool.clone()))
         .nest("/api/admin/markup-profile-tags", routes::admin_markup::create_admin_markup_profile_tags_router(pool.clone()))
-        .nest("/api/admin/swap", create_admin_swap_router(pool.clone()))
+        .nest(
+            "/api/admin/swap",
+            create_admin_swap_router(pool.clone(), redis_pool.clone()),
+        )
         .nest("/api/admin/swap-rule-tags", routes::admin_swap::create_admin_swap_rule_tags_router(pool.clone()))
+        .nest("/api/admin/fees", create_admin_fees_router(pool.clone()))
         .nest("/api/admin/user-notes", create_admin_user_notes_router(pool.clone()))
         .nest("/api/admin/users", create_admin_users_router(pool.clone(), deposits_state.clone()))
         .nest(
@@ -306,6 +334,14 @@ pub async fn run() -> anyhow::Result<()> {
             "/api/admin/settings",
             create_admin_settings_router(pool.clone())
                 .layer(axum::extract::Extension(redis_pool.clone())),
+        )
+        .nest(
+            "/api/admin/fx-rates",
+            create_admin_fx_router(pool.clone(), redis_pool.clone(), fx_http_client.clone()),
+        )
+        .nest(
+            "/api/fx-rates",
+            create_public_fx_router(pool.clone(), redis_pool.clone()),
         )
         .nest("/api/appointments", create_appointments_router(pool.clone()))
         .nest("/api/admin/appointments", create_admin_appointments_router(pool.clone()))
@@ -377,6 +413,47 @@ pub async fn run() -> anyhow::Result<()> {
         }
     });
 
+    // Fee refund safety net: rejected orders with stale unrefunded placement fees (every 5 minutes).
+    let pool_for_fee_recon = pool_for_events.clone();
+    tokio::spawn(async move {
+        use std::time::Duration;
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            match crate::services::fee_placement::scan_and_refund_stale_rejected_fees(
+                &pool_for_fee_recon,
+                Duration::from_secs(300),
+            )
+            .await
+            {
+                Ok(n) if n > 0 => {
+                    tracing::info!("fee reconciliation: refunded {} stale rejected-order fees", n);
+                }
+                Ok(_) => {}
+                Err(e) => tracing::error!("fee reconciliation failed: {:?}", e),
+            }
+        }
+    });
+
+    // Swap rollover engine: every UTC minute, charge open positions whose group's swap_rules match the clock (daily mode only).
+    let swap_pool = pool.clone();
+    let swap_redis = redis_pool.clone();
+    tokio::spawn(async move {
+        use std::time::Duration;
+        use tokio::time::{interval, MissedTickBehavior};
+        let mut interval = interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            match crate::services::swap_engine::run_rollover_tick(&swap_pool, swap_redis.as_ref(), false).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("swap engine: charged {} positions", n),
+                Err(e) => tracing::error!("swap engine error: {:?}", e),
+            }
+        }
+    });
+
     // Start admin call record listener (ws-gateway publishes admin_call.events)
     let nats_for_calls = nats_client.clone();
     let pool_for_calls = pool.clone();
@@ -422,25 +499,109 @@ pub async fn run() -> anyhow::Result<()> {
     let pool_for_closed = pool.clone();
     let redis_for_closed = redis_pool.clone();
     tokio::spawn(async move {
-        use futures::StreamExt;
-        use routes::deposits::{compute_and_cache_account_summary, create_liquidation_notifications_and_push, create_sltp_notifications_and_push};
+        use routes::deposits::{
+            compute_and_cache_account_summary, create_liquidation_notifications_and_push,
+            create_sltp_notifications_and_push, publish_wallet_balance_updated,
+        };
+        use rust_decimal::Decimal;
+        use services::bonus_service;
+        use services::position_cost_settlement;
+        use std::str::FromStr;
+
         match nats_for_closed.subscribe("event.position.closed".to_string()).await {
             Ok(mut subscriber) => {
                 info!("✅ Subscribed to event.position.closed for account summary refresh");
                 while let Some(msg) = subscriber.next().await {
                     if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&msg.payload.to_vec()) {
-                        // Support VersionedMessage: { "v", "type", "payload": { user_id, trigger_reason, ... } }
-                        let inner = payload
-                            .get("payload")
-                            .cloned()
-                            .unwrap_or(payload);
-                        let user_id_str = inner.get("user_id").and_then(|v| v.as_str());
-                        if let Some(uid) = user_id_str {
-                            if let Ok(user_id) = Uuid::parse_str(uid) {
-                                compute_and_cache_account_summary(&pool_for_closed, redis_for_closed.as_ref(), user_id).await;
+                        let inner = payload.get("payload").cloned().unwrap_or(payload);
+
+                        let user_id = inner
+                            .get("user_id")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| Uuid::parse_str(s).ok());
+                        let position_id = inner
+                            .get("position_id")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| Uuid::parse_str(s).ok());
+
+                        let parse_dec = |k: &str| -> Decimal {
+                            inner.get(k).and_then(|v| {
+                                v.as_str()
+                                    .and_then(|s| Decimal::from_str(s).ok())
+                                    .or_else(|| v.as_f64().and_then(|f| Decimal::try_from(f).ok()))
+                            }).unwrap_or(Decimal::ZERO)
+                        };
+
+                        let realized_pnl = parse_dec("realized_pnl");
+                        let margin_from_cash = parse_dec("margin_from_cash");
+                        let margin_from_bonus = parse_dec("margin_from_bonus");
+
+                        if let (Some(uid), Some(pid)) = (user_id, position_id) {
+                            let mut bonus_committed = false;
+                            match pool_for_closed.begin().await {
+                                Ok(mut tx) => {
+                                    match bonus_service::release_and_apply_pnl(
+                                        &mut tx,
+                                        pid,
+                                        uid,
+                                        margin_from_cash,
+                                        margin_from_bonus,
+                                        realized_pnl,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => {
+                                            if let Err(e) = tx.commit().await {
+                                                error!(
+                                                    "event.position.closed: commit failed user={} position={}: {}",
+                                                    uid, pid, e
+                                                );
+                                            } else {
+                                                bonus_committed = true;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "event.position.closed: release_and_apply_pnl failed user={} position={}: {}",
+                                                uid, pid, e
+                                            );
+                                            let _ = tx.rollback().await;
+                                        }
+                                    }
+                                }
+                                Err(e) => error!("event.position.closed: begin tx failed: {}", e),
                             }
+
+                            if bonus_committed {
+                                if let Err(e) =
+                                    position_cost_settlement::settle_swap_on_closed_position(
+                                        &pool_for_closed,
+                                        uid,
+                                        pid,
+                                    )
+                                    .await
+                                {
+                                    error!(
+                                        "event.position.closed: swap settlement failed user={} position={}: {}",
+                                        uid, pid, e
+                                    );
+                                }
+                            }
+
+                            compute_and_cache_account_summary(
+                                &pool_for_closed,
+                                redis_for_closed.as_ref(),
+                                uid,
+                            )
+                            .await;
+                            publish_wallet_balance_updated(
+                                &pool_for_closed,
+                                redis_for_closed.as_ref(),
+                                uid,
+                            )
+                            .await;
                         }
-                        // If SL/TP or liquidation trigger, spawn notification task (do not await)
+
                         let trigger = inner.get("trigger_reason").and_then(|v| v.as_str());
                         if trigger == Some("SL") || trigger == Some("TP") {
                             let pool_spawn = pool_for_closed.clone();
@@ -523,6 +684,32 @@ pub async fn run() -> anyhow::Result<()> {
     tokio::spawn(async move {
         use services::account_summary_cache_warmup::warm_all_users;
         warm_all_users(pool_warm, redis_warm).await;
+    });
+
+    // FX rates: initial fetch + hourly refresh (Frankfurter → open.er-api → stale cache)
+    let fx_redis = redis_pool.clone();
+    let fx_http_bg = fx_http_client.clone();
+    tokio::spawn(async move {
+        use services::fx_rates;
+        if let Err(e) = fx_rates::fetch_and_cache(&fx_redis, &fx_http_bg).await {
+            tracing::warn!("initial FX rate fetch failed: {:?}", e);
+        }
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            match fx_rates::fetch_and_cache(&fx_redis, &fx_http_bg).await {
+                Ok(snapshot) => {
+                    tracing::info!(
+                        "FX rates refreshed from {} ({} currencies)",
+                        snapshot.source,
+                        snapshot.rates.len()
+                    );
+                }
+                Err(e) => tracing::warn!("FX rate refresh failed: {:?}", e),
+            }
+        }
     });
 
     // Start server

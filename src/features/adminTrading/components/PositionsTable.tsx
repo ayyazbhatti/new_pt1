@@ -12,6 +12,7 @@ import { liquidatePosition } from '../api/positions'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
+import { useFormatFromUsd } from '@/shared/currency'
 
 /** Fixed column widths so header and body columns stay aligned when cells are empty */
 const COLUMN_WIDTHS = [
@@ -24,7 +25,7 @@ const COLUMN_WIDTHS = [
   '80px',  // Size
   '95px',  // Entry
   '90px',  // Mark
-  '95px',  // Live PnL ($)
+  '95px',  // Live PnL (USD-denominated; cell uses hooks)
   '80px',  // PnL %
   '90px',  // Margin
   '85px',  // SL
@@ -44,6 +45,7 @@ interface PositionsTableProps {
 
 export function PositionsTable({ positions, onPositionClick, readOnly }: PositionsTableProps) {
   const { setSelectedPositionId, setOpenModal } = useAdminTradingStore()
+  const formatMoney = useFormatFromUsd()
   const [openActionsMenuId, setOpenActionsMenuId] = useState<string | null>(null)
   const canClosePosition = useCanAccess('trading:close_position')
   const canLiquidate = useCanAccess('trading:liquidate')
@@ -155,7 +157,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
         header: 'Entry',
         cell: ({ row }) => (
           <span className="text-sm font-mono text-text">
-            ${row.original.entryPrice.toFixed(2)}
+            {row.original.entryPrice.toFixed(2)}
           </span>
         ),
       },
@@ -163,7 +165,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
         accessorKey: 'markPrice',
         header: 'Mark',
         cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">${row.original.markPrice.toFixed(2)}</span>
+          <span className="text-sm font-mono text-text">{row.original.markPrice.toFixed(2)}</span>
         ),
       },
       {
@@ -181,7 +183,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
         header: 'Margin',
         cell: ({ row }) => (
           <span className="text-sm font-mono text-text">
-            ${row.original.marginUsed.toFixed(4)}
+            {formatMoney(row.original.marginUsed)}
           </span>
         ),
       },
@@ -190,7 +192,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
         header: 'SL',
         cell: ({ row }) => (
           <span className="text-sm font-mono text-text">
-            {row.original.stopLoss ? `$${row.original.stopLoss.toFixed(2)}` : '—'}
+            {row.original.stopLoss ? row.original.stopLoss.toFixed(2) : '—'}
           </span>
         ),
       },
@@ -199,7 +201,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
         header: 'TP',
         cell: ({ row }) => (
           <span className="text-sm font-mono text-text">
-            {row.original.takeProfit ? `$${row.original.takeProfit.toFixed(2)}` : '—'}
+            {row.original.takeProfit ? row.original.takeProfit.toFixed(2) : '—'}
           </span>
         ),
       },
@@ -266,6 +268,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
       canLiquidate,
       readOnly,
       openActionsMenuId,
+      formatMoney,
     ]
   )
 

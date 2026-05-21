@@ -13,7 +13,8 @@ import { SendNotificationModal } from '../modals/SendNotificationModal'
 import { Eye, Edit, Shield, X, LogIn, Bell } from 'lucide-react'
 import { Checkbox } from '@/shared/ui/Checkbox'
 import { toast } from '@/shared/components/common'
-import { formatDateTime, formatCurrency } from '../utils/formatters'
+import { useFormatFromUsd } from '@/shared/currency'
+import { useFormatDateTime } from '@/shared/datetime'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { updateUserGroup, updateUserAccountType, updateUserMarginCalculationType, updateUserTradingAccess, impersonateUser } from '../api/users.api'
@@ -36,6 +37,8 @@ interface UsersTableProps {
 }
 
 export function UsersTable({ users, onUserUpdate, pagination, bulkSelect }: UsersTableProps) {
+  const formatDateTime = useFormatDateTime()
+  const formatMoney = useFormatFromUsd()
   const openModal = useModalStore((state) => state.openModal)
   const canEditUser = useCanAccess('users:edit')
   const canEditGroup = useCanAccess('users:edit_group')
@@ -450,6 +453,44 @@ export function UsersTable({ users, onUserUpdate, pagination, bulkSelect }: User
       },
     },
     {
+      id: 'currency',
+      header: 'Currency',
+      cell: ({ row }) => {
+        const u = row.original
+        const eff = u.effectiveDisplayCurrency ?? 'USD'
+        const hasOverride = Boolean(u.displayCurrency?.trim())
+        return (
+          <div className="flex items-center gap-1.5 whitespace-nowrap text-sm">
+            <span className="font-mono text-text">{eff}</span>
+            {hasOverride ? (
+              <Badge variant="info" className="text-[10px] px-1.5 py-0">
+                override
+              </Badge>
+            ) : null}
+          </div>
+        )
+      },
+    },
+    {
+      id: 'timezone',
+      header: 'Timezone',
+      cell: ({ row }) => {
+        const u = row.original
+        const eff = u.effectiveTimezone ?? 'UTC'
+        const hasOverride = Boolean(u.timezone?.trim())
+        return (
+          <div className="flex items-center gap-1.5 whitespace-nowrap text-sm">
+            <span className="font-mono text-text">{eff}</span>
+            {hasOverride ? (
+              <Badge variant="info" className="text-[10px] px-1.5 py-0">
+                override
+              </Badge>
+            ) : null}
+          </div>
+        )
+      },
+    },
+    {
       accessorKey: 'accountType',
       header: 'Account Type',
       cell: ({ row }) => {
@@ -602,7 +643,7 @@ export function UsersTable({ users, onUserUpdate, pagination, bulkSelect }: User
       cell: ({ row }) => {
         return (
           <span className="font-mono font-semibold text-text whitespace-nowrap">
-            {formatCurrency(row.getValue('balance'), 'USD')}
+            {formatMoney(row.getValue('balance') as number)}
           </span>
         )
       },
@@ -724,6 +765,8 @@ export function UsersTable({ users, onUserUpdate, pagination, bulkSelect }: User
     updatingMarginCalculationTypes,
     updatingTradingAccess,
     loginLoading,
+    formatDateTime,
+    formatMoney,
   ])
 
   return (

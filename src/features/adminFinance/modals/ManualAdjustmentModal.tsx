@@ -6,7 +6,7 @@ import { Card } from '@/shared/ui/card'
 import { Wallet, AdjustmentType, ReasonCategory, Currency, WalletType } from '../types/finance'
 import { useModalStore } from '@/app/store'
 import { toast } from '@/shared/components/common'
-import { formatCurrency } from '../utils/formatters'
+import { useFormatConverted } from '@/shared/currency'
 
 interface ManualAdjustmentModalProps {
   wallet?: Wallet
@@ -14,6 +14,7 @@ interface ManualAdjustmentModalProps {
 
 export function ManualAdjustmentModal({ wallet }: ManualAdjustmentModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
+  const formatConv = useFormatConverted()
   const [userId, setUserId] = useState(wallet?.userId || '')
   const [userEmail, setUserEmail] = useState(wallet?.userEmail || '')
   const [walletType, setWalletType] = useState<WalletType>(wallet?.walletType || 'spot')
@@ -36,7 +37,7 @@ export function ManualAdjustmentModal({ wallet }: ManualAdjustmentModalProps) {
       toast.error('Admin note is required')
       return
     }
-    toast.success(`Manual adjustment applied: ${adjustmentType === 'credit' ? '+' : '-'}${formatCurrency(parseFloat(amount), currency)}`)
+    toast.success(`Manual adjustment applied: ${adjustmentType === 'credit' ? '+' : '-'}${formatConv(parseFloat(amount), currency)}`)
     closeModal(wallet ? `adjust-${wallet.id}` : 'manual-adjustment')
   }
 
@@ -150,7 +151,7 @@ export function ManualAdjustmentModal({ wallet }: ManualAdjustmentModalProps) {
             Available balance will change by{' '}
             <span className={`font-mono font-semibold ${effectAmount >= 0 ? 'text-success' : 'text-danger'}`}>
               {effectAmount >= 0 ? '+' : ''}
-              {formatCurrency(effectAmount, currency)}
+              {formatConv(effectAmount, currency)}
             </span>
           </div>
         </Card>

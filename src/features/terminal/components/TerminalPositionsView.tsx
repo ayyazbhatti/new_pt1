@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Menu, Plus, Bell, LineChart } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import { useFormatSignedFromUsd } from '@/shared/currency'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useTerminalStore } from '../store/terminalStore'
 import { BottomDock } from './BottomDock'
@@ -15,10 +16,11 @@ type PositionsSubTab = 'positions' | 'orders'
 export function TerminalPositionsView() {
   const [subTab, setSubTab] = useState<PositionsSubTab>('positions')
   const { accountSummary } = useAccountSummary()
+  const formatSigned = useFormatSignedFromUsd()
   const { setMobileTab, setNotificationPanelOpen, setMobileSymbolPanelOpen } = useTerminalStore()
 
   const unrealizedPnl = accountSummary?.unrealizedPnl ?? 0
-  const pnlStr = unrealizedPnl >= 0 ? `+$${unrealizedPnl.toFixed(2)}` : `-$${Math.abs(unrealizedPnl).toFixed(2)}`
+  const pnlStr = formatSigned(unrealizedPnl)
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-surface">

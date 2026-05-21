@@ -40,6 +40,11 @@ pub struct PositionUpdatedEvent {
     pub tp: Option<Decimal>,
     pub status: PositionStatus,
     pub ts: DateTime<Utc>,
+    /// Margin funded from cash wallet lock (optional; persisted to Postgres when present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_cash: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_from_bonus: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

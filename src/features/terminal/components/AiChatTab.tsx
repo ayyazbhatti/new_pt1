@@ -15,6 +15,7 @@ import {
 import { wsClient } from '@/shared/ws/wsClient'
 import { useAuthStore } from '@/shared/store/auth.store'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
+import { useFormatTime } from '@/shared/datetime'
 
 type AiUiMessage = {
   id: string
@@ -24,29 +25,24 @@ type AiUiMessage = {
   time: string
 }
 
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
-  } catch {
-    return ''
-  }
-}
-
-function dtoToUi(m: AiMessageDto): AiUiMessage {
+function dtoToUi(m: AiMessageDto, formatTimeFn: (iso: string) => string): AiUiMessage {
   const role = m.role === 'user' ? 'user' : 'assistant'
   return {
     id: m.id,
     role,
     content: m.content,
     streaming: false,
-    time: formatTime(m.createdAt),
+    time: formatTimeFn(m.createdAt),
   }
 }
 
 /** Prefer API text when present; never replace in-flight UI with an empty DB row mid-generation. */
-function mergeApiWithLocal(prev: AiUiMessage[], api: AiMessageDto[]): AiUiMessage[] {
-  const apiUi = api.map(dtoToUi)
+function mergeApiWithLocal(
+  prev: AiUiMessage[],
+  api: AiMessageDto[],
+  formatTimeFn: (iso: string) => string,
+): AiUiMessage[] {
+  const apiUi = api.map((m) => dtoToUi(m, formatTimeFn))
   const prevById = new Map(prev.map((m) => [m.id, m]))
   const merged = apiUi.map((apiMsg) => {
     const local = prevById.get(apiMsg.id)
@@ -75,6 +71,7 @@ interface AiChatTabProps {
 }
 
 export function AiChatTab({ active }: AiChatTabProps) {
+  const formatTime = useFormatTime()
   const userId = useAuthStore((s) => s.user?.id)
   const queryClient = useQueryClient()
   const [messages, setMessages] = useState<AiUiMessage[]>([])
@@ -102,7 +99,7 @@ export function AiChatTab({ active }: AiChatTabProps) {
         if (conv.conversationId) {
           conversationIdRef.current = conv.conversationId
         }
-        setMessages((prev) => mergeApiWithLocal(prev, conv.messages))
+        setMessages((prev) => mergeApiWithLocal(prev, conv.messages, formatTime))
         if (assistantMessageId) {
           const row = conv.messages.find((m) => m.id === assistantMessageId)
           return Boolean(row?.content?.trim())
@@ -112,7 +109,7 @@ export function AiChatTab({ active }: AiChatTabProps) {
         return false
       }
     },
-    [queryClient]
+    [queryClient, formatTime]
   )
 
   const scheduleAssistantSync = useCallback(
@@ -161,9 +158,9 @@ export function AiChatTab({ active }: AiChatTabProps) {
       conversationIdRef.current = conversation.conversationId
     }
     if (conversation?.messages) {
-      setMessages((prev) => mergeApiWithLocal(prev, conversation.messages))
+      setMessages((prev) => mergeApiWithLocal(prev, conversation.messages, formatTime))
     }
-  }, [conversation])
+  }, [conversation, formatTime])
 
   useEffect(() => {
     if (loadError) {
@@ -268,6 +265,7 @@ export function AiChatTab({ active }: AiChatTabProps) {
     upsertAssistantMessage,
     clearSyncTimeouts,
     refreshConversationFromServer,
+    formatTime,
   ])
 
   const handleSend = useCallback(async () => {
@@ -321,7 +319,7 @@ export function AiChatTab({ active }: AiChatTabProps) {
       setSending(false)
       requestAnimationFrame(() => messageInputRef.current?.focus())
     }
-  }, [inputValue, userId, sending, scheduleAssistantSync])
+  }, [inputValue, userId, sending, scheduleAssistantSync, formatTime])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

@@ -16,7 +16,7 @@ import {
   type DailyFee,
 } from '../api/dashboard.api'
 import type { Transaction } from '@/features/adminFinance/api/finance.api'
-import { formatCurrency } from '@/features/adminFinance/utils/formatters'
+import { useFormatFromUsd } from '@/shared/currency'
 import { DollarSign, TrendingUp, Bell, UserCheck, Loader2 } from 'lucide-react'
 
 const CHART_DAYS = 30
@@ -110,6 +110,7 @@ const PLATFORM_ALERTS_PLACEHOLDER = [
 
 export function DashboardPage() {
   const user = useAuthStore((s) => s.user)
+  const formatMoney = useFormatFromUsd()
   const isSuperAdmin = user?.role === 'super_admin'
   const { data: usersData, isLoading: usersLoading } = useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.users,
@@ -140,12 +141,15 @@ export function DashboardPage() {
   const revenue = financeData?.totalBalances ?? 0
   const pendingCount = (financeData?.pendingDeposits ?? 0) + (financeData?.pendingWithdrawals ?? 0)
 
-  const statValues: Record<string, { value: string; change: string | null }> = {
-    users: { value: totalUsers.toLocaleString(), change: null },
-    trades: { value: String(openPositionsCount), change: null },
-    revenue: { value: formatCurrency(revenue, 'USD'), change: null },
-    risk: { value: String(pendingCount), change: null },
-  }
+  const statValues: Record<string, { value: string; change: string | null }> = useMemo(
+    () => ({
+      users: { value: totalUsers.toLocaleString(), change: null },
+      trades: { value: String(openPositionsCount), change: null },
+      revenue: { value: formatMoney(revenue), change: null },
+      risk: { value: String(pendingCount), change: null },
+    }),
+    [totalUsers, openPositionsCount, revenue, pendingCount, formatMoney],
+  )
 
   const recentActivity = (transactionsData?.items ?? []).map((tx) => ({
     id: tx.id,
@@ -207,7 +211,7 @@ export function DashboardPage() {
           <div className="min-w-0">
             <p className="text-xs font-medium text-text-muted sm:text-sm">Deposits today</p>
             <p className="mt-0.5 truncate text-lg font-bold text-text sm:mt-1 sm:text-xl">
-              {financeLoading ? '—' : formatCurrency(depositsToday?.amount ?? 0, 'USD')}
+              {financeLoading ? '—' : formatMoney(depositsToday?.amount ?? 0)}
             </p>
             {!financeLoading && depositsToday != null && (
               <p className="mt-0.5 text-xs text-text-muted sm:mt-1">
@@ -220,7 +224,7 @@ export function DashboardPage() {
           <div className="min-w-0">
             <p className="text-xs font-medium text-text-muted sm:text-sm">Withdrawals today</p>
             <p className="mt-0.5 truncate text-lg font-bold text-text sm:mt-1 sm:text-xl">
-              {financeLoading ? '—' : formatCurrency(withdrawalsToday?.amount ?? 0, 'USD')}
+              {financeLoading ? '—' : formatMoney(withdrawalsToday?.amount ?? 0)}
             </p>
             {!financeLoading && withdrawalsToday != null && (
               <p className="mt-0.5 text-xs text-text-muted sm:mt-1">
@@ -233,7 +237,7 @@ export function DashboardPage() {
           <div className="min-w-0">
             <p className="text-xs font-medium text-text-muted sm:text-sm">Net fees today</p>
             <p className="mt-0.5 truncate text-lg font-bold text-text sm:mt-1 sm:text-xl">
-              {financeLoading ? '—' : formatCurrency(netFeesToday, 'USD')}
+              {financeLoading ? '—' : formatMoney(netFeesToday)}
             </p>
           </div>
         </Card>
@@ -330,7 +334,7 @@ export function DashboardPage() {
             <h2 className="text-sm font-semibold text-text">Deposit & withdrawal flow (30 days)</h2>
           </div>
           <div className="bg-surface-2/50 p-4">
-            <RevenueChart data={flowData} loading={chartTxLoading} />
+            <RevenueChart data={flowData} loading={chartTxLoading} formatMoney={formatMoney} />
           </div>
         </Card>
 
@@ -340,7 +344,7 @@ export function DashboardPage() {
             <h2 className="text-sm font-semibold text-text">Net fees (30 days)</h2>
           </div>
           <div className="bg-surface-2/50 p-4">
-            <FeesChart data={feeData} loading={chartTxLoading} />
+            <FeesChart data={feeData} loading={chartTxLoading} formatMoney={formatMoney} />
           </div>
         </Card>
       </div>

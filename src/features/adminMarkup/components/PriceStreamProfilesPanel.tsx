@@ -9,10 +9,11 @@ import { PriceStreamProfile } from '../types/pricing'
 import { mockPriceProfiles } from '../mocks/priceProfiles.mock'
 import { Edit, X, Plus } from 'lucide-react'
 import { toast } from '@/shared/components/common'
-import { formatDateTime } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
 
 export function PriceStreamProfilesPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const formatDateTime = useFormatDateTime()
   const [profiles, setProfiles] = useState<PriceStreamProfile[]>(mockPriceProfiles)
 
   const handleCreate = () => {
@@ -44,7 +45,7 @@ export function PriceStreamProfilesPanel() {
     toast.success(`Profile ${profile.name} ${profile.status === 'active' ? 'disabled' : 'enabled'}`)
   }
 
-  const columns: ColumnDef<PriceStreamProfile>[] = [
+  const columns: ColumnDef<PriceStreamProfile>[] = useMemo(() => [
     {
       accessorKey: 'name',
       header: 'Profile Name',
@@ -109,7 +110,7 @@ export function PriceStreamProfilesPanel() {
         )
       },
     },
-  ]
+  ], [formatDateTime, openModal, profiles])
 
   return (
     <div className="space-y-4">

@@ -3,16 +3,43 @@ import { Badge } from '@/shared/ui/badge'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
+import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { closedPositionPnlParts, openPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
 
 export function PositionDetailsModal() {
   const { openModal, setOpenModal, selectedPositionId, positions, positionHistory } =
     useAdminTradingStore()
+  const formatMoney = useFormatFromUsd()
+  const formatSigned = useFormatSignedFromUsd()
   const position = selectedPositionId
     ? positions.get(selectedPositionId) ?? positionHistory.get(selectedPositionId)
     : null
   const open = openModal === 'position-details'
 
   if (!position) return null
+
+  const isOpen = position.status === 'OPEN' || position.status === 'open'
+  const pnlParts = isOpen
+    ? openPositionPnlParts(
+        {
+          side: position.side === 'LONG' ? 'LONG' : 'SHORT',
+          unrealized_pnl: String(position.pnl),
+          accumulatedSwapUsd:
+            position.accumulatedSwapUsd != null ? String(position.accumulatedSwapUsd) : undefined,
+          accumulatedFeesUsd:
+            position.accumulatedFeesUsd != null ? String(position.accumulatedFeesUsd) : undefined,
+        },
+        position.markPrice,
+        position.size,
+        position.entryPrice,
+      )
+    : closedPositionPnlParts({
+        realized_pnl: String(position.pnl),
+        accumulatedSwapUsd:
+          position.accumulatedSwapUsd != null ? String(position.accumulatedSwapUsd) : undefined,
+        accumulatedFeesUsd:
+          position.accumulatedFeesUsd != null ? String(position.accumulatedFeesUsd) : undefined,
+      })
 
   const pnlIsPositive = position.pnl >= 0
 
@@ -66,37 +93,37 @@ export function PositionDetailsModal() {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Entry Price</div>
-            <div className="text-sm font-mono text-text">${position.entryPrice.toFixed(2)}</div>
+            <div className="text-sm font-mono text-text">{position.entryPrice.toFixed(2)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Mark Price</div>
-            <div className="text-sm font-mono text-text">${position.markPrice.toFixed(2)}</div>
+            <div className="text-sm font-mono text-text">{position.markPrice.toFixed(2)}</div>
           </div>
           <div>
-            <div className="text-xs text-text-muted mb-1">PnL</div>
+            <div className="text-xs text-text-muted mb-1">PnL (engine)</div>
             <div className={cn('text-sm font-mono font-semibold', pnlIsPositive ? 'text-success' : 'text-danger')}>
-              {pnlIsPositive ? '+' : ''}${position.pnl.toFixed(2)} ({pnlIsPositive ? '+' : ''}
+              {formatSigned(position.pnl)} ({pnlIsPositive ? '+' : ''}
               {position.pnlPercent.toFixed(2)}%)
             </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Margin Used</div>
-            <div className="text-sm font-mono text-text">${position.marginUsed.toFixed(2)}</div>
+            <div className="text-sm font-mono text-text">{formatMoney(position.marginUsed)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Liquidation Price</div>
-            <div className="text-sm font-mono text-text">${position.liquidationPrice.toFixed(2)}</div>
+            <div className="text-sm font-mono text-text">{position.liquidationPrice.toFixed(2)}</div>
           </div>
           {position.stopLoss && (
             <div>
               <div className="text-xs text-text-muted mb-1">Stop Loss</div>
-              <div className="text-sm font-mono text-text">${position.stopLoss.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{position.stopLoss.toFixed(2)}</div>
             </div>
           )}
           {position.takeProfit && (
             <div>
               <div className="text-xs text-text-muted mb-1">Take Profit</div>
-              <div className="text-sm font-mono text-text">${position.takeProfit.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{position.takeProfit.toFixed(2)}</div>
             </div>
           )}
           <div>
@@ -109,6 +136,15 @@ export function PositionDetailsModal() {
               <div className="text-sm text-text">{format(new Date(position.closedAt), 'PPpp')}</div>
             </div>
           )}
+        </div>
+        <div className="rounded-lg border border-border bg-surface-2/40 p-4">
+          <div className="text-sm font-semibold text-text mb-2">P&L breakdown</div>
+          <PositionPnLBreakdown
+            marketPnlUsd={pnlParts.market}
+            accumulatedSwapUsd={position.accumulatedSwapUsd}
+            accumulatedFeesUsd={position.accumulatedFeesUsd}
+            netPnlUsd={pnlParts.net}
+          />
         </div>
       </div>
     </ModalShell>

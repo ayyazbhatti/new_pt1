@@ -23,8 +23,6 @@ export function useAccountSummary() {
     enabled: !!user?.id,
     staleTime: 0,
     refetchOnWindowFocus: false,
-    // Fallback: refetch every 5s so UI updates even if WS account.summary.updated is missed
-    refetchInterval: 5000,
   })
 
   // Update cache from WebSocket so UI stays real-time without refetch
@@ -45,6 +43,19 @@ export function useAccountSummary() {
         const marginLevel = String(raw.marginLevel ?? raw.margin_level ?? '')
         const realizedPnl = Number((raw.realizedPnl ?? raw.realized_pnl ?? 0))
         const unrealizedPnl = Number((raw.unrealizedPnl ?? raw.unrealized_pnl ?? 0))
+        const bonus = Number((raw.bonus ?? 0))
+        const totalSwapPaidUsd =
+          raw.totalSwapPaidUsd != null
+            ? Number(raw.totalSwapPaidUsd)
+            : raw.total_swap_paid_usd != null
+              ? Number(raw.total_swap_paid_usd)
+              : undefined
+        const totalFeesPaidUsd =
+          raw.totalFeesPaidUsd != null
+            ? Number(raw.totalFeesPaidUsd)
+            : raw.total_fees_paid_usd != null
+              ? Number(raw.total_fees_paid_usd)
+              : undefined
         const updatedAt = String(raw.updatedAt ?? raw.updated_at ?? '')
         const isZeros = balance === 0 && equity === 0 && marginUsed === 0
         if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
@@ -72,6 +83,9 @@ export function useAccountSummary() {
           stopOutLevelThreshold,
           realizedPnl,
           unrealizedPnl,
+          bonus,
+          totalSwapPaidUsd,
+          totalFeesPaidUsd,
           updatedAt,
         }
         queryClient.setQueryData<AccountSummaryResponse>(QUERY_KEY, payload)

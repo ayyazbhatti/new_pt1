@@ -4,8 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
 import { User } from '../types/users'
 import { useModalStore } from '@/app/store'
-import { CreateEditUserModal } from './CreateEditUserModal'
-import { formatDateTime, formatCurrency, formatAccountAge } from '../utils/formatters'
+import { CurrencyOverrideProvider } from '@/shared/currency'
+import { formatConverted, formatFromUsd, formatSignedFromUsd } from '@/shared/currency/format'
+import { useFxRatesMap } from '@/shared/currency/rates'
+import { resolveEffectiveCurrency } from '@/shared/currency/resolve'
+import { formatAccountAge } from '@/shared/utils/duration'
+import { TimezoneOverrideProvider, useFormatDateTime, fromZonedWallClock, useEffectiveTimezone, useTimezoneOffsetLabel } from '@/shared/datetime'
 import { toast } from '@/shared/components/common'
 import { getApiErrorMessage } from '@/shared/api/http'
 import {
@@ -46,6 +50,7 @@ import { fetchTransactions, createDirectDeposit, type Transaction as ApiTransact
 import type { Transaction as FinanceTransaction } from '@/features/adminFinance/types/finance'
 import { TransactionDetailsModal } from '@/features/adminFinance/modals/TransactionDetailsModal'
 import { ApproveRejectModal } from '@/features/adminFinance/modals/ApproveRejectModal'
+import { TradingTransactionTypeDisplay } from '@/shared/components/TradingTransactionTypeDisplay'
 import { DataTable } from '@/shared/ui/table'
 import { Badge } from '@/shared/ui/badge'
 import { Button } from '@/shared/ui/button'
@@ -249,6 +254,9 @@ interface UserDetailsModalProps {
 }
 
 export function UserDetailsModal({ user }: UserDetailsModalProps) {
+  const formatDateTime = useFormatDateTime()
+  const traderTzContext = useEffectiveTimezone()
+  const traderOffsetLabel = useTimezoneOffsetLabel()
   const navigate = useNavigate()
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
@@ -305,6 +313,19 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       const marginLevel = String(raw.marginLevel ?? raw.margin_level ?? '')
       const realizedPnl = Number(raw.realizedPnl ?? raw.realized_pnl ?? 0)
       const unrealizedPnl = Number(raw.unrealizedPnl ?? raw.unrealized_pnl ?? 0)
+      const bonus = Number(raw.bonus ?? 0)
+      const totalSwapPaidUsd =
+        raw.totalSwapPaidUsd != null
+          ? Number(raw.totalSwapPaidUsd)
+          : raw.total_swap_paid_usd != null
+            ? Number(raw.total_swap_paid_usd)
+            : undefined
+      const totalFeesPaidUsd =
+        raw.totalFeesPaidUsd != null
+          ? Number(raw.totalFeesPaidUsd)
+          : raw.total_fees_paid_usd != null
+            ? Number(raw.total_fees_paid_usd)
+            : undefined
       const updatedAt = String(raw.updatedAt ?? raw.updated_at ?? '')
       const isZeros = balance === 0 && equity === 0 && marginUsed === 0
       if (isZeros && lastTargetEquityRef.current != null && lastTargetEquityRef.current > 0) return
@@ -332,6 +353,9 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         marginLevel: marginLevel || null,
         realizedPnl,
         unrealizedPnl,
+        bonus,
+        totalSwapPaidUsd,
+        totalFeesPaidUsd,
         updatedAt,
         marginCallLevelThreshold,
         stopOutLevelThreshold,
@@ -365,6 +389,33 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       return { ...prev, balance: user.balance, marginLevel: user.marginLevel }
     })
   }, [user.id, user.balance, user.marginLevel])
+
+  const rates = useFxRatesMap()
+  const currencyOverrideSource = useMemo(
+    () => ({
+      userCurrency: userState.displayCurrency ?? null,
+      groupCurrency: userState.groupDisplayCurrency ?? null,
+      platformCurrency: userState.platformDisplayCurrency ?? null,
+    }),
+    [userState.displayCurrency, userState.groupDisplayCurrency, userState.platformDisplayCurrency],
+  )
+  const viewedCurrencyCode = useMemo(
+    () => resolveEffectiveCurrency(currencyOverrideSource).code,
+    [currencyOverrideSource],
+  )
+  const formatMoney = useCallback(
+    (v: number) => formatFromUsd(v, viewedCurrencyCode, rates),
+    [viewedCurrencyCode, rates],
+  )
+  const formatSignedMoney = useCallback(
+    (v: number) => formatSignedFromUsd(v, viewedCurrencyCode, rates),
+    [viewedCurrencyCode, rates],
+  )
+  const formatFromRowCurrency = useCallback(
+    (v: number, currency: string) => formatConverted(v, currency, viewedCurrencyCode, rates),
+    [viewedCurrencyCode, rates],
+  )
+
   const [activeTab, setActiveTab] = useState<typeof TAB_VALUES[number]>(getStoredUserDetailsTab)
 
   useEffect(() => {
@@ -735,7 +786,8 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
     if (!aptTitle.trim() || !aptScheduledDate || !aptScheduledTime) return
     const [y, m, d] = aptScheduledDate.split('-').map(Number)
     const [hour, min] = aptScheduledTime.split(':').map(Number)
-    const scheduled_at = new Date(y, m - 1, d, hour, min, 0).toISOString()
+    const traderTz = userState.effectiveTimezone?.trim() || 'UTC'
+    const scheduled_at = fromZonedWallClock(y, m, d, hour, min, traderTz).toISOString()
     const payload: CreateAppointmentRequest = {
       user_id: userState.id,
       title: aptTitle.trim(),
@@ -757,6 +809,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       'edit-apt',
       <EditAppointmentModal
         appointment={apt}
+        wallClockTimezone={userState.effectiveTimezone?.trim() || 'UTC'}
         onSubmit={(id, payload) => updateAptMutation.mutate({ id, payload })}
         submitting={updateAptMutation.isPending}
       />,
@@ -1079,11 +1132,15 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         accessorKey: 'type',
         header: 'Type',
         cell: ({ row }) => {
-          const type = row.getValue('type') as string
-          const isWithdrawal = type?.toLowerCase() === 'withdrawal'
+          const tx = row.original
+          const type = (tx.type || '').toLowerCase()
+          const isWithdrawal = type === 'withdrawal'
+          if (type === 'fee' || type === 'swap') {
+            return <TradingTransactionTypeDisplay type={tx.type} amount={tx.amount} methodDetails={tx.methodDetails} />
+          }
           return (
             <span className={cn('capitalize', isWithdrawal && 'text-red-400 font-semibold')}>
-              {type ? type.charAt(0).toUpperCase() + type.slice(1) : type}
+              {tx.type ? tx.type.charAt(0).toUpperCase() + tx.type.slice(1) : tx.type}
             </span>
           )
         },
@@ -1093,13 +1150,20 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         header: 'Amount',
         cell: ({ row }) => {
           const tx = row.original
-          const isWithdrawal = tx.type?.toLowerCase() === 'withdrawal'
+          const type = (tx.type || '').toLowerCase()
+          const isWithdrawal = type === 'withdrawal'
+          if (type === 'fee' || type === 'swap') {
+            const color = tx.amount >= 0 ? 'text-green-400' : 'text-red-400'
+            return (
+              <span className={cn('font-mono font-semibold text-right block', color)}>{formatSignedMoney(tx.amount)}</span>
+            )
+          }
           const color = isWithdrawal ? 'text-red-400' : (tx.netAmount >= 0 ? 'text-green-400' : 'text-red-400')
           const sign = isWithdrawal ? '-' : (tx.netAmount >= 0 ? '+' : '')
           return (
             <span className={cn('font-mono font-semibold text-right block', color)}>
               {sign}
-              {formatCurrency(Math.abs(tx.netAmount), tx.currency)}
+              {formatFromRowCurrency(Math.abs(tx.netAmount), tx.currency)}
             </span>
           )
         },
@@ -1165,7 +1229,16 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         },
       },
     ],
-    [canApproveDeposit, canRejectDeposit]
+    [
+      canApproveDeposit,
+      canRejectDeposit,
+      formatDateTime,
+      formatFromRowCurrency,
+      formatSignedMoney,
+      handleApproveFundingTx,
+      handleRejectFundingTx,
+      handleViewFundingTx,
+    ]
   )
 
   const handleClose = () => closeModal(`user-details-${user.id}`)
@@ -1194,6 +1267,14 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   }
 
   return (
+    <TimezoneOverrideProvider
+      source={{
+        userTimezone: userState.timezone ?? null,
+        groupTimezone: userState.groupTimezone ?? null,
+        platformTimezone: undefined,
+      }}
+    >
+    <CurrencyOverrideProvider source={currencyOverrideSource}>
     <>
       {/* Header */}
       <header className="flex-shrink-0 border-b border-slate-700">
@@ -1243,19 +1324,19 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
             <div>
               <div className="mb-1 text-xs text-slate-400">Balance</div>
               <div className="text-sm font-semibold text-white sm:text-base">
-                {formatCurrency(metrics.balance, 'USD')}
+                {formatMoney(metrics.balance)}
               </div>
             </div>
             <div>
               <div className="mb-1 text-xs text-slate-400">Equity</div>
               <div className="text-sm font-semibold text-white sm:text-base">
-                {formatCurrency(metrics.equity, 'USD')}
+                {formatMoney(metrics.equity)}
               </div>
             </div>
             <div>
               <div className="mb-1 text-xs text-slate-400">Margin</div>
               <div className="text-sm font-semibold text-white sm:text-base">
-                {formatCurrency(metrics.margin, 'USD')}
+                {formatMoney(metrics.margin)}
               </div>
             </div>
             <div>
@@ -1266,7 +1347,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                   metrics.freeMargin >= 0 ? 'text-green-400' : 'text-red-400'
                 )}
               >
-                {formatCurrency(metrics.freeMargin, 'USD')}
+                {formatMoney(metrics.freeMargin)}
               </div>
             </div>
             <div>
@@ -1288,7 +1369,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                   metrics.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'
                 )}
               >
-                {formatCurrency(metrics.unrealizedPnl, 'USD')}
+                {formatSignedMoney(metrics.unrealizedPnl)}
               </div>
             </div>
           </div>
@@ -1412,6 +1493,62 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                 </div>
               </div>
               <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">Effective timezone</label>
+                <input
+                  readOnly
+                  value={userState.effectiveTimezone ?? '—'}
+                  className="w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+                {userState.effectiveTimezoneOrigin ? (
+                  <p className="mt-1 text-xs text-slate-400">Source: {userState.effectiveTimezoneOrigin}</p>
+                ) : null}
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">Group timezone default</label>
+                <input
+                  readOnly
+                  value={userState.groupTimezone?.trim() || '—'}
+                  className="w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">User timezone override</label>
+                <input
+                  readOnly
+                  value={userState.timezone?.trim() || '—'}
+                  className="w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+                <p className="mt-1 text-xs text-slate-400">Edit via Users → Edit user to set or clear override.</p>
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">Effective display currency</label>
+                <input
+                  readOnly
+                  value={userState.effectiveDisplayCurrency ?? '—'}
+                  className="w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+                {userState.effectiveDisplayCurrencyOrigin ? (
+                  <p className="mt-1 text-xs text-slate-400">Source: {userState.effectiveDisplayCurrencyOrigin}</p>
+                ) : null}
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">Group display currency default</label>
+                <input
+                  readOnly
+                  value={userState.groupDisplayCurrency?.trim() || '—'}
+                  className="w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">User display currency override</label>
+                <input
+                  readOnly
+                  value={userState.displayCurrency?.trim() || '—'}
+                  className="w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+                <p className="mt-1 text-xs text-slate-400">Edit via Users → Edit user to set or clear override.</p>
+              </div>
+              <div>
                 <label className="mb-2 block text-sm font-medium text-slate-300">Account Status</label>
                 <div className="flex items-center justify-between rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-2.5">
                   <span className="text-sm text-white">{userState.status === 'active' ? 'Active' : 'Locked'}</span>
@@ -1511,9 +1648,8 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                     <div className="mb-1 text-xs text-slate-400">Total Deposits</div>
                     <div className="flex items-center justify-between">
                       <span className="text-lg font-bold text-green-400 sm:text-xl">
-                        {formatCurrency(
+                        {formatMoney(
                           transactions.filter((t: TransactionRow) => t.type === 'deposit').reduce((s: number, t: TransactionRow) => s + t.amount, 0),
-                          'USD'
                         )}
                       </span>
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-900/30">
@@ -1525,9 +1661,8 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                     <div className="mb-1 text-xs text-slate-400">Total Withdrawals</div>
                     <div className="flex items-center justify-between">
                       <span className="text-lg font-bold text-blue-400 sm:text-xl">
-                        {formatCurrency(
+                        {formatMoney(
                           transactions.filter((t: TransactionRow) => t.type === 'withdrawal').reduce((s: number, t: TransactionRow) => s + t.amount, 0),
-                          'USD'
                         )}
                       </span>
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-900/30">
@@ -1589,7 +1724,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                             amount: amountNum,
                             note: directDepositNote.trim() || undefined,
                           })
-                          toast.success(`Direct deposit of ${formatCurrency(amountNum, 'USD')} applied.`)
+                          toast.success(`Direct deposit of ${formatMoney(amountNum)} applied.`)
                           setDirectDepositAmount('')
                           setDirectDepositNote('')
                           setShowDirectDepositForm(false)
@@ -2210,6 +2345,9 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
             {showCreateAppointmentForm && (
               <div className="mt-4 mb-4">
                 <h3 className="text-sm font-semibold text-slate-200 mb-3">Create appointment for this user</h3>
+                <p className="mb-3 text-xs text-amber-100/90 rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-2">
+                  Scheduled date and time are in the trader&apos;s timezone: {traderOffsetLabel} · {traderTzContext.iana}
+                </p>
                 <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4">
                   <form onSubmit={handleSubmitCreateApt} className="space-y-4">
                     <div className="grid grid-cols-3 gap-3 items-end">
@@ -2993,6 +3131,8 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       )}
 
     </>
+    </CurrencyOverrideProvider>
+    </TimezoneOverrideProvider>
   )
 }
 

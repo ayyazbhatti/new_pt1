@@ -19,12 +19,15 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin_from_db_fast, get_price_from_redis};
+use crate::services::bonus_service::{self, BonusError};
+use crate::services::fee_engine;
+use crate::services::fee_placement;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
 use risk::effective_leverage;
 
-const MIN_REQUIRED_MARGIN_USD: i64 = 10;
+pub const MIN_REQUIRED_MARGIN_USD: i64 = 10;
 
 #[derive(Clone)]
 pub struct OrdersState {
@@ -35,23 +38,40 @@ pub struct OrdersState {
 /// Error type for place_order: status-only or 403 with body (margin / trading restricted).
 pub enum PlaceOrderError {
     Status(StatusCode),
-    InsufficientMargin { required_margin: String, free_margin: String },
+    InsufficientMargin {
+        required_margin: String,
+        estimated_fee_usd: String,
+        total_required_usd: String,
+        free_margin: String,
+    },
     MinimumMarginNotMet { required_margin: String, min_required_margin: String },
     /// Trading access is not "full" (close_only or disabled) — return 403 with message.
     TradingRestricted { message: String },
     /// No leverage profile / tiers, missing user min–max, or notional outside configured bands.
     LeverageConfigurationInvalid { message: String },
+    /// DB bonus / margin lock failure after validations passed.
+    BonusLock(String),
 }
 
 impl IntoResponse for PlaceOrderError {
     fn into_response(self) -> axum::response::Response {
         match self {
             PlaceOrderError::Status(c) => c.into_response(),
-            PlaceOrderError::InsufficientMargin { required_margin, free_margin } => {
+            PlaceOrderError::InsufficientMargin {
+                required_margin,
+                estimated_fee_usd,
+                total_required_usd,
+                free_margin,
+            } => {
                 let body = serde_json::json!({
                     "error": "INSUFFICIENT_FREE_MARGIN",
-                    "message": format!("Estimated margin ({}) exceeds free margin ({}).", required_margin, free_margin),
+                    "message": format!(
+                        "Required margin ({}) plus estimated fee ({}) exceeds free margin ({}). Total required: {}.",
+                        required_margin, estimated_fee_usd, free_margin, total_required_usd
+                    ),
                     "required_margin": required_margin,
+                    "estimated_fee_usd": estimated_fee_usd,
+                    "total_required_usd": total_required_usd,
                     "free_margin": free_margin
                 });
                 (StatusCode::FORBIDDEN, Json(body)).into_response()
@@ -76,6 +96,12 @@ impl IntoResponse for PlaceOrderError {
                     "error": { "code": "LEVERAGE_CONFIGURATION", "message": message }
                 });
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            PlaceOrderError::BonusLock(e) => {
+                let body = serde_json::json!({
+                    "error": { "code": "BONUS_LOCK", "message": e.to_string() }
+                });
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
         }
     }
@@ -146,6 +172,10 @@ pub struct OrderMarginDetails {
     pub user_max_resolved: i32,
     pub leverage_tiers: Option<Vec<CmdLeverageTier>>,
     pub account_type: Option<String>,
+    /// Placement fee (USD) when `fees_enabled` and a matching `fee_rules` row exists.
+    pub estimated_fee_usd: Decimal,
+    /// Resolved rule used for `estimated_fee_usd` (clone for charging in the same request).
+    pub resolved_fee_rule: Option<fee_engine::ResolvedFee>,
 }
 
 /// Computes margin for an order using the same rules as `place_order` (no idempotency / free-margin check).
@@ -311,6 +341,38 @@ pub async fn compute_order_margin_details(
     }
     let required_margin = notional / eff_lev;
 
+    let (estimated_fee_usd, resolved_fee_rule) = if let Some(gid) = group_id {
+        let market_str = fee_engine::resolve_symbol_market(pool, symbol_code)
+            .await
+            .map_err(|e| {
+                error!(
+                    user_id = %user_id,
+                    symbol = %symbol_code,
+                    error = %e,
+                    "compute_order_margin_details fee symbol market query failed"
+                );
+                PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
+        let resolved = fee_engine::resolve_fee_rule(pool, gid, symbol_code, &market_str)
+            .await
+            .map_err(|e| {
+                error!(
+                    user_id = %user_id,
+                    symbol = %symbol_code,
+                    error = %e,
+                    "compute_order_margin_details resolve_fee_rule failed"
+                );
+                PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
+        let fee_usd = resolved
+            .as_ref()
+            .map(|r| fee_engine::compute_fee_amount(notional, r))
+            .unwrap_or(Decimal::ZERO);
+        (fee_usd, resolved)
+    } else {
+        (Decimal::ZERO, None)
+    };
+
     Ok(OrderMarginDetails {
         symbol_id,
         notional,
@@ -321,6 +383,8 @@ pub async fn compute_order_margin_details(
         user_max_resolved,
         leverage_tiers,
         account_type,
+        estimated_fee_usd,
+        resolved_fee_rule,
     })
 }
 
@@ -416,9 +480,15 @@ async fn place_order(
 
     // Fetch user leverage limits, account_type, and trading_access for order-engine
     #[derive(sqlx::FromRow)]
-    struct UserLeverageRow { min_leverage: Option<i32>, max_leverage: Option<i32>, account_type: Option<String>, trading_access: Option<String> }
+    struct UserLeverageRow {
+        min_leverage: Option<i32>,
+        max_leverage: Option<i32>,
+        account_type: Option<String>,
+        trading_access: Option<String>,
+        group_id: Option<Uuid>,
+    }
     let user_lev = sqlx::query_as::<_, UserLeverageRow>(
-        r#"SELECT min_leverage, max_leverage, account_type, COALESCE(trading_access, 'full') as trading_access FROM users WHERE id = $1"#,
+        r#"SELECT min_leverage, max_leverage, account_type, COALESCE(trading_access, 'full') as trading_access, group_id FROM users WHERE id = $1"#,
     )
     .bind(user_id)
     .fetch_optional(&pool)
@@ -427,11 +497,18 @@ async fn place_order(
         error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=fetch_user_leverage status=500");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let (user_min_lev, user_max_lev, _acct_raw, trading_access) = user_lev
+    let (user_min_lev, user_max_lev, _acct_raw, trading_access, user_group_id) = user_lev
         .as_ref()
-        .map(|r| (r.min_leverage, r.max_leverage, r.account_type.clone(), r.trading_access.clone()))
-        .unwrap_or((None, None, None, Some("full".to_string())));
+        .map(|r| (
+            r.min_leverage,
+            r.max_leverage,
+            r.account_type.clone(),
+            r.trading_access.clone(),
+            r.group_id,
+        ))
+        .unwrap_or((None, None, None, Some("full".to_string()), None));
     let trading_access = trading_access.as_deref().unwrap_or("full");
+    let effective_group_id = claims.group_id.or(user_group_id);
     if trading_access != "full" {
         error!(order_id = %order_id, user_id = %user_id, trading_access = %trading_access, "place_order FAILED stage=trading_restricted status=403");
         return Err(PlaceOrderError::TradingRestricted {
@@ -444,7 +521,7 @@ async fn place_order(
         &pool,
         orders_state.redis.as_ref(),
         user_id,
-        claims.group_id,
+        effective_group_id,
         &req.symbol,
         &side_upper,
         &order_type_upper,
@@ -461,6 +538,7 @@ async fn place_order(
     let leverage_tiers = margin.leverage_tiers;
     let account_type = margin.account_type;
     let required_margin = margin.required_margin;
+    let total_required = required_margin + margin.estimated_fee_usd;
     let min_required_margin = Decimal::from(MIN_REQUIRED_MARGIN_USD);
 
     if required_margin < min_required_margin {
@@ -499,13 +577,6 @@ async fn place_order(
         }));
     }
 
-    // Store idempotency key (expires in 24 hours)
-    let _: () = conn.set_ex(&idempotency_key, order_id.to_string(), 86400).await
-        .map_err(|e| {
-            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=idempotency_store status=500");
-            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
-
     // ---------- Free margin vs required margin check (block order if insufficient) ----------
     let summary_key = Keys::account_summary(user_id);
     let free_margin_str: Option<String> = conn.hget(&summary_key, "free_margin").await
@@ -537,10 +608,12 @@ async fn place_order(
         }
     };
 
-    if required_margin > free_margin {
-        error!(order_id = %order_id, user_id = %user_id, required = %required_margin, free = %free_margin, "place_order FAILED stage=insufficient_margin status=403");
+    if total_required > free_margin {
+        error!(order_id = %order_id, user_id = %user_id, required = %required_margin, fee = %margin.estimated_fee_usd, total = %total_required, free = %free_margin, "place_order FAILED stage=insufficient_margin status=403");
         return Err(PlaceOrderError::InsufficientMargin {
             required_margin: required_margin.to_string(),
+            estimated_fee_usd: margin.estimated_fee_usd.to_string(),
+            total_required_usd: total_required.to_string(),
             free_margin: free_margin.to_string(),
         });
     }
@@ -549,14 +622,32 @@ async fn place_order(
     let stop_price = req.sl.as_ref().and_then(|s| Decimal::from_str(s).ok());
     let stop_price_str = req.sl.clone();
 
-    // Insert order into database (using raw query to handle enums)
+    // DB transaction: lock margin (cash first, then bonus) + insert pending order
+    let mut tx = pool.begin().await.map_err(|e| {
+        error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=db_tx_begin status=500");
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+
+    let alloc = bonus_service::lock_margin(&mut tx, user_id, required_margin)
+        .await
+        .map_err(|e| match e {
+            BonusError::InsufficientMargin => PlaceOrderError::InsufficientMargin {
+                required_margin: required_margin.to_string(),
+                estimated_fee_usd: margin.estimated_fee_usd.to_string(),
+                total_required_usd: total_required.to_string(),
+                free_margin: free_margin.to_string(),
+            },
+            _ => PlaceOrderError::BonusLock(e.to_string()),
+        })?;
+
     sqlx::query(
         r#"
         INSERT INTO orders (
             id, user_id, symbol_id, side, type, size, price, stop_price,
-            status, reference, created_at, updated_at
+            status, reference, created_at, updated_at,
+            margin_from_cash, margin_from_bonus
         )
-        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12)
+        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12, $13, $14)
         "#,
     )
     .bind(order_id)
@@ -571,14 +662,63 @@ async fn place_order(
     .bind(req.client_order_id.as_deref())
     .bind(now)
     .bind(now)
-    .execute(&pool)
+    .bind(alloc.from_cash)
+    .bind(alloc.from_bonus)
+    .execute(&mut *tx)
     .await
     .map_err(|e| {
         error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=db_insert_order status=500");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
-    // Publish to NATS for order-engine to process
+    if margin.estimated_fee_usd > Decimal::ZERO {
+        if let Some(ref rule) = margin.resolved_fee_rule {
+            fee_placement::charge_placement_fee_in_tx(
+                &mut tx,
+                user_id,
+                order_id,
+                margin.estimated_fee_usd,
+                margin.notional,
+                rule,
+                &req.symbol,
+            )
+            .await
+            .map_err(|e| {
+                error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=fee_charge");
+                if matches!(&e, sqlx::Error::RowNotFound) {
+                    let total = required_margin + margin.estimated_fee_usd;
+                    PlaceOrderError::InsufficientMargin {
+                        required_margin: required_margin.to_string(),
+                        estimated_fee_usd: margin.estimated_fee_usd.to_string(),
+                        total_required_usd: total.to_string(),
+                        free_margin: free_margin.to_string(),
+                    }
+                } else {
+                    PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            })?;
+        }
+    }
+
+    tx.commit().await.map_err(|e| {
+        error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=db_tx_commit status=500");
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+
+    compute_and_cache_account_summary(&pool, orders_state.redis.as_ref(), user_id).await;
+
+    // Store idempotency key only after successful margin lock + order row (expires in 24 hours)
+    let mut conn = orders_state.redis.get().await
+        .map_err(|_| {
+            error!(order_id = %order_id, user_id = %user_id, "place_order FAILED stage=redis_connection_post_commit status=503");
+            PlaceOrderError::Status(StatusCode::SERVICE_UNAVAILABLE)
+        })?;
+    let idempotency_key = format!("order:idempotency:{}", req.idempotency_key);
+    let _: () = conn.set_ex(&idempotency_key, order_id.to_string(), 86400).await
+        .map_err(|e| {
+            error!(order_id = %order_id, user_id = %user_id, error = %e, "place_order FAILED stage=idempotency_store status=500");
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
     // Convert to PlaceOrderCommand format
     let side = match side_upper.as_str() {
         "BUY" => Side::Buy,
@@ -615,11 +755,13 @@ async fn place_order(
         client_order_id: req.client_order_id.clone(),
         idempotency_key: req.idempotency_key.clone(),
         ts: now,
-        group_id: claims.group_id.map(|u| u.to_string()),
+        group_id: effective_group_id.map(|u| u.to_string()),
         min_leverage: Some(user_min_resolved),
         max_leverage: Some(user_max_resolved),
         leverage_tiers: leverage_tiers,
         account_type: account_type.clone(),
+        margin_from_cash: Some(alloc.from_cash),
+        margin_from_bonus: Some(alloc.from_bonus),
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)
@@ -747,6 +889,8 @@ pub struct EstimateOrderMarginResponse {
     pub effective_leverage: String,
     pub required_margin: String,
     pub execution_price: String,
+    /// Estimated placement fee in USD ("0" when fees disabled or no rule).
+    pub estimated_fee_usd: String,
 }
 
 async fn estimate_order_margin(
@@ -790,9 +934,10 @@ async fn estimate_order_margin(
         min_leverage: Option<i32>,
         max_leverage: Option<i32>,
         account_type: Option<String>,
+        group_id: Option<Uuid>,
     }
     let user_lev = sqlx::query_as::<_, UserLevRow>(
-        r#"SELECT min_leverage, max_leverage, account_type FROM users WHERE id = $1"#,
+        r#"SELECT min_leverage, max_leverage, account_type, group_id FROM users WHERE id = $1"#,
     )
     .bind(user_id)
     .fetch_optional(&pool)
@@ -801,16 +946,22 @@ async fn estimate_order_margin(
         error!(user_id = %user_id, error = %e, "estimate_order_margin user query failed");
         PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let (u_min, u_max, acct) = user_lev
+    let (u_min, u_max, acct, user_group_id) = user_lev
         .as_ref()
-        .map(|r| (r.min_leverage, r.max_leverage, r.account_type.clone()))
-        .unwrap_or((None, None, None));
+        .map(|r| (
+            r.min_leverage,
+            r.max_leverage,
+            r.account_type.clone(),
+            r.group_id,
+        ))
+        .unwrap_or((None, None, None, None));
+    let effective_group_id = claims.group_id.or(user_group_id);
 
     let m = compute_order_margin_details(
         &pool,
         orders_state.redis.as_ref(),
         user_id,
-        claims.group_id,
+        effective_group_id,
         &req.symbol,
         &side_upper,
         &order_type_upper,
@@ -827,6 +978,7 @@ async fn estimate_order_margin(
         effective_leverage: m.effective_leverage.to_string(),
         required_margin: m.required_margin.to_string(),
         execution_price: m.execution_price.to_string(),
+        estimated_fee_usd: m.estimated_fee_usd.to_string(),
     }))
 }
 
@@ -1192,6 +1344,8 @@ struct PendingOrderRow {
     stop_price: Option<rust_decimal::Decimal>,
     reference: Option<String>,
     created_at: chrono::DateTime<Utc>,
+    margin_from_cash: rust_decimal::Decimal,
+    margin_from_bonus: rust_decimal::Decimal,
 }
 
 async fn sync_pending_orders(
@@ -1214,7 +1368,8 @@ async fn sync_pending_orders(
         r#"
         SELECT o.id, o.user_id, s.code AS symbol_code,
                o.side::text AS side, o.type::text AS order_type,
-               o.size, o.price, o.stop_price, o.reference, o.created_at
+               o.size, o.price, o.stop_price, o.reference, o.created_at,
+               o.margin_from_cash, o.margin_from_bonus
         FROM orders o
         JOIN symbols s ON s.id = o.symbol_id
         WHERE o.status = 'pending'::order_status
@@ -1367,6 +1522,8 @@ async fn sync_pending_orders(
             max_leverage: user_max_lev,
             leverage_tiers,
             account_type: account_type.clone(),
+            margin_from_cash: Some(row.margin_from_cash),
+            margin_from_bonus: Some(row.margin_from_bonus),
         };
 
         let msg = match VersionedMessage::new("cmd.order.place", &place_order_cmd) {

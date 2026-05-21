@@ -11,12 +11,15 @@ import { EventDetailsModal } from '../modals/EventDetailsModal'
 import { Eye, CheckCircle } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { filterMarginEvents } from '../utils/filters'
-import { formatDateTime } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
+import { useFormatFromUsd } from '@/shared/currency'
 import { mockGroups } from '../mocks/groups.mock'
 import { mockMarginEvents } from '../mocks/marginEvents.mock'
 
 export function MarginEventsAdminPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const formatDateTime = useFormatDateTime()
+  const formatMoney = useFormatFromUsd()
   const [events, setEvents] = useState<MarginEvent[]>(mockMarginEvents)
   const [filters, setFilters] = useState({
     type: 'all',
@@ -61,7 +64,7 @@ export function MarginEventsAdminPanel() {
     return <Badge variant={variants[severity] || 'neutral'} className="capitalize">{severity}</Badge>
   }
 
-  const columns: ColumnDef<MarginEvent>[] = [
+  const columns: ColumnDef<MarginEvent>[] = useMemo(() => [
     {
       accessorKey: 'id',
       header: 'Event ID',
@@ -114,21 +117,21 @@ export function MarginEventsAdminPanel() {
       accessorKey: 'equity',
       header: 'Equity',
       cell: ({ row }) => {
-        return <span className="font-mono">${row.getValue('equity')}</span>
+        return <span className="font-mono">{formatMoney(row.getValue('equity') as number)}</span>
       },
     },
     {
       accessorKey: 'margin',
       header: 'Margin',
       cell: ({ row }) => {
-        return <span className="font-mono">${row.getValue('margin')}</span>
+        return <span className="font-mono">{formatMoney(row.getValue('margin') as number)}</span>
       },
     },
     {
       accessorKey: 'maintenance',
       header: 'Maintenance',
       cell: ({ row }) => {
-        return <span className="font-mono">${row.getValue('maintenance')}</span>
+        return <span className="font-mono">{formatMoney(row.getValue('maintenance') as number)}</span>
       },
     },
     {
@@ -161,7 +164,7 @@ export function MarginEventsAdminPanel() {
         )
       },
     },
-  ]
+  ], [formatDateTime, formatMoney, openModal, events])
 
   return (
     <div className="space-y-4">

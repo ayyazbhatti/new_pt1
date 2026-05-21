@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Card } from '@/shared/ui/card'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
@@ -11,9 +11,10 @@ import { mockSymbolControls, mockGroupControls, mockAuditLog } from '../mocks/tr
 import { mockGroups } from '../mocks/groups.mock'
 import { mockSymbols } from '../mocks/symbols.mock'
 import { toast } from '@/shared/components/common'
-import { formatDateTime } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
 
 export function TradingControlsAdminPanel() {
+  const formatDateTime = useFormatDateTime()
   const [symbolControls, setSymbolControls] = useState<SymbolControl[]>(mockSymbolControls)
   const [groupControls, setGroupControls] = useState<GroupControl[]>(mockGroupControls)
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>(mockAuditLog)
@@ -99,7 +100,7 @@ export function TradingControlsAdminPanel() {
     )
   }
 
-  const auditColumns: ColumnDef<AuditLogEntry>[] = [
+  const auditColumns: ColumnDef<AuditLogEntry>[] = useMemo(() => [
     {
       accessorKey: 'time',
       header: 'Time',
@@ -117,7 +118,7 @@ export function TradingControlsAdminPanel() {
       accessorKey: 'target',
       header: 'Target',
     },
-  ]
+  ], [formatDateTime, auditLog])
 
   return (
     <div className="space-y-6">

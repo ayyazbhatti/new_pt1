@@ -41,23 +41,25 @@ else
 fi
 
 echo "==> Starting auth-service (port 3000)..."
-(cd "$REPO_ROOT/backend/auth-service" && SQLX_OFFLINE=true cargo run --bin auth-service) &
+# Root .env often sets PORT for another service; auth must bind 3000, not inherit PORT.
+(cd "$REPO_ROOT/backend/auth-service" && PORT=3000 SQLX_OFFLINE=true cargo run --bin auth-service) &
 AUTH_PID=$!
 
 echo "==> Starting ws-gateway (WS 3003, health 9002)..."
-(WS_PORT=3003 HTTP_PORT=9002 REDIS_URL="$REDIS_URL" JWT_SECRET="$JWT_SECRET" JWT_ISSUER="$JWT_ISSUER" cd "$REPO_ROOT/backend/ws-gateway" && cargo run) &
+# Env vars must sit on the same command as `cargo run` (not only `cd`), or they are lost for the binary.
+(cd "$REPO_ROOT/backend/ws-gateway" && WS_PORT=3003 HTTP_PORT=9002 REDIS_URL="$REDIS_URL" JWT_SECRET="$JWT_SECRET" JWT_ISSUER="$JWT_ISSUER" cargo run) &
 GW_PID=$!
 
 echo "==> Starting data-provider (WS 9003, HTTP 9004)..."
-(WS_PORT=9003 HTTP_PORT=9004 REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cd "$REPO_ROOT/backend/data-provider" && cargo run) &
+(cd "$REPO_ROOT/backend/data-provider" && WS_PORT=9003 HTTP_PORT=9004 REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cargo run) &
 DATA_PROVIDER_PID=$!
 
 echo "==> Starting order-engine (port 3002)..."
-(PORT=3002 REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cd "$REPO_ROOT" && cargo run -p order-engine) &
+(cd "$REPO_ROOT" && PORT=3002 REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cargo run -p order-engine) &
 ORDER_ENGINE_PID=$!
 
 echo "==> Starting core-api (port 3004)..."
-(PORT=3004 DATABASE_URL="$DATABASE_URL" REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cd "$REPO_ROOT" && cargo run -p core-api) &
+(cd "$REPO_ROOT" && PORT=3004 DATABASE_URL="$DATABASE_URL" REDIS_URL="$REDIS_URL" NATS_URL="$NATS_URL" cargo run -p core-api) &
 CORE_PID=$!
 
 echo "==> Starting Vite (port 5173)..."

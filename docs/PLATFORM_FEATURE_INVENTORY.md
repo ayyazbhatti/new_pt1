@@ -116,7 +116,7 @@ By status:
 | SL/TP update on open positions | ✅ | `positions.api.ts` `updatePositionSltp`; BottomDock / positions UI | REST + WS refresh |
 | Order types Stop / Stop-Limit | 🗑️ | `crates/contracts/src/enums.rs` only `Market`, `Limit` | Not in engine enum |
 | Time-in-force GTC/IOC/FOK | ⚠️ | `TimeInForce` in `enums.rs`; `orders.api.ts` `tif?`; ticket uses `tif: 'GTC'` in `RightTradingPanel.tsx` | API supports; UI fixed to GTC |
-| Free Margin % slider (default 15%) | ✅ | `RightTradingPanel.tsx` `applyFreeMarginFromPct`, `DEFAULT_FREE_MARGIN_SLIDER_PCT` | Sizes order from % of free margin |
+| Free Margin % slider | 🗑️ | Removed from `RightTradingPanel.tsx` | Manual size input only; slider removed as unreliable |
 | Effective leverage / tiers | ✅ | `resolveEffectiveLeverageFromTiersOrNull` in `orders.api.ts`; `GET /api/auth/me/symbol-leverage` | Shown in ticket / estimates |
 | Cost breakdown (spread, fees, margin, liq.) | ✅ | `costBreakdown` useMemo, `useQuery` `estimateOrderMargin` in `RightTradingPanel.tsx` | Server estimate + client breakdown |
 | Buy / Sell (CFD long/short) | ✅ | `RightTradingPanel.tsx`, `previewOrderSide` | Buy uses ask, sell bid for estimates |

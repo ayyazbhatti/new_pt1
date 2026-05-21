@@ -31,7 +31,16 @@ export type DepositRequestApprovedPayload = {
 
 export type NotificationPushPayload = {
   id: string
-  kind: 'DEPOSIT_REQUEST' | 'DEPOSIT_APPROVED' | 'WITHDRAWAL_APPROVED' | 'POSITION_SL' | 'POSITION_TP' | 'POSITION_LIQUIDATED' | 'ADMIN_MESSAGE'
+  kind:
+    | 'DEPOSIT_REQUEST'
+    | 'DEPOSIT_APPROVED'
+    | 'DEPOSIT_REJECTED'
+    | 'WITHDRAWAL_APPROVED'
+    | 'POSITION_SL'
+    | 'POSITION_TP'
+    | 'POSITION_LIQUIDATED'
+    | 'ADMIN_MESSAGE'
+    | 'SWAP_FIRST_CHARGE'
   title: string
   message: string
   createdAt: string
@@ -48,6 +57,8 @@ export type AccountSummaryUpdatedPayload = {
   marginLevel: string
   realizedPnl: number
   unrealizedPnl: number
+  totalSwapPaidUsd?: number
+  totalFeesPaidUsd?: number
   updatedAt: string
 }
 

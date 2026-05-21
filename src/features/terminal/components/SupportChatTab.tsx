@@ -6,34 +6,29 @@ import { getMyChat, sendChatMessage } from '../api/chat.api'
 import { wsClient } from '@/shared/ws/wsClient'
 import { useAuthStore } from '@/shared/store/auth.store'
 import type { WsInboundEvent } from '@/shared/ws/wsEvents'
+import { useFormatTime } from '@/shared/datetime'
 
 type ChatMessage = { id: string; sender: 'support' | 'user'; name: string; text: string; time: string }
-
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
-  } catch {
-    return ''
-  }
-}
-
-function dtoToMessage(dto: { id: string; senderType: string; body: string; createdAt: string }): ChatMessage {
-  const sender = dto.senderType === 'user' ? 'user' : 'support'
-  return {
-    id: dto.id,
-    sender,
-    name: sender === 'user' ? 'You' : 'Support',
-    text: dto.body,
-    time: formatTime(dto.createdAt),
-  }
-}
 
 interface SupportChatTabProps {
   active: boolean
 }
 
 export function SupportChatTab({ active }: SupportChatTabProps) {
+  const formatTime = useFormatTime()
+  const dtoToMessage = useCallback(
+    (dto: { id: string; senderType: string; body: string; createdAt: string }): ChatMessage => {
+      const sender = dto.senderType === 'user' ? 'user' : 'support'
+      return {
+        id: dto.id,
+        sender,
+        name: sender === 'user' ? 'You' : 'Support',
+        text: dto.body,
+        time: formatTime(dto.createdAt),
+      }
+    },
+    [formatTime],
+  )
   const userId = useAuthStore((s) => s.user?.id)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputValue, setInputValue] = useState('')
@@ -62,7 +57,7 @@ export function SupportChatTab({ active }: SupportChatTabProps) {
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load chat'))
       .finally(() => setLoading(false))
-  }, [active, userId])
+  }, [active, userId, dtoToMessage])
 
   useEffect(() => {
     if (!userId || !active) return
@@ -84,7 +79,7 @@ export function SupportChatTab({ active }: SupportChatTabProps) {
       setMessages((prev) => [...prev, dtoToMessage(dto)])
     })
     return unsubscribe
-  }, [userId, active])
+  }, [userId, active, dtoToMessage])
 
   const handleSend = useCallback(async () => {
     const trimmed = inputValue.trim()
@@ -104,7 +99,7 @@ export function SupportChatTab({ active }: SupportChatTabProps) {
       setSending(false)
       requestAnimationFrame(() => messageInputRef.current?.focus())
     }
-  }, [inputValue, userId, sending])
+  }, [inputValue, userId, sending, dtoToMessage])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

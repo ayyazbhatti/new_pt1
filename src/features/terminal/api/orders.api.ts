@@ -155,6 +155,8 @@ export interface EstimateOrderMarginResponse {
   effectiveLeverage: string
   requiredMargin: string
   executionPrice: string
+  /** Pre-pay trading fee in USD (same rules as place_order); "0" when fees disabled or no rule. */
+  estimatedFeeUsd: string
 }
 
 export async function estimateOrderMargin(

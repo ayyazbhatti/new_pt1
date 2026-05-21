@@ -4,7 +4,7 @@ import { Input } from '@/shared/ui/input'
 import { LeverageProfile, LeverageTier } from '../types/leverageProfile'
 import { useLeverageProfileTiers, useCreateLeverageTier, useUpdateLeverageTier, useDeleteLeverageTier, leverageProfilesQueryKeys } from '../hooks/useLeverageProfiles'
 import { useQueryClient } from '@tanstack/react-query'
-import { formatCurrency } from '../utils/format'
+import { formatAmount } from '@/shared/currency/format'
 import { Settings, Plus, Trash2, X } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { Spinner } from '@/shared/ui/loading'
@@ -69,7 +69,9 @@ export function ManageTiersModal({ profile, open, onOpenChange }: ManageTiersMod
     const sorted = [...rows].sort((a, b) => a.marginFrom - b.marginFrom)
     for (let i = 1; i < sorted.length; i++) {
       if (sorted[i].marginFrom < sorted[i - 1].marginTo) {
-        errs.push(`Overlap: row ${i + 1} Margin From (${formatCurrency(sorted[i].marginFrom)}) is less than previous Margin To`)
+        errs.push(
+          `Overlap: row ${i + 1} Margin From (${formatAmount(sorted[i].marginFrom, 'USD')}) is less than previous Margin To`,
+        )
       }
     }
     setValidationErrors(errs)

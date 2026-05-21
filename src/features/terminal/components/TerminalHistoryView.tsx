@@ -1,14 +1,17 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { format, parse } from 'date-fns'
 import DatePicker from 'react-datepicker'
 import 'react-datepicker/dist/react-datepicker.css'
-import { Search, Calendar, History, X } from 'lucide-react'
+import { Search, Calendar, History, X, ChevronDown } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { getClosedPositions, type Position } from '../api/positions.api'
 import { listOrders, type Order } from '../api/orders.api'
 import { Skeleton, Input } from '@/shared/ui'
+import { closedPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
+import { useFormatDateTimeSeconds } from '@/shared/datetime'
+import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
 
 type HistorySubTab = 'positions' | 'orders'
 
@@ -23,6 +26,9 @@ function toDateString(ts: number): string {
  * Matches reference layout: header with title/subtitle and icons, two sub-tabs, summary, then list.
  */
 export function TerminalHistoryView() {
+  const formatDateTimeSeconds = useFormatDateTimeSeconds()
+  const formatMoney = useFormatFromUsd()
+  const formatSigned = useFormatSignedFromUsd()
   const [historySubTab, setHistorySubTab] = useState<HistorySubTab>('positions')
   const [positions, setPositions] = useState<Position[]>([])
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
@@ -33,6 +39,7 @@ export function TerminalHistoryView() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [calendarOpen, setCalendarOpen] = useState(false)
+  const [expandedPositionId, setExpandedPositionId] = useState<string | null>(null)
   const { accountSummary } = useAccountSummary()
 
   const fetchPositions = useCallback(async () => {
@@ -108,38 +115,48 @@ export function TerminalHistoryView() {
   const lastTenClosed = closedPositions.length
   const lastTenOrders = Math.min(filledOrders.length, 10)
 
-  const summaryRows =
-    historySubTab === 'positions'
-      ? [
-          { label: 'Last Ten Closed:', value: String(lastTenClosed) },
-          { label: 'Balance:', value: accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—' },
-          {
-            label: 'Profit:',
-            value: accountSummary != null ? `$${accountSummary.realizedPnl.toFixed(2)}` : '—',
-            valueClass: accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success',
-          },
-          { label: 'Equity:', value: accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—' },
-          {
-            label: 'Free Margin:',
-            value: accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—',
-            valueClass: accountSummary != null && accountSummary.freeMargin < 0 ? 'text-danger' : undefined,
-          },
-        ]
-      : [
-          { label: 'Last Ten Closed:', value: String(lastTenOrders) },
-          { label: 'Balance:', value: accountSummary != null ? `$${accountSummary.balance.toFixed(2)}` : '—' },
-          {
-            label: 'Profit:',
-            value: accountSummary != null ? `$${accountSummary.realizedPnl.toFixed(2)}` : '—',
-            valueClass: accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success',
-          },
-          { label: 'Equity:', value: accountSummary != null ? `$${accountSummary.equity.toFixed(2)}` : '—' },
-          {
-            label: 'Free Margin:',
-            value: accountSummary != null ? `$${accountSummary.freeMargin.toFixed(2)}` : '—',
-            valueClass: accountSummary != null && accountSummary.freeMargin < 0 ? 'text-danger' : undefined,
-          },
-        ]
+  const summaryRows = useMemo(
+    () =>
+      historySubTab === 'positions'
+        ? [
+            { label: 'Last Ten Closed:', value: String(lastTenClosed) },
+            { label: 'Balance:', value: accountSummary != null ? formatMoney(accountSummary.balance) : '—' },
+            {
+              label: 'Profit:',
+              value: accountSummary != null ? formatSigned(accountSummary.realizedPnl) : '—',
+              valueClass: accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success',
+            },
+            { label: 'Equity:', value: accountSummary != null ? formatMoney(accountSummary.equity) : '—' },
+            {
+              label: 'Free Margin:',
+              value: accountSummary != null ? formatMoney(accountSummary.freeMargin) : '—',
+              valueClass: accountSummary != null && accountSummary.freeMargin < 0 ? 'text-danger' : undefined,
+            },
+          ]
+        : [
+            { label: 'Last Ten Closed:', value: String(lastTenOrders) },
+            { label: 'Balance:', value: accountSummary != null ? formatMoney(accountSummary.balance) : '—' },
+            {
+              label: 'Profit:',
+              value: accountSummary != null ? formatSigned(accountSummary.realizedPnl) : '—',
+              valueClass: accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success',
+            },
+            { label: 'Equity:', value: accountSummary != null ? formatMoney(accountSummary.equity) : '—' },
+            {
+              label: 'Free Margin:',
+              value: accountSummary != null ? formatMoney(accountSummary.freeMargin) : '—',
+              valueClass: accountSummary != null && accountSummary.freeMargin < 0 ? 'text-danger' : undefined,
+            },
+          ],
+    [
+      historySubTab,
+      lastTenClosed,
+      lastTenOrders,
+      accountSummary,
+      formatMoney,
+      formatSigned,
+    ],
+  )
 
   const subtitle = historySubTab === 'positions' ? 'Last 10 positions' : 'Last 10 orders'
 
@@ -307,17 +324,11 @@ export function TerminalHistoryView() {
                 const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
                 const exitVal = pos.exit_price ?? (pos as { exitPrice?: string }).exitPrice ?? ''
                 const exitPrice = exitVal && exitVal !== 'null' ? parseFloat(String(exitVal)) : null
-                const realizedPnl = parseFloat(pos.realized_pnl || '0')
+                const { market: marketPnl, net: netClosedPnl } = closedPositionPnlParts(pos)
                 const ts = pos.closed_at ?? pos.updated_at ?? 0
                 const tsMs = ts < 1e12 ? ts * 1000 : ts
-                const closedAtStr = new Date(tsMs).toLocaleString(undefined, {
-                  month: 'numeric',
-                  day: 'numeric',
-                  year: 'numeric',
-                  hour: 'numeric',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })
+                const closedAtStr = formatDateTimeSeconds(tsMs)
+                const expanded = expandedPositionId === pos.id
                 return (
                   <div key={pos.id} className="border-b border-white/10 py-3">
                     <div className="flex items-start justify-between gap-3">
@@ -333,11 +344,28 @@ export function TerminalHistoryView() {
                       </div>
                       <div className="text-right shrink-0">
                         <div className="text-[11px] text-muted">{closedAtStr}</div>
-                        <div className={cn('text-sm font-semibold', realizedPnl >= 0 ? 'text-success' : 'text-danger')}>
-                          {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(4)}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedPositionId((prev) => (prev === pos.id ? null : pos.id))}
+                          className="mt-0.5 flex items-center gap-1 ml-auto text-sm font-semibold"
+                          aria-expanded={expanded}
+                        >
+                          <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', expanded && 'rotate-180')} />
+                          <span className={netClosedPnl >= 0 ? 'text-success' : 'text-danger'}>{formatSigned(netClosedPnl)}</span>
+                        </button>
                       </div>
                     </div>
+                    {expanded ? (
+                      <div className="mt-3 pt-3 border-t border-white/10">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-muted mb-2">P&L breakdown</div>
+                        <PositionPnLBreakdown
+                          marketPnlUsd={marketPnl}
+                          accumulatedSwapUsd={pos.accumulatedSwapUsd}
+                          accumulatedFeesUsd={pos.accumulatedFeesUsd}
+                          netPnlUsd={netClosedPnl}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 )
               })}
@@ -374,14 +402,7 @@ export function TerminalHistoryView() {
               {filteredFilledOrders.map((order) => {
                 const filledSize = parseFloat(order.filled_size || order.size || '0')
                 const avgPrice = parseFloat(order.average_price || order.price || '0')
-                const createdStr = new Date(order.created_at).toLocaleString(undefined, {
-                  month: 'numeric',
-                  day: 'numeric',
-                  year: 'numeric',
-                  hour: 'numeric',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })
+                const createdStr = formatDateTimeSeconds(order.created_at)
                 return (
                   <div key={order.id} className="border-b border-white/10 py-3">
                     <div className="flex items-start justify-between gap-3">

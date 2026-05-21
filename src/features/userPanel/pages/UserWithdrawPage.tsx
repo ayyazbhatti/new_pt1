@@ -3,6 +3,8 @@ import { Card } from '@/shared/ui/card'
 import { Button } from '@/shared/ui/button'
 import { Wallet, ArrowUpFromLine, Building2, Clock } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import { useFormatFromUsd } from '@/shared/currency'
+import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 
 function MethodCard({
   title,
@@ -42,6 +44,15 @@ function MethodCard({
 }
 
 export function UserWithdrawPage() {
+  const { accountSummary, isLoading: summaryLoading } = useAccountSummary()
+  const formatMoney = useFormatFromUsd()
+  const withdrawable =
+    accountSummary?.balance != null && !Number.isNaN(accountSummary.balance)
+      ? formatMoney(accountSummary.balance)
+      : summaryLoading
+        ? '…'
+        : '—'
+
   return (
     <ContentShell>
       <PageHeader
@@ -60,8 +71,11 @@ export function UserWithdrawPage() {
               </div>
               <div>
                 <p className="text-sm font-medium text-text-muted">Withdrawable balance</p>
-                <p className="text-2xl font-bold text-text">—</p>
+                <p className="text-2xl font-bold text-text">{withdrawable}</p>
                 <p className="text-xs text-text-muted">Will load from backend (may exclude margin in use)</p>
+                <p className="mt-3 rounded-md border border-border/80 bg-surface-2/40 px-3 py-2 text-xs text-text-muted">
+                  Withdrawals are processed from your cash balance only. Bonus funds are not withdrawable.
+                </p>
               </div>
             </div>
           </div>

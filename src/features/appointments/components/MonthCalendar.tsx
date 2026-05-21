@@ -1,6 +1,6 @@
 import type { Appointment } from '../types'
 import { getMonthCalendarCells, isSameCalendarDay } from '../utils/calendar'
-import { formatTime } from '../utils/format'
+import { useFormatTime } from '@/shared/datetime'
 import { StatusBadge } from './StatusBadge'
 import { cn } from '@/shared/utils'
 
@@ -24,6 +24,7 @@ export function MonthCalendar({
   onToday,
   onAppointmentClick,
 }: MonthCalendarProps) {
+  const formatTime = useFormatTime()
   const cells = getMonthCalendarCells(calendarDate)
   const today = new Date()
   const monthLabel = calendarDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })

@@ -87,8 +87,8 @@ export function SwapRulesPage() {
   return (
     <ContentShell>
       <PageHeader
-        title="Swap / Overnight Fees"
-        description="Configure rollover (swap) charges for long/short positions by group and symbol."
+        title="Swap / Overnight Financing"
+        description="Configure financing per group and symbol. Accrues at rollover on the position; the wallet is debited when the position closes, not each rollover (group must have swap enabled)."
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={handleExport} disabled>
@@ -120,7 +120,7 @@ export function SwapRulesPage() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-text-muted">Total rules</p>
             <p className="mt-1 text-lg font-bold text-text">{totalRules}</p>
-            <p className="mt-0.5 text-xs text-text-muted">Swap / overnight fee rules</p>
+            <p className="mt-0.5 text-xs text-text-muted">Rates & rollover schedule</p>
           </div>
         </Card>
         <Card className="flex items-start gap-3 p-4">
@@ -130,7 +130,7 @@ export function SwapRulesPage() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-text-muted">Active</p>
             <p className="mt-1 text-lg font-bold text-text">{activeRules}</p>
-            <p className="mt-0.5 text-xs text-text-muted">Currently applied</p>
+            <p className="mt-0.5 text-xs text-text-muted">When group swap is on</p>
           </div>
         </Card>
         <Card className="flex items-start gap-3 p-4">
@@ -157,8 +157,9 @@ export function SwapRulesPage() {
 
       <Card className="p-4 mb-6 bg-surface-2">
         <p className="text-sm text-text-muted">
-          <strong className="text-text">Swap is applied at rollover time for open margin positions.</strong>{' '}
-          Rates are group-based and symbol-based.
+          Accrues on the position at rollover when the rule matches and the group has swap enabled; the wallet is
+          settled on position close. Triple-swap follows the rule weekday. V1 runs <span className="font-mono text-xs">daily</span>{' '}
+          mode only.
         </p>
       </Card>
       <SwapFiltersBar onFilterChange={setFilters} />

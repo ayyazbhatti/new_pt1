@@ -12,12 +12,13 @@ import { ConfirmActionModal } from '../modals/ConfirmActionModal'
 import { Eye, X, CheckCircle } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { filterOrders } from '../utils/filters'
-import { formatDateTime } from '../utils/formatters'
+import { useFormatDateTime } from '@/shared/datetime'
 import { mockGroups } from '../mocks/groups.mock'
 import { mockOrders } from '../mocks/orders.mock'
 
 export function OrdersAdminPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const formatDateTime = useFormatDateTime()
   const [orders, setOrders] = useState<Order[]>(mockOrders)
   const [filters, setFilters] = useState({
     status: 'all',
@@ -113,7 +114,7 @@ export function OrdersAdminPanel() {
     )
   }
 
-  const columns: ColumnDef<Order>[] = [
+  const columns: ColumnDef<Order>[] = useMemo(() => [
     {
       accessorKey: 'id',
       header: 'Order ID',
@@ -226,7 +227,7 @@ export function OrdersAdminPanel() {
         )
       },
     },
-  ]
+  ], [formatDateTime, openModal, orders])
 
   return (
     <div className="space-y-4">

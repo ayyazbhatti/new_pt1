@@ -70,6 +70,11 @@ struct UserGroupRowMinimalWithProfiles {
     updated_at: DateTime<Utc>,
     default_price_profile_id: Option<Uuid>,
     default_leverage_profile_id: Option<Uuid>,
+    /// Present when migration `timezone` on `user_groups` has been applied.
+    #[sqlx(default)]
+    timezone: Option<String>,
+    #[sqlx(default)]
+    display_currency: Option<String>,
 }
 
 impl From<UserGroupRowMinimal> for UserGroup {
@@ -88,6 +93,10 @@ impl From<UserGroupRowMinimal> for UserGroup {
             updated_at: r.updated_at,
             created_by_user_id: None,
             hide_leverage_in_terminal: false,
+            timezone: None,
+            display_currency: None,
+            swap_enabled: false,
+            fees_enabled: false,
         }
     }
 }
@@ -108,6 +117,10 @@ impl From<UserGroupRowMinimalWithProfiles> for UserGroup {
             updated_at: r.updated_at,
             created_by_user_id: None,
             hide_leverage_in_terminal: false,
+            timezone: r.timezone,
+            display_currency: r.display_currency,
+            swap_enabled: false,
+            fees_enabled: false,
         }
     }
 }
@@ -189,6 +202,7 @@ impl AdminGroupsService {
                     || msg.contains("signup_slug")
                     || msg.contains("margin_call_level")
                     || msg.contains("stop_out_level")
+                    || msg.contains("display_currency")
                     || msg.contains("does not exist")
                 {
                     match self
@@ -270,7 +284,7 @@ impl AdminGroupsService {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, signup_slug, default_price_profile_id, \
              default_leverage_profile_id, margin_call_level, stop_out_level, created_at, updated_at, created_by_user_id, \
-             hide_leverage_in_terminal FROM user_groups WHERE 1=1"
+             hide_leverage_in_terminal, timezone, display_currency, swap_enabled, fees_enabled FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
             if !search.is_empty() {
@@ -347,8 +361,8 @@ impl AdminGroupsService {
         Ok(rows.into_iter().map(UserGroup::from).collect())
     }
 
-    /// Same as minimal but includes default_price_profile_id and default_leverage_profile_id
-    /// so the groups list shows assigned price/leverage profile after update.
+    /// Same as minimal but includes default_price_profile_id, default_leverage_profile_id, and
+    /// `timezone` (when the column exists) so the admin groups list shows saved profile and timezone.
     async fn list_groups_minimal_with_profiles(
         &self,
         search: Option<&str>,
@@ -360,7 +374,7 @@ impl AdminGroupsService {
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, created_at, updated_at, \
-             default_price_profile_id, default_leverage_profile_id FROM user_groups WHERE 1=1"
+             default_price_profile_id, default_leverage_profile_id, timezone, display_currency FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
             if !search.is_empty() {
@@ -428,6 +442,10 @@ impl AdminGroupsService {
         margin_call_level: Option<f64>,
         stop_out_level: Option<f64>,
         signup_slug: Option<&str>,
+        timezone: Option<&str>,
+        display_currency: Option<&str>,
+        swap_enabled: bool,
+        fees_enabled: bool,
         created_by_user_id: Option<Uuid>,
     ) -> anyhow::Result<UserGroup> {
         // Validate
@@ -455,12 +473,23 @@ impl AdminGroupsService {
             }
         };
 
+        let tz: Option<String> = timezone
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        let dc: Option<String> = display_currency
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
             INSERT INTO user_groups (
-                name, description, status, signup_slug, margin_call_level, stop_out_level, created_by_user_id
+                name, description, status, signup_slug, margin_call_level, stop_out_level, display_currency, timezone, created_by_user_id,
+                swap_enabled, fees_enabled
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING *
             "#,
         )
@@ -470,7 +499,11 @@ impl AdminGroupsService {
         .bind(&slug)
         .bind(margin_call_level.and_then(rust_decimal::Decimal::from_f64))
         .bind(stop_out_level.and_then(rust_decimal::Decimal::from_f64))
+        .bind(dc)
+        .bind(tz)
         .bind(created_by_user_id)
+        .bind(swap_enabled)
+        .bind(fees_enabled)
         .fetch_one(&self.pool)
         .await?;
 
@@ -487,6 +520,10 @@ impl AdminGroupsService {
         stop_out_level: Option<f64>,
         signup_slug: Option<Option<&str>>,
         hide_leverage_in_terminal: Option<bool>,
+        timezone: Option<Option<&str>>,
+        display_currency: Option<Option<&str>>,
+        swap_enabled: Option<bool>,
+        fees_enabled: Option<bool>,
     ) -> anyhow::Result<UserGroup> {
         // Validate (same as create)
         if name.len() < 2 || name.len() > 40 {
@@ -500,6 +537,32 @@ impl AdminGroupsService {
             Some(Some(s)) => Some(normalize_and_validate_slug(s)?),
         };
 
+        let (update_tz, tz_value): (bool, Option<String>) = match timezone {
+            None => (false, None),
+            Some(None) => (true, None),
+            Some(Some(s)) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    (true, None)
+                } else {
+                    (true, Some(t.to_string()))
+                }
+            }
+        };
+
+        let (update_dc, dc_value): (bool, Option<String>) = match display_currency {
+            None => (false, None),
+            Some(None) => (true, None),
+            Some(Some(s)) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    (true, None)
+                } else {
+                    (true, Some(t.to_string()))
+                }
+            }
+        };
+
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
             UPDATE user_groups
@@ -511,6 +574,10 @@ impl AdminGroupsService {
                 stop_out_level = $6,
                 signup_slug = $7,
                 hide_leverage_in_terminal = COALESCE($8, hide_leverage_in_terminal),
+                timezone = CASE WHEN $9 THEN $10 ELSE timezone END,
+                display_currency = CASE WHEN $11 THEN $12 ELSE display_currency END,
+                swap_enabled = COALESCE($13, swap_enabled),
+                fees_enabled = COALESCE($14, fees_enabled),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -524,6 +591,12 @@ impl AdminGroupsService {
         .bind(stop_out_level.and_then(rust_decimal::Decimal::from_f64))
         .bind(&slug_value)
         .bind(hide_leverage_in_terminal)
+        .bind(update_tz)
+        .bind(tz_value)
+        .bind(update_dc)
+        .bind(dc_value)
+        .bind(swap_enabled)
+        .bind(fees_enabled)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Group not found"))?;
@@ -550,6 +623,19 @@ impl AdminGroupsService {
             .await?;
 
         Ok(())
+    }
+
+    /// Open positions in DB for users belonging to this group (used for admin swap-enable warning).
+    pub async fn count_open_positions_in_group(&self, group_id: Uuid) -> anyhow::Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*)::bigint FROM positions p
+               JOIN users u ON u.id = p.user_id
+               WHERE u.group_id = $1 AND p.status = 'open'::position_status"#,
+        )
+        .bind(group_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
     }
 
     pub async fn get_group_usage(&self, id: Uuid) -> anyhow::Result<i64> {

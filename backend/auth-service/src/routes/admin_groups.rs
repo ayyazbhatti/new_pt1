@@ -28,6 +28,16 @@ pub struct CreateGroupRequest {
     pub stop_out_level: Option<f64>,
     /// Optional signup link slug (e.g. "golduser"). 3-20 chars, alphanumeric. If empty, auto-generated (5-7 chars).
     pub signup_slug: Option<String>,
+    /// Optional IANA timezone; empty/null = NULL in DB.
+    #[serde(default)]
+    pub timezone: Option<String>,
+    /// Optional ISO 4217 display currency; empty/null = NULL in DB.
+    #[serde(default)]
+    pub display_currency: Option<String>,
+    #[serde(default)]
+    pub swap_enabled: Option<bool>,
+    #[serde(default)]
+    pub fees_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +51,16 @@ pub struct UpdateGroupRequest {
     pub signup_slug: Option<Option<String>>,
     /// When true, users in this group do not see the Leverage section in the trading terminal.
     pub hide_leverage_in_terminal: Option<bool>,
+    /// Omitted = no change; JSON null = clear; string = set.
+    #[serde(default)]
+    pub timezone: Option<Option<String>>,
+    /// Omitted = no change; JSON null = clear; string = set.
+    #[serde(default)]
+    pub display_currency: Option<Option<String>>,
+    #[serde(default)]
+    pub swap_enabled: Option<bool>,
+    #[serde(default)]
+    pub fees_enabled: Option<bool>,
 }
 
 /// Reference to a profile (price stream or leverage) for embedding in group list.
@@ -90,6 +110,11 @@ pub struct UsageResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct OpenPositionsCountResponse {
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
 }
@@ -130,6 +155,7 @@ pub fn create_admin_groups_router(pool: PgPool) -> Router<PgPool> {
         .route("/overview", get(get_groups_overview))
         .route("/", get(list_groups).post(create_group))
         .route("/:id/usage", get(get_group_usage))
+        .route("/:id/open-positions-count", get(get_group_open_positions_count))
         .route("/:id/price-profile", put(update_group_price_profile))
         .route("/:id/leverage-profile", put(update_group_leverage_profile))
         .route("/:id/symbols", get(get_group_symbols).put(update_group_symbols))
@@ -434,6 +460,10 @@ async fn create_group(
             payload.margin_call_level,
             payload.stop_out_level,
             payload.signup_slug.as_deref(),
+            payload.timezone.as_deref(),
+            payload.display_currency.as_deref(),
+            payload.swap_enabled.unwrap_or(false),
+            payload.fees_enabled.unwrap_or(false),
             Some(claims.sub),
         )
         .await
@@ -482,6 +512,10 @@ async fn update_group(
             payload.stop_out_level,
             payload.signup_slug.as_ref().map(|o| o.as_deref()),
             payload.hide_leverage_in_terminal,
+            payload.timezone.as_ref().map(|o| o.as_deref()),
+            payload.display_currency.as_ref().map(|o| o.as_deref()),
+            payload.swap_enabled,
+            payload.fees_enabled,
         )
         .await
     {
@@ -573,6 +607,30 @@ async fn get_group_usage(
             Json(ErrorResponse {
                 error: ErrorDetail {
                     code: "GET_USAGE_FAILED".to_string(),
+                    message: e.to_string(),
+                },
+            }),
+        )),
+    }
+}
+
+async fn get_group_open_positions_count(
+    State(pool): State<PgPool>,
+    axum::extract::Extension(claims): axum::extract::Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<OpenPositionsCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    permission_check::check_permission(&pool, &claims, "groups:view")
+        .await
+        .map_err(permission_denied_to_response)?;
+
+    let service = AdminGroupsService::new(pool.clone());
+    match service.count_open_positions_in_group(id).await {
+        Ok(count) => Ok(Json(OpenPositionsCountResponse { count })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    code: "GET_OPEN_POSITIONS_COUNT_FAILED".to_string(),
                     message: e.to_string(),
                 },
             }),

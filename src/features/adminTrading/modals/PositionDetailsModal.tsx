@@ -4,14 +4,19 @@ import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
 import { Position } from '../types/adminTrading'
 import { useModalStore } from '@/app/store'
-import { formatDateTime, formatPercent } from '../utils/formatters'
+import { formatPercent } from '@/shared/utils/number'
+import { useFormatDateTime } from '@/shared/datetime'
 import { toast } from '@/shared/components/common'
+import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
 
 interface PositionDetailsModalProps {
   position: Position
 }
 
 export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
+  const formatDateTime = useFormatDateTime()
+  const formatMoney = useFormatFromUsd()
+  const formatSigned = useFormatSignedFromUsd()
   const closeModal = useModalStore((state) => state.closeModal)
   const [notes, setNotes] = useState('')
 
@@ -67,8 +72,7 @@ export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
           <div>
             <div className="text-xs text-text-muted mb-1">PnL</div>
             <div className={`font-mono font-semibold ${pnlColor}`}>
-              {position.pnl >= 0 ? '+' : ''}
-              {position.pnl.toFixed(2)}
+              {formatSigned(position.pnl)}
             </div>
             <div className={`text-xs ${pnlColor}`}>{formatPercent(position.pnlPercent)}</div>
           </div>
@@ -78,7 +82,7 @@ export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Margin Used</div>
-            <div className="font-mono text-text">${position.marginUsed.toFixed(2)}</div>
+            <div className="font-mono text-text">{formatMoney(position.marginUsed)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Liquidation Price</div>

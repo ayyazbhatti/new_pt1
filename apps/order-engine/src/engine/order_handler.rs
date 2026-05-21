@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use async_nats::Message;
 use contracts::{commands::PlaceOrderCommand, VersionedMessage};
-use contracts::enums::PositionStatus;
+use contracts::enums::{OrderStatus, PositionStatus};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::collections::HashMap;
@@ -256,6 +256,8 @@ impl OrderHandler {
             }),
             correlation_id: correlation_id.clone(),
             ts: cmd.ts,
+            margin_from_cash: cmd.margin_from_cash,
+            margin_from_bonus: cmd.margin_from_bonus,
         };
         
         // Validate order
@@ -309,6 +311,8 @@ impl OrderHandler {
                     max_leverage: cmd.max_leverage,
                     leverage_tiers,
                     account_type: cmd.account_type.or_else(|| Some("hedging".to_string())),
+                    margin_from_cash: cmd.margin_from_cash,
+                    margin_from_bonus: cmd.margin_from_bonus,
                 };
                 
                 // Store order in Redis
@@ -376,9 +380,35 @@ impl OrderHandler {
                         match self.lua.atomic_fill_order(&mut conn, &order_id, fill_price, order.size, eff).await {
                             Ok(result) => {
                                 if result.get("error").is_some() {
-                                    let error_msg = result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                    warn!("Failed to fill market order {} immediately: {}", order_id, error_msg);
-                                    // Order will be processed on next tick
+                                    let error_msg = result
+                                        .get("error")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+                                    let lua_st = result.get("status").and_then(|v| v.as_str());
+                                    if error_msg == "order_not_pending" && lua_st == Some("FILLED") {
+                                        // Sync position to auth-service Postgres via evt.position.updated.
+                                        // Required: prevents Redis-only positions (see docs/position-redis-postgres-sync-diagnostic-442fde7b.md).
+                                        position_events::sync_duplicate_fill_to_db(
+                                            self.nats.as_ref(),
+                                            &mut conn,
+                                            &order,
+                                            fill_price,
+                                            order.size,
+                                        )
+                                        .await;
+                                        let mut updated_order = order.clone();
+                                        updated_order.status = OrderStatus::Filled;
+                                        updated_order.filled_size = order.size;
+                                        updated_order.average_fill_price = Some(fill_price);
+                                        updated_order.filled_at = Some(now());
+                                        self.cache.update_order(updated_order);
+                                        self.cache.remove_pending_order(&cmd.symbol, order_id);
+                                    } else {
+                                        warn!(
+                                            "Failed to fill market order {} immediately: {}",
+                                            order_id, error_msg
+                                        );
+                                    }
                                 } else {
                                     info!(
                                         order_id = %order_id,
@@ -438,6 +468,22 @@ impl OrderHandler {
                                     if let Some(closed_id) = closed_position_id {
                                         let closed_side = result.get("closed_position_side").and_then(|v| v.as_str()).unwrap_or("LONG");
                                         let pos_side = if closed_side == "SHORT" { contracts::enums::PositionSide::Short } else { contracts::enums::PositionSide::Long };
+                                        let (margin_c, margin_b) = {
+                                            let raw: HashMap<String, String> = redis::cmd("HGETALL")
+                                                .arg(format!("pos:by_id:{}", closed_id))
+                                                .query_async(&mut conn)
+                                                .await
+                                                .unwrap_or_default();
+                                            let mfc = raw
+                                                .get("margin_from_cash")
+                                                .and_then(|s| Decimal::from_str_exact(s).ok())
+                                                .unwrap_or(Decimal::ZERO);
+                                            let mfb = raw
+                                                .get("margin_from_bonus")
+                                                .and_then(|s| Decimal::from_str_exact(s).ok())
+                                                .unwrap_or(Decimal::ZERO);
+                                            (mfc, mfb)
+                                        };
                                         let closed_event = crate::models::PositionClosedEvent {
                                             position_id: closed_id,
                                             user_id: cmd.user_id,
@@ -449,6 +495,8 @@ impl OrderHandler {
                                             correlation_id: correlation_id.clone(),
                                             ts: now(),
                                             trigger_reason: None,
+                                            margin_from_cash: Some(margin_c),
+                                            margin_from_bonus: Some(margin_b),
                                         };
                                         let _ = self.nats.publish_event(nats_subjects::EVENT_POSITION_CLOSED, &closed_event).await;
                                         let _ = position_events::publish_position_updated(self.nats.as_ref(), &mut conn, closed_id, Some(PositionStatus::Closed)).await;

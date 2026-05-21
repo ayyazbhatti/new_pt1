@@ -10,7 +10,11 @@ import {
   updateGroupPriceProfile,
   updateGroupLeverageProfile,
 } from '../api/groups.api'
-import { ListGroupsParams, ListGroupsResponse, CreateGroupPayload, UpdateGroupPayload } from '../types/group'
+import {
+  ListGroupsParams,
+  CreateGroupPayload,
+  UpdateGroupPayload,
+} from '../types/group'
 
 // Query key factory (exported for optimistic cache updates)
 export const groupsQueryKeys = {
@@ -69,7 +73,8 @@ export function useUpdateGroup() {
     mutationFn: ({ id, payload }: { id: string; payload: UpdateGroupPayload }) =>
       updateGroup(id, payload),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.lists() })
+      // Do not invalidate list queries: Admin → Groups table uses local state (like Admin → Users).
+      // Refetching the list here can overwrite the row before/without `timezone` in the API response.
       queryClient.invalidateQueries({ queryKey: queryKeys.detail(variables.id) })
       toast.success('Group updated successfully')
     },
@@ -129,7 +134,7 @@ export function useDeleteGroup() {
       const errorData = error?.response?.data?.error
       const code = errorData?.code
       const message = errorData?.message || error?.message || 'Failed to delete group'
-      
+
       if (code === 'GROUP_IN_USE') {
         toast.error('Cannot delete group: It has assigned users. Remove users first.')
       } else {
@@ -138,4 +143,3 @@ export function useDeleteGroup() {
     },
   })
 }
-

@@ -21,7 +21,7 @@ export interface Transaction {
   userEmail: string
   userFirstName?: string
   userLastName?: string
-  type: 'deposit' | 'withdrawal' | 'adjustment' | 'fee' | 'rebate'
+  type: 'deposit' | 'withdrawal' | 'adjustment' | 'fee' | 'rebate' | 'swap'
   amount: number
   currency: string
   fee: number

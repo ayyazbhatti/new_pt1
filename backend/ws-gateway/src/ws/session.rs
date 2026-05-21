@@ -179,8 +179,13 @@ impl Session {
                                     continue;
                                 }
                                 info!("Auth message received from connection {}, validating token...", conn_id);
-                                // Strip "Bearer " prefix if frontend sent it; trim whitespace
-                                let token = token.trim().strip_prefix("Bearer ").unwrap_or(token.trim());
+                                // Strip "Bearer " prefix (case-insensitive); trim whitespace
+                                let t = token.trim();
+                                let token = t
+                                    .strip_prefix("Bearer ")
+                                    .or_else(|| t.strip_prefix("bearer "))
+                                    .unwrap_or(t)
+                                    .trim();
                                 match jwt_auth.validate_token(token) {
                                     Ok(claims) => {
                                         info!("✅ Token validated successfully for connection {}", conn_id);

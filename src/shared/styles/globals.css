@@ -343,6 +343,7 @@
   /**
    * Dark slim scrollbars for wide tables (overflow-x) and overflow-auto panes (virtualized lists).
    * Use .table-scroll on horizontal table wrappers; add .scroll-surface alongside overflow-auto where both axes scroll.
+   * Keep WebKit height/width small (3px) so horizontal bars under wide admin tables do not look like thick slabs.
    */
   .table-scroll {
     overflow-x: auto;
@@ -352,32 +353,37 @@
   .table-scroll,
   .scroll-surface {
     scrollbar-width: thin;
-    scrollbar-color: rgba(148, 163, 184, 0.45) rgba(15, 23, 42, 0.55);
+    scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
   }
 
   .table-scroll::-webkit-scrollbar,
   .scroll-surface::-webkit-scrollbar {
-    height: 6px;
-    width: 6px;
+    height: 3px;
+    width: 3px;
   }
 
   .table-scroll::-webkit-scrollbar-track,
   .scroll-surface::-webkit-scrollbar-track {
-    background: rgba(15, 23, 42, 0.55);
-    border-radius: 4px;
+    background: transparent;
+    border-radius: 9999px;
   }
 
   .table-scroll::-webkit-scrollbar-thumb,
   .scroll-surface::-webkit-scrollbar-thumb {
-    background-color: rgba(148, 163, 184, 0.42);
-    border-radius: 4px;
-    border: 1px solid transparent;
+    background-color: rgba(148, 163, 184, 0.45);
+    border-radius: 9999px;
+    border: none;
     background-clip: padding-box;
+  }
+
+  .table-scroll:hover::-webkit-scrollbar-thumb,
+  .scroll-surface:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.55);
   }
 
   .table-scroll::-webkit-scrollbar-thumb:hover,
   .scroll-surface::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(186, 198, 212, 0.6);
+    background-color: rgba(186, 198, 212, 0.65);
   }
 
   .table-scroll::-webkit-scrollbar-corner,

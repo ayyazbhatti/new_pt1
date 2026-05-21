@@ -42,7 +42,8 @@ export function PreviewSwapModal({ rule }: PreviewSwapModalProps) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="text-sm text-text-muted">
-          Preview estimated swap charge for a sample position
+          Preview estimated swap <strong className="text-text">accrual</strong> for a sample hold (wallet debits on
+          position close in production, not each rollover).
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 text-xs text-text-muted">
@@ -120,7 +121,7 @@ export function PreviewSwapModal({ rule }: PreviewSwapModalProps) {
         <div className="space-y-4">
           <div className="text-sm font-semibold text-text mb-2">Preview Result</div>
           <Card className="p-6 bg-surface-2">
-            <div className="text-xs text-text-muted mb-2">Estimated Swap Charge</div>
+            <div className="text-xs text-text-muted mb-2">Estimated accrual (per preview period)</div>
             <div className="text-3xl font-mono font-bold text-text mb-2">
               {preview.estimatedCharge >= 0 ? '+' : ''}
               {preview.estimatedCharge.toFixed(4)} {preview.unitLabel}

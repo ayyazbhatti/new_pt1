@@ -15,6 +15,7 @@ import { ManualAdjustmentModal } from '@/features/adminFinance/modals/ManualAdju
 import { Download, Plus, ArrowDownToLine, ArrowUpFromLine, TrendingUp, Wallet } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { useState } from 'react'
+import { useFormatFromUsd } from '@/shared/currency'
 
 const STORAGE_KEY_TRANSACTIONS_TAB = 'admin.transactions.activeTab'
 const VALID_TABS = ['transactions', 'overview', 'wallets']
@@ -60,8 +61,7 @@ export function AdminTransactionsPage() {
   const pendingWithdrawals = overview?.pendingWithdrawals ?? 0
   const netFeesToday = overview?.netFeesToday ?? 0
   const totalBalances = overview?.totalBalances ?? 0
-  const formatCurrency = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(n)
+  const formatMoney = useFormatFromUsd()
 
   return (
     <ContentShell>
@@ -112,7 +112,7 @@ export function AdminTransactionsPage() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-text-muted">Net fees today</p>
-            <p className="mt-1 text-lg font-bold text-text">{formatCurrency(netFeesToday)}</p>
+            <p className="mt-1 text-lg font-bold text-text">{formatMoney(netFeesToday)}</p>
             <p className="mt-0.5 text-xs text-text-muted">Today</p>
           </div>
         </Card>
@@ -122,7 +122,7 @@ export function AdminTransactionsPage() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-text-muted">Total balances</p>
-            <p className="mt-1 text-lg font-bold text-text">{formatCurrency(totalBalances)}</p>
+            <p className="mt-1 text-lg font-bold text-text">{formatMoney(totalBalances)}</p>
             <p className="mt-0.5 text-xs text-text-muted">All wallets</p>
           </div>
         </Card>

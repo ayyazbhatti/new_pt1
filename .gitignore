@@ -39,6 +39,9 @@ target/
 target/
 **/target/
 
+# Generated host stats for Admin → System (see deploy/scripts/collect-system-stats-local.sh)
+deploy/stats/system-stats.json
+
 # KYC uploaded documents (stored on server, not in repo)
 backend/auth-service/uploads/
 temp_auto_push.bat

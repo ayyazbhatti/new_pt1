@@ -43,6 +43,15 @@ export interface UserResponse {
   referral_code?: string | null
   /** When true, hide the Leverage section in the trading terminal (from user's group). */
   hide_leverage_in_terminal?: boolean | null
+  timezone?: string | null
+  group_timezone?: string | null
+  effective_timezone?: string
+  effective_timezone_origin?: string
+  display_currency?: string | null
+  group_display_currency?: string | null
+  effective_display_currency?: string
+  effective_display_currency_origin?: string
+  platform_display_currency?: string | null
 }
 
 export async function login(email: string, password: string): Promise<{
@@ -174,6 +183,15 @@ export interface MeResponse {
   referralCode?: string | null
   /** When true, hide the Leverage section in the trading terminal (from user's group). */
   hideLeverageInTerminal?: boolean
+  timezone: string | null
+  groupTimezone: string | null
+  effectiveTimezone: string
+  effectiveTimezoneOrigin: 'user' | 'group' | 'platform' | 'fallback'
+  displayCurrency: string | null
+  groupDisplayCurrency: string | null
+  effectiveDisplayCurrency: string
+  effectiveDisplayCurrencyOrigin: 'user' | 'group' | 'platform' | 'fallback'
+  platformDisplayCurrency: string | null
 }
 
 export async function me(): Promise<MeResponse> {
@@ -255,6 +273,12 @@ export async function getMyCommissions(): Promise<Commission[]> {
 }
 
 function mapUserResponseToMe(response: UserResponse): MeResponse {
+  const o = response.effective_timezone_origin
+  const origin: MeResponse['effectiveTimezoneOrigin'] =
+    o === 'user' || o === 'group' || o === 'platform' || o === 'fallback' ? o : 'fallback'
+  const co = response.effective_display_currency_origin
+  const currencyOrigin: MeResponse['effectiveDisplayCurrencyOrigin'] =
+    co === 'user' || co === 'group' || co === 'platform' || co === 'fallback' ? co : 'fallback'
   return {
     id: response.id,
     email: response.email,
@@ -274,6 +298,15 @@ function mapUserResponseToMe(response: UserResponse): MeResponse {
     permissionProfileName: response.permission_profile_name ?? undefined,
     referralCode: response.referral_code ?? undefined,
     hideLeverageInTerminal: response.hide_leverage_in_terminal ?? undefined,
+    timezone: response.timezone ?? null,
+    groupTimezone: response.group_timezone ?? null,
+    effectiveTimezone: response.effective_timezone ?? 'UTC',
+    effectiveTimezoneOrigin: origin,
+    displayCurrency: response.display_currency ?? null,
+    groupDisplayCurrency: response.group_display_currency ?? null,
+    effectiveDisplayCurrency: response.effective_display_currency ?? 'USD',
+    effectiveDisplayCurrencyOrigin: currencyOrigin,
+    platformDisplayCurrency: response.platform_display_currency ?? null,
   }
 }
 

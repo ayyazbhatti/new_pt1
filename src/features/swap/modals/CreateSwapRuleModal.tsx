@@ -232,6 +232,10 @@ export function CreateSwapRuleModal() {
           {errors.unit && <p className="mt-1 text-sm text-danger">{errors.unit.message}</p>}
         </div>
       </div>
+      <p className="text-xs text-text-muted mb-2">
+        <strong className="text-text">V1 engine:</strong> only <code className="text-xs">daily</code> calc mode is executed.
+        Hourly and 8H funding values can be stored but are not applied by the rollover job yet.
+      </p>
       <div className="border-t border-border pt-4">
         <div className="text-sm font-semibold text-text mb-3">Rates</div>
         <div className="grid grid-cols-2 gap-4">
@@ -278,6 +282,10 @@ export function CreateSwapRuleModal() {
             {...register('rolloverTimeUtc')}
             defaultValue="00:00"
           />
+          <p className="mt-1 text-xs text-text-muted">
+            Accrual runs once per UTC day after this time for matching open positions (group must have swap enabled).
+            Amounts accumulate on the position; the wallet is debited at position close (settlement), not each rollover.
+          </p>
           {errors.rolloverTimeUtc && (
             <p className="mt-1 text-sm text-danger">{errors.rolloverTimeUtc.message}</p>
           )}

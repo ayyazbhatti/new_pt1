@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use async_nats::Message;
 use contracts::events::OrderUpdatedEvent;
 use crate::routes::deposits::compute_and_cache_account_summary;
+use crate::services::bonus_service;
+use crate::services::fee_placement;
 use contracts::enums::OrderStatus;
 use contracts::messages::VersionedMessage;
 use futures::StreamExt;
@@ -61,6 +63,18 @@ impl OrderEventHandler {
         // Only update database for terminal states
         if matches!(event.status, OrderStatus::Filled) {
             if self.update_order_in_database(&event).await? {
+                if let Err(e) = fee_placement::link_placement_fee_to_position_on_fill(
+                    &self.pool,
+                    event.user_id,
+                    event.order_id,
+                )
+                .await
+                {
+                    warn!(
+                        "link_placement_fee_to_position_on_fill order_id={}: {}",
+                        event.order_id, e
+                    );
+                }
                 self.publish_order_update_to_redis(&event).await;
                 let pool = Arc::clone(&self.pool);
                 let redis = Arc::clone(&self.redis);
@@ -71,6 +85,11 @@ impl OrderEventHandler {
             }
         } else if matches!(event.status, OrderStatus::Cancelled) {
             if self.update_order_cancelled_in_database(&event).await? {
+                if let Err(e) =
+                    bonus_service::rollback_order_margin_lock(&self.pool, event.user_id, event.order_id).await
+                {
+                    warn!("rollback_order_margin_lock: {}", e);
+                }
                 self.publish_order_update_to_redis(&event).await;
                 let pool = Arc::clone(&self.pool);
                 let redis = Arc::clone(&self.redis);
@@ -81,6 +100,16 @@ impl OrderEventHandler {
             }
         } else if matches!(event.status, OrderStatus::Rejected) {
             if self.update_order_rejected_in_database(&event).await? {
+                if let Err(e) =
+                    bonus_service::rollback_order_margin_lock(&self.pool, event.user_id, event.order_id).await
+                {
+                    warn!("rollback_order_margin_lock: {}", e);
+                }
+                if let Err(e) =
+                    fee_placement::refund_placement_fee_for_order(&self.pool, event.user_id, event.order_id).await
+                {
+                    warn!("refund_placement_fee_for_order: {}", e);
+                }
                 self.publish_order_update_to_redis(&event).await;
                 let pool = Arc::clone(&self.pool);
                 let redis = Arc::clone(&self.redis);
@@ -109,6 +138,18 @@ impl OrderEventHandler {
         // Only update database for terminal states
         if matches!(event.status, OrderStatus::Filled) {
             if self.update_order_in_database(&event).await? {
+                if let Err(e) = fee_placement::link_placement_fee_to_position_on_fill(
+                    &self.pool,
+                    event.user_id,
+                    event.order_id,
+                )
+                .await
+                {
+                    warn!(
+                        "link_placement_fee_to_position_on_fill order_id={}: {}",
+                        event.order_id, e
+                    );
+                }
                 self.publish_order_update_to_redis(&event).await;
                 let pool = Arc::clone(&self.pool);
                 let redis = Arc::clone(&self.redis);
@@ -119,6 +160,11 @@ impl OrderEventHandler {
             }
         } else if matches!(event.status, OrderStatus::Cancelled) {
             if self.update_order_cancelled_in_database(&event).await? {
+                if let Err(e) =
+                    bonus_service::rollback_order_margin_lock(&self.pool, event.user_id, event.order_id).await
+                {
+                    warn!("rollback_order_margin_lock: {}", e);
+                }
                 self.publish_order_update_to_redis(&event).await;
                 let pool = Arc::clone(&self.pool);
                 let redis = Arc::clone(&self.redis);
@@ -129,6 +175,16 @@ impl OrderEventHandler {
             }
         } else if matches!(event.status, OrderStatus::Rejected) {
             if self.update_order_rejected_in_database(&event).await? {
+                if let Err(e) =
+                    bonus_service::rollback_order_margin_lock(&self.pool, event.user_id, event.order_id).await
+                {
+                    warn!("rollback_order_margin_lock: {}", e);
+                }
+                if let Err(e) =
+                    fee_placement::refund_placement_fee_for_order(&self.pool, event.user_id, event.order_id).await
+                {
+                    warn!("refund_placement_fee_for_order: {}", e);
+                }
                 self.publish_order_update_to_redis(&event).await;
                 let pool = Arc::clone(&self.pool);
                 let redis = Arc::clone(&self.redis);

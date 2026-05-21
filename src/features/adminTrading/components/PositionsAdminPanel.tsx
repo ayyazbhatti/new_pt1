@@ -12,12 +12,17 @@ import { ConfirmActionModal } from '../modals/ConfirmActionModal'
 import { Eye, X } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { filterPositions } from '../utils/filters'
-import { formatDateTime, formatPercent } from '../utils/formatters'
+import { formatPercent } from '@/shared/utils/number'
+import { useFormatDateTime } from '@/shared/datetime'
+import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
 import { mockGroups } from '../mocks/groups.mock'
 import { mockPositions } from '../mocks/positions.mock'
 
 export function PositionsAdminPanel() {
   const openModal = useModalStore((state) => state.openModal)
+  const formatDateTime = useFormatDateTime()
+  const formatMoney = useFormatFromUsd()
+  const formatSigned = useFormatSignedFromUsd()
   const [positions, setPositions] = useState<Position[]>(mockPositions)
   const [filters, setFilters] = useState({
     status: 'open',
@@ -77,7 +82,7 @@ export function PositionsAdminPanel() {
     )
   }
 
-  const columns: ColumnDef<Position>[] = [
+  const columns: ColumnDef<Position>[] = useMemo(() => [
     {
       accessorKey: 'id',
       header: 'Position ID',
@@ -144,8 +149,7 @@ export function PositionsAdminPanel() {
         return (
           <div>
             <div className={`font-mono font-semibold ${color}`}>
-              {position.pnl >= 0 ? '+' : ''}
-              {position.pnl.toFixed(2)}
+              {formatSigned(position.pnl)}
             </div>
             <div className={`text-xs ${color}`}>{formatPercent(position.pnlPercent)}</div>
           </div>
@@ -163,7 +167,7 @@ export function PositionsAdminPanel() {
       accessorKey: 'marginUsed',
       header: 'Margin Used',
       cell: ({ row }) => {
-        return <span className="font-mono">${row.getValue('marginUsed')}</span>
+        return <span className="font-mono">{formatMoney(row.getValue('marginUsed') as number)}</span>
       },
     },
     {
@@ -205,7 +209,7 @@ export function PositionsAdminPanel() {
         )
       },
     },
-  ]
+  ], [formatDateTime, formatMoney, formatSigned, openModal, positions])
 
   return (
     <div className="space-y-4">
