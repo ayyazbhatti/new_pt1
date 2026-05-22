@@ -8,7 +8,7 @@ import {
 } from '@/shared/api/auth.api'
 import { updateProfile } from '@/shared/api/auth.api'
 import { useQueryClient } from '@tanstack/react-query'
-import { profileQueryKey } from '../hooks/useProfile'
+import { profileQueryKey, useProfile } from '../hooks/useProfile'
 import { Eye, EyeOff } from 'lucide-react'
 
 type PwdStep = 'initial' | 'otp-sent' | 'otp-verified'
@@ -25,6 +25,7 @@ export function UserProfilePage() {
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
   const queryClient = useQueryClient()
+  const { data: profile } = useProfile()
 
   const userEmail = user?.email ?? ''
   const initialName = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() || ''
@@ -33,6 +34,9 @@ export function UserProfilePage() {
   const [profileMsg, setProfileMsg] = useState('')
   const [profileErr, setProfileErr] = useState('')
   const [saveLoading, setSaveLoading] = useState(false)
+  const [confirmOrdersBeforePlacement, setConfirmOrdersBeforePlacement] = useState(true)
+  const [confirmPrefLoading, setConfirmPrefLoading] = useState(false)
+  const [confirmPrefErr, setConfirmPrefErr] = useState('')
 
   const [pwdStep, setPwdStep] = useState<PwdStep>('initial')
   const [otp, setOtp] = useState<string[]>(['', '', '', '', '', ''])
@@ -50,6 +54,12 @@ export function UserProfilePage() {
   useEffect(() => {
     setName(initialName)
   }, [initialName])
+
+  useEffect(() => {
+    if (profile?.confirmOrdersBeforePlacement !== undefined) {
+      setConfirmOrdersBeforePlacement(profile.confirmOrdersBeforePlacement)
+    }
+  }, [profile?.confirmOrdersBeforePlacement])
 
   const canSave =
     name.trim() !== '' &&
@@ -71,6 +81,7 @@ export function UserProfilePage() {
         lastName: data.lastName,
       })
       queryClient.setQueryData(profileQueryKey, data)
+      queryClient.setQueryData(['auth', 'me'], data)
       setProfileMsg('Profile updated successfully')
     } catch (err: unknown) {
       const message =
@@ -85,6 +96,25 @@ export function UserProfilePage() {
   const handleNameChange = () => {
     setProfileMsg('')
     setProfileErr('')
+  }
+
+  const handleConfirmOrdersToggle = async (checked: boolean) => {
+    if (checked === confirmOrdersBeforePlacement) return
+    setConfirmPrefErr('')
+    setConfirmPrefLoading(true)
+    try {
+      const data = await updateProfile({ confirmOrdersBeforePlacement: checked })
+      setConfirmOrdersBeforePlacement(data.confirmOrdersBeforePlacement)
+      queryClient.setQueryData(profileQueryKey, data)
+      queryClient.setQueryData(['auth', 'me'], data)
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message ?? (err as Error)?.message ?? 'Failed to update preference'
+      setConfirmPrefErr(message)
+    } finally {
+      setConfirmPrefLoading(false)
+    }
   }
 
   const handleRequestOTP = async () => {
@@ -289,6 +319,31 @@ export function UserProfilePage() {
             {saveLoading ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
+      </section>
+
+      {/* Trading preferences */}
+      <section className="bg-slate-800 rounded-lg p-4 sm:p-5 md:p-6 border border-slate-700">
+        <h2 className="text-base sm:text-lg font-semibold text-white mb-3 sm:mb-4">Trading preferences</h2>
+        {confirmPrefErr && (
+          <p className="text-red-400 text-xs sm:text-sm mb-2 sm:mb-3">{confirmPrefErr}</p>
+        )}
+        <label className="flex items-start gap-3 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 rounded border-slate-500 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 disabled:opacity-50"
+            checked={confirmOrdersBeforePlacement}
+            disabled={confirmPrefLoading}
+            onChange={(e) => void handleConfirmOrdersToggle(e.target.checked)}
+          />
+          <span>
+            <span className="block text-sm font-medium text-white">Confirm orders before placement</span>
+            <span className="block text-xs text-slate-400 mt-1 leading-relaxed">
+              Show a confirmation dialog with size, notional, margin, and prices before submitting orders from the
+              order ticket. Turn off for one-click placement from the ticket (chart trading strip stays one-click
+              either way).
+            </span>
+          </span>
+        </label>
       </section>
 
       {/* Security */}

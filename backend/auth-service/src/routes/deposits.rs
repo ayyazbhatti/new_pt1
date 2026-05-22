@@ -1972,6 +1972,31 @@ pub async fn compute_and_cache_account_summary_with_prices(
                         ("total_fees_paid_usd", summary_with_threshold.total_fees_paid_usd.to_string()),
                         ("updated_at", summary_with_threshold.updated_at.clone()),
                     ]).await;
+
+                    // Order-engine `validation.rs` reads `user:{id}:balance` (GET). Keep it in lockstep with
+                    // `pos:summary` above — not gated by `should_publish` (WS throttle only).
+                    let fm = summary_with_threshold.free_margin.to_string();
+                    let balance_json = serde_json::json!({
+                        "currency": "USD",
+                        "available": fm.clone(),
+                        "locked": "0",
+                        "equity": summary_with_threshold.equity.to_string(),
+                        "margin_used": summary_with_threshold.margin_used.to_string(),
+                        "free_margin": fm,
+                        "updated_at": Utc::now().timestamp_millis(),
+                    });
+                    let user_balance_key = format!("user:{}:balance", user_id);
+                    if let Err(e) = conn
+                        .set::<_, _, ()>(&user_balance_key, balance_json.to_string())
+                        .await
+                    {
+                        warn!(
+                            user_id = %user_id,
+                            error = %e,
+                            "Failed to SET user:balance JSON for order-engine (after pos:summary refresh)"
+                        );
+                    }
+
                     let should_pub = COORDINATOR
                         .get()
                         .map(|c| c.should_publish(user_id))
@@ -2707,6 +2732,7 @@ async fn create_direct_deposit(
         amount,
         &transaction_ref,
         Some(&description),
+        true, // `transactions` row inserted above for this direct deposit
     )
     .await
     .map_err(|e| {
@@ -2904,6 +2930,7 @@ async fn approve_deposit(
         amount,
         &transaction_ref,
         Some(&description),
+        true, // pending `transactions` row was approved above — no duplicate mirror row
     )
     .await
     .map_err(|e| {

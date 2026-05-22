@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
@@ -64,7 +64,11 @@ import {
   type AdminAccountSummaryResponse,
 } from '../api/users.api'
 import { getPositionsByUserId, type Position } from '@/features/terminal/api/positions.api'
-import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
+import {
+  usePriceStreamConnection,
+  useSymbolPrice,
+  normalizeSymbolKey,
+} from '@/features/symbols/hooks/usePriceStream'
 import { Input } from '@/shared/ui'
 import { cn } from '@/shared/utils'
 import {
@@ -252,6 +256,253 @@ function ResetPasswordConfirmModal({ email, modalKey }: ResetPasswordConfirmModa
 interface UserDetailsModalProps {
   user: User
 }
+
+function parsePosNum(s: string | undefined): number {
+  if (s == null || s === '') return 0
+  const n = parseFloat(s)
+  return Number.isFinite(n) ? n : 0
+}
+
+const UserDetailsOpenPositionRow = memo(function UserDetailsOpenPositionRow({
+  pos,
+  canClosePosition,
+  closingPositionId,
+  onModifyPosition,
+  onClosePosition,
+}: {
+  pos: Position
+  canClosePosition: boolean
+  closingPositionId: string | null
+  onModifyPosition: (p: Position) => void
+  onClosePosition: (p: Position) => void
+}) {
+  const tick = useSymbolPrice(normalizeSymbolKey(pos.symbol))
+  const sizeNum = parsePosNum(pos.size)
+  const entryPrice = parsePosNum(pos.avg_price || pos.entry_price)
+  const liveRaw =
+    tick != null ? (pos.side === 'LONG' ? parseFloat(tick.bid) : parseFloat(tick.ask)) : NaN
+  const livePriceFin = Number.isFinite(liveRaw) ? liveRaw : null
+  const unrealizedPnl =
+    livePriceFin !== null
+      ? pos.side === 'LONG'
+        ? (livePriceFin - entryPrice) * sizeNum
+        : (entryPrice - livePriceFin) * sizeNum
+      : parsePosNum(pos.unrealized_pnl)
+  const slNum = pos.sl != null && !Number.isNaN(parseFloat(pos.sl)) ? parseFloat(pos.sl) : null
+  const tpNum = pos.tp != null && !Number.isNaN(parseFloat(pos.tp)) ? parseFloat(pos.tp) : null
+  return (
+    <tr>
+      <td className="px-4 py-3 font-mono text-white">{pos.symbol}</td>
+      <td className="px-4 py-3">
+        <span
+          className={cn(
+            'rounded px-2 py-0.5 text-xs font-semibold',
+            pos.side === 'LONG' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400',
+          )}
+        >
+          {pos.side}
+        </span>
+      </td>
+      <td className="px-4 py-3 text-slate-300">{sizeNum.toFixed(6)}</td>
+      <td className="px-4 py-3 font-mono text-slate-300">${entryPrice.toFixed(2)}</td>
+      <td className="px-4 py-3 font-mono text-blue-400">
+        {livePriceFin != null ? `$${livePriceFin.toFixed(2)}` : '—'}
+      </td>
+      <td
+        className={cn(
+          'px-4 py-3 font-mono font-medium',
+          unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400',
+        )}
+      >
+        {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}
+      </td>
+      <td className="px-4 py-3 font-mono text-slate-400">{slNum != null ? `$${slNum.toFixed(2)}` : '—'}</td>
+      <td className="px-4 py-3 font-mono text-slate-400">{tpNum != null ? `$${tpNum.toFixed(2)}` : '—'}</td>
+      {canClosePosition && (
+        <td className="px-4 py-3 text-right">
+          <div className="flex items-center justify-end gap-1">
+            <div className="relative group inline-flex">
+              <button
+                type="button"
+                onClick={() => onModifyPosition(pos)}
+                title="Modify entry, size, SL/TP"
+                className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                Modify
+              </span>
+            </div>
+            <div className="relative group inline-flex">
+              <button
+                type="button"
+                onClick={() => onClosePosition(pos)}
+                disabled={closingPositionId === pos.id}
+                title="Close position"
+                className={cn(
+                  'rounded p-1.5 text-slate-400 hover:bg-red-600/80 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                )}
+              >
+                {closingPositionId === pos.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <X className="h-4 w-4" />
+                )}
+              </button>
+              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                Close
+              </span>
+            </div>
+          </div>
+        </td>
+      )}
+    </tr>
+  )
+})
+
+const UserDetailsUnrealizedShard = memo(function UserDetailsUnrealizedShard({
+  pos,
+  onReport,
+}: {
+  pos: Position
+  onReport: (id: string, n: number) => void
+}) {
+  const tick = useSymbolPrice(normalizeSymbolKey(pos.symbol))
+  const n = useMemo(() => {
+    const sizeNum = parsePosNum(pos.size)
+    const entryPrice = parsePosNum(pos.avg_price || pos.entry_price)
+    if (!tick) return parsePosNum(pos.unrealized_pnl)
+    const livePrice = pos.side === 'LONG' ? parseFloat(tick.bid) : parseFloat(tick.ask)
+    if (!Number.isFinite(livePrice)) return parsePosNum(pos.unrealized_pnl)
+    return pos.side === 'LONG'
+      ? (livePrice - entryPrice) * sizeNum
+      : (entryPrice - livePrice) * sizeNum
+  }, [pos, tick])
+  useEffect(() => {
+    onReport(pos.id, n)
+  }, [pos.id, n, onReport])
+  return null
+})
+
+const UserDetailsMetricsBar = memo(function UserDetailsMetricsBar({
+  openPositions,
+  accountSummary,
+  balanceFallback,
+  formatMoney,
+  formatSignedMoney,
+}: {
+  openPositions: Position[]
+  accountSummary: AdminAccountSummaryResponse | null | undefined
+  balanceFallback: number
+  formatMoney: (n: number) => string
+  formatSignedMoney: (n: number) => string
+}) {
+  const pnlsRef = useRef<Map<string, number>>(new Map())
+  const [gen, setGen] = useState(0)
+  const report = useCallback((id: string, v: number) => {
+    const prev = pnlsRef.current.get(id)
+    if (prev === v) return
+    pnlsRef.current.set(id, v)
+    setGen((g) => g + 1)
+  }, [])
+
+  const metrics = useMemo(() => {
+    const balance = accountSummary?.balance ?? balanceFallback ?? 0
+    let totalMargin = 0
+    let unrealizedPnl = 0
+    openPositions.forEach((pos) => {
+      totalMargin += parsePosNum(pos.margin)
+      const stored = parsePosNum(pos.unrealized_pnl)
+      unrealizedPnl += pnlsRef.current.has(pos.id) ? (pnlsRef.current.get(pos.id) as number) : stored
+    })
+    const clientEquityFallback = balance + unrealizedPnl
+    const equity = accountSummary?.equity ?? clientEquityFallback
+    const margin = accountSummary?.marginUsed ?? totalMargin
+    const freeMargin = accountSummary?.freeMargin ?? clientEquityFallback - totalMargin
+
+    let marginLevel = 0
+    if (
+      accountSummary?.marginLevel != null &&
+      accountSummary.marginLevel !== 'inf' &&
+      accountSummary.marginLevel !== 'Infinity'
+    ) {
+      marginLevel = parseFloat(accountSummary.marginLevel) || 0
+    } else if (accountSummary != null) {
+      marginLevel = 0
+    } else {
+      marginLevel = totalMargin > 0 ? (clientEquityFallback / totalMargin) * 100 : 0
+    }
+
+    return {
+      balance,
+      equity,
+      margin,
+      freeMargin,
+      marginLevel,
+      unrealizedPnl,
+    }
+  }, [accountSummary, balanceFallback, openPositions, gen])
+
+  return (
+    <>
+      {openPositions.map((pos) => (
+        <UserDetailsUnrealizedShard key={pos.id} pos={pos} onReport={report} />
+      ))}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-6">
+        <div>
+          <div className="mb-1 text-xs text-slate-400">Balance</div>
+          <div className="text-sm font-semibold text-white sm:text-base">{formatMoney(metrics.balance)}</div>
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-slate-400">Equity</div>
+          <div className="text-sm font-semibold text-white sm:text-base">{formatMoney(metrics.equity)}</div>
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-slate-400">Margin</div>
+          <div className="text-sm font-semibold text-white sm:text-base">{formatMoney(metrics.margin)}</div>
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-slate-400">Free Margin</div>
+          <div
+            className={cn(
+              'text-sm font-semibold sm:text-base',
+              metrics.freeMargin >= 0 ? 'text-green-400' : 'text-red-400',
+            )}
+          >
+            {formatMoney(metrics.freeMargin)}
+          </div>
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-slate-400">Margin Level</div>
+          <div
+            className={cn(
+              'text-sm font-semibold sm:text-base',
+              metrics.marginLevel < 100
+                ? 'text-red-400'
+                : metrics.marginLevel < 200
+                  ? 'text-yellow-400'
+                  : 'text-green-400',
+            )}
+          >
+            {metrics.marginLevel > 0 ? `${metrics.marginLevel.toFixed(2)}%` : '—'}
+          </div>
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-slate-400">Unrealized P&L</div>
+          <div
+            className={cn(
+              'text-sm font-semibold sm:text-base',
+              metrics.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400',
+            )}
+          >
+            {formatSignedMoney(metrics.unrealizedPnl)}
+          </div>
+        </div>
+      </div>
+    </>
+  )
+})
 
 export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const formatDateTime = useFormatDateTime()
@@ -529,9 +780,16 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
   const canApproveDeposit = useCanAccess('deposits:approve')
   const canRejectDeposit = useCanAccess('deposits:reject')
 
+  const [fundingAuditFilter, setFundingAuditFilter] = useState<'money' | 'all' | 'audit'>('money')
+
   const { data: transactionsData, isLoading: transactionsLoading, refetch: refetchTransactions } = useQuery({
-    queryKey: ['user-transactions', user.id, user.email],
-    queryFn: () => fetchTransactions({ search: user.email, pageSize: 100 }),
+    queryKey: ['user-transactions', user.id, user.email, fundingAuditFilter],
+    queryFn: () =>
+      fetchTransactions({
+        search: user.email,
+        pageSize: 100,
+        auditFilter: fundingAuditFilter,
+      }),
     enabled: !!user.email,
   })
   const transactions = transactionsData?.items ?? []
@@ -668,7 +926,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
       document.removeEventListener('touchstart', handleClick)
     }
   }, [createOrderSymbolDropdownOpen])
-  const { prices: livePrices } = usePriceStream(positionSymbols)
+  usePriceStreamConnection(positionSymbols)
 
   const { data: notes = [], isLoading: notesLoading } = useQuery({
     queryKey: ['user-notes', user.id],
@@ -961,54 +1219,15 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
     chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [activeTab, chatMessages.length])
 
-  const metrics = useMemo(() => {
-    const balance = accountSummary?.balance ?? userState.balance ?? 0
-    let totalMargin = 0
-    let unrealizedPnl = 0
-    openPositions.forEach((pos) => {
-      totalMargin += parseFloat(pos.margin || '0')
-      const sizeNum = parseFloat(pos.size || '0')
-      const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
-      const symbolKey = normalizeSymbolKey(pos.symbol)
-      const priceData = livePrices.get(symbolKey) ?? livePrices.get(pos.symbol?.toUpperCase?.() ?? '')
-      const livePrice = priceData
-        ? pos.side === 'LONG'
-          ? parseFloat(priceData.bid)
-          : parseFloat(priceData.ask)
-        : null
-      if (livePrice !== null) {
-        unrealizedPnl += pos.side === 'LONG' ? (livePrice - entryPrice) * sizeNum : (entryPrice - livePrice) * sizeNum
-      } else {
-        unrealizedPnl += parseFloat(pos.unrealized_pnl || '0')
-      }
-    })
-    const clientEquityFallback = balance + unrealizedPnl
-    const equity = accountSummary?.equity ?? clientEquityFallback
-    const margin = accountSummary?.marginUsed ?? totalMargin
-    const freeMargin = accountSummary?.freeMargin ?? clientEquityFallback - totalMargin
-
-    let marginLevel = 0
-    if (
-      accountSummary?.marginLevel != null &&
-      accountSummary.marginLevel !== 'inf' &&
-      accountSummary.marginLevel !== 'Infinity'
-    ) {
-      marginLevel = parseFloat(accountSummary.marginLevel) || 0
-    } else if (accountSummary != null) {
-      marginLevel = 0
-    } else {
-      marginLevel = totalMargin > 0 ? (clientEquityFallback / totalMargin) * 100 : 0
-    }
-
-    return {
-      balance,
-      equity,
-      margin,
-      freeMargin,
-      marginLevel,
-      unrealizedPnl,
-    }
-  }, [accountSummary, userState.balance, openPositions, livePrices])
+  const handleOpenPositionRowModify = useCallback((p: Position) => {
+    setModifyPosition(p)
+    setModifyPositionDialogOpen(true)
+  }, [])
+  const handleOpenPositionRowClose = useCallback((p: Position) => {
+    setClosePositionId(p.id)
+    setClosePositionSymbol(p.symbol)
+    setClosePositionDialogOpen(true)
+  }, [])
 
   type TransactionRow = {
     id: string
@@ -1034,7 +1253,7 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
         firstName: tx.userFirstName,
         lastName: tx.userLastName,
       },
-      type: tx.type as FinanceTransaction['type'],
+      type: tx.type,
       amount: Number(tx.amount),
       currency: (tx.currency || 'USD') as FinanceTransaction['currency'],
       method: tx.method as FinanceTransaction['method'],
@@ -1320,59 +1539,13 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
             <span className="text-sm text-slate-400">Loading metrics...</span>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-6">
-            <div>
-              <div className="mb-1 text-xs text-slate-400">Balance</div>
-              <div className="text-sm font-semibold text-white sm:text-base">
-                {formatMoney(metrics.balance)}
-              </div>
-            </div>
-            <div>
-              <div className="mb-1 text-xs text-slate-400">Equity</div>
-              <div className="text-sm font-semibold text-white sm:text-base">
-                {formatMoney(metrics.equity)}
-              </div>
-            </div>
-            <div>
-              <div className="mb-1 text-xs text-slate-400">Margin</div>
-              <div className="text-sm font-semibold text-white sm:text-base">
-                {formatMoney(metrics.margin)}
-              </div>
-            </div>
-            <div>
-              <div className="mb-1 text-xs text-slate-400">Free Margin</div>
-              <div
-                className={cn(
-                  'text-sm font-semibold sm:text-base',
-                  metrics.freeMargin >= 0 ? 'text-green-400' : 'text-red-400'
-                )}
-              >
-                {formatMoney(metrics.freeMargin)}
-              </div>
-            </div>
-            <div>
-              <div className="mb-1 text-xs text-slate-400">Margin Level</div>
-              <div
-                className={cn(
-                  'text-sm font-semibold sm:text-base',
-                  metrics.marginLevel < 100 ? 'text-red-400' : metrics.marginLevel < 200 ? 'text-yellow-400' : 'text-green-400'
-                )}
-              >
-                {metrics.marginLevel > 0 ? `${metrics.marginLevel.toFixed(2)}%` : '—'}
-              </div>
-            </div>
-            <div>
-              <div className="mb-1 text-xs text-slate-400">Unrealized P&L</div>
-              <div
-                className={cn(
-                  'text-sm font-semibold sm:text-base',
-                  metrics.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'
-                )}
-              >
-                {formatSignedMoney(metrics.unrealizedPnl)}
-              </div>
-            </div>
-          </div>
+          <UserDetailsMetricsBar
+            openPositions={openPositions}
+            accountSummary={accountSummary}
+            balanceFallback={userState.balance ?? 0}
+            formatMoney={formatMoney}
+            formatSignedMoney={formatSignedMoney}
+          />
         )}
       </div>
 
@@ -1789,6 +1962,31 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                   </div>
                 )}
 
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-slate-500">Show:</span>
+                  {(
+                    [
+                      { id: 'money' as const, label: 'Money events' },
+                      { id: 'all' as const, label: 'All' },
+                      { id: 'audit' as const, label: 'Audit only' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setFundingAuditFilter(opt.id)}
+                      className={cn(
+                        'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+                        fundingAuditFilter === opt.id
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-600',
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
                 {transactions.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12">
                     <DollarSign className="h-12 w-12 text-slate-600" />
@@ -2119,85 +2317,16 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-700">
-                        {openPositions.map((pos) => {
-                          const sizeNum = parseFloat(pos.size || '0')
-                          const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
-                          const symbolKey = normalizeSymbolKey(pos.symbol)
-                          const priceData = livePrices.get(symbolKey) ?? livePrices.get(pos.symbol?.toUpperCase?.() ?? '')
-                          const livePrice = priceData ? (pos.side === 'LONG' ? parseFloat(priceData.bid) : parseFloat(priceData.ask)) : null
-                          const unrealizedPnl =
-                            livePrice !== null
-                              ? pos.side === 'LONG'
-                                ? (livePrice - entryPrice) * sizeNum
-                                : (entryPrice - livePrice) * sizeNum
-                              : parseFloat(pos.unrealized_pnl || '0')
-                          const slNum = pos.sl != null && !Number.isNaN(parseFloat(pos.sl)) ? parseFloat(pos.sl) : null
-                          const tpNum = pos.tp != null && !Number.isNaN(parseFloat(pos.tp)) ? parseFloat(pos.tp) : null
-                          return (
-                            <tr key={pos.id}>
-                              <td className="px-4 py-3 font-mono text-white">{pos.symbol}</td>
-                              <td className="px-4 py-3">
-                                <span className={cn('rounded px-2 py-0.5 text-xs font-semibold', pos.side === 'LONG' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400')}>
-                                  {pos.side}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-slate-300">{sizeNum.toFixed(6)}</td>
-                              <td className="px-4 py-3 font-mono text-slate-300">${entryPrice.toFixed(2)}</td>
-                              <td className="px-4 py-3 font-mono text-blue-400">{livePrice != null ? `$${livePrice.toFixed(2)}` : '—'}</td>
-                              <td className={cn('px-4 py-3 font-mono font-medium', unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400')}>
-                                {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}
-                              </td>
-                              <td className="px-4 py-3 font-mono text-slate-400">{slNum != null ? `$${slNum.toFixed(2)}` : '—'}</td>
-                              <td className="px-4 py-3 font-mono text-slate-400">{tpNum != null ? `$${tpNum.toFixed(2)}` : '—'}</td>
-                              {(canClosePosition) && (
-                                <td className="px-4 py-3 text-right">
-                                  <div className="flex items-center justify-end gap-1">
-                                    <div className="relative group inline-flex">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setModifyPosition(pos)
-                                          setModifyPositionDialogOpen(true)
-                                        }}
-                                        title="Modify entry, size, SL/TP"
-                                        className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
-                                      >
-                                        <Pencil className="h-4 w-4" />
-                                      </button>
-                                      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-                                        Modify
-                                      </span>
-                                    </div>
-                                    <div className="relative group inline-flex">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setClosePositionId(pos.id)
-                                          setClosePositionSymbol(pos.symbol)
-                                          setClosePositionDialogOpen(true)
-                                        }}
-                                        disabled={closingPositionId === pos.id}
-                                        title="Close position"
-                                        className={cn(
-                                          'rounded p-1.5 text-slate-400 hover:bg-red-600/80 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
-                                        )}
-                                      >
-                                        {closingPositionId === pos.id ? (
-                                          <Loader2 className="h-4 w-4 animate-spin" />
-                                        ) : (
-                                          <X className="h-4 w-4" />
-                                        )}
-                                      </button>
-                                      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-                                        Close
-                                      </span>
-                                    </div>
-                                  </div>
-                                </td>
-                              )}
-                            </tr>
-                          )
-                        })}
+                        {openPositions.map((pos) => (
+                          <UserDetailsOpenPositionRow
+                            key={pos.id}
+                            pos={pos}
+                            canClosePosition={canClosePosition}
+                            closingPositionId={closingPositionId}
+                            onModifyPosition={handleOpenPositionRowModify}
+                            onClosePosition={handleOpenPositionRowClose}
+                          />
+                        ))}
                       </tbody>
                     </table>
                   </div>

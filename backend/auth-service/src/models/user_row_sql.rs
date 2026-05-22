@@ -10,7 +10,8 @@ pub const USERS_ROW_SQL: &str = "\
 id, email, password_hash, first_name, last_name, phone, country, status, role, group_id, \
 account_type, margin_calculation_type, trading_access, min_leverage, max_leverage, \
 referral_code, referred_by_user_id, email_verified, created_at, updated_at, last_login_at, \
-permission_profile_id, deleted_at, timezone, display_currency";
+permission_profile_id, deleted_at, timezone, display_currency, \
+confirm_orders_before_placement";
 
 /// Columns for [`super::user::UserSession`] — must match `public.user_sessions`.
 pub const USER_SESSIONS_ROW_SQL: &str =

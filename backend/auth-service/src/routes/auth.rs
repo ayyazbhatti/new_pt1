@@ -180,6 +180,9 @@ pub struct UserResponse {
     pub effective_slippage_bps: i32,
     /// Origin of [`Self::effective_slippage_bps`]: `groupDefault` | `platformDefault` | `hardcodedFallback`.
     pub effective_slippage_source: crate::services::slippage::SlippageSource,
+    /// When true, order ticket shows a confirmation step before submitting (user can disable for fast trading).
+    #[serde(rename = "confirmOrdersBeforePlacement")]
+    pub confirm_orders_before_placement: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -207,6 +210,8 @@ pub struct SymbolLeverageQuery {
 pub struct UpdateMeRequest {
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+    #[serde(rename = "confirmOrdersBeforePlacement")]
+    pub confirm_orders_before_placement: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1151,6 +1156,7 @@ async fn build_user_response(
         platform_display_currency: platform_currency.clone(),
         effective_slippage_bps: slippage_res.bps,
         effective_slippage_source: slippage_res.source,
+        confirm_orders_before_placement: user.confirm_orders_before_placement,
     })
 }
 
@@ -1319,23 +1325,32 @@ async fn update_me(
 ) -> Result<Json<UserResponse>, (StatusCode, Json<ErrorResponse>)> {
     let first_name = payload.first_name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
     let last_name = payload.last_name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
-    if first_name.is_none() && last_name.is_none() {
+    let has_name = first_name.is_some() || last_name.is_some();
+    let has_confirm = payload.confirm_orders_before_placement.is_some();
+    if !has_name && !has_confirm {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: ErrorDetail {
                     code: "VALIDATION".to_string(),
-                    message: "Provide at least one of first_name or last_name".to_string(),
+                    message: "Provide at least one of first_name, last_name, or confirmOrdersBeforePlacement"
+                        .to_string(),
                 },
             }),
         ));
     }
 
     let rows = sqlx::query(
-        "UPDATE users SET first_name = COALESCE($1, first_name), last_name = COALESCE($2, last_name), updated_at = NOW() WHERE id = $3",
+        r#"UPDATE users SET
+            first_name = COALESCE($1, first_name),
+            last_name = COALESCE($2, last_name),
+            confirm_orders_before_placement = COALESCE($3, confirm_orders_before_placement),
+            updated_at = NOW()
+           WHERE id = $4"#,
     )
     .bind(first_name)
     .bind(last_name)
+    .bind(payload.confirm_orders_before_placement)
     .bind(claims.sub)
     .execute(&pool)
     .await

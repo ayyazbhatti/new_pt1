@@ -41,6 +41,7 @@ import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useSessionStatus, useSessionStatusBatch } from '../hooks/useSessionStatus'
 import { formatOpensInLabel, formatClosesInLabel } from '../utils/sessionCountdown'
 import { tryToastPlaceOrderForbiddenError } from '../utils/placeOrderErrorToast'
+import { OrderConfirmationDialog } from './OrderConfirmationDialog'
 import { getPromotionSlides } from '../api/promotions.api'
 import type { PromotionSlidePublic } from '../api/promotions.api'
 import { useEffectiveTimezone, useTimezoneOffsetLabel } from '@/shared/datetime'
@@ -300,6 +301,14 @@ export function RightTradingPanel() {
   const symbolDropdownRef = useRef<HTMLDivElement>(null)
   const autoSizeSeedKeyRef = useRef('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [orderConfirmOpen, setOrderConfirmOpen] = useState(false)
+  const [pendingOrderConfirm, setPendingOrderConfirm] = useState<{
+    payload: PlaceOrderRequest
+    side: 'BUY' | 'SELL'
+    baseSize: number
+    displaySize: string
+    youEnteredLabel: string
+  } | null>(null)
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
   /** Which side market/limit preview uses for margin estimate (BUY→ask, SELL→bid). Updated on Buy/Sell hover/focus and click. */
   const [previewOrderSide, setPreviewOrderSide] = useState<'BUY' | 'SELL'>('BUY')
@@ -394,10 +403,10 @@ export function RightTradingPanel() {
   // Helper to create AdminSymbol-like object from MockSymbol (with defaults)
   const getSymbolForCalculations = useCallback((): AdminSymbol | null => {
     if (!selectedSymbol) return null
-    
+
     // If we have AdminSymbol data, use it
     if (adminSymbol) return adminSymbol
-    
+
     // Otherwise, create a minimal AdminSymbol with defaults
     return {
       id: selectedSymbol.id,
@@ -420,6 +429,12 @@ export function RightTradingPanel() {
       updatedAt: '',
     }
   }, [selectedSymbol, adminSymbol])
+
+  /** Same source as sizing / place-order; used so confirm dialog mounts when API list omits this symbol (e.g. page_size). */
+  const symbolForOrderConfirmDialog = useMemo(() => {
+    if (!pendingOrderConfirm || !selectedSymbol) return null
+    return getSymbolForCalculations()
+  }, [pendingOrderConfirm, selectedSymbol, getSymbolForCalculations])
 
   // When the user has not locked size mode (Segmented or prior explicit save), follow symbol-class default (e.g. FX → lots).
   useEffect(() => {
@@ -1062,6 +1077,104 @@ export function RightTradingPanel() {
     return () => window.clearTimeout(timer)
   }, [wsState])
 
+  const reportPlaceOrderHttpError = (error: unknown) => {
+    if (tryToastPlaceOrderForbiddenError(error, toast, clockNow.getTime())) {
+      return
+    }
+    const err = error as {
+      response?: {
+        data?: { error?: string | { code?: string; message?: string }; message?: string }
+        status?: number
+      }
+      message?: string
+    }
+    const data = err?.response?.data
+    const status = err?.response?.status
+    const apiMessage =
+      typeof data?.error === 'object' && data?.error?.message
+        ? data.error.message
+        : data?.message ??
+          (typeof data?.error === 'object' ? (data.error as { message?: string }).message : undefined)
+    const insufficientCode =
+      data?.error === 'INSUFFICIENT_FREE_MARGIN' ||
+      (typeof data?.error === 'object' && data?.error?.code === 'INSUFFICIENT_FREE_MARGIN')
+    const minRequiredMarginCode =
+      data?.error === 'MIN_REQUIRED_MARGIN_NOT_MET' ||
+      (typeof data?.error === 'object' && data?.error?.code === 'MIN_REQUIRED_MARGIN_NOT_MET')
+    const required = Number((data as { required_margin?: string })?.required_margin)
+    const free = Number((data as { free_margin?: string })?.free_margin)
+    const minRequired = Number((data as { min_required_margin?: string })?.min_required_margin)
+    const insufficientMessage =
+      Number.isFinite(required) && Number.isFinite(free)
+        ? `Insufficient funds: required margin ${formatMoney(required)}, free margin ${formatMoney(free)}`
+        : 'Insufficient funds/margin to place this order'
+    const minRequiredMessage =
+      Number.isFinite(minRequired)
+        ? `Estimated margin must be at least ${formatMoney(minRequired)} to open a position`
+        : `Estimated margin must be at least ${formatMoney(minRequiredMarginDollars)} to open a position`
+    const is403 = status === 403 || (typeof err?.message === 'string' && err.message.includes('403'))
+    const errorMessage =
+      (minRequiredMarginCode ? minRequiredMessage : null) ||
+      (insufficientCode ? insufficientMessage : null) ||
+      apiMessage ||
+      (is403 ? 'Trading is disabled. You cannot open new positions.' : null) ||
+      (error instanceof Error ? error.message : 'Failed to place order')
+    const showPlain = minRequiredMarginCode || insufficientCode || is403 || apiMessage
+    toast.error(showPlain ? errorMessage : `Order failed: ${errorMessage}`)
+    console.error('Order placement error:', error)
+  }
+
+  const executePlaceOrderRequest = async (
+    payload: PlaceOrderRequest,
+    side: 'BUY' | 'SELL',
+    displaySize: string,
+  ) => {
+    const sym = selectedSymbol
+    if (!sym) {
+      throw new Error('No symbol selected')
+    }
+    const response = await placeOrder(payload)
+    const orderId = response.orderId || (response as { order_id?: string }).order_id
+    if (!orderId) {
+      throw new Error('Order ID not returned from server')
+    }
+    setPendingOrders((prev) => new Set(prev).add(orderId))
+    useTerminalStore.getState().registerRecentSubmittedOrder(orderId)
+    useTerminalStore.getState().requestOpenPositionsRefresh()
+    toast.success(
+      `${side} order submitted: ${displaySize} @ ${sym.code} (Order ID: ${orderId.slice(0, 8)}...)`,
+      { duration: 3000 },
+    )
+    if (orderType === 'market') {
+      if (sizeMode === 'units') {
+        const nextDefaultSize = getDefaultSizeForMinMargin()
+        setSize(nextDefaultSize ?? '0.003457')
+      } else if (sizeMode === 'lots') {
+        setLotSize('0.5')
+      } else if (sizeMode === 'pipPosition') {
+        setPipPosition('5')
+      }
+      setStopLoss('')
+      setTakeProfit('')
+      setUseSlTp(false)
+    }
+  }
+
+  const handleConfirmPendingOrder = async () => {
+    if (!pendingOrderConfirm) return
+    const { payload, side, displaySize } = pendingOrderConfirm
+    setIsSubmitting(true)
+    try {
+      await executePlaceOrderRequest(payload, side, displaySize)
+      setOrderConfirmOpen(false)
+      setPendingOrderConfirm(null)
+    } catch (error: unknown) {
+      reportPlaceOrderHttpError(error)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
   const handlePlaceOrder = async (side: 'BUY' | 'SELL') => {
     if (!selectedSymbol) {
       toast.error('Please select a symbol')
@@ -1088,9 +1201,10 @@ export function RightTradingPanel() {
       if (currency === selectedSymbol.quoteCurrency && liveBidNum > 0) {
         baseSize = sizeNum / liveBidNum
       }
-      displaySize = currency === selectedSymbol.quoteCurrency 
-        ? `${size} ${selectedSymbol.quoteCurrency} (${baseSize.toFixed(8)} ${selectedSymbol.baseCurrency})`
-        : `${size} ${selectedSymbol.baseCurrency}`
+      displaySize =
+        currency === selectedSymbol.quoteCurrency
+          ? `${size} ${selectedSymbol.quoteCurrency} (${baseSize.toFixed(8)} ${selectedSymbol.baseCurrency})`
+          : `${size} ${selectedSymbol.baseCurrency}`
     } else if (sizeMode === 'lots') {
       const lotSizeNum = parseFloat(lotSize)
       if (!lotSizeNum || lotSizeNum <= 0) {
@@ -1111,7 +1225,12 @@ export function RightTradingPanel() {
         toast.error('Price not available')
         return
       }
-      const calculatedLots = calculateLotSizeFromPipPosition(pipPosNum, symbolForCalc, price, pipPositionCurrency)
+      const calculatedLots = calculateLotSizeFromPipPosition(
+        pipPosNum,
+        symbolForCalc,
+        price,
+        pipPositionCurrency,
+      )
       baseSize = calculateUnitsFromLots(calculatedLots, symbolForCalc)
       displaySize = `${formatAmount(pipPosNum, pipPositionCurrency as CurrencyCode)}/pip (${formatLotSize(calculatedLots, symbolForCalc)} lots, ${formatUnits(baseSize, symbolForCalc)} units)`
     }
@@ -1128,7 +1247,7 @@ export function RightTradingPanel() {
 
     if (canEstimateServerMargin && estMarginDollars == null) {
       toast.error(
-        'Margin cannot be calculated — tier configuration unavailable or price data missing. Check Admin leverage profiles for this symbol.'
+        'Margin cannot be calculated — tier configuration unavailable or price data missing. Check Admin leverage profiles for this symbol.',
       )
       return
     }
@@ -1136,7 +1255,7 @@ export function RightTradingPanel() {
     if (insufficientFreeMargin && estMarginDollars != null) {
       const freeMargin = accountSummary?.freeMargin ?? 0
       toast.error(
-        `Insufficient funds: required margin ${formatMoney(estMarginDollars)}, free margin ${formatMoney(freeMargin)}`
+        `Insufficient funds: required margin ${formatMoney(estMarginDollars)}, free margin ${formatMoney(freeMargin)}`,
       )
       return
     }
@@ -1145,93 +1264,40 @@ export function RightTradingPanel() {
       return
     }
 
+    const payload: PlaceOrderRequest = {
+      symbol: selectedSymbol.code,
+      side,
+      order_type: orderType.toUpperCase() as 'MARKET' | 'LIMIT',
+      size: baseSize.toString(),
+      limit_price: orderType === 'limit' && limitPrice ? limitPrice : undefined,
+      sl: useSlTp && stopLoss ? stopLoss : undefined,
+      tp: useSlTp && takeProfit ? takeProfit : undefined,
+      tif: 'GTC',
+      idempotency_key: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      ...(orderType === 'market' && slippageOverridden ? { slippage_bps: slippageBps } : {}),
+    }
+
+    const requireConfirmation = meData?.confirmOrdersBeforePlacement ?? true
+    let youEnteredLabel = ''
+    if (sizeMode === 'units') {
+      youEnteredLabel = `${size} ${currency}`
+    } else if (sizeMode === 'lots') {
+      youEnteredLabel = `${lotSize} lots`
+    } else {
+      youEnteredLabel = `${pipPosition} ${pipPositionCurrency}/pip`
+    }
+
+    if (requireConfirmation) {
+      setPendingOrderConfirm({ payload, side, baseSize, displaySize, youEnteredLabel })
+      setOrderConfirmOpen(true)
+      return
+    }
+
     setIsSubmitting(true)
-
     try {
-      const payload: PlaceOrderRequest = {
-        symbol: selectedSymbol.code,
-        side,
-        order_type: orderType.toUpperCase() as 'MARKET' | 'LIMIT',
-        size: baseSize.toString(),
-        limit_price: orderType === 'limit' && limitPrice ? limitPrice : undefined,
-        sl: useSlTp && stopLoss ? stopLoss : undefined,
-        tp: useSlTp && takeProfit ? takeProfit : undefined,
-        tif: 'GTC',
-        idempotency_key: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
-        ...(orderType === 'market' && slippageOverridden ? { slippage_bps: slippageBps } : {}),
-      }
-
-      const response = await placeOrder(payload)
-      
-      // Handle both camelCase (API) and snake_case (legacy) for compatibility
-      const orderId = response.orderId || (response as any).order_id
-      
-      if (!orderId) {
-        throw new Error('Order ID not returned from server')
-      }
-      
-      setPendingOrders(prev => new Set(prev).add(orderId))
-      useTerminalStore.getState().registerRecentSubmittedOrder(orderId)
-
-      useTerminalStore.getState().requestOpenPositionsRefresh()
-
-      // Show "submitted" message - actual execution happens asynchronously
-      toast.success(
-        `${side} order submitted: ${displaySize} @ ${selectedSymbol.code} (Order ID: ${orderId.slice(0, 8)}...)`,
-        { duration: 3000 }
-      )
-
-      // Reset form for market orders (keep limit orders for potential modifications)
-      if (orderType === 'market') {
-        if (sizeMode === 'units') {
-          const nextDefaultSize = getDefaultSizeForMinMargin()
-          setSize(nextDefaultSize ?? '0.003457')
-        } else if (sizeMode === 'lots') {
-          setLotSize('0.5')
-        } else if (sizeMode === 'pipPosition') {
-          setPipPosition('5')
-        }
-        setStopLoss('')
-        setTakeProfit('')
-        setUseSlTp(false)
-      }
+      await executePlaceOrderRequest(payload, side, displaySize)
     } catch (error: unknown) {
-      if (tryToastPlaceOrderForbiddenError(error, toast, clockNow.getTime())) {
-        return
-      }
-      const err = error as { response?: { data?: { error?: string | { code?: string; message?: string }; message?: string }; status?: number }; message?: string }
-      const data = err?.response?.data
-      const status = err?.response?.status
-      const apiMessage = typeof data?.error === 'object' && data?.error?.message
-        ? data.error.message
-        : data?.message ?? (typeof data?.error === 'object' ? (data.error as { message?: string }).message : undefined)
-      const insufficientCode =
-        data?.error === 'INSUFFICIENT_FREE_MARGIN' ||
-        (typeof data?.error === 'object' && data?.error?.code === 'INSUFFICIENT_FREE_MARGIN')
-      const minRequiredMarginCode =
-        data?.error === 'MIN_REQUIRED_MARGIN_NOT_MET' ||
-        (typeof data?.error === 'object' && data?.error?.code === 'MIN_REQUIRED_MARGIN_NOT_MET')
-      const required = Number((data as { required_margin?: string })?.required_margin)
-      const free = Number((data as { free_margin?: string })?.free_margin)
-      const minRequired = Number((data as { min_required_margin?: string })?.min_required_margin)
-      const insufficientMessage =
-        Number.isFinite(required) && Number.isFinite(free)
-          ? `Insufficient funds: required margin ${formatMoney(required)}, free margin ${formatMoney(free)}`
-          : 'Insufficient funds/margin to place this order'
-      const minRequiredMessage =
-        Number.isFinite(minRequired)
-          ? `Estimated margin must be at least ${formatMoney(minRequired)} to open a position`
-          : `Estimated margin must be at least ${formatMoney(minRequiredMarginDollars)} to open a position`
-      const is403 = status === 403 || (typeof err?.message === 'string' && err.message.includes('403'))
-      const errorMessage =
-        (minRequiredMarginCode ? minRequiredMessage : null) ||
-        (insufficientCode ? insufficientMessage : null) ||
-        apiMessage ||
-        (is403 ? 'Trading is disabled. You cannot open new positions.' : null) ||
-        (error instanceof Error ? error.message : 'Failed to place order')
-      const showPlain = minRequiredMarginCode || insufficientCode || is403 || apiMessage
-      toast.error(showPlain ? errorMessage : `Order failed: ${errorMessage}`)
-      console.error('Order placement error:', error)
+      reportPlaceOrderHttpError(error)
     } finally {
       setIsSubmitting(false)
     }
@@ -2296,6 +2362,33 @@ export function RightTradingPanel() {
           </div>
         </div>
       </div>
+
+      {pendingOrderConfirm && symbolForOrderConfirmDialog && selectedSymbol && (
+        <OrderConfirmationDialog
+          open={orderConfirmOpen}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen && !isSubmitting) {
+              setOrderConfirmOpen(false)
+              setPendingOrderConfirm(null)
+            }
+          }}
+          onConfirm={() => void handleConfirmPendingOrder()}
+          payload={pendingOrderConfirm.payload}
+          side={pendingOrderConfirm.side}
+          orderType={orderType === 'limit' ? 'limit' : 'market'}
+          baseSize={pendingOrderConfirm.baseSize}
+          youEnteredLabel={pendingOrderConfirm.youEnteredLabel}
+          symbolForCalc={symbolForOrderConfirmDialog}
+          symbolCode={selectedSymbol.code}
+          baseCurrency={selectedSymbol.baseCurrency}
+          quoteCurrency={selectedSymbol.quoteCurrency ?? 'USD'}
+          liveBid={liveBidNum > 0 ? liveBidNum : null}
+          liveAsk={liveAskNum > 0 ? liveAskNum : null}
+          estimatedMarginUsd={estMarginDollars}
+          estimatedFeeUsd={placementFeeFromEstimateUsd}
+          isSubmitting={isSubmitting}
+        />
+      )}
     </div>
   )
 }

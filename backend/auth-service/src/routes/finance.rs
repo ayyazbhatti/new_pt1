@@ -90,6 +90,9 @@ pub struct ListTransactionsQuery {
     pub date_from: Option<String>,
     #[serde(default)]
     pub date_to: Option<String>,
+    /// `money` (default in UI): hide margin lock/unlock audit rows. `audit`: only those rows. `all`: no filter.
+    #[serde(default)]
+    pub audit_filter: Option<String>,
     #[serde(default = "default_page")]
     pub page: i64,
     #[serde(default = "default_page_size")]
@@ -243,6 +246,7 @@ async fn approve_transaction(
         delta,
         &reference,
         Some(&description),
+        true, // canonical row already exists / is updated above
     )
     .await
     .map_err(|e| {
@@ -525,11 +529,12 @@ async fn get_finance_overview(
                     SUM(CASE 
                         WHEN type = 'fee'::transaction_type THEN -net_amount
                         WHEN type = 'rebate'::transaction_type THEN net_amount
+                        WHEN type = 'affiliate_commission'::transaction_type THEN net_amount
                         ELSE 0
                     END), 0
                 )
                 FROM transactions
-                WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type)
+                WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type OR type = 'affiliate_commission'::transaction_type)
                 AND status = 'completed'::transaction_status
                 AND DATE(created_at) = CURRENT_DATE
                 "#
@@ -648,11 +653,12 @@ async fn get_finance_overview(
                     SUM(CASE 
                         WHEN type = 'fee'::transaction_type THEN -net_amount
                         WHEN type = 'rebate'::transaction_type THEN net_amount
+                        WHEN type = 'affiliate_commission'::transaction_type THEN net_amount
                         ELSE 0
                     END), 0
                 )
                 FROM transactions
-                WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type)
+                WHERE (type = 'fee'::transaction_type OR type = 'rebate'::transaction_type OR type = 'affiliate_commission'::transaction_type)
                 AND status = 'completed'::transaction_status
                 AND DATE(created_at) = CURRENT_DATE
                 AND user_id = ANY($1)
@@ -799,6 +805,28 @@ async fn list_transactions(
     };
 
     let mut where_clauses = vec![user_condition];
+    // Default: hide pure margin-movement rows (same as UI "Money events" chip).
+    match params.audit_filter.as_deref() {
+        Some("all") => {}
+        Some("audit") => {
+            where_clauses.push(
+                "t.type::text IN ('margin_lock', 'margin_unlock', 'bonus_margin_lock', 'bonus_margin_release')"
+                    .to_string(),
+            );
+        }
+        Some("money") | None => {
+            where_clauses.push(
+                "t.type::text NOT IN ('margin_lock', 'margin_unlock', 'bonus_margin_lock', 'bonus_margin_release')"
+                    .to_string(),
+            );
+        }
+        _ => {
+            where_clauses.push(
+                "t.type::text NOT IN ('margin_lock', 'margin_unlock', 'bonus_margin_lock', 'bonus_margin_release')"
+                    .to_string(),
+            );
+        }
+    }
     if search_pattern.is_some() {
         where_clauses.push(format!("(u.email ILIKE ${} OR t.id::text ILIKE ${} OR t.reference ILIKE ${})", bind_index, bind_index, bind_index));
         bind_index += 1;

@@ -64,6 +64,9 @@ pub struct User {
     /// Optional ISO 4217 display currency override (highest priority in effective display currency resolution).
     #[serde(default)]
     pub display_currency: Option<String>,
+    /// When true, terminal order ticket shows a confirm dialog before placing (default true).
+    #[serde(default)]
+    pub confirm_orders_before_placement: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

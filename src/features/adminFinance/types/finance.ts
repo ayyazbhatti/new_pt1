@@ -17,7 +17,8 @@ export interface User {
 export interface Transaction {
   id: string
   user: User
-  type: TransactionType
+  /** Postgres `transaction_type` (includes margin_lock, pnl_credit, etc.) */
+  type: string
   amount: number
   currency: Currency
   method: TransactionMethod
@@ -60,7 +61,7 @@ export interface LedgerEntry {
   id: string
   walletId: string
   time: string
-  type: TransactionType
+  type: string
   delta: number
   balanceAfter: number
   ref: string

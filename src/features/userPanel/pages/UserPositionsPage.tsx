@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, memo, useCallback, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ColumnDef } from '@tanstack/react-table'
 import { ContentShell, PageHeader } from '@/shared/layout'
@@ -30,7 +30,11 @@ import {
 } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { getOpenPositions, getClosedPositions, Position } from '@/features/terminal/api/positions.api'
-import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
+import {
+  usePriceStreamConnection,
+  useSymbolPrice,
+  normalizeSymbolKey,
+} from '@/features/symbols/hooks/usePriceStream'
 
 function StatCard({
   title,
@@ -71,17 +75,12 @@ function parseNum(s: string | undefined): number {
   return Number.isFinite(n) ? n : 0
 }
 
-/** Compute unrealized PnL for a position: use live price when available, else fallback to stored value. */
-function computeUnrealizedPnl(
-  pos: Position,
-  livePrices: Map<string, { bid: string; ask: string; ts: number }>
-): number {
-  const symbolKey = normalizeSymbolKey(pos.symbol)
-  const priceData = livePrices.get(symbolKey) ?? livePrices.get(pos.symbol.toUpperCase())
+/** Compute unrealized PnL from a live tick (or stored unrealized when tick missing). */
+function unrealizedPnlFromTick(pos: Position, tick: { bid: string; ask: string } | null): number {
   const entryPrice = parseNum(pos.entry_price)
   const sizeNum = parseNum(pos.size)
-  if (priceData) {
-    const mark = pos.side === 'LONG' ? parseFloat(priceData.bid) : parseFloat(priceData.ask)
+  if (tick) {
+    const mark = pos.side === 'LONG' ? parseFloat(tick.bid) : parseFloat(tick.ask)
     if (Number.isFinite(mark)) {
       return pos.side === 'LONG'
         ? (mark - entryPrice) * sizeNum
@@ -93,10 +92,130 @@ function computeUnrealizedPnl(
 
 type ViewMode = 'open' | 'history'
 
-function buildPositionColumns(
-  livePrices: Map<string, { bid: string; ask: string; ts: number }>,
-  viewMode: ViewMode
-): ColumnDef<Position>[] {
+const OpenPositionUnrealizedPnlCell = memo(function OpenPositionUnrealizedPnlCell({ pos }: { pos: Position }) {
+  const tick = useSymbolPrice(normalizeSymbolKey(pos.symbol))
+  const pnl = useMemo(() => unrealizedPnlFromTick(pos, tick), [pos, tick])
+  const positive = pnl >= 0
+  const notional = parseNum(pos.entry_price) * parseNum(pos.size)
+  const pnlPercent = notional > 0 ? (pnl / notional) * 100 : 0
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <span className={cn('tabular-nums font-medium', positive ? 'text-success' : 'text-danger')}>
+        {positive ? '+' : ''}
+        ${pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </span>
+      <span className={cn('text-xs tabular-nums', positive ? 'text-success' : 'text-danger')}>
+        ({positive ? '+' : ''}
+        {pnlPercent.toFixed(2)}%)
+      </span>
+    </span>
+  )
+})
+
+const UserPositionUnrealizedOverviewShard = memo(function UserPositionUnrealizedOverviewShard({
+  position,
+  onReport,
+}: {
+  position: Position
+  onReport: (id: string, n: number) => void
+}) {
+  const tick = useSymbolPrice(normalizeSymbolKey(position.symbol))
+  const n = useMemo(() => unrealizedPnlFromTick(position, tick), [position, tick])
+  useEffect(() => {
+    onReport(position.id, n)
+  }, [position.id, n, onReport])
+  return null
+})
+
+const UserPositionsOverviewSection = memo(function UserPositionsOverviewSection({
+  isLoading,
+  filterView,
+  total,
+  totalExposure,
+  totalMarginUsed,
+  totalRealizedPnl,
+  filteredPositions,
+}: {
+  isLoading: boolean
+  filterView: ViewMode
+  total: number
+  totalExposure: number
+  totalMarginUsed: number
+  totalRealizedPnl: number
+  filteredPositions: Position[]
+}) {
+  const isHistory = filterView === 'history'
+  const pnlPartsRef = useRef<Map<string, number>>(new Map())
+  const [pnlTick, setPnlTick] = useState(0)
+  const reportPnl = useCallback((id: string, v: number) => {
+    const prev = pnlPartsRef.current.get(id)
+    if (prev === v) return
+    pnlPartsRef.current.set(id, v)
+    setPnlTick((t) => t + 1)
+  }, [])
+
+  const totalUnrealizedLive = useMemo(() => {
+    return filteredPositions.reduce((sum, p) => {
+      const v = pnlPartsRef.current.get(p.id)
+      return sum + (v !== undefined ? v : parseNum(p.unrealized_pnl))
+    }, 0)
+  }, [filteredPositions, pnlTick])
+
+  const displayPnl = isHistory ? totalRealizedPnl : totalUnrealizedLive
+  const isProfit = isHistory ? totalRealizedPnl >= 0 : totalUnrealizedLive >= 0
+
+  return (
+    <section className="mb-8">
+      <h2 className="mb-4 text-lg font-semibold text-text">Overview</h2>
+      {!isHistory &&
+        filteredPositions.map((p) => (
+          <UserPositionUnrealizedOverviewShard key={p.id} position={p} onReport={reportPnl} />
+        ))}
+      {isLoading ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i} className="p-5">
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-5 w-5 animate-spin text-text-muted" />
+                <span className="text-sm text-text-muted">Loading…</span>
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            title={isHistory ? 'Closed positions' : 'Open positions'}
+            value={String(total)}
+            subtext={isHistory ? 'Past trades' : 'Active trades'}
+            icon={isHistory ? History : BarChart3}
+          />
+          <StatCard
+            title="Total exposure"
+            value={`$${totalExposure.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            subtext="Notional value"
+            icon={TrendingUp}
+          />
+          <StatCard
+            title={isHistory ? 'Realized P/L' : 'Unrealized P/L'}
+            value={`${isProfit ? '+' : ''}$${displayPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            subtext={isHistory ? 'Closed P/L' : 'Floating profit/loss'}
+            icon={DollarSign}
+            valueClassName={isProfit ? 'text-success' : 'text-danger'}
+          />
+          <StatCard
+            title="Margin used"
+            value={`$${totalMarginUsed.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            subtext="Collateral in use"
+            icon={Wallet}
+          />
+        </div>
+      )}
+    </section>
+  )
+})
+
+function buildPositionColumns(viewMode: ViewMode): ColumnDef<Position>[] {
   const isHistory = viewMode === 'history'
   const columns: ColumnDef<Position>[] = [
     {
@@ -168,21 +287,25 @@ function buildPositionColumns(
       header: isHistory ? 'Realized P/L' : 'Unrealized P/L',
       cell: ({ row }) => {
         const pos = row.original
-        const pnl = isHistory ? parseNum(pos.realized_pnl) : computeUnrealizedPnl(pos, livePrices)
-        const positive = pnl >= 0
-        const notional = parseNum(pos.entry_price) * parseNum(pos.size)
-        const pnlPercent = notional > 0 ? (pnl / notional) * 100 : 0
-        return (
-          <span className="inline-flex flex-col items-start gap-0.5">
-            <span className={cn('tabular-nums font-medium', positive ? 'text-success' : 'text-danger')}>
-              {positive ? '+' : ''}
-              ${pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        if (isHistory) {
+          const pnl = parseNum(pos.realized_pnl)
+          const positive = pnl >= 0
+          const notional = parseNum(pos.entry_price) * parseNum(pos.size)
+          const pnlPercent = notional > 0 ? (pnl / notional) * 100 : 0
+          return (
+            <span className="inline-flex flex-col items-start gap-0.5">
+              <span className={cn('tabular-nums font-medium', positive ? 'text-success' : 'text-danger')}>
+                {positive ? '+' : ''}
+                ${pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <span className={cn('text-xs tabular-nums', positive ? 'text-success' : 'text-danger')}>
+                ({positive ? '+' : ''}
+                {pnlPercent.toFixed(2)}%)
+              </span>
             </span>
-            <span className={cn('text-xs tabular-nums', positive ? 'text-success' : 'text-danger')}>
-              ({positive ? '+' : ''}{pnlPercent.toFixed(2)}%)
-            </span>
-          </span>
-        )
+          )
+        }
+        return <OpenPositionUnrealizedPnlCell pos={pos} />
       },
     },
     {
@@ -269,12 +392,9 @@ export function UserPositionsPage() {
     const symbols = openPositions.map((p) => p.symbol.toUpperCase().replace('USDT', 'USD'))
     return [...new Set(symbols)]
   }, [openPositions])
-  const { prices: livePrices } = usePriceStream(positionSymbols)
+  usePriceStreamConnection(positionSymbols)
 
-  const positionColumns = useMemo(
-    () => buildPositionColumns(livePrices, filterView),
-    [livePrices, filterView]
-  )
+  const positionColumns = useMemo(() => buildPositionColumns(filterView), [filterView])
 
   const paginatedPositions = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -290,10 +410,6 @@ export function UserPositionsPage() {
     () => filteredPositions.reduce((sum, p) => sum + parseNum(p.size) * parseNum(p.entry_price), 0),
     [filteredPositions]
   )
-  const totalUnrealizedPnl = useMemo(
-    () => filteredPositions.reduce((sum, p) => sum + computeUnrealizedPnl(p, livePrices), 0),
-    [filteredPositions, livePrices]
-  )
   const totalRealizedPnl = useMemo(
     () => filteredPositions.reduce((sum, p) => sum + parseNum(p.realized_pnl), 0),
     [filteredPositions]
@@ -302,9 +418,6 @@ export function UserPositionsPage() {
     () => filteredPositions.reduce((sum, p) => sum + parseNum(p.margin), 0),
     [filteredPositions]
   )
-  const isHistory = filterView === 'history'
-  const isProfit = isHistory ? totalRealizedPnl >= 0 : totalUnrealizedPnl >= 0
-  const displayPnl = isHistory ? totalRealizedPnl : totalUnrealizedPnl
 
   const clearFilters = () => {
     setFilterSymbol('')
@@ -319,50 +432,15 @@ export function UserPositionsPage() {
         description="View and manage your open trading positions"
       />
 
-      {/* Statistics */}
-      <section className="mb-8">
-        <h2 className="mb-4 text-lg font-semibold text-text">Overview</h2>
-        {isLoading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {[1, 2, 3, 4].map((i) => (
-              <Card key={i} className="p-5">
-                <div className="flex items-center gap-3">
-                  <Loader2 className="h-5 w-5 animate-spin text-text-muted" />
-                  <span className="text-sm text-text-muted">Loading…</span>
-                </div>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              title={isHistory ? 'Closed positions' : 'Open positions'}
-              value={String(total)}
-              subtext={isHistory ? 'Past trades' : 'Active trades'}
-              icon={isHistory ? History : BarChart3}
-            />
-            <StatCard
-              title="Total exposure"
-              value={`$${totalExposure.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              subtext="Notional value"
-              icon={TrendingUp}
-            />
-            <StatCard
-              title={isHistory ? 'Realized P/L' : 'Unrealized P/L'}
-              value={`${isProfit ? '+' : ''}$${displayPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              subtext={isHistory ? 'Closed P/L' : 'Floating profit/loss'}
-              icon={DollarSign}
-              valueClassName={isProfit ? 'text-success' : 'text-danger'}
-            />
-            <StatCard
-              title="Margin used"
-              value={`$${totalMarginUsed.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              subtext="Collateral in use"
-              icon={Wallet}
-            />
-          </div>
-        )}
-      </section>
+      <UserPositionsOverviewSection
+        isLoading={isLoading}
+        filterView={filterView}
+        total={total}
+        totalExposure={totalExposure}
+        totalMarginUsed={totalMarginUsed}
+        totalRealizedPnl={totalRealizedPnl}
+        filteredPositions={filteredPositions}
+      />
 
       {/* Positions table */}
       <section>

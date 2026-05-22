@@ -1,9 +1,13 @@
-import { useMemo, useState, useCallback, useEffect } from 'react'
+import { useMemo, useState, useCallback, useEffect, memo } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { useModalStore } from '@/app/store'
 import { useSymbolOverrides, useUpsertSymbolOverride } from '../hooks/useMarkup'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
-import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
+import {
+  usePriceStreamConnection,
+  useSymbolPrice,
+  normalizeSymbolKey,
+} from '@/features/symbols/hooks/usePriceStream'
 import { DataTable } from '@/shared/ui/table'
 import { MarkupProfile, SymbolWithMarkup } from '../types/markup'
 import { X, Search, RotateCcw, ArrowRightLeft, Save } from 'lucide-react'
@@ -85,6 +89,85 @@ function MarkupInput({
   )
 }
 
+const MarkupLiveBidCell = memo(function MarkupLiveBidCell({ symbolCode }: { symbolCode: string }) {
+  const tick = useSymbolPrice(normalizeSymbolKey(symbolCode))
+  if (!tick) return <span className="text-text-muted text-sm">N/A</span>
+  const n = parseFloat(tick.bid)
+  return (
+    <span className="text-green-600 dark:text-green-400 font-mono text-sm">
+      {formatPrice(n)}
+    </span>
+  )
+})
+
+const MarkupLiveAskCell = memo(function MarkupLiveAskCell({ symbolCode }: { symbolCode: string }) {
+  const tick = useSymbolPrice(normalizeSymbolKey(symbolCode))
+  if (!tick) return <span className="text-text-muted text-sm">N/A</span>
+  const n = parseFloat(tick.ask)
+  return (
+    <span className="text-red-600 dark:text-red-400 font-mono text-sm">
+      {formatPrice(n)}
+    </span>
+  )
+})
+
+const MarkupBidAfterCell = memo(function MarkupBidAfterCell({
+  symbolCode,
+  bidPct,
+}: {
+  symbolCode: string
+  bidPct: string
+}) {
+  const tick = useSymbolPrice(normalizeSymbolKey(symbolCode))
+  const liveBid = tick ? parseFloat(tick.bid) : NaN
+  const after =
+    !Number.isNaN(liveBid) && liveBid !== 0 ? liveBid * (1 + (parseFloat(bidPct) || 0) / 100) : NaN
+  if (Number.isNaN(after)) return <span className="text-text-muted text-sm">—</span>
+  return (
+    <span className="text-green-600 dark:text-green-300 font-mono text-sm">{formatPrice(after)}</span>
+  )
+})
+
+const MarkupAskAfterCell = memo(function MarkupAskAfterCell({
+  symbolCode,
+  askPct,
+}: {
+  symbolCode: string
+  askPct: string
+}) {
+  const tick = useSymbolPrice(normalizeSymbolKey(symbolCode))
+  const liveAsk = tick ? parseFloat(tick.ask) : NaN
+  const after =
+    !Number.isNaN(liveAsk) && liveAsk !== 0 ? liveAsk * (1 + (parseFloat(askPct) || 0) / 100) : NaN
+  if (Number.isNaN(after)) return <span className="text-text-muted text-sm">—</span>
+  return (
+    <span className="text-red-600 dark:text-red-300 font-mono text-sm">{formatPrice(after)}</span>
+  )
+})
+
+const MarkupPreviewSpreadCell = memo(function MarkupPreviewSpreadCell({
+  symbolCode,
+  bidPct,
+  askPct,
+}: {
+  symbolCode: string
+  bidPct: string
+  askPct: string
+}) {
+  const tick = useSymbolPrice(normalizeSymbolKey(symbolCode))
+  const liveBid = tick ? parseFloat(tick.bid) : NaN
+  const liveAsk = tick ? parseFloat(tick.ask) : NaN
+  const bidAfter =
+    !Number.isNaN(liveBid) && liveBid !== 0 ? liveBid * (1 + (parseFloat(bidPct) || 0) / 100) : NaN
+  const askAfter =
+    !Number.isNaN(liveAsk) && liveAsk !== 0 ? liveAsk * (1 + (parseFloat(askPct) || 0) / 100) : NaN
+  const spreadPct =
+    !Number.isNaN(bidAfter) && !Number.isNaN(askAfter) && bidAfter > 0
+      ? (((askAfter - bidAfter) / bidAfter) * 100).toFixed(1)
+      : '0.0'
+  return <span className="text-sm text-text-muted">{spreadPct}%</span>
+})
+
 export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
   const openModal = useModalStore((state) => state.openModal)
   const closeModal = useModalStore((state) => state.closeModal)
@@ -101,7 +184,7 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
     return (symbolsData?.items ?? []).map((s) => s.symbolCode)
   }, [symbolsData])
 
-  const { prices } = usePriceStream(symbolCodes)
+  usePriceStreamConnection(symbolCodes)
   const [search, setSearch] = useState('')
   const [localMarkups, setLocalMarkups] = useState<
     Record<string, { bid: string; ask: string }>
@@ -276,31 +359,13 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         id: 'liveBid',
         size: 82,
         header: 'Live Bid',
-        cell: ({ row }) => {
-          const live = prices.get(normalizeSymbolKey(row.original.symbolCode))
-          const n = live ? parseFloat(live.bid) : NaN
-          if (!live) return <span className="text-text-muted text-sm">N/A</span>
-          return (
-            <span className="text-green-600 dark:text-green-400 font-mono text-sm">
-              {formatPrice(n)}
-            </span>
-          )
-        },
+        cell: ({ row }) => <MarkupLiveBidCell symbolCode={row.original.symbolCode} />,
       },
       {
         id: 'liveAsk',
         size: 82,
         header: 'Live Ask',
-        cell: ({ row }) => {
-          const live = prices.get(normalizeSymbolKey(row.original.symbolCode))
-          const n = live ? parseFloat(live.ask) : NaN
-          if (!live) return <span className="text-text-muted text-sm">N/A</span>
-          return (
-            <span className="text-red-600 dark:text-red-400 font-mono text-sm">
-              {formatPrice(n)}
-            </span>
-          )
-        },
+        cell: ({ row }) => <MarkupLiveAskCell symbolCode={row.original.symbolCode} />,
       },
       {
         id: 'bidAfter',
@@ -308,20 +373,8 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         header: 'Bid (after)',
         cell: ({ row }) => {
           const s = row.original
-          const live = prices.get(normalizeSymbolKey(s.symbolCode))
           const bidPct = localMarkups[s.symbolId]?.bid ?? s.bidMarkup
-          const liveBid = live ? parseFloat(live.bid) : NaN
-          const after =
-            !Number.isNaN(liveBid) && liveBid !== 0
-              ? liveBid * (1 + (parseFloat(bidPct) || 0) / 100)
-              : NaN
-          if (Number.isNaN(after))
-            return <span className="text-text-muted text-sm">—</span>
-          return (
-            <span className="text-green-600 dark:text-green-300 font-mono text-sm">
-              {formatPrice(after)}
-            </span>
-          )
+          return <MarkupBidAfterCell symbolCode={s.symbolCode} bidPct={bidPct} />
         },
       },
       {
@@ -330,20 +383,8 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         header: 'Ask (after)',
         cell: ({ row }) => {
           const s = row.original
-          const live = prices.get(normalizeSymbolKey(s.symbolCode))
           const askPct = localMarkups[s.symbolId]?.ask ?? s.askMarkup
-          const liveAsk = live ? parseFloat(live.ask) : NaN
-          const after =
-            !Number.isNaN(liveAsk) && liveAsk !== 0
-              ? liveAsk * (1 + (parseFloat(askPct) || 0) / 100)
-              : NaN
-          if (Number.isNaN(after))
-            return <span className="text-text-muted text-sm">—</span>
-          return (
-            <span className="text-red-600 dark:text-red-300 font-mono text-sm">
-              {formatPrice(after)}
-            </span>
-          )
+          return <MarkupAskAfterCell symbolCode={s.symbolCode} askPct={askPct} />
         },
       },
       {
@@ -434,24 +475,11 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
         header: 'Preview Spread',
         cell: ({ row }) => {
           const s = row.original
-          const live = prices.get(normalizeSymbolKey(s.symbolCode))
           const bidPct = localMarkups[s.symbolId]?.bid ?? s.bidMarkup
           const askPct = localMarkups[s.symbolId]?.ask ?? s.askMarkup
-          const liveBid = live ? parseFloat(live.bid) : NaN
-          const liveAsk = live ? parseFloat(live.ask) : NaN
-          const bidAfter =
-            !Number.isNaN(liveBid) && liveBid !== 0
-              ? liveBid * (1 + (parseFloat(bidPct) || 0) / 100)
-              : NaN
-          const askAfter =
-            !Number.isNaN(liveAsk) && liveAsk !== 0
-              ? liveAsk * (1 + (parseFloat(askPct) || 0) / 100)
-              : NaN
-          const spreadPct =
-            !Number.isNaN(bidAfter) && !Number.isNaN(askAfter) && bidAfter > 0
-              ? (((askAfter - bidAfter) / bidAfter) * 100).toFixed(1)
-              : '0.0'
-          return <span className="text-sm text-text-muted">{spreadPct}%</span>
+          return (
+            <MarkupPreviewSpreadCell symbolCode={s.symbolCode} bidPct={bidPct} askPct={askPct} />
+          )
         },
       },
       {
@@ -484,7 +512,6 @@ export function ConfigureMarkupsModal({ stream }: ConfigureMarkupsModalProps) {
       },
     ],
     [
-      prices,
       localMarkups,
       stream.id,
       handleBidChange,

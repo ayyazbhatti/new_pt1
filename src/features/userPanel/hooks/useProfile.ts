@@ -20,6 +20,7 @@ export function useUpdateProfile() {
     mutationFn: (payload: UpdateProfilePayload) => updateProfile(payload),
     onSuccess: (data) => {
       queryClient.setQueryData(profileQueryKey, data)
+      queryClient.setQueryData(['auth', 'me'], data)
       setUser({
         id: data.id,
         email: data.email,

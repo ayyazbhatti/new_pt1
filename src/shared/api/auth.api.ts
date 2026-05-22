@@ -54,6 +54,8 @@ export interface UserResponse {
   platform_display_currency?: string | null
   effective_slippage_bps?: number | null
   effective_slippage_source?: string | null
+  /** When true, order ticket shows confirm dialog before place (default true). */
+  confirmOrdersBeforePlacement?: boolean | null
 }
 
 export async function login(email: string, password: string): Promise<{
@@ -203,6 +205,8 @@ export interface MeResponse {
   /** Resolved max slippage in basis points (1 bp = 0.01%). */
   effectiveSlippageBps: number
   effectiveSlippageSource: SlippageSource
+  /** Order ticket: confirm before placing (default true). */
+  confirmOrdersBeforePlacement: boolean
 }
 
 export async function me(): Promise<MeResponse> {
@@ -333,20 +337,25 @@ function mapUserResponseToMe(response: UserResponse): MeResponse {
     platformDisplayCurrency: response.platform_display_currency ?? null,
     effectiveSlippageBps: slipBps,
     effectiveSlippageSource: slipSrc,
+    confirmOrdersBeforePlacement: response.confirmOrdersBeforePlacement !== false,
   }
 }
 
 export interface UpdateProfilePayload {
   first_name?: string
   last_name?: string
+  confirmOrdersBeforePlacement?: boolean
 }
 
 export async function updateProfile(
   payload: UpdateProfilePayload
 ): Promise<MeResponse> {
-  const body: UpdateProfilePayload = {}
+  const body: Record<string, unknown> = {}
   if (payload.first_name !== undefined) body.first_name = payload.first_name.trim()
   if (payload.last_name !== undefined) body.last_name = payload.last_name.trim()
+  if (payload.confirmOrdersBeforePlacement !== undefined) {
+    body.confirmOrdersBeforePlacement = payload.confirmOrdersBeforePlacement
+  }
   const response = await http<UserResponse>('/api/auth/me', {
     method: 'PATCH',
     body: JSON.stringify(body),

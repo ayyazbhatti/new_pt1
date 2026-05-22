@@ -251,6 +251,7 @@ pub async fn revoke_bonus(
 pub async fn lock_margin(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
+    order_id: Uuid,
     margin_required: Decimal,
 ) -> Result<MarginAllocation, BonusError> {
     if margin_required <= Decimal::ZERO {
@@ -295,6 +296,20 @@ pub async fn lock_margin(
     .bind(wid)
     .execute(tx.as_mut())
     .await?;
+
+    if margin_from_cash > Decimal::ZERO {
+        let reference = format!("MLOCK-CASH-{}-{}", order_id, Uuid::new_v4());
+        insert_bonus_transaction(
+            tx,
+            user_id,
+            "margin_lock",
+            margin_from_cash,
+            Decimal::ZERO,
+            &reference,
+            serde_json::json!({ "orderId": order_id.to_string(), "walletId": wid.to_string() }),
+        )
+        .await?;
+    }
 
     if margin_from_bonus > Decimal::ZERO {
         let reference = format!("BONUS-MLOCK-{}", Uuid::new_v4());
@@ -352,6 +367,20 @@ pub async fn rollback_order_margin_lock(pool: &PgPool, user_id: Uuid, order_id: 
     .bind(wid)
     .execute(tx.as_mut())
     .await?;
+
+    if m_cash > Decimal::ZERO {
+        let reference = format!("MUNLOCK-CASH-{}-{}", order_id, Uuid::new_v4());
+        insert_bonus_transaction(
+            &mut tx,
+            user_id,
+            "margin_unlock",
+            m_cash,
+            Decimal::ZERO,
+            &reference,
+            serde_json::json!({ "orderId": order_id.to_string(), "reason": "order_cancelled" }),
+        )
+        .await?;
+    }
 
     if m_bonus > Decimal::ZERO {
         let reference = format!("BONUS-MREL-{}", Uuid::new_v4());
@@ -412,6 +441,20 @@ pub async fn release_and_apply_pnl(
     .bind(wid)
     .execute(tx.as_mut())
     .await?;
+
+    if margin_from_cash > Decimal::ZERO {
+        let reference = format!("MUNLOCK-CASH-{}-{}", position_id, Uuid::new_v4());
+        insert_bonus_transaction(
+            tx,
+            user_id,
+            "margin_unlock",
+            margin_from_cash,
+            Decimal::ZERO,
+            &reference,
+            serde_json::json!({ "positionId": position_id.to_string(), "reason": "position_close_release" }),
+        )
+        .await?;
+    }
 
     if margin_from_bonus > Decimal::ZERO {
         let reference = format!("BONUS-MREL-{}", Uuid::new_v4());

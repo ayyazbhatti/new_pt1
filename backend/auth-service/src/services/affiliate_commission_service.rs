@@ -122,10 +122,11 @@ pub async fn accrue_commission_on_deposit(
     ledger_service::create_ledger_entry(
         pool,
         wallet_id,
-        "rebate",
+        "affiliate_commission",
         commission_amount,
         &ref_id,
         Some(&description),
+        false,
     )
     .await
     .map_err(|e| {

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rust_decimal::Decimal;
+use serde_json::json;
 use sqlx::{PgPool, Row};
-use std::str::FromStr;
-use tracing::{error, info};
+use tracing::info;
 use uuid::Uuid;
 
 /// Get or create a wallet for a user
@@ -53,7 +53,11 @@ pub async fn get_or_create_wallet(
     Ok(wallet_id)
 }
 
-/// Create a ledger entry and update wallet balance
+/// Create a ledger entry and update wallet balance.
+///
+/// When `skip_mirror_transaction` is **true**, no row is inserted into `transactions` (the caller
+/// already has the canonical `transactions` row, e.g. finance approval or direct deposit).
+/// When **false** (default for most callers), inserts a matching `transactions` row for user-facing audit.
 pub async fn create_ledger_entry(
     pool: &PgPool,
     wallet_id: Uuid,
@@ -61,6 +65,7 @@ pub async fn create_ledger_entry(
     delta: Decimal,
     ref_id: &str,
     description: Option<&str>,
+    skip_mirror_transaction: bool,
 ) -> Result<()> {
     // Get current wallet balance
     let balance_row = sqlx::query(
@@ -100,6 +105,54 @@ pub async fn create_ledger_entry(
     .execute(pool)
     .await
     .context("Failed to create ledger entry")?;
+
+    if !skip_mirror_transaction {
+        let wallet_meta = sqlx::query(
+            r#"SELECT user_id, currency FROM wallets WHERE id = $1"#,
+        )
+        .bind(wallet_id)
+        .fetch_optional(pool)
+        .await
+        .context("Failed to read wallet for transactions mirror")?;
+
+        let (user_id, currency): (Uuid, String) = if let Some(row) = wallet_meta {
+            (row.try_get(0)?, row.try_get(1)?)
+        } else {
+            return Err(anyhow::anyhow!("Wallet not found for mirror: {}", wallet_id));
+        };
+
+        let tx_row_id = Uuid::new_v4();
+        let now = Utc::now();
+        let mirror_reference = format!("LEDGER-{}", ledger_id);
+        let amount_abs = delta.abs();
+        sqlx::query(
+            r#"
+            INSERT INTO transactions (
+                id, user_id, type, amount, currency, fee, net_amount, method, status, reference, method_details, created_at, updated_at, completed_at
+            )
+            VALUES (
+                $1, $2, $3::transaction_type, $4, $5, 0, $6, 'manual'::transaction_method, 'completed'::transaction_status, $7, $8, $9, $10, $9
+            )
+            "#,
+        )
+        .bind(tx_row_id)
+        .bind(user_id)
+        .bind(transaction_type)
+        .bind(amount_abs)
+        .bind(currency)
+        .bind(delta)
+        .bind(mirror_reference)
+        .bind(json!({
+            "ledgerEntryId": ledger_id.to_string(),
+            "ledgerRef": ref_id,
+            "description": description,
+        }))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .context("Failed to insert transactions mirror for ledger entry")?;
+    }
 
     // Update wallet balance
     sqlx::query(

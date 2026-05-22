@@ -39,11 +39,12 @@ export function FinanceTransactionsPanel() {
     dateFrom: '',
     dateTo: '',
   })
+  const [auditFilter, setAuditFilter] = useState<'money' | 'all' | 'audit'>('money')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
 
   const { data: paginated, isLoading } = useQuery({
-    queryKey: [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, page, pageSize],
+    queryKey: [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, auditFilter, page, pageSize],
     queryFn: () => fetchTransactions({
       search: filters.search || undefined,
       type: filters.type !== 'all' ? filters.type : undefined,
@@ -51,6 +52,7 @@ export function FinanceTransactionsPanel() {
       currency: filters.currency !== 'all' ? filters.currency : undefined,
       dateFrom: filters.dateFrom || undefined,
       dateTo: filters.dateTo || undefined,
+      auditFilter,
       page,
       pageSize,
     }),
@@ -151,7 +153,7 @@ export function FinanceTransactionsPanel() {
         transaction={tx}
         action="approve"
         onSuccess={() => {
-          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, page, pageSize]
+          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, auditFilter, page, pageSize]
           queryClient.setQueryData<PaginatedTransactions>(queryKey, (old) => {
             if (!old) return old
             return {
@@ -173,7 +175,7 @@ export function FinanceTransactionsPanel() {
         transaction={tx}
         action="reject"
         onSuccess={() => {
-          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, page, pageSize]
+          const queryKey = [...FINANCE_TRANSACTIONS_QUERY_KEY, filters, auditFilter, page, pageSize]
           queryClient.setQueryData<PaginatedTransactions>(queryKey, (old) => {
             if (!old) return old
             return {
@@ -347,7 +349,8 @@ export function FinanceTransactionsPanel() {
     filters.status !== 'all' ||
     filters.currency !== 'all' ||
     filters.dateFrom !== '' ||
-    filters.dateTo !== ''
+    filters.dateTo !== '' ||
+    auditFilter !== 'money'
 
   if (isLoading) {
     return (
@@ -458,11 +461,39 @@ export function FinanceTransactionsPanel() {
           disabled={!hasActiveFilters}
           onClick={() => {
             setFilters({ search: '', type: 'all', status: 'all', currency: 'all', dateFrom: '', dateTo: '' })
+            setAuditFilter('money')
             setPage(1)
           }}
         >
           Clear
         </Button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-text-muted">History:</span>
+        {(
+          [
+            { id: 'money' as const, label: 'Money events' },
+            { id: 'all' as const, label: 'All' },
+            { id: 'audit' as const, label: 'Audit only' },
+          ] as const
+        ).map((opt) => (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => {
+              setAuditFilter(opt.id)
+              setPage(1)
+            }}
+            className={cn(
+              'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+              auditFilter === opt.id
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-surface-2 text-text-muted hover:bg-surface-3 border border-border',
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
       <DataTable
         data={transactions}

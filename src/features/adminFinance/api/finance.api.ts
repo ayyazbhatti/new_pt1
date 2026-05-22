@@ -21,7 +21,7 @@ export interface Transaction {
   userEmail: string
   userFirstName?: string
   userLastName?: string
-  type: 'deposit' | 'withdrawal' | 'adjustment' | 'fee' | 'rebate' | 'swap'
+  type: string
   amount: number
   currency: string
   fee: number
@@ -60,6 +60,8 @@ export interface ListTransactionsParams {
   dateTo?: string
   page?: number
   pageSize?: number
+  /** `money` (default API): hide margin lock/unlock rows. `all` | `audit` */
+  auditFilter?: 'money' | 'all' | 'audit'
 }
 
 export interface PaginatedTransactions {
@@ -128,6 +130,7 @@ export async function fetchTransactions(params?: ListTransactionsParams): Promis
   if (params?.currency && params.currency !== 'all') queryParams.append('currency', params.currency)
   if (params?.dateFrom) queryParams.append('date_from', params.dateFrom)
   if (params?.dateTo) queryParams.append('date_to', params.dateTo)
+  if (params?.auditFilter) queryParams.append('audit_filter', params.auditFilter)
   const page = params?.page ?? 1
   const pageSize = params?.pageSize ?? 20
   queryParams.append('page', page.toString())
