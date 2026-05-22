@@ -3,6 +3,8 @@ import { Badge } from '@/shared/ui/badge'
 import { Order } from '../types/adminTrading'
 import { useModalStore } from '@/app/store'
 import { useFormatDateTime } from '@/shared/datetime'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 interface OrderDetailsModalProps {
   order: Order
@@ -11,6 +13,12 @@ interface OrderDetailsModalProps {
 export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
   const formatDateTime = useFormatDateTime()
   const closeModal = useModalStore((state) => state.closeModal)
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const sizeFmt = formatPositionSize(order.size, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
+  const filledFmt =
+    order.filledSize != null
+      ? formatPositionSize(order.filledSize, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
+      : null
 
   const getStatusBadge = (status: string) => {
     const variants: Record<string, 'success' | 'danger' | 'neutral' | 'warning'> = {
@@ -73,7 +81,9 @@ export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Size</div>
-            <div className="font-mono text-text">{order.size}</div>
+            <div className="font-mono text-text" title={sizeFmt.secondary || undefined}>
+              {sizeFmt.display}
+            </div>
           </div>
           {order.price && (
             <div>
@@ -87,10 +97,12 @@ export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
               <div className="font-mono text-text">{order.stopPrice.toFixed(2)}</div>
             </div>
           )}
-          {order.filledSize && (
+          {order.filledSize != null && (
             <div>
               <div className="text-xs text-text-muted mb-1">Filled Size</div>
-              <div className="font-mono text-text">{order.filledSize}</div>
+              <div className="font-mono text-text" title={filledFmt?.secondary || undefined}>
+                {filledFmt?.display}
+              </div>
             </div>
           )}
           {order.averagePrice && (

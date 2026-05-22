@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react'
+import { memo, useRef, useEffect, useState } from 'react'
 import { cn } from '@/shared/utils'
 
 interface PriceDisplayProps {
@@ -11,7 +11,7 @@ interface PriceDisplayProps {
 
 type PriceDirection = 'up' | 'down'
 
-export function PriceDisplay({ bid, ask, bidFormatted, askFormatted, className }: PriceDisplayProps) {
+function PriceDisplayImpl({ bid, ask, bidFormatted, askFormatted, className }: PriceDisplayProps) {
   const prevBidRef = useRef<number | null>(null)
   const prevAskRef = useRef<number | null>(null)
   const [bidDirection, setBidDirection] = useState<PriceDirection>('up')
@@ -104,3 +104,4 @@ export function PriceDisplay({ bid, ask, bidFormatted, askFormatted, className }
   )
 }
 
+export const PriceDisplay = memo(PriceDisplayImpl)

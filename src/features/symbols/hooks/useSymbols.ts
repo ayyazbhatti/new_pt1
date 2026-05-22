@@ -17,11 +17,14 @@ import {
   SyncMmdpsPayload,
 } from '../api/symbols.api'
 
+/** Shared React Query key for full enabled terminal symbol list (terminal UI + size meta lookup). */
+export const TERMINAL_ENABLED_SYMBOLS_QUERY_KEY = ['symbols', 'list', 'all-enabled-terminal'] as const
+
 const queryKeys = {
   all: ['symbols'] as const,
   lists: () => [...queryKeys.all, 'list'] as const,
   /** Full enabled-symbol set for the trading terminal (all pages). */
-  allEnabledTerminal: () => [...queryKeys.lists(), 'all-enabled-terminal'] as const,
+  allEnabledTerminal: () => TERMINAL_ENABLED_SYMBOLS_QUERY_KEY,
   list: (params?: ListSymbolsParams) => [...queryKeys.lists(), params] as const,
   adminLists: () => [...queryKeys.all, 'admin', 'list'] as const,
   adminList: (params?: ListSymbolsParams) => [...queryKeys.adminLists(), params] as const,
@@ -45,7 +48,7 @@ export function useSymbolsList(params?: ListSymbolsParams) {
 /** Loads every enabled symbol for the user terminal (forex, crypto, etc.), not capped at one page. */
 export function useAllEnabledSymbolsForTerminal() {
   return useQuery({
-    queryKey: queryKeys.allEnabledTerminal(),
+    queryKey: TERMINAL_ENABLED_SYMBOLS_QUERY_KEY,
     queryFn: async () => {
       const items = await listAllSymbolsMatching({ is_enabled: 'true' })
       return { items, total: items.length }

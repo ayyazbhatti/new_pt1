@@ -8,6 +8,8 @@ import { formatPercent } from '@/shared/utils/number'
 import { useFormatDateTime } from '@/shared/datetime'
 import { toast } from '@/shared/components/common'
 import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 interface PositionDetailsModalProps {
   position: Position
@@ -17,6 +19,11 @@ export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
   const formatDateTime = useFormatDateTime()
   const formatMoney = useFormatFromUsd()
   const formatSigned = useFormatSignedFromUsd()
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const sizeFmt = formatPositionSize(
+    position.size,
+    getSymbolMetaForCode(symbolMetaLookup, position.symbol),
+  )
   const closeModal = useModalStore((state) => state.closeModal)
   const [notes, setNotes] = useState('')
 
@@ -90,7 +97,9 @@ export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Size</div>
-            <div className="font-mono text-text">{position.size}</div>
+            <div className="font-mono text-text" title={sizeFmt.secondary || undefined}>
+              {sizeFmt.display}
+            </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Opened</div>

@@ -29,6 +29,7 @@ use routes::admin_symbols::create_admin_symbols_router;
 use routes::admin_markup::create_admin_markup_router;
 use routes::admin_swap::create_admin_swap_router;
 use routes::admin_fees::create_admin_fees_router;
+use routes::admin_sessions::create_admin_sessions_router;
 use routes::admin_users::{create_admin_user_notes_router, create_admin_users_router};
 use routes::admin_managers::create_admin_managers_router;
 use routes::admin_permission_profiles::create_admin_permission_profiles_router;
@@ -41,6 +42,7 @@ use routes::chat::{create_admin_chat_router, create_user_chat_router};
 use routes::deposits::create_deposits_router;
 use routes::withdrawals::create_withdrawals_router;
 use routes::orders::create_orders_router;
+use routes::sessions::create_sessions_router;
 use routes::admin_trading::create_admin_trading_router;
 use routes::admin_positions::create_admin_positions_router;
 use routes::admin_audit::create_admin_audit_router;
@@ -318,6 +320,7 @@ pub async fn run() -> anyhow::Result<()> {
         )
         .nest("/api/admin/swap-rule-tags", routes::admin_swap::create_admin_swap_rule_tags_router(pool.clone()))
         .nest("/api/admin/fees", create_admin_fees_router(pool.clone()))
+        .nest("/api/admin/sessions", create_admin_sessions_router(pool.clone()))
         .nest("/api/admin/user-notes", create_admin_user_notes_router(pool.clone()))
         .nest("/api/admin/users", create_admin_users_router(pool.clone(), deposits_state.clone()))
         .nest(
@@ -381,6 +384,7 @@ pub async fn run() -> anyhow::Result<()> {
             ),
         )
         .nest("/api/orders", create_orders_router(pool.clone(), orders_state.clone()))
+        .nest("/api/sessions", create_sessions_router(pool.clone()))
         .nest("/v1/orders", create_orders_router(pool.clone(), orders_state.clone())) // Keep v1 for backward compatibility
         .nest(
             "/v1/terminal",

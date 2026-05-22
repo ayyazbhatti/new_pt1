@@ -13,6 +13,8 @@ import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 import { useFormatFromUsd } from '@/shared/currency'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 /** Fixed column widths so header and body columns stay aligned when cells are empty */
 const COLUMN_WIDTHS = [
@@ -49,6 +51,8 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
   const [openActionsMenuId, setOpenActionsMenuId] = useState<string | null>(null)
   const canClosePosition = useCanAccess('trading:close_position')
   const canLiquidate = useCanAccess('trading:liquidate')
+
+  const symbolMetaLookup = useSymbolMetaLookup()
 
   const handleClose = useCallback(
     (position: AdminPosition) => {
@@ -148,9 +152,15 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
       {
         accessorKey: 'size',
         header: 'Size',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">{row.original.size.toLocaleString()}</span>
-        ),
+        cell: ({ row }) => {
+          const p = row.original
+          const fmt = formatPositionSize(p.size, getSymbolMetaForCode(symbolMetaLookup, p.symbol))
+          return (
+            <span className="text-sm font-mono text-text" title={fmt.secondary || undefined}>
+              {fmt.display}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'entryPrice',
@@ -269,6 +279,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
       readOnly,
       openActionsMenuId,
       formatMoney,
+      symbolMetaLookup,
     ]
   )
 

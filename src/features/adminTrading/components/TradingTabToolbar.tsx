@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import { Input } from '@/shared/ui/input'
 import { Button } from '@/shared/ui/button'
+import { cn } from '@/shared/utils'
 import { useDebouncedValue } from '@/shared/hooks/useDebounce'
 import { SearchableFilterDropdown } from './SearchableFilterDropdown'
 import type { LookupGroup, LookupSymbol, TabListQuery } from '../types'
@@ -59,16 +60,27 @@ export function TradingTabToolbar({
   }
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-1 p-3">
-      <span className="relative block min-w-[200px] max-w-sm flex-1">
+    <div className="mb-6 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-2">
+      <div className="relative min-h-10 min-w-[min(100%,220px)] flex-1">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
         <Input
+          type="search"
           placeholder="Search user, email, symbol…"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          className="pl-9"
+          className={cn('w-full min-w-0 pl-9', searchInput.trim() && 'pr-9')}
         />
-      </span>
+        {searchInput.trim() ? (
+          <button
+            type="button"
+            onClick={() => setSearchInput('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text"
+            aria-label="Clear search"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
+      </div>
 
       <SearchableFilterDropdown
         value={query.symbol}
@@ -88,6 +100,7 @@ export function TradingTabToolbar({
           setSymbolDropdownOpen(open)
           if (open) setGroupDropdownOpen(false)
         }}
+        className="min-w-[10.5rem] max-w-[min(100%,18rem)]"
       />
 
       <SearchableFilterDropdown
@@ -108,14 +121,19 @@ export function TradingTabToolbar({
           setGroupDropdownOpen(open)
           if (open) setSymbolDropdownOpen(false)
         }}
+        className="min-w-[13rem] max-w-[min(100%,26rem)]"
       />
 
-      {hasActiveQuery(query) && (
-        <Button type="button" variant="ghost" size="sm" onClick={clearAll}>
-          <X className="mr-1 h-4 w-4" />
-          Clear
-        </Button>
-      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="shrink-0"
+        disabled={!hasActiveQuery(query)}
+        onClick={clearAll}
+      >
+        Clear
+      </Button>
     </div>
   )
 }

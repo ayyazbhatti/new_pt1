@@ -15,6 +15,8 @@ import { filterPositions } from '../utils/filters'
 import { formatPercent } from '@/shared/utils/number'
 import { useFormatDateTime } from '@/shared/datetime'
 import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 import { mockGroups } from '../mocks/groups.mock'
 import { mockPositions } from '../mocks/positions.mock'
 
@@ -23,6 +25,7 @@ export function PositionsAdminPanel() {
   const formatDateTime = useFormatDateTime()
   const formatMoney = useFormatFromUsd()
   const formatSigned = useFormatSignedFromUsd()
+  const symbolMetaLookup = useSymbolMetaLookup()
   const [positions, setPositions] = useState<Position[]>(mockPositions)
   const [filters, setFilters] = useState({
     status: 'open',
@@ -123,7 +126,13 @@ export function PositionsAdminPanel() {
       accessorKey: 'size',
       header: 'Size',
       cell: ({ row }) => {
-        return <span className="font-mono">{row.getValue('size')}</span>
+        const p = row.original
+        const fmt = formatPositionSize(p.size, getSymbolMetaForCode(symbolMetaLookup, p.symbol))
+        return (
+          <span className="font-mono" title={fmt.secondary || undefined}>
+            {fmt.display}
+          </span>
+        )
       },
     },
     {
@@ -209,7 +218,7 @@ export function PositionsAdminPanel() {
         )
       },
     },
-  ], [formatDateTime, formatMoney, formatSigned, openModal, positions])
+  ], [formatDateTime, formatMoney, formatSigned, openModal, positions, symbolMetaLookup])
 
   return (
     <div className="space-y-4">

@@ -2,15 +2,24 @@ import { ModalShell } from '@/shared/ui/modal'
 import { Badge } from '@/shared/ui/badge'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { format } from 'date-fns'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 export function OrderDetailsModal() {
   const { openModal, setOpenModal, selectedOrderId, orders, orderHistory } = useAdminTradingStore()
+  const symbolMetaLookup = useSymbolMetaLookup()
   const order = selectedOrderId
     ? orders.get(selectedOrderId) ?? orderHistory.get(selectedOrderId)
     : null
   const open = openModal === 'order-details'
 
   if (!order) return null
+
+  const sizeFmt = formatPositionSize(order.size, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
+  const filledFmt =
+    order.filledSize != null
+      ? formatPositionSize(order.filledSize, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
+      : null
 
   return (
     <ModalShell
@@ -62,7 +71,9 @@ export function OrderDetailsModal() {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Size</div>
-            <div className="text-sm font-mono text-text">{order.size.toLocaleString()}</div>
+            <div className="text-sm font-mono text-text" title={sizeFmt.secondary || undefined}>
+              {sizeFmt.display}
+            </div>
           </div>
           {order.price && (
             <div>
@@ -70,10 +81,12 @@ export function OrderDetailsModal() {
               <div className="text-sm font-mono text-text">{order.price.toFixed(2)}</div>
             </div>
           )}
-          {order.filledSize && (
+          {order.filledSize != null && (
             <div>
               <div className="text-xs text-text-muted mb-1">Filled Size</div>
-              <div className="text-sm font-mono text-text">{order.filledSize.toLocaleString()}</div>
+              <div className="text-sm font-mono text-text" title={filledFmt?.secondary || undefined}>
+                {filledFmt?.display}
+              </div>
             </div>
           )}
           {order.averagePrice && (

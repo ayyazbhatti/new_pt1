@@ -89,6 +89,7 @@ export function SettingsPage() {
   const [supportEmail, setSupportEmail] = useState('support@landbricks.com')
   const [defaultCurrency, setDefaultCurrency] = useState('USD')
   const [timezone, setTimezone] = useState('America/New_York')
+  const [defaultSlippageBps, setDefaultSlippageBps] = useState(50)
   const [whatsapp, setWhatsapp] = useState('+1234567890')
   const [phone, setPhone] = useState('+1 (234) 567-8900')
   const [facebook, setFacebook] = useState('https://facebook.com/...')
@@ -176,6 +177,9 @@ export function SettingsPage() {
     setSiteName(d.siteName)
     setTimezone(d.timezone)
     setDefaultCurrency(d.currency)
+    setDefaultSlippageBps(
+      typeof d.defaultSlippageBps === 'number' && Number.isFinite(d.defaultSlippageBps) ? d.defaultSlippageBps : 50,
+    )
   }, [generalSettingsQuery.data])
 
   const generalDirty = useMemo(() => {
@@ -184,9 +188,10 @@ export function SettingsPage() {
     return (
       siteName.trim() !== d.siteName.trim() ||
       timezone !== d.timezone ||
-      defaultCurrency !== d.currency
+      defaultCurrency !== d.currency ||
+      defaultSlippageBps !== d.defaultSlippageBps
     )
-  }, [generalSettingsQuery.data, siteName, timezone, defaultCurrency])
+  }, [generalSettingsQuery.data, siteName, timezone, defaultCurrency, defaultSlippageBps])
 
   const saveGeneralSettingsMutation = useMutation({
     mutationFn: (payload: GeneralSettings) => updateGeneralSettings(payload),
@@ -205,8 +210,9 @@ export function SettingsPage() {
       siteName: siteName.trim(),
       timezone,
       currency: defaultCurrency,
+      defaultSlippageBps,
     })
-  }, [generalSettingsQuery.data, siteName, timezone, defaultCurrency, saveGeneralSettingsMutation])
+  }, [generalSettingsQuery.data, siteName, timezone, defaultCurrency, defaultSlippageBps, saveGeneralSettingsMutation])
 
   const handleResetGeneralSettings = useCallback(() => {
     const d = generalSettingsQuery.data
@@ -214,7 +220,10 @@ export function SettingsPage() {
     setSiteName(d.siteName)
     setTimezone(d.timezone)
     setDefaultCurrency(d.currency)
-    toast.success('Reverted site name, timezone, and currency to last saved values')
+    setDefaultSlippageBps(
+      typeof d.defaultSlippageBps === 'number' && Number.isFinite(d.defaultSlippageBps) ? d.defaultSlippageBps : 50,
+    )
+    toast.success('Reverted general settings to last saved values')
   }, [generalSettingsQuery.data])
 
   const updateTemplateMutation = useMutation({
@@ -484,6 +493,34 @@ export function SettingsPage() {
                         <SelectItem value="UTC">UTC</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text">
+                      Default slippage tolerance
+                    </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input
+                        type="number"
+                        min={0}
+                        step={1}
+                        className="w-28"
+                        value={defaultSlippageBps}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value, 10)
+                          setDefaultSlippageBps(Number.isFinite(n) && n >= 0 ? n : 0)
+                        }}
+                        disabled={!canEditSettings}
+                      />
+                      <span className="text-sm text-text-muted">bps</span>
+                      <span className="text-xs text-text-muted">
+                        ({(defaultSlippageBps / 100).toFixed(2)}%)
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-xs text-text-muted">
+                      Max slippage (basis points) for market orders when no group or per-order override applies. 100 bps
+                      = 1%. Users can raise slippage per order in the terminal up to 500 bps (5%); a group default can be
+                      higher than that cap.
+                    </p>
                   </div>
                 </div>
               </Card>

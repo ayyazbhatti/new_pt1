@@ -6,4 +6,5 @@ pub mod symbol;
 pub mod markup_profile;
 pub mod swap_rule;
 pub mod fee_rule;
+pub mod market_session;
 

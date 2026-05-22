@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Search } from 'lucide-react'
 import { Input } from '@/shared/ui/input'
+import { cn } from '@/shared/utils'
 
 export interface SearchableFilterOption {
   value: string
@@ -26,7 +27,7 @@ export function SearchableFilterDropdown({
   allLabel,
   searchPlaceholder,
   disabled,
-  className = 'w-[180px]',
+  className,
   open: controlledOpen,
   onOpenChange,
 }: SearchableFilterDropdownProps) {
@@ -65,12 +66,18 @@ export function SearchableFilterDropdown({
   }, [open])
 
   return (
-    <div ref={containerRef} className={`relative ${className}`}>
+    <div
+      ref={containerRef}
+      className={cn(
+        'relative w-max min-w-[11rem] max-w-[min(100%,22rem)] shrink-0',
+        className,
+      )}
+    >
       <button
         type="button"
         disabled={disabled}
         onClick={() => setOpen(!open)}
-        className="flex h-10 w-full items-center justify-between rounded-lg border border-border bg-surface-1 px-3 py-2 text-left text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-10 w-full min-w-0 items-center justify-between rounded-lg border border-border bg-surface-1 px-3 py-2 text-left text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50"
       >
         <span className="truncate">{selectedLabel}</span>
         <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />

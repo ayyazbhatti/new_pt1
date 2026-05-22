@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite'
+/// <reference types="vitest/config" />
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import http from 'node:http'
@@ -91,6 +92,10 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
   },
   server: {
     // Use 127.0.0.1 to avoid ERR_ADDRESS_INVALID when Chrome resolves localhost to IPv6 (::1).

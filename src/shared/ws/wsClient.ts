@@ -133,9 +133,6 @@ class WebSocketClient {
           if (data.type === 'error') {
             console.warn('⚠️ [wsClient] Server sent error:', (data as { type: string; message?: string }).message)
           }
-          if (data.type === 'tick') {
-            console.log('📨 [wsClient] Tick received:', (data as any).symbol, 'handlers=', this.handlers.size)
-          }
           
           // Log wallet balance updates with more detail
           if (data.type === 'wallet.balance.updated') {
@@ -251,13 +248,9 @@ class WebSocketClient {
   }
 
   subscribe(handler: MessageHandler): () => void {
-    console.log('📝 [wsClient] Adding handler, current count:', this.handlers.size)
     this.handlers.add(handler)
-    console.log('📝 [wsClient] Handler added, new count:', this.handlers.size)
     return () => {
-      console.log('📝 [wsClient] Removing handler, current count:', this.handlers.size)
       this.handlers.delete(handler)
-      console.log('📝 [wsClient] Handler removed, new count:', this.handlers.size)
     }
   }
 

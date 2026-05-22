@@ -7,6 +7,7 @@ import { UserGroup, ProfileRef } from '../types/group'
 import { GroupFormDialog } from './GroupFormDialog'
 import { GroupTimezoneModal } from './GroupTimezoneModal'
 import { GroupCurrencyModal } from './GroupCurrencyModal'
+import { GroupSlippageModal } from './GroupSlippageModal'
 import { DeleteGroupDialog } from './DeleteGroupDialog'
 import { AssignSymbolsModal } from '../modals/AssignSymbolsModal'
 import { Eye, Edit, Trash2, Settings, Copy, Tag, ChevronDown } from 'lucide-react'
@@ -46,6 +47,7 @@ function listRowPatchFromSavedGroup(g: UserGroup): Partial<UserGroup> {
     hideLeverageInTerminal: g.hideLeverageInTerminal,
     timezone: g.timezone ?? null,
     displayCurrency: g.displayCurrency ?? null,
+    defaultSlippageBps: g.defaultSlippageBps ?? null,
     updatedAt: g.updatedAt,
   }
 }
@@ -78,6 +80,7 @@ export function GroupsTable({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [timezoneEditGroup, setTimezoneEditGroup] = useState<UserGroup | null>(null)
   const [currencyEditGroup, setCurrencyEditGroup] = useState<UserGroup | null>(null)
+  const [slippageEditGroup, setSlippageEditGroup] = useState<UserGroup | null>(null)
   const [openTagsGroupId, setOpenTagsGroupId] = useState<string | null>(null)
   const [openTagsAnchorRect, setOpenTagsAnchorRect] = useState<DOMRect | null>(null)
   const [updatingTagsGroupId, setUpdatingTagsGroupId] = useState<string | null>(null)
@@ -257,6 +260,60 @@ export function GroupsTable({
       cell: ({ row }) => {
         const v = row.original.stopOutLevel
         return <span className="text-text">{v != null ? `${v}%` : '—'}</span>
+      },
+    },
+    {
+      id: 'defaultSlippageBps',
+      header: 'Slippage',
+      cell: ({ row }) => {
+        const group = row.original
+        const bps = group.defaultSlippageBps
+        const defaultTitle =
+          'Uses platform default (Admin → Settings → General) for market-order max slippage.'
+        const editTitle = canEditGroups ? 'Click to change group default slippage' : 'Requires edit groups permission'
+
+        if (bps == null) {
+          if (!canEditGroups) {
+            return (
+              <span className="text-sm text-text-muted" title={defaultTitle}>
+                Default
+              </span>
+            )
+          }
+          return (
+            <button
+              type="button"
+              className="text-left text-sm text-accent underline-offset-2 hover:text-accent/90 hover:underline cursor-pointer"
+              title={`${defaultTitle} ${editTitle}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                setSlippageEditGroup(group)
+              }}
+            >
+              Default
+            </button>
+          )
+        }
+        if (!canEditGroups) {
+          return (
+            <span className="text-sm text-text tabular-nums" title="Group default max slippage for market orders (basis points).">
+              {bps} bps
+            </span>
+          )
+        }
+        return (
+          <button
+            type="button"
+            className="text-left text-sm text-accent tabular-nums underline-offset-2 hover:text-accent/90 hover:underline cursor-pointer"
+            title={`Group default max slippage for market orders (basis points). ${editTitle}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSlippageEditGroup(group)
+            }}
+          >
+            {bps} bps
+          </button>
+        )
       },
     },
     {
@@ -716,6 +773,15 @@ export function GroupsTable({
           if (!open) setCurrencyEditGroup(null)
         }}
         onUpdated={(groupId, displayCurrency) => onGroupUpdate?.(groupId, { displayCurrency })}
+      />
+
+      <GroupSlippageModal
+        group={slippageEditGroup}
+        open={slippageEditGroup != null}
+        onOpenChange={(open) => {
+          if (!open) setSlippageEditGroup(null)
+        }}
+        onUpdated={(groupId, defaultSlippageBps) => onGroupUpdate?.(groupId, { defaultSlippageBps })}
       />
     </>
   )

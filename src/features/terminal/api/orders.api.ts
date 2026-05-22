@@ -127,11 +127,35 @@ export interface PlaceOrderRequest {
   tif?: 'GTC' | 'IOC' | 'FOK'
   client_order_id?: string
   idempotency_key: string
+  /** Optional override in basis points (sent only when user changes Advanced slippage). */
+  slippage_bps?: number
 }
 
 export interface PlaceOrderResponse {
   orderId: string  // API returns camelCase
   status: string
+}
+
+/** Known `error.code` values from POST `/v1/orders` (non-exhaustive). */
+export type PlaceOrderErrorCode =
+  | 'INSUFFICIENT_FREE_MARGIN'
+  | 'MIN_REQUIRED_MARGIN_NOT_MET'
+  | 'MARKET_CLOSED'
+  | 'TRADING_DISABLED'
+  | 'CLOSE_ONLY'
+  | 'NEW_ORDERS_DISABLED'
+  /** Engine-side rejection; place-order HTTP may still be 200 — surfaced via WebSocket. */
+  | 'SLIPPAGE_EXCEEDED'
+  | string
+
+/** Nested `error` object on failed place-order responses (shape varies by code). */
+export interface PlaceOrderErrorBody {
+  code: PlaceOrderErrorCode
+  message: string
+  templateName?: string
+  timezone?: string
+  nextOpenAt?: string | null
+  nextCloseAt?: string | null
 }
 
 export async function placeOrder(payload: PlaceOrderRequest): Promise<PlaceOrderResponse> {

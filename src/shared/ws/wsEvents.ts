@@ -48,6 +48,20 @@ export type NotificationPushPayload = {
   meta?: Record<string, any>
 }
 
+/** User terminal: ws-gateway `order_update` (flat body, optional fields when backend forwards them). */
+export type OrderUpdateInboundPayload = {
+  order_id?: string
+  orderId?: string
+  status?: string
+  symbol?: string
+  side?: string
+  quantity?: string
+  price?: string | null
+  ts?: number
+  reason?: string
+  details?: Record<string, unknown>
+}
+
 export type AccountSummaryUpdatedPayload = {
   userId: string
   balance: number
@@ -314,6 +328,17 @@ export type WsInboundEvent =
       bid: string
       ask: string
       ts: number
+    }
+  | ({
+      type: 'order_update'
+    } & OrderUpdateInboundPayload)
+  | {
+      type: 'order.update'
+      payload?: OrderUpdateInboundPayload
+    }
+  | {
+      type: 'order_updated'
+      payload?: OrderUpdateInboundPayload
     }
   | {
       type: 'chat.message'

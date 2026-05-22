@@ -13,11 +13,12 @@ import { useQuery } from '@tanstack/react-query'
 import { listTags } from '@/features/tags/api/tags.api'
 import { getGroupsOverview } from '../api/groups.api'
 import type { ListGroupsParams, UserGroup } from '../types/group'
-import { Plus, X, Building2, CheckCircle, Users } from 'lucide-react'
+import { Plus, X, Building2, CheckCircle, Users, Search } from 'lucide-react'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Skeleton } from '@/shared/ui/loading'
 import { EmptyState } from '@/shared/ui/empty'
+import { cn } from '@/shared/utils'
 // Simple debounce implementation
 function debounce<T extends (...args: any[]) => void>(func: T, wait: number) {
   let timeout: NodeJS.Timeout | null = null
@@ -228,54 +229,64 @@ export function GroupsPage() {
         </Card>
       </div>
 
-      {/* Filters */}
-      <div className="sticky top-0 z-10 bg-surface-1 border-b border-border p-4 space-y-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex-1 min-w-[200px]">
-            <Input
-              placeholder="Search by name..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-            />
-          </div>
-
-          <Select value={status} onValueChange={handleStatusChange}>
-            <SelectTrigger className="w-[140px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="disabled">Disabled</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select value={sort} onValueChange={handleSortChange}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="name_asc">Name</SelectItem>
-              <SelectItem value="created_desc">Created</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
-            <SelectTrigger className="w-[100px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="10">10</SelectItem>
-              <SelectItem value="20">20</SelectItem>
-              <SelectItem value="50">50</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Button variant="ghost" size="sm" onClick={handleClearFilters}>
-            <X className="h-4 w-4 mr-1" />
-            Clear
-          </Button>
+      {/* Filters — same toolbar pattern as Admin → Users / User events */}
+      <div className="mb-6 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-2">
+        <div className="relative min-h-10 min-w-[min(100%,220px)] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+          <Input
+            type="search"
+            placeholder="Search by name..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            className={cn('w-full min-w-0 pl-9', searchInput.trim() && 'pr-9')}
+          />
+          {searchInput.trim() ? (
+            <button
+              type="button"
+              onClick={() => setSearchInput('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text"
+              aria-label="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
+
+        <Select value={status} onValueChange={handleStatusChange}>
+          <SelectTrigger className="h-10 w-fit min-w-[10.5rem] max-w-[min(100%,15rem)] shrink-0">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="disabled">Disabled</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={sort} onValueChange={handleSortChange}>
+          <SelectTrigger className="h-10 w-fit min-w-[11.5rem] max-w-[min(100%,16rem)] shrink-0">
+            <SelectValue placeholder="Sort" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="name_asc">Name</SelectItem>
+            <SelectItem value="created_desc">Created</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
+          <SelectTrigger className="h-10 w-fit min-w-[9rem] max-w-[min(100%,12rem)] shrink-0">
+            <SelectValue placeholder="Page size" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="10">10</SelectItem>
+            <SelectItem value="20">20</SelectItem>
+            <SelectItem value="50">50</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Button variant="outline" size="sm" className="shrink-0" onClick={handleClearFilters}>
+          Clear
+        </Button>
       </div>
 
       {/* Table */}

@@ -263,6 +263,43 @@ impl TickHandler {
         if eff <= Decimal::ZERO {
             return Err(anyhow::anyhow!("effective leverage must be positive (order {})", order.id));
         }
+
+        if order.order_type == contracts::enums::OrderType::Market {
+            use risk::slippage::{check_slippage, SlippageCheckInput, SlippageCheckOutcome};
+            match check_slippage(SlippageCheckInput {
+                side: order.side,
+                fill_price,
+                requested_bid: order.requested_bid,
+                requested_ask: order.requested_ask,
+                max_slippage_bps: order.max_slippage_bps,
+            }) {
+                SlippageCheckOutcome::Exceeded(r) => {
+                    info!(
+                        order_id = %order.id,
+                        user_id = %order.user_id,
+                        symbol = %order.symbol,
+                        slippage_bps = r.slippage_bps,
+                        max_bps = r.max_bps,
+                        reference = %r.reference_price,
+                        fill = %fill_price,
+                        "Slippage exceeded — rejecting fill"
+                    );
+                    crate::engine::slippage_reject::reject_market_order_slippage_exceeded(
+                        &self.nats,
+                        &self.cache,
+                        conn,
+                        &self.metrics,
+                        order,
+                        fill_price,
+                        &r,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                SlippageCheckOutcome::NotApplicable | SlippageCheckOutcome::Passed(_) => {}
+            }
+        }
+
         let result = self
             .lua
             .atomic_fill_order(conn, &order.id, fill_price, fill_size, eff)

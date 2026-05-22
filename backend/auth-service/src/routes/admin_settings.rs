@@ -120,6 +120,13 @@ struct GeneralSettingsDto {
     site_name: String,
     timezone: String,
     currency: String,
+    /// Platform default max slippage for market orders (basis points). 50 = 0.5%.
+    #[serde(default = "default_slippage_bps_platform")]
+    default_slippage_bps: i32,
+}
+
+fn default_slippage_bps_platform() -> i32 {
+    50
 }
 
 fn validate_general_settings(body: &GeneralSettingsDto) -> Result<(), String> {
@@ -138,6 +145,9 @@ fn validate_general_settings(body: &GeneralSettingsDto) -> Result<(), String> {
     if cur.len() != 3 || !cur.chars().all(|c| c.is_ascii_alphabetic()) {
         return Err("Currency must be a 3-letter ISO code (e.g. USD)".to_string());
     }
+    if body.default_slippage_bps < 0 {
+        return Err("default_slippage_bps must be >= 0".to_string());
+    }
     Ok(())
 }
 
@@ -152,9 +162,9 @@ async fn get_general_settings(
             Json(serde_json::json!({ "error": { "code": "DB_ERROR", "message": e.to_string() } })),
         )
     })?;
-    let row: (String, String, String) = sqlx::query_as(
+    let row: (String, String, String, i32) = sqlx::query_as(
         r#"
-        SELECT site_name, timezone, currency
+        SELECT site_name, timezone, currency, default_slippage_bps
         FROM platform_general_settings
         WHERE singleton_id = 1
         "#,
@@ -172,6 +182,7 @@ async fn get_general_settings(
         site_name: row.0,
         timezone: row.1,
         currency: row.2,
+        default_slippage_bps: row.3,
     }))
 }
 
@@ -204,6 +215,7 @@ async fn put_general_settings(
         SET site_name = $1,
             timezone = $2,
             currency = $3,
+            default_slippage_bps = $4,
             updated_at = NOW()
         WHERE singleton_id = 1
         "#,
@@ -211,6 +223,7 @@ async fn put_general_settings(
     .bind(&body.site_name)
     .bind(&body.timezone)
     .bind(&body.currency)
+    .bind(body.default_slippage_bps)
     .execute(&pool)
     .await
     .map_err(|e| {

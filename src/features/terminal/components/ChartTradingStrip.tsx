@@ -3,7 +3,11 @@ import { TrendingUp, TrendingDown, Loader2, Minus, Plus } from 'lucide-react'
 import { Button, Input } from '@/shared/ui'
 import { useQuery } from '@tanstack/react-query'
 import { useTerminalStore } from '../store'
+import { useSymbolPrice } from '@/features/symbols/hooks/usePriceStream'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
+import { useSessionStatus, useSessionCountdownTick } from '../hooks/useSessionStatus'
+import { formatOpensInLabel } from '../utils/sessionCountdown'
+import { tryToastPlaceOrderForbiddenError } from '../utils/placeOrderErrorToast'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useFormatFromUsd } from '@/shared/currency'
 import { useWebSocketState } from '@/shared/ws/wsHooks'
@@ -16,11 +20,24 @@ import { me, getSymbolLeverage } from '@/shared/api/auth.api'
  * Reuses same placeOrder API and Est. Margin calculation as the Trade panel.
  */
 export function ChartTradingStrip() {
-  const { selectedSymbol } = useTerminalStore()
+  const selectedSymbol = useTerminalStore((s) => s.selectedSymbol)
   const { accountSummary } = useAccountSummary()
   const formatMoney = useFormatFromUsd()
   const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
   const wsState = useWebSocketState()
+
+  const liveKey = selectedSymbol?.priceLookupKey || selectedSymbol?.code || null
+  const live = useSymbolPrice(liveKey)
+  const bidParsed = live ? parseFloat(live.bid) : 0
+  const askParsed = live ? parseFloat(live.ask) : 0
+  const bidSafe = Number.isFinite(bidParsed) ? bidParsed : 0
+  const askSafe = Number.isFinite(askParsed) ? askParsed : 0
+
+  const { data: session } = useSessionStatus(selectedSymbol?.code)
+  const sessionCountdownNow = useSessionCountdownTick()
+  const isSessionClosed = session != null && !session.isOpen
+  const isSymbolTradingOff = selectedSymbol != null && !selectedSymbol.enabled
+  const sessionBlocksOrders = isSessionClosed || isSymbolTradingOff
 
   const { data: meData } = useQuery({ queryKey: ['auth', 'me'], queryFn: me })
   const { data: symbolLeverage } = useQuery({
@@ -35,8 +52,8 @@ export function ChartTradingStrip() {
 
   const canPlaceOrder = tradingAccess !== 'disabled'
   const wsConnected = wsState === 'authenticated'
-  const bid = selectedSymbol?.numericPrice ?? 0
-  const ask = selectedSymbol?.numericPrice2 ?? bid
+  const bidForOrder = bidSafe
+  const askForOrder = askSafe > 0 ? askSafe : bidForOrder
   const sizeNum = parseFloat(size) || 0
   const freeMargin = accountSummary?.freeMargin ?? 0
 
@@ -66,15 +83,15 @@ export function ChartTradingStrip() {
   const fallbackMarginUsd = useMemo(() => {
     if (!selectedSymbol) return null
     return clientMarketFallbackMarginUsdOrNull({
-      bid,
-      ask,
+      bid: bidForOrder,
+      ask: askForOrder,
       side: previewOrderSide,
       baseUnits: sizeNum,
       tiers: symbolLeverage?.tiers,
       userMin: meData?.minLeverage,
       userMax: meData?.maxLeverage,
     })
-  }, [selectedSymbol, bid, ask, previewOrderSide, sizeNum, symbolLeverage?.tiers, meData?.minLeverage, meData?.maxLeverage])
+  }, [selectedSymbol, bidForOrder, askForOrder, previewOrderSide, sizeNum, symbolLeverage?.tiers, meData?.minLeverage, meData?.maxLeverage])
 
   const estMarginUsd: number | null = parsedServerMarginUsd != null ? parsedServerMarginUsd : fallbackMarginUsd
   const marginCalcUnavailable = canEstimateServerMargin && estMarginUsd == null
@@ -130,6 +147,10 @@ export function ChartTradingStrip() {
         idempotency_key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       }
       const res = await placeOrder(payload)
+      const orderId = res.orderId || (res as { order_id?: string }).order_id
+      if (orderId) {
+        useTerminalStore.getState().registerRecentSubmittedOrder(orderId)
+      }
       useTerminalStore.getState().requestOpenPositionsRefresh()
       toast.success(
         `${side} order submitted: ${size} @ ${selectedSymbol.code}${res.orderId ? ` (${res.orderId.slice(0, 8)}…)` : ''}`,
@@ -137,6 +158,9 @@ export function ChartTradingStrip() {
       )
       setSize('0.01')
     } catch (err: unknown) {
+      if (tryToastPlaceOrderForbiddenError(err, toast, Date.now())) {
+        return
+      }
       const e = err as {
         response?: {
           data?: {
@@ -232,7 +256,8 @@ export function ChartTradingStrip() {
             !wsConnected ||
             marginCalcUnavailable ||
             insufficientFreeMargin ||
-            !canPlaceOrder
+            !canPlaceOrder ||
+            sessionBlocksOrders
           }
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <TrendingUp className="h-4 w-4" />}
@@ -259,13 +284,23 @@ export function ChartTradingStrip() {
             !wsConnected ||
             marginCalcUnavailable ||
             insufficientFreeMargin ||
-            !canPlaceOrder
+            !canPlaceOrder ||
+            sessionBlocksOrders
           }
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <TrendingDown className="h-4 w-4" />}
           <span className="ml-1">Sell</span>
         </Button>
       </div>
+      {isSessionClosed && session && (
+        <div className="text-center text-xs text-amber-500">
+          Market closed —{' '}
+          {formatOpensInLabel(session.nextOpenAt, session.timezone, sessionCountdownNow) || 'No upcoming session'}
+        </div>
+      )}
+      {isSymbolTradingOff && !isSessionClosed && (
+        <div className="text-center text-xs text-amber-500">Trading disabled for this symbol.</div>
+      )}
     </div>
   )
 }

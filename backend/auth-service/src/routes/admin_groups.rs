@@ -38,6 +38,9 @@ pub struct CreateGroupRequest {
     pub swap_enabled: Option<bool>,
     #[serde(default)]
     pub fees_enabled: Option<bool>,
+    /// Optional per-group default max slippage (bps). Omitted = NULL (use platform default).
+    #[serde(default)]
+    pub default_slippage_bps: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +64,9 @@ pub struct UpdateGroupRequest {
     pub swap_enabled: Option<bool>,
     #[serde(default)]
     pub fees_enabled: Option<bool>,
+    /// Omitted = no change; JSON null = clear to platform default; integer = set (bps, >= 0).
+    #[serde(default)]
+    pub default_slippage_bps: Option<Option<i32>>,
 }
 
 /// Reference to a profile (price stream or leverage) for embedding in group list.
@@ -464,6 +470,7 @@ async fn create_group(
             payload.display_currency.as_deref(),
             payload.swap_enabled.unwrap_or(false),
             payload.fees_enabled.unwrap_or(false),
+            payload.default_slippage_bps,
             Some(claims.sub),
         )
         .await
@@ -516,6 +523,7 @@ async fn update_group(
             payload.display_currency.as_ref().map(|o| o.as_deref()),
             payload.swap_enabled,
             payload.fees_enabled,
+            payload.default_slippage_bps,
         )
         .await
     {

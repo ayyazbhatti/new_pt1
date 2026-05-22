@@ -4,6 +4,8 @@ import { useAdminTradingStore } from '../store/adminTrading.store'
 import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
 import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 import { closedPositionPnlParts, openPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
 
 export function PositionDetailsModal() {
@@ -11,12 +13,18 @@ export function PositionDetailsModal() {
     useAdminTradingStore()
   const formatMoney = useFormatFromUsd()
   const formatSigned = useFormatSignedFromUsd()
+  const symbolMetaLookup = useSymbolMetaLookup()
   const position = selectedPositionId
     ? positions.get(selectedPositionId) ?? positionHistory.get(selectedPositionId)
     : null
   const open = openModal === 'position-details'
 
   if (!position) return null
+
+  const sizeFmt = formatPositionSize(
+    position.size,
+    getSymbolMetaForCode(symbolMetaLookup, position.symbol),
+  )
 
   const isOpen = position.status === 'OPEN' || position.status === 'open'
   const pnlParts = isOpen
@@ -85,7 +93,9 @@ export function PositionDetailsModal() {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Size</div>
-            <div className="text-sm font-mono text-text">{position.size.toLocaleString()}</div>
+            <div className="text-sm font-mono text-text" title={sizeFmt.secondary || undefined}>
+              {sizeFmt.display}
+            </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Leverage</div>

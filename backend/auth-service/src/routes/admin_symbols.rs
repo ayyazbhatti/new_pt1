@@ -32,6 +32,8 @@ pub struct CreateSymbolRequest {
     pub pip_position_min: Option<String>,
     pub pip_position_max: Option<String>,
     pub leverage_profile_id: Option<String>,
+    #[serde(default)]
+    pub session_template_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +55,8 @@ pub struct UpdateSymbolRequest {
     pub is_enabled: bool,
     pub trading_enabled: bool,
     pub leverage_profile_id: Option<String>,
+    #[serde(default)]
+    pub session_template_id: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -204,6 +208,9 @@ async fn list_symbols(
                 "leverage_profile_name": s.leverage_profile_name,
                 "mmdps_category": s.mmdps_category,
                 "provider_description": s.provider_description,
+                "market": s.market,
+                "session_template_id": s.session_template_id,
+                "session_template_name": s.session_template_name,
                 "created_at": s.created_at,
                 "updated_at": s.updated_at,
             })
@@ -297,6 +304,9 @@ async fn get_symbol(
         "leverage_profile_id": symbol.leverage_profile_id,
         "mmdps_category": symbol.mmdps_category,
         "provider_description": symbol.provider_description,
+        "market": symbol.market,
+        "session_template_id": symbol.session_template_id,
+        "session_template_name": symbol.session_template_name,
         "created_at": symbol.created_at,
         "updated_at": symbol.updated_at,
     })))
@@ -316,6 +326,14 @@ async fn create_symbol(
         .leverage_profile_id
         .as_ref()
         .and_then(|s| Uuid::parse_str(s).ok());
+    let session_template_id = payload.session_template_id.as_ref().and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Uuid::parse_str(t).ok()
+        }
+    });
 
     let symbol = service
         .create_symbol(
@@ -334,6 +352,7 @@ async fn create_symbol(
             payload.pip_position_min.as_deref(),
             payload.pip_position_max.as_deref(),
             leverage_profile_id,
+            session_template_id,
         )
         .await
         .map_err(|e| {
@@ -372,6 +391,9 @@ async fn create_symbol(
         "leverage_profile_id": symbol.leverage_profile_id,
         "mmdps_category": symbol.mmdps_category,
         "provider_description": symbol.provider_description,
+        "market": symbol.market,
+        "session_template_id": symbol.session_template_id,
+        "session_template_name": symbol.session_template_name,
         "created_at": symbol.created_at,
         "updated_at": symbol.updated_at,
     })))
@@ -392,6 +414,14 @@ async fn update_symbol(
         .leverage_profile_id
         .as_ref()
         .and_then(|s| Uuid::parse_str(s).ok());
+    let session_template_id = payload.session_template_id.as_ref().and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Uuid::parse_str(t).ok()
+        }
+    });
 
     let symbol = service
         .update_symbol(
@@ -413,6 +443,7 @@ async fn update_symbol(
             payload.is_enabled,
             payload.trading_enabled,
             leverage_profile_id,
+            session_template_id,
         )
         .await
         .map_err(|e| {
@@ -451,6 +482,9 @@ async fn update_symbol(
         "leverage_profile_id": symbol.leverage_profile_id,
         "mmdps_category": symbol.mmdps_category,
         "provider_description": symbol.provider_description,
+        "market": symbol.market,
+        "session_template_id": symbol.session_template_id,
+        "session_template_name": symbol.session_template_name,
         "created_at": symbol.created_at,
         "updated_at": symbol.updated_at,
     })))

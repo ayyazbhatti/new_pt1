@@ -29,6 +29,9 @@ export interface AdminSymbol {
   tradingEnabled: boolean
   leverageProfileId: string | null
   leverageProfileName: string | null
+  /** Explicit session template override; null = use default template for `market`. */
+  sessionTemplateId?: string | null
+  sessionTemplateName?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -49,6 +52,7 @@ export interface CreateSymbolPayload {
   pip_position_min?: string | null
   pip_position_max?: string | null
   leverage_profile_id?: string | null
+  session_template_id?: string | null
 }
 
 export interface UpdateSymbolPayload {
@@ -69,6 +73,7 @@ export interface UpdateSymbolPayload {
   is_enabled: boolean
   trading_enabled: boolean
   leverage_profile_id?: string | null
+  session_template_id?: string | null
 }
 
 export interface ListSymbolsParams {

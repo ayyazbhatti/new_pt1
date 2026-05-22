@@ -8,17 +8,25 @@ import { useAdminTradingStore } from '../store/adminTrading.store'
 import { closeAdminPosition } from '../api/positions'
 import { toast } from '@/shared/components/common'
 import { Loader2 } from 'lucide-react'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 export function ClosePositionModal() {
   const { openModal, setOpenModal, selectedPositionId, positions, removePosition } =
     useAdminTradingStore()
   const position = selectedPositionId ? positions.get(selectedPositionId) : null
+  const symbolMetaLookup = useSymbolMetaLookup()
   const [closeType, setCloseType] = useState<'full' | 'partial'>('full')
   const [partialSize, setPartialSize] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const open = openModal === 'close-position'
 
   if (!position) return null
+
+  const positionSizeFmt = formatPositionSize(
+    position.size,
+    getSymbolMetaForCode(symbolMetaLookup, position.symbol),
+  )
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -66,7 +74,10 @@ export function ClosePositionModal() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="full">Full Close ({position.size.toLocaleString()})</SelectItem>
+              <SelectItem value="full">
+                Full Close ({positionSizeFmt.display}
+                {positionSizeFmt.secondary ? ` — ${positionSizeFmt.secondary}` : ''})
+              </SelectItem>
               <SelectItem value="partial">Partial Close</SelectItem>
             </SelectContent>
           </Select>
@@ -83,7 +94,7 @@ export function ClosePositionModal() {
               max={position.size}
               value={partialSize}
               onChange={(e) => setPartialSize(e.target.value)}
-              placeholder={`Max: ${position.size.toLocaleString()}`}
+              placeholder={`Max: ${positionSizeFmt.display}${positionSizeFmt.secondary ? ` (${positionSizeFmt.secondary})` : ''}`}
               required
             />
           </div>

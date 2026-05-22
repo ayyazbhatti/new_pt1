@@ -3,13 +3,14 @@ import { Button } from '@/shared/ui'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
 import { useTerminalStore } from '../store'
+import { useShallow } from 'zustand/react/shallow'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useWalletStore } from '@/shared/store/walletStore'
 import { useNavigate } from 'react-router-dom'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { PriceDisplay } from './PriceDisplay'
+import { PriceCell } from './PriceCell'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { WithdrawModal } from '@/features/wallet/components/WithdrawModal'
 import { fetchBalance } from '@/features/wallet/api'
@@ -22,6 +23,8 @@ import { useWebSocketSubscription, useWebSocketState } from '@/shared/ws/wsHooks
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { wsClient } from '@/shared/ws/wsClient'
 import { groupSymbolsByAssetClass } from '../utils/symbolCategories'
+import { useSessionStatusBatch, useSessionCountdownTick } from '../hooks/useSessionStatus'
+import { formatOpensInLabel } from '../utils/sessionCountdown'
 
 const TERMINAL_SIDEBAR_SECTIONS_KEY = 'terminal.sidebar.categorySections'
 
@@ -48,27 +51,25 @@ interface LeftSidebarProps {
 }
 
 export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
-  const {
-    activeTab,
-    setActiveTab,
-    searchQuery,
-    setSearchQuery,
-    watchlist,
-    toggleWatchlist,
-    selectedSymbol,
-    setSelectedSymbol,
-    getFilteredSymbols,
-    isLoading,
-    settingsPanelOpen,
-    setSettingsPanelOpen,
-    notificationPanelOpen,
-    setNotificationPanelOpen,
-    paymentPanelOpen,
-    setPaymentPanelOpen,
-    chatPanelOpen,
-    setChatPanelOpen,
-  } = useTerminalStore()
+  const activeTab = useTerminalStore((s) => s.activeTab)
+  const setActiveTab = useTerminalStore((s) => s.setActiveTab)
+  const searchQuery = useTerminalStore((s) => s.searchQuery)
+  const setSearchQuery = useTerminalStore((s) => s.setSearchQuery)
+  const watchlist = useTerminalStore((s) => s.watchlist)
+  const toggleWatchlist = useTerminalStore((s) => s.toggleWatchlist)
+  const selectedSymbol = useTerminalStore((s) => s.selectedSymbol)
+  const setSelectedSymbol = useTerminalStore((s) => s.setSelectedSymbol)
+  const isLoading = useTerminalStore((s) => s.isLoading)
+  const settingsPanelOpen = useTerminalStore((s) => s.settingsPanelOpen)
+  const setSettingsPanelOpen = useTerminalStore((s) => s.setSettingsPanelOpen)
+  const notificationPanelOpen = useTerminalStore((s) => s.notificationPanelOpen)
+  const setNotificationPanelOpen = useTerminalStore((s) => s.setNotificationPanelOpen)
+  const paymentPanelOpen = useTerminalStore((s) => s.paymentPanelOpen)
+  const setPaymentPanelOpen = useTerminalStore((s) => s.setPaymentPanelOpen)
+  const chatPanelOpen = useTerminalStore((s) => s.chatPanelOpen)
+  const setChatPanelOpen = useTerminalStore((s) => s.setChatPanelOpen)
 
+  const symbols = useTerminalStore(useShallow((s) => s.getFilteredSymbols()))
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
   const { balance, equity, margin_used, currency, isLoading: balanceLoading, setWalletData, setLoading } = useWalletStore()
@@ -88,9 +89,11 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
   const theme = useThemeStore((s) => s.theme)
   const toggleTheme = useThemeStore((s) => s.toggleTheme)
   const wsState = useWebSocketState()
-  const symbols = getFilteredSymbols()
   const symbolsByCategory = useMemo(() => groupSymbolsByAssetClass(symbols), [symbols])
   const searchActive = Boolean(searchQuery.trim())
+  const symbolCodes = useMemo(() => symbols.map((s) => s.code), [symbols])
+  const { data: sessionMap = {} } = useSessionStatusBatch(symbolCodes)
+  const sessionCountdownNow = useSessionCountdownTick()
 
   const toggleSection = useCallback((key: string) => {
     setExpandedSections((prev) => {
@@ -563,12 +566,25 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                   )}
                 </button>
                 {isSectionOpen(group.key) &&
-                  group.symbols.map((symbol) => (
+                  group.symbols.map((symbol) => {
+                    const session = sessionMap[symbol.code]
+                    const sessionClosed = session != null && !session.isOpen
+                    const dimmed = !symbol.enabled || sessionClosed
+                    const rowTitle =
+                      sessionClosed && session
+                        ? formatOpensInLabel(session.nextOpenAt, session.timezone, sessionCountdownNow) ||
+                          'Market closed'
+                        : !symbol.enabled
+                          ? 'Trading disabled for this symbol'
+                          : undefined
+                    return (
                     <div
                       key={symbol.id}
+                      title={rowTitle}
                       onClick={() => setSelectedSymbol(symbol)}
                       className={cn(
                         'px-4 py-2.5 hover:bg-slate-200/60 dark:hover:bg-white/5 transition-all duration-200 cursor-pointer group relative',
+                        dimmed && 'opacity-50 hover:opacity-75',
                         selectedSymbol?.id === symbol.id && 'bg-accent/10 border-l-2 border-accent'
                       )}
                     >
@@ -598,15 +614,19 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                             />
                           </button>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
                               <span className="text-sm font-bold text-text tracking-tight">{symbol.code}</span>
-                              <div className="h-1.5 w-1.5 rounded-full bg-accent shadow-sm shadow-accent/50"></div>
+                              {dimmed ? (
+                                <span className="text-[10px] font-bold uppercase tracking-wide text-amber-500 shrink-0">
+                                  {!symbol.enabled ? 'Off' : 'Closed'}
+                                </span>
+                              ) : (
+                                <div className="h-1.5 w-1.5 rounded-full bg-accent shadow-sm shadow-accent/50"></div>
+                              )}
                             </div>
-                            <PriceDisplay
-                              bid={symbol.numericPrice}
-                              ask={symbol.numericPrice2}
-                              bidFormatted={symbol.price}
-                              askFormatted={symbol.price2}
+                            <PriceCell
+                              feedSymbol={symbol.priceLookupKey ?? symbol.code}
+                              pricePrecision={symbol.pricePrecision}
                             />
                           </div>
                         </div>
@@ -633,7 +653,8 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
                         </div>
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
               </div>
             ))
           )}
@@ -669,7 +690,12 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
             setPaymentPanelOpen(false)
             setSettingsPanelOpen(!settingsPanelOpen)
           }}
-          className="w-full text-left text-xs font-medium text-slate-600/90 dark:text-text-muted/70 hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/70 dark:hover:bg-white/5 transition-all duration-200 rounded-lg py-2 px-2.5"
+          className={cn(
+            'w-full text-left text-xs font-medium transition-all duration-200 rounded-lg py-2 px-2.5',
+            settingsPanelOpen
+              ? 'text-accent bg-accent/10'
+              : 'text-slate-600/90 dark:text-text-muted/70 hover:text-slate-900 dark:hover:text-text hover:bg-slate-200/70 dark:hover:bg-white/5'
+          )}
         >
           Settings
         </button>

@@ -13,7 +13,8 @@ import { DataTable } from '@/shared/ui/table'
 import { useFormatDateTime } from '@/shared/datetime'
 import { useDebouncedValue } from '@/shared/hooks/useDebounce'
 import { useFormatFromUsd } from '@/shared/currency'
-import { Activity, Gift, ListOrdered, Loader2, MinusCircle } from 'lucide-react'
+import { cn } from '@/shared/utils'
+import { Activity, Gift, ListOrdered, Loader2, MinusCircle, Search, X } from 'lucide-react'
 
 const BONUS_TX_QUERY_KEY = 'admin-bonus-transactions' as const
 const BONUS_STATS_QUERY_KEY = 'admin-bonus-stats' as const
@@ -183,6 +184,13 @@ export function BonusPage() {
     [formatDateTime]
   )
 
+  const hasActiveFilters =
+    filters.userId.trim() !== '' ||
+    filters.adminId.trim() !== '' ||
+    filters.from.trim() !== '' ||
+    filters.to.trim() !== '' ||
+    filters.types.trim() !== ''
+
   if (!canView) {
     return (
       <ContentShell>
@@ -280,66 +288,95 @@ export function BonusPage() {
         </Card>
       </div>
 
-      <div className="space-y-4">
-        <div className="flex items-center gap-4 flex-wrap">
-          <Input
-            value={filters.userId}
-            onChange={(e) => setFilters((f) => ({ ...f, userId: e.target.value }))}
-            placeholder="User ID"
-            className="w-[220px] font-mono text-sm"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-          <Input
-            value={filters.adminId}
-            onChange={(e) => setFilters((f) => ({ ...f, adminId: e.target.value }))}
-            placeholder="Admin user ID"
-            className="w-[220px] font-mono text-sm"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-          <Input
-            value={filters.from}
-            onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))}
-            placeholder="From (ISO)"
-            className="w-[180px] font-mono text-sm"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-          <Input
-            value={filters.to}
-            onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))}
-            placeholder="To (ISO)"
-            className="w-[180px] font-mono text-sm"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
+      <div className="mb-6 flex min-w-0 flex-wrap items-end gap-x-4 gap-y-3">
+        <div className="relative min-h-10 min-w-[min(100%,220px)] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
           <Input
             value={filters.types}
             onChange={(e) => setFilters((f) => ({ ...f, types: e.target.value }))}
             placeholder="Types (comma), e.g. bonus_grant"
-            className="min-w-[200px] flex-1 max-w-md"
+            className={cn('w-full min-w-0 pl-9 font-mono text-sm', filters.types.trim() && 'pr-9')}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setFilters({ ...emptyFilters })
-              setPage(1)
-            }}
-          >
-            Clear
-          </Button>
+          {filters.types.trim() ? (
+            <button
+              type="button"
+              onClick={() => setFilters((f) => ({ ...f, types: '' }))}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text"
+              aria-label="Clear types filter"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
+        <Input
+          value={filters.userId}
+          onChange={(e) => setFilters((f) => ({ ...f, userId: e.target.value }))}
+          placeholder="User ID"
+          className="h-10 w-[min(100%,16rem)] min-w-[10rem] shrink-0 font-mono text-xs"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        <Input
+          value={filters.adminId}
+          onChange={(e) => setFilters((f) => ({ ...f, adminId: e.target.value }))}
+          placeholder="Admin user ID"
+          className="h-10 w-[min(100%,16rem)] min-w-[10rem] shrink-0 font-mono text-xs"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        <div className="flex min-w-0 shrink-0 flex-wrap items-end gap-x-4 gap-y-2 border-l border-border pl-4">
+          <div className="flex shrink-0 items-center gap-2.5">
+            <label className="whitespace-nowrap text-xs text-text-muted" htmlFor="bonus_filter_from">
+              From
+            </label>
+            <Input
+              id="bonus_filter_from"
+              value={filters.from}
+              onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))}
+              placeholder="ISO"
+              className="h-10 w-[min(100%,14rem)] min-w-[10.5rem] shrink-0 font-mono text-xs"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-2.5">
+            <label className="whitespace-nowrap text-xs text-text-muted" htmlFor="bonus_filter_to">
+              To
+            </label>
+            <Input
+              id="bonus_filter_to"
+              value={filters.to}
+              onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))}
+              placeholder="ISO"
+              className="h-10 w-[min(100%,14rem)] min-w-[10.5rem] shrink-0 font-mono text-xs"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+            />
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={!hasActiveFilters}
+          onClick={() => {
+            setFilters({ ...emptyFilters })
+            setPage(1)
+          }}
+        >
+          Clear
+        </Button>
+      </div>
 
+      <div className="space-y-4">
         {isError && (
           <p className="text-sm text-danger">
             {error instanceof Error ? error.message : 'Failed to load bonus transactions'}

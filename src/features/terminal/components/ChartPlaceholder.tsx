@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useMemo } from 'react'
 import { init, dispose } from 'klinecharts'
 import type { KLineData, Period } from 'klinecharts'
 import { useTerminalStore } from '../store'
@@ -15,7 +15,7 @@ import type { ChartSettings, DrawingMagnetMode } from '../utils/chartOptions'
 import type { ChartIndicator } from '../utils/indicatorParams'
 import { Spinner } from '@/shared/ui/loading'
 import { priceStreamClient } from '@/shared/ws/priceStreamClient'
-import { normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
+import { normalizeSymbolKey, useSymbolPrice } from '@/features/symbols/hooks/usePriceStream'
 import { getOpenPositions, getClosedPositions } from '../api/positions.api'
 import type { Position } from '../api/positions.api'
 import { useThemeStore } from '@/shared/store/themeStore'
@@ -176,6 +176,20 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
   const uiTheme = useThemeStore((s) => s.theme)
   const chartIsDark = uiTheme === 'dark'
   const { selectedSymbol, chartShowAskPrice, chartShowPositionMarker, chartShowClosedPositionMarker } = useTerminalStore()
+  const liveKey = selectedSymbol?.priceLookupKey?.trim() || selectedSymbol?.code || null
+  const livePrice = useSymbolPrice(liveKey)
+  const liveBid = useMemo(() => {
+    const b = livePrice?.bid
+    if (b == null || b === '') return 0
+    const n = parseFloat(b)
+    return Number.isFinite(n) ? n : 0
+  }, [livePrice?.bid, livePrice?.ts])
+  const liveAsk = useMemo(() => {
+    const a = livePrice?.ask
+    if (a == null || a === '') return 0
+    const n = parseFloat(a)
+    return Number.isFinite(n) ? n : 0
+  }, [livePrice?.ask, livePrice?.ts])
   const chartRef = useRef<ReturnType<typeof init> | null>(null)
   const subscribeBarCallbackRef = useRef<((data: KLineData) => void) | null>(null)
   const lastBarRef = useRef<KLineBar | null>(null)
@@ -601,9 +615,9 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     return unsub
   }, [])
 
-  // Sync live price from store when symbol/price first loads (e.g. after symbol switch)
+  // Sync live price when stream updates (symbol metadata no longer carries tick-driven prices).
   useEffect(() => {
-    const bid = selectedSymbol?.numericPrice
+    const bid = liveBid
     if (bid == null || bid <= 0) return
 
     const cb = subscribeBarCallbackRef.current
@@ -629,16 +643,16 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
     }
 
     if (cb) cb({ ...bar })
-  }, [selectedSymbol?.numericPrice])
+  }, [liveBid])
 
-  // Ask line must update when bid/ask come from the store alone (tick.symbol used to mismatch catalog code).
+  // Ask line must update when bid/ask come from the stream (tick.symbol may differ from catalog code).
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || !chartShowAskPrice) {
       chart?.removeOverlay({ name: 'askPriceLine' })
       return
     }
-    const ask = selectedSymbol?.numericPrice2
+    const ask = liveAsk
     if (ask == null || ask <= 0 || !currentBarRef.current) {
       chart.removeOverlay({ name: 'askPriceLine' })
       return
@@ -654,7 +668,7 @@ export const ChartPlaceholder = forwardRef<ChartPlaceholderHandle, ChartPlacehol
         },
       ],
     })
-  }, [chartShowAskPrice, selectedSymbol?.numericPrice2, selectedSymbol?.code, chartDataLength])
+  }, [chartShowAskPrice, liveAsk, selectedSymbol?.code, chartDataLength])
 
   return (
     <div className="h-full w-full flex-1 min-h-0 relative overflow-hidden border-b border-border bg-background">

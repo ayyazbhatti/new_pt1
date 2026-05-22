@@ -39,6 +39,14 @@ interface TerminalStore {
    */
   openPositionsRefreshNonce: number
   requestOpenPositionsRefresh: () => void
+  /**
+   * Order IDs from recent POST /v1/orders success (this session). Used to attribute async
+   * `order_update` rejections (e.g. slippage) without treating unrelated rejects as user toasts.
+   */
+  recentOrderSubmitAtById: Record<string, number>
+  registerRecentSubmittedOrder: (orderId: string) => void
+  forgetRecentSubmittedOrder: (orderId: string) => void
+  pruneStaleRecentSubmittedOrders: () => void
   setSymbols: (symbols: MockSymbol[]) => void
   setLoading: (loading: boolean) => void
   setSelectedSymbol: (symbol: MockSymbol) => void
@@ -162,7 +170,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     if (currentSelectedId) {
       const stillExists = symbols.find((s) => s.id === currentSelectedId)
       if (stillExists) {
-        // Update the selected symbol with the latest data (prices may have changed)
+        // Keep selection row in sync with catalog metadata (runs when catalog changes, not on ticks).
         set({ selectedSymbol: stillExists })
         return
       }
@@ -285,7 +293,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   mobileTab: (() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_MOBILE_TAB)
-      if (s === 'quotes' || s === 'chart' || s === 'trade' || s === 'positions' || s === 'account' || s === 'history') return s
+      if (
+        s === 'quotes' ||
+        s === 'chart' ||
+        s === 'trade' ||
+        s === 'positions' ||
+        s === 'account' ||
+        s === 'history'
+      )
+        return s
     } catch {}
     return 'chart'
   })(),
@@ -299,6 +315,26 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   requestOpenPositionsRefresh: () => {
     set((s) => ({ openPositionsRefreshNonce: s.openPositionsRefreshNonce + 1 }))
   },
+  recentOrderSubmitAtById: {},
+  registerRecentSubmittedOrder: (orderId) =>
+    set((s) => ({
+      recentOrderSubmitAtById: { ...s.recentOrderSubmitAtById, [orderId]: Date.now() },
+    })),
+  forgetRecentSubmittedOrder: (orderId) =>
+    set((s) => {
+      const { [orderId]: _r, ...rest } = s.recentOrderSubmitAtById
+      return { recentOrderSubmitAtById: rest }
+    }),
+  pruneStaleRecentSubmittedOrders: () =>
+    set((s) => {
+      const now = Date.now()
+      const maxAge = 90_000
+      const next: Record<string, number> = {}
+      for (const [id, t] of Object.entries(s.recentOrderSubmitAtById)) {
+        if (now - t <= maxAge) next[id] = t
+      }
+      return { recentOrderSubmitAtById: next }
+    }),
   getFilteredSymbols: () => {
     const { searchQuery, activeTab, watchlist, symbols } = get()
     let filtered = symbols

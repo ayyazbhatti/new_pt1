@@ -33,6 +33,9 @@ function toCamelCaseSymbol(obj: any): AdminSymbol {
     tradingEnabled: obj.trading_enabled,
     leverageProfileId: obj.leverage_profile_id != null ? String(obj.leverage_profile_id) : null,
     leverageProfileName: obj.leverage_profile_name != null ? String(obj.leverage_profile_name) : null,
+    market: obj.market != null ? String(obj.market) : undefined,
+    sessionTemplateId: obj.session_template_id != null ? String(obj.session_template_id) : null,
+    sessionTemplateName: obj.session_template_name != null ? String(obj.session_template_name) : null,
     createdAt: obj.created_at,
     updatedAt: obj.updated_at,
   }

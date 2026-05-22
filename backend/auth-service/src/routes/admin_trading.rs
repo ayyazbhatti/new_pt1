@@ -19,7 +19,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::middleware::auth_middleware;
-use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin_from_db_fast};
+use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin_from_db_fast, get_price_from_redis};
 use crate::routes::orders::{compute_order_margin_details, PlaceOrderError, MIN_REQUIRED_MARGIN_USD};
 use crate::routes::scoped_access;
 use crate::services::bonus_service;
@@ -617,6 +617,7 @@ async fn create_admin_order(
             ),
             PlaceOrderError::TradingRestricted { message } => message.clone(),
             PlaceOrderError::BonusLock(m) => m.clone(),
+            PlaceOrderError::OrderForbidden { message, .. } => message.clone(),
             PlaceOrderError::Status(_) => "Order margin validation failed".to_string(),
         };
         let code = match &e {
@@ -624,12 +625,13 @@ async fn create_admin_order(
             PlaceOrderError::MinimumMarginNotMet { .. } => "MIN_REQUIRED_MARGIN_NOT_MET",
             PlaceOrderError::LeverageConfigurationInvalid { .. } => "LEVERAGE_CONFIGURATION",
             PlaceOrderError::TradingRestricted { .. } => "TRADING_DISABLED",
+            PlaceOrderError::OrderForbidden { code, .. } => code.as_str(),
             PlaceOrderError::BonusLock(_) => "BONUS_LOCK",
             PlaceOrderError::Status(_) => "ORDER_MARGIN",
         };
         let status = match &e {
             PlaceOrderError::InsufficientMargin { .. } => StatusCode::FORBIDDEN,
-            PlaceOrderError::TradingRestricted { .. } => StatusCode::FORBIDDEN,
+            PlaceOrderError::TradingRestricted { .. } | PlaceOrderError::OrderForbidden { .. } => StatusCode::FORBIDDEN,
             PlaceOrderError::MinimumMarginNotMet { .. } | PlaceOrderError::LeverageConfigurationInvalid { .. } => {
                 StatusCode::BAD_REQUEST
             }
@@ -668,6 +670,32 @@ async fn create_admin_order(
         ));
     }
 
+    let gid_snap = user_row.group_id.map(|u| u.to_string()).unwrap_or_default();
+    let (requested_bid, requested_ask) =
+        match get_price_from_redis(admin_state.redis.as_ref(), &symbol_row.code, &gid_snap).await {
+            Some((b, a)) => (Some(b), Some(a)),
+            None => {
+                tracing::warn!(
+                    symbol = %symbol_row.code,
+                    "Slippage snapshot (admin order): no Redis price; proceeding without snapshot."
+                );
+                (None, None)
+            }
+        };
+
+    let resolved_slippage = crate::services::slippage::resolve_slippage(&pool, user_row.group_id, None)
+        .await
+        .map_err(|e| {
+            error!("admin create order: slippage resolve: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "INTERNAL_ERROR".to_string(),
+                    "Slippage resolution failed".to_string(),
+                )),
+            )
+        })?;
+
     let mut tx = pool.begin().await.map_err(|e| {
         error!("admin create order: begin tx: {}", e);
         (
@@ -698,9 +726,10 @@ async fn create_admin_order(
         r#"
         INSERT INTO orders (
             id, user_id, symbol_id, side, type, size, price, stop_price,
-            status, reference, created_at, updated_at, margin_from_cash, margin_from_bonus
+            status, reference, created_at, updated_at, margin_from_cash, margin_from_bonus,
+            requested_bid, requested_ask, max_slippage_bps
         )
-        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12, $13, $14)
+        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12, $13, $14, $15, $16, $17)
         "#,
     )
     .bind(order_id)
@@ -717,6 +746,9 @@ async fn create_admin_order(
     .bind(now)
     .bind(alloc.from_cash)
     .bind(alloc.from_bonus)
+    .bind(requested_bid)
+    .bind(requested_ask)
+    .bind(resolved_slippage.bps)
     .execute(&mut *tx)
     .await
     .map_err(|e| {
@@ -807,6 +839,9 @@ async fn create_admin_order(
         account_type: account_type_cmd,
         margin_from_cash: Some(alloc.from_cash),
         margin_from_bonus: Some(alloc.from_bonus),
+        requested_bid,
+        requested_ask,
+        max_slippage_bps: Some(resolved_slippage.bps),
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd).map_err(|e| {

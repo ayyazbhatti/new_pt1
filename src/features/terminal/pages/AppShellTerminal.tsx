@@ -16,27 +16,30 @@ import { TerminalSymbolsPage } from '../components/TerminalSymbolsPage'
 import { TerminalMobileNav } from '../components/TerminalMobileNav'
 import { useTerminalStore } from '../store'
 import { useAllEnabledSymbolsForTerminal } from '@/features/symbols/hooks/useSymbols'
-import { usePriceStream } from '@/features/symbols/hooks/usePriceStream'
+import { usePriceStreamConnection, hasCachedPriceForAnySymbol, useSymbolPrice } from '@/features/symbols/hooks/usePriceStream'
 import { AdminSymbol } from '@/features/symbols/types/symbol'
 import { MockSymbol } from '@/shared/mock/terminalMock'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
+import { useInvalidateSessionStatusOnVisibility } from '@/features/terminal/hooks/useSessionStatus'
 import { useMarginCall } from '@/features/wallet/hooks/useMarginCall'
+import { useTerminalOrderRejectToast } from '@/features/terminal/hooks/useTerminalOrderRejectToast'
 import { MarginCallModal } from '@/features/wallet/components/MarginCallModal'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { getTerminalPreferences } from '../api/preferences.api'
 import { terminalFeedSymbol, terminalPriceLookupKey } from '../utils/terminalFeedSymbol'
 
-// Map AdminSymbol to MockSymbol format
-function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: string; ask: string; ts: number }>): MockSymbol {
-  // Single lookup key: same derivation as subscription (`terminalFeedSymbol` + `normalizeSymbolKey`)
+// Map AdminSymbol to MockSymbol format (catalog metadata). Live bid/ask: `useSymbolPrice` / `PriceCell`.
+function mapSymbolToTerminal(
+  symbol: AdminSymbol,
+  prices: Map<string, { bid: string; ask: string; ts: number }> | null,
+): MockSymbol {
   const lookupKey = terminalPriceLookupKey(symbol)
-  const priceData = prices.get(lookupKey)
-  
+  const priceData = prices?.get(lookupKey)
+
   const bid = priceData ? parseFloat(priceData.bid) : 0
-  const ask = priceData ? parseFloat(priceData.ask) : bid || 0
-  
-  // Format prices based on precision
+  const ask = priceData ? parseFloat(priceData.ask) : 0
+
   const formatPrice = (value: number) => {
     if (value === 0) return '$0.00'
     const precision = symbol.pricePrecision || 2
@@ -68,6 +71,7 @@ function mapSymbolToTerminal(symbol: AdminSymbol, prices: Map<string, { bid: str
 }
 
 export function AppShellTerminal() {
+  useTerminalOrderRejectToast()
   const {
     setSymbols,
     setLoading,
@@ -92,6 +96,7 @@ export function AppShellTerminal() {
   const { user } = useAuthStore()
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const { accountSummary } = useAccountSummary()
+  useInvalidateSessionStatusOnVisibility()
   const marginCall = useMarginCall(accountSummary ?? null)
 
   // Load terminal preferences from server once (chart options + favourite symbols)
@@ -121,40 +126,43 @@ export function AppShellTerminal() {
     return symbolsData.items.map((s) => terminalFeedSymbol(s)).filter((code) => code && code.length > 0)
   }, [symbolsData])
 
-  // Subscribe to price stream
-  const { prices: priceMap, isConnected, triggerResubscribe } = usePriceStream(symbolCodes)
+  const symbolCodesKey = useMemo(() => symbolCodes.join(','), [symbolCodes])
 
-  // Re-request price subscription when connected with symbols but no prices (in case first subscribe was lost)
+  const { isConnected, triggerResubscribe } = usePriceStreamConnection(symbolCodes)
+
+  // Re-request price subscription when connected but cache still empty (e.g. first subscribe lost)
   useEffect(() => {
-    if (priceMap.size > 0 || !isConnected || symbolCodes.length === 0) return
+    if (!isConnected || symbolCodes.length === 0) return
     const t = setTimeout(() => {
-      if (triggerResubscribe) {
-        console.log('🔄 Terminal: Price map still empty after 3s, triggering re-subscribe')
+      if (!hasCachedPriceForAnySymbol(symbolCodes)) {
         triggerResubscribe()
       }
     }, 3000)
     return () => clearTimeout(t)
-  }, [isConnected, symbolCodes.length, priceMap.size, triggerResubscribe])
+  }, [isConnected, symbolCodesKey, symbolCodes, triggerResubscribe])
 
-  // Update symbols when data or prices change
+  // Catalog / metadata only — not on every tick
   useEffect(() => {
     if (symbolsData?.items) {
-      const mappedSymbols = symbolsData.items.map((symbol) =>
-        mapSymbolToTerminal(symbol, priceMap)
-      )
+      const mappedSymbols = symbolsData.items.map((symbol) => mapSymbolToTerminal(symbol, null))
       setSymbols(mappedSymbols)
     }
-  }, [symbolsData, priceMap, setSymbols])
+  }, [symbolsData, setSymbols])
 
   // Update loading state
   useEffect(() => {
     setLoading(isLoading)
   }, [isLoading, setLoading])
 
+  const titleLive = useSymbolPrice(selectedSymbol?.priceLookupKey || selectedSymbol?.code || null)
+
   const DEFAULT_TITLE = 'Trading UI'
   useEffect(() => {
     if (selectedSymbol?.code) {
-      const priceStr = selectedSymbol.numericPrice > 0 ? ` ${selectedSymbol.price}` : ''
+      const bid = titleLive ? parseFloat(titleLive.bid) : 0
+      const prec = selectedSymbol.pricePrecision ?? 2
+      const priceStr =
+        Number.isFinite(bid) && bid > 0 ? ` $${bid.toFixed(prec)}` : ''
       document.title = `${selectedSymbol.code}${priceStr} | ${DEFAULT_TITLE}`
     } else {
       document.title = DEFAULT_TITLE
@@ -162,7 +170,7 @@ export function AppShellTerminal() {
     return () => {
       document.title = DEFAULT_TITLE
     }
-  }, [selectedSymbol?.code, selectedSymbol?.price, selectedSymbol?.numericPrice])
+  }, [selectedSymbol?.code, selectedSymbol?.pricePrecision, titleLive?.bid, titleLive?.ts])
 
   const isDesktopMedia = useMediaQuery('(min-width: 1024px)')
   // Sync with actual width so mobile nav shows on narrow viewports (handles mobile browser quirks)
@@ -240,7 +248,15 @@ export function AppShellTerminal() {
         center={<CenterWorkspace />}
         right={<RightTradingPanel />}
         rightPanel={
-          notificationPanelOpen ? <NotificationsPanel /> : chatPanelOpen ? <ChatPanel /> : paymentPanelOpen ? <PaymentPanel /> : settingsPanelOpen ? <SettingsPanel /> : undefined
+          notificationPanelOpen ? (
+            <NotificationsPanel />
+          ) : chatPanelOpen ? (
+            <ChatPanel />
+          ) : paymentPanelOpen ? (
+            <PaymentPanel />
+          ) : settingsPanelOpen ? (
+            <SettingsPanel />
+          ) : undefined
         }
       />
       <MarginCallModal

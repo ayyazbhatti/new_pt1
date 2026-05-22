@@ -22,6 +22,7 @@ use crate::routes::deposits::{compute_and_cache_account_summary, get_free_margin
 use crate::services::bonus_service::{self, BonusError};
 use crate::services::fee_engine;
 use crate::services::fee_placement;
+use crate::services::market_sessions;
 use crate::utils::jwt::Claims;
 use crate::utils::permission_check;
 use crate::middleware::auth_middleware;
@@ -51,6 +52,12 @@ pub enum PlaceOrderError {
     LeverageConfigurationInvalid { message: String },
     /// DB bonus / margin lock failure after validations passed.
     BonusLock(String),
+    /// Symbol/session gate (Phase 2): `MARKET_CLOSED`, `TRADING_DISABLED` (symbol), `CLOSE_ONLY`, `NEW_ORDERS_DISABLED`.
+    OrderForbidden {
+        code: String,
+        message: String,
+        details: serde_json::Value,
+    },
 }
 
 impl IntoResponse for PlaceOrderError {
@@ -103,6 +110,55 @@ impl IntoResponse for PlaceOrderError {
                 });
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
+            PlaceOrderError::OrderForbidden {
+                code,
+                message,
+                details,
+            } => {
+                let mut err = serde_json::json!({
+                    "code": code,
+                    "message": message,
+                });
+                if let serde_json::Value::Object(ref mut m) = err {
+                    if let serde_json::Value::Object(d) = details {
+                        for (k, v) in d {
+                            m.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                let body = serde_json::json!({ "error": err });
+                (StatusCode::FORBIDDEN, Json(body)).into_response()
+            }
+        }
+    }
+}
+
+/// True when the order side reduces an existing open position (sell when long, buy when short).
+async fn check_is_closing_intent(
+    pool: &PgPool,
+    user_id: Uuid,
+    symbol_id: Uuid,
+    side_upper: &str,
+) -> Result<bool, PlaceOrderError> {
+    let position: Option<(String,)> = sqlx::query_as(
+        r#"SELECT side::text FROM positions WHERE user_id = $1 AND symbol_id = $2 AND status = 'open' LIMIT 1"#,
+    )
+    .bind(user_id)
+    .bind(symbol_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!(user_id = %user_id, symbol_id = %symbol_id, error = %e, "check_is_closing_intent query failed");
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+
+    match position {
+        None => Ok(false),
+        Some((pos_side,)) => {
+            let ps = pos_side.to_lowercase();
+            let pos_long = ps == "long" || ps == "buy";
+            let order_buy = side_upper == "BUY";
+            Ok((pos_long && !order_buy) || (!pos_long && order_buy))
         }
     }
 }
@@ -409,6 +465,8 @@ pub struct PlaceOrderRequest {
     pub client_order_id: Option<String>,
     #[serde(rename = "idempotency_key")]
     pub idempotency_key: String,
+    /// Optional user max slippage override (basis points); capped at platform per-order cap.
+    pub slippage_bps: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -537,6 +595,89 @@ async fn place_order(
     let user_max_resolved = margin.user_max_resolved;
     let leverage_tiers = margin.leverage_tiers;
     let account_type = margin.account_type;
+
+    // Symbol trading flags + market session (before min-margin / idempotency / free-margin).
+    let (trading_enabled_sym, close_only, allow_new_orders): (bool, bool, bool) = sqlx::query_as(
+        r#"SELECT trading_enabled, close_only, allow_new_orders FROM symbols WHERE id = $1"#,
+    )
+    .bind(symbol_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        error!(
+            order_id = %order_id,
+            user_id = %user_id,
+            symbol_id = %symbol_id,
+            error = %e,
+            "place_order FAILED stage=symbol_flags status=500"
+        );
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+
+    if !trading_enabled_sym {
+        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "place_order FAILED stage=symbol_trading_disabled status=403");
+        return Err(PlaceOrderError::OrderForbidden {
+            code: "TRADING_DISABLED".to_string(),
+            message: format!("Trading is currently disabled for {}.", req.symbol),
+            details: serde_json::json!({}),
+        });
+    }
+
+    let is_closing_intent = check_is_closing_intent(&pool, user_id, symbol_id, &side_upper).await?;
+
+    if close_only && !is_closing_intent {
+        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "place_order FAILED stage=close_only status=403");
+        return Err(PlaceOrderError::OrderForbidden {
+            code: "CLOSE_ONLY".to_string(),
+            message: format!(
+                "{} is in close-only mode. You can only reduce existing positions.",
+                req.symbol
+            ),
+            details: serde_json::json!({}),
+        });
+    }
+
+    if !allow_new_orders && !is_closing_intent {
+        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "place_order FAILED stage=allow_new_orders status=403");
+        return Err(PlaceOrderError::OrderForbidden {
+            code: "NEW_ORDERS_DISABLED".to_string(),
+            message: format!(
+                "New positions on {} are temporarily disabled. Existing positions can still be closed.",
+                req.symbol
+            ),
+            details: serde_json::json!({}),
+        });
+    }
+
+    let session_status = market_sessions::get_session_status(&pool, symbol_id, Utc::now())
+        .await
+        .map_err(|e| {
+            error!(
+                order_id = %order_id,
+                user_id = %user_id,
+                symbol_id = %symbol_id,
+                error = %e,
+                "place_order FAILED stage=session_status status=500"
+            );
+            PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+
+    if !session_status.is_open {
+        error!(order_id = %order_id, user_id = %user_id, symbol = %req.symbol, "place_order FAILED stage=market_closed status=403");
+        return Err(PlaceOrderError::OrderForbidden {
+            code: "MARKET_CLOSED".to_string(),
+            message: format!("{} market is closed.", req.symbol),
+            details: serde_json::json!({
+                "templateName": session_status.template_name,
+                "timezone": session_status.timezone,
+                "nextOpenAt": session_status.next_open_at,
+                "nextCloseAt": session_status.next_close_at,
+                "holidayName": session_status.holiday_name,
+                "holidayType": session_status.holiday_type,
+            }),
+        });
+    }
+
     let required_margin = margin.required_margin;
     let total_required = required_margin + margin.estimated_fee_usd;
     let min_required_margin = Decimal::from(MIN_REQUIRED_MARGIN_USD);
@@ -618,6 +759,40 @@ async fn place_order(
         });
     }
 
+    // Snapshot bid/ask at submission (Phase 2 slippage enforcement). Same Redis keys as margin pricing.
+    let group_id_str_snap = effective_group_id.map(|u| u.to_string()).unwrap_or_default();
+    let (requested_bid, requested_ask) =
+        match get_price_from_redis(orders_state.redis.as_ref(), &req.symbol, &group_id_str_snap).await {
+            Some((b, a)) => (Some(b), Some(a)),
+            None => {
+                tracing::warn!(
+                    symbol = %req.symbol,
+                    "Slippage snapshot: no Redis price available. Order proceeds without snapshot."
+                );
+                (None, None)
+            }
+        };
+
+    let resolved_slippage = crate::services::slippage::resolve_slippage(
+        &pool,
+        effective_group_id,
+        req.slippage_bps,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(order_id = %order_id, user_id = %user_id, error = %e, "Slippage resolution failed");
+        PlaceOrderError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+
+    tracing::debug!(
+        order_id = %order_id,
+        user_id = %user_id,
+        symbol = %req.symbol,
+        slippage_bps = resolved_slippage.bps,
+        source = ?resolved_slippage.source,
+        "Resolved slippage for order"
+    );
+
     // Parse stop price if provided
     let stop_price = req.sl.as_ref().and_then(|s| Decimal::from_str(s).ok());
     let stop_price_str = req.sl.clone();
@@ -645,9 +820,10 @@ async fn place_order(
         INSERT INTO orders (
             id, user_id, symbol_id, side, type, size, price, stop_price,
             status, reference, created_at, updated_at,
-            margin_from_cash, margin_from_bonus
+            margin_from_cash, margin_from_bonus,
+            requested_bid, requested_ask, max_slippage_bps
         )
-        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12, $13, $14)
+        VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6, $7, $8, $9::order_status, $10, $11, $12, $13, $14, $15, $16, $17)
         "#,
     )
     .bind(order_id)
@@ -664,6 +840,9 @@ async fn place_order(
     .bind(now)
     .bind(alloc.from_cash)
     .bind(alloc.from_bonus)
+    .bind(requested_bid)
+    .bind(requested_ask)
+    .bind(resolved_slippage.bps)
     .execute(&mut *tx)
     .await
     .map_err(|e| {
@@ -762,6 +941,9 @@ async fn place_order(
         account_type: account_type.clone(),
         margin_from_cash: Some(alloc.from_cash),
         margin_from_bonus: Some(alloc.from_bonus),
+        requested_bid,
+        requested_ask,
+        max_slippage_bps: Some(resolved_slippage.bps),
     };
 
     let msg = VersionedMessage::new("cmd.order.place", &place_order_cmd)
@@ -1346,6 +1528,9 @@ struct PendingOrderRow {
     created_at: chrono::DateTime<Utc>,
     margin_from_cash: rust_decimal::Decimal,
     margin_from_bonus: rust_decimal::Decimal,
+    requested_bid: Option<rust_decimal::Decimal>,
+    requested_ask: Option<rust_decimal::Decimal>,
+    max_slippage_bps: Option<i32>,
 }
 
 async fn sync_pending_orders(
@@ -1369,7 +1554,8 @@ async fn sync_pending_orders(
         SELECT o.id, o.user_id, s.code AS symbol_code,
                o.side::text AS side, o.type::text AS order_type,
                o.size, o.price, o.stop_price, o.reference, o.created_at,
-               o.margin_from_cash, o.margin_from_bonus
+               o.margin_from_cash, o.margin_from_bonus,
+               o.requested_bid, o.requested_ask, o.max_slippage_bps
         FROM orders o
         JOIN symbols s ON s.id = o.symbol_id
         WHERE o.status = 'pending'::order_status
@@ -1524,6 +1710,9 @@ async fn sync_pending_orders(
             account_type: account_type.clone(),
             margin_from_cash: Some(row.margin_from_cash),
             margin_from_bonus: Some(row.margin_from_bonus),
+            requested_bid: row.requested_bid,
+            requested_ask: row.requested_ask,
+            max_slippage_bps: row.max_slippage_bps,
         };
 
         let msg = match VersionedMessage::new("cmd.order.place", &place_order_cmd) {

@@ -44,6 +44,12 @@ function toCamelCase(obj: any): UserGroup {
     displayCurrency: obj.display_currency ?? undefined,
     swapEnabled: obj.swap_enabled ?? false,
     feesEnabled: obj.fees_enabled ?? false,
+    defaultSlippageBps:
+      obj.default_slippage_bps != null && obj.default_slippage_bps !== ''
+        ? Number(obj.default_slippage_bps)
+        : obj.default_slippage_bps === null
+          ? null
+          : undefined,
   }
 }
 
@@ -62,6 +68,9 @@ function toSnakeCase(payload: CreateGroupPayload | UpdateGroupPayload): any {
   if ('display_currency' in payload && payload.display_currency !== undefined) out.display_currency = payload.display_currency
   if ('swap_enabled' in payload && payload.swap_enabled !== undefined) out.swap_enabled = payload.swap_enabled
   if ('fees_enabled' in payload && payload.fees_enabled !== undefined) out.fees_enabled = payload.fees_enabled
+  if ('default_slippage_bps' in payload && payload.default_slippage_bps !== undefined) {
+    out.default_slippage_bps = payload.default_slippage_bps
+  }
   return out
 }
 

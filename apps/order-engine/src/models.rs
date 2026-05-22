@@ -51,6 +51,13 @@ pub struct Order {
     pub margin_from_cash: Option<Decimal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub margin_from_bonus: Option<Decimal>,
+    /// Bid at order submission (auth-service). None → skip slippage enforcement (legacy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_bid: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_ask: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_slippage_bps: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +159,8 @@ pub struct OrderRejectedEvent {
     pub reason: String,
     pub correlation_id: String,
     pub ts: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

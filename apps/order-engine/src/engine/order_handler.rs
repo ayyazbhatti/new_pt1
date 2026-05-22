@@ -313,6 +313,9 @@ impl OrderHandler {
                     account_type: cmd.account_type.or_else(|| Some("hedging".to_string())),
                     margin_from_cash: cmd.margin_from_cash,
                     margin_from_bonus: cmd.margin_from_bonus,
+                    requested_bid: cmd.requested_bid,
+                    requested_ask: cmd.requested_ask,
+                    max_slippage_bps: cmd.max_slippage_bps,
                 };
                 
                 // Store order in Redis
@@ -377,6 +380,39 @@ impl OrderHandler {
                         ) {
                         if eff > Decimal::ZERO {
                         let mut conn = self.redis.get_connection().await;
+                            use risk::slippage::{check_slippage, SlippageCheckInput, SlippageCheckOutcome};
+                            match check_slippage(SlippageCheckInput {
+                                side: cmd.side,
+                                fill_price,
+                                requested_bid: order.requested_bid,
+                                requested_ask: order.requested_ask,
+                                max_slippage_bps: order.max_slippage_bps,
+                            }) {
+                                SlippageCheckOutcome::Exceeded(r) => {
+                                    info!(
+                                        order_id = %order_id,
+                                        user_id = %cmd.user_id,
+                                        symbol = %cmd.symbol,
+                                        slippage_bps = r.slippage_bps,
+                                        max_bps = r.max_bps,
+                                        reference = %r.reference_price,
+                                        fill = %fill_price,
+                                        "Slippage exceeded — rejecting immediate market fill"
+                                    );
+                                    crate::engine::slippage_reject::reject_market_order_slippage_exceeded(
+                                        &self.nats,
+                                        &self.cache,
+                                        &mut conn,
+                                        &self.metrics,
+                                        &order,
+                                        fill_price,
+                                        &r,
+                                    )
+                                    .await?;
+                                    return Ok(());
+                                }
+                                SlippageCheckOutcome::NotApplicable | SlippageCheckOutcome::Passed(_) => {}
+                            }
                         match self.lua.atomic_fill_order(&mut conn, &order_id, fill_price, order.size, eff).await {
                             Ok(result) => {
                                 if result.get("error").is_some() {
@@ -623,6 +659,7 @@ impl OrderHandler {
                     reason: rejection_reason.clone(),
                     correlation_id: correlation_id.clone(),
                     ts: now(),
+                    details: None,
                 };
                 
                 self.nats.publish_event(nats_subjects::EVENT_ORDER_REJECTED, &rejected_event).await?;

@@ -8,6 +8,7 @@ pub mod cancel_handler;
 pub mod position_handler;
 pub mod sltp_handler;
 pub mod warm_cache;
+pub mod slippage_reject;
 
 pub use cache::*;
 pub use lua::*;

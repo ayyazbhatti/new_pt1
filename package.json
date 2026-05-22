@@ -8,7 +8,8 @@
     "dev:network": "vite --host 0.0.0.0",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@headlessui/react": "^1.7.17",
@@ -61,6 +62,7 @@
     "tailwindcss": "^3.4.0",
     "typescript": "^5.2.2",
     "vite": "^5.0.8",
+    "vitest": "^2.1.9",
     "ws": "^8.19.0"
   }
 }

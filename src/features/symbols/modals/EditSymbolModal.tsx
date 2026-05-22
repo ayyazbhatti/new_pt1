@@ -12,7 +12,8 @@ import { AdminSymbol, AssetClass } from '../types/symbol'
 import { useUpdateSymbol } from '../hooks/useSymbols'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { Spinner } from '@/shared/ui/loading'
-import { useEffect } from 'react'
+import { SessionTemplateSelect } from '@/features/marketSessions/components/SessionTemplateSelect'
+import { assetClassToMarketHint } from '@/features/marketSessions/utils/marketHint'
 
 const symbolSchema = z.object({
   symbol_code: z.string().min(2, 'Symbol code must be at least 2 characters').max(50),
@@ -59,6 +60,7 @@ const symbolSchema = z.object({
   is_enabled: z.boolean(),
   trading_enabled: z.boolean(),
   leverage_profile_id: z.string().nullable().optional(),
+  session_template_id: z.string().uuid().nullish(),
 }).refine((data) => {
   // Validate lot_min < lot_max if both are provided
   if (data.lot_min && data.lot_max) {
@@ -137,6 +139,7 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
       is_enabled: symbol?.isEnabled ?? true,
       trading_enabled: symbol?.tradingEnabled ?? true,
       leverage_profile_id: symbol?.leverageProfileId || null,
+      session_template_id: symbol?.sessionTemplateId ?? null,
     },
   })
 
@@ -153,19 +156,6 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
   }
 
   const modalKey = readOnly ? `view-symbol-${symbol?.id || 'unknown'}` : `edit-symbol-${symbol?.id || 'unknown'}`
-
-  // Debug: Log symbol data
-  useEffect(() => {
-    console.log('🔍 EditSymbolModal - Symbol data:', symbol)
-    console.log('🔍 EditSymbolModal - Symbol fields:', {
-      id: symbol?.id,
-      symbolCode: symbol?.symbolCode,
-      tickSize: symbol?.tickSize,
-      lotMin: symbol?.lotMin,
-      lotMax: symbol?.lotMax,
-      contractSize: symbol?.contractSize,
-    })
-  }, [symbol])
 
   // Early return if symbol is missing critical data
   if (!symbol || !symbol.id || !symbol.symbolCode) {
@@ -262,6 +252,18 @@ export function EditSymbolModal({ symbol, readOnly = false }: EditSymbolModalPro
                 </Select>
               )
             })()}
+          </div>
+        </div>
+
+        <div>
+          <Label>Session template</Label>
+          <div className="mt-2">
+            <SessionTemplateSelect
+              value={watch('session_template_id') ?? null}
+              onChange={(v) => setValue('session_template_id', v)}
+              marketHint={symbol.market ?? assetClassToMarketHint(watch('asset_class'))}
+              disabled={readOnly || isSubmitting}
+            />
           </div>
         </div>
 

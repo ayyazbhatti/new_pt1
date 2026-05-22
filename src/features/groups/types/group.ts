@@ -44,6 +44,8 @@ export type UserGroup = {
   swapEnabled?: boolean
   /** When true, per-trade fees may be charged for this group at order placement (Phase 2). */
   feesEnabled?: boolean
+  /** Group default max slippage (bps) for market orders; null uses platform default. */
+  defaultSlippageBps?: number | null
 }
 
 export interface ListGroupsParams {
@@ -79,6 +81,8 @@ export interface CreateGroupPayload {
   display_currency?: string | null
   swap_enabled?: boolean | null
   fees_enabled?: boolean | null
+  /** Per-group default slippage (bps); null/omit = use platform default. */
+  default_slippage_bps?: number | null
 }
 
 export interface UpdateGroupPayload extends CreateGroupPayload {}

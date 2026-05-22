@@ -1,4 +1,4 @@
-import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, PhoneCall, CopyPlus, Megaphone, Trophy, UserPlus, ShieldCheck, History } from 'lucide-react'
+import { type LucideIcon, LayoutDashboard, Users, UserCog, Coins, DollarSign, Gift, UsersRound, KeyRound, Headphones, Settings, FileText, Layers, TrendingUp, Clock, Activity, Wallet, Receipt, BadgeCheck, Tag, ArrowDownToLine, ArrowUpFromLine, User, BarChart3, ClipboardList, CalendarDays, Phone, PhoneCall, CopyPlus, Megaphone, Trophy, UserPlus, ShieldCheck, History, CalendarClock } from 'lucide-react'
 
 export interface NavItem {
   label: string
@@ -25,6 +25,7 @@ export const adminNavItems: NavItem[] = [
   { label: 'Funded programs', path: '/admin/funded-programs', icon: Trophy, permission: 'dashboard:view' },
   { label: 'Swap Fees', path: '/admin/swap', icon: Clock, permission: 'swap:view' },
   { label: 'Trading fees', path: '/admin/fees', icon: Receipt, permission: 'fees:view' },
+  { label: 'Market sessions', path: '/admin/sessions', icon: CalendarClock, permission: 'sessions:view' },
   { label: 'Transactions', path: '/admin/transactions', icon: Receipt, permission: 'finance:view' },
   { label: 'Bonus', path: '/admin/bonus', icon: Gift, permission: 'bonus:view' },
   { label: 'Affiliate', path: '/admin/affiliate', icon: UsersRound, permission: 'affiliate:view' },

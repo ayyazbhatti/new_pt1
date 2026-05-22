@@ -37,5 +37,9 @@ pub struct UserGroup {
     /// When true, per-trade fees may be charged at order placement (Phase 2 engine).
     #[serde(default)]
     pub fees_enabled: bool,
+    /// Optional per-group default max slippage (bps) for market orders; NULL = use platform default.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub default_slippage_bps: Option<i32>,
 }
 

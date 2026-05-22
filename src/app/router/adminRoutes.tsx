@@ -6,6 +6,7 @@ import { AdminTradingPage } from '@/features/adminTrading'
 import { SymbolsPage } from '@/features/symbols'
 import { SwapRulesPage } from '@/features/swap'
 import { FeeRulesPage } from '@/features/fees'
+import { SessionTemplatesPage } from '@/features/marketSessions'
 import { BonusPage } from '@/features/bonus'
 import { AffiliatePage } from '@/features/affiliate'
 import { PermissionsPage } from '@/features/permissions'
@@ -93,6 +94,10 @@ export const adminRoutes: RouteObject[] = [
   {
     path: '/admin/fees',
     element: <FeeRulesPage />,
+  },
+  {
+    path: '/admin/sessions',
+    element: <SessionTemplatesPage />,
   },
   {
     path: '/admin/transactions',

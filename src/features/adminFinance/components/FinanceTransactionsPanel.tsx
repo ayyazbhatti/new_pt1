@@ -10,7 +10,7 @@ import { useModalStore } from '@/app/store'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { TransactionDetailsModal } from '../modals/TransactionDetailsModal'
 import { ApproveRejectModal } from '../modals/ApproveRejectModal'
-import { Eye, CheckCircle, X, Loader2 } from 'lucide-react'
+import { Eye, CheckCircle, X, Loader2, Search } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { useFormatConverted, useFormatSignedFromUsd } from '@/shared/currency'
 import { TradingTransactionTypeDisplay } from '@/shared/components/TradingTransactionTypeDisplay'
@@ -19,6 +19,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchTransactions, Transaction as ApiTransaction, PaginatedTransactions } from '../api/finance.api'
 import { useWebSocketSubscription } from '@/shared/ws/wsHooks'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
+import { cn } from '@/shared/utils'
 
 const FINANCE_TRANSACTIONS_QUERY_KEY = ['finance-transactions']
 
@@ -340,6 +341,14 @@ export function FinanceTransactionsPanel() {
     },
   ], [formatDateTime, formatConv, formatSigned, openModal, canApprove, canReject])
 
+  const hasActiveFilters =
+    filters.search.trim() !== '' ||
+    filters.type !== 'all' ||
+    filters.status !== 'all' ||
+    filters.currency !== 'all' ||
+    filters.dateFrom !== '' ||
+    filters.dateTo !== ''
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -350,19 +359,32 @@ export function FinanceTransactionsPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-4 flex-wrap">
-        <Input
-          type="search"
-          placeholder="Search user, Tx ID, or reference..."
-          value={filters.search}
-          onChange={(e) => updateFilters({ search: e.target.value })}
-          className="flex-1 max-w-sm"
-        />
+      <div className="flex min-w-0 flex-wrap items-end gap-x-3 gap-y-2">
+        <div className="relative min-h-10 min-w-[min(100%,220px)] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+          <Input
+            type="search"
+            placeholder="Search user, Tx ID, or reference..."
+            value={filters.search}
+            onChange={(e) => updateFilters({ search: e.target.value })}
+            className={cn('w-full min-w-0 pl-9', filters.search.trim() && 'pr-9')}
+          />
+          {filters.search.trim() ? (
+            <button
+              type="button"
+              onClick={() => updateFilters({ search: '' })}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text"
+              aria-label="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
         <Select
           value={filters.type}
           onValueChange={(value) => updateFilters({ type: value as typeof filters.type })}
         >
-          <SelectTrigger className="w-[150px]">
+          <SelectTrigger className="h-10 w-fit min-w-[10.5rem] max-w-[min(100%,16rem)] shrink-0">
             <SelectValue placeholder="Type" />
           </SelectTrigger>
           <SelectContent>
@@ -379,7 +401,7 @@ export function FinanceTransactionsPanel() {
           value={filters.status}
           onValueChange={(value) => updateFilters({ status: value as typeof filters.status })}
         >
-          <SelectTrigger className="w-[150px]">
+          <SelectTrigger className="h-10 w-fit min-w-[10.5rem] max-w-[min(100%,15rem)] shrink-0">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -394,7 +416,7 @@ export function FinanceTransactionsPanel() {
           value={filters.currency}
           onValueChange={(value) => updateFilters({ currency: value as typeof filters.currency })}
         >
-          <SelectTrigger className="w-[120px]">
+          <SelectTrigger className="h-10 w-fit min-w-[9rem] max-w-[min(100%,12rem)] shrink-0">
             <SelectValue placeholder="Currency" />
           </SelectTrigger>
           <SelectContent>
@@ -405,23 +427,35 @@ export function FinanceTransactionsPanel() {
             <SelectItem value="USDT">USDT</SelectItem>
           </SelectContent>
         </Select>
-        <Input
-          type="date"
-          placeholder="From"
-          value={filters.dateFrom}
-          onChange={(e) => updateFilters({ dateFrom: e.target.value })}
-          className="w-[150px]"
-        />
-        <Input
-          type="date"
-          placeholder="To"
-          value={filters.dateTo}
-          onChange={(e) => updateFilters({ dateTo: e.target.value })}
-          className="w-[150px]"
-        />
+        <div className="flex shrink-0 items-center gap-2">
+          <label className="whitespace-nowrap text-xs text-text-muted" htmlFor="finance_tx_date_from">
+            From
+          </label>
+          <Input
+            id="finance_tx_date_from"
+            type="date"
+            value={filters.dateFrom}
+            onChange={(e) => updateFilters({ dateFrom: e.target.value })}
+            className="w-auto min-w-[10.5rem] shrink-0"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <label className="whitespace-nowrap text-xs text-text-muted" htmlFor="finance_tx_date_to">
+            To
+          </label>
+          <Input
+            id="finance_tx_date_to"
+            type="date"
+            value={filters.dateTo}
+            onChange={(e) => updateFilters({ dateTo: e.target.value })}
+            className="w-auto min-w-[10.5rem] shrink-0"
+          />
+        </div>
         <Button
           variant="outline"
           size="sm"
+          className="shrink-0"
+          disabled={!hasActiveFilters}
           onClick={() => {
             setFilters({ search: '', type: 'all', status: 'all', currency: 'all', dateFrom: '', dateTo: '' })
             setPage(1)

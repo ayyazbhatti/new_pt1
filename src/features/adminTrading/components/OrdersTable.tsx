@@ -10,6 +10,8 @@ import { cancelAdminOrder, forceCancelAdminOrder } from '../api/orders'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 interface OrdersTableProps {
   orders: AdminOrder[]
@@ -19,6 +21,7 @@ interface OrdersTableProps {
 export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
   const { setSelectedOrderId, setOpenModal } = useAdminTradingStore()
   const canCancelOrder = useCanAccess('trading:cancel_order')
+  const symbolMetaLookup = useSymbolMetaLookup()
 
   const handleCancel = useCallback(async (order: AdminOrder) => {
     try {
@@ -109,9 +112,15 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
       {
         accessorKey: 'size',
         header: 'Size',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">{row.original.size.toLocaleString()}</span>
-        ),
+        cell: ({ row }) => {
+          const o = row.original
+          const fmt = formatPositionSize(o.size, getSymbolMetaForCode(symbolMetaLookup, o.symbol))
+          return (
+            <span className="text-sm font-mono text-text" title={fmt.secondary || undefined}>
+              {fmt.display}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'price',
@@ -175,7 +184,7 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
         },
       },
     ],
-    [handleCancel, handleForceCancel, handleRowClick, canCancelOrder]
+    [handleCancel, handleForceCancel, handleRowClick, canCancelOrder, symbolMetaLookup]
   )
 
   const parentRef = useRef<HTMLDivElement>(null)

@@ -28,6 +28,7 @@ const groupSchema = z.object({
   display_currency: z.string().nullable().optional(),
   swap_enabled: z.boolean().optional(),
   fees_enabled: z.boolean().optional(),
+  default_slippage_bps: z.union([z.number().int().min(0), z.null()]).optional(),
 })
 
 type GroupFormData = z.infer<typeof groupSchema>
@@ -53,6 +54,10 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange, onSaved }: 
   })
   const platformDefaultTimezone = generalSettings?.timezone ?? 'UTC'
   const platformDefaultCurrency = generalSettings?.currency ?? 'USD'
+  const platformDefaultSlippageBps =
+    typeof generalSettings?.defaultSlippageBps === 'number' && Number.isFinite(generalSettings.defaultSlippageBps)
+      ? generalSettings.defaultSlippageBps
+      : 50
 
   const baselineSwapEnabledRef = useRef(false)
 
@@ -77,6 +82,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange, onSaved }: 
       display_currency: '',
       swap_enabled: false,
       fees_enabled: false,
+      default_slippage_bps: null,
     },
   })
 
@@ -103,6 +109,10 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange, onSaved }: 
         display_currency: initial.displayCurrency ?? '',
         swap_enabled: initial.swapEnabled ?? false,
         fees_enabled: initial.feesEnabled ?? false,
+        default_slippage_bps:
+          initial.defaultSlippageBps != null && Number.isFinite(initial.defaultSlippageBps)
+            ? initial.defaultSlippageBps
+            : null,
       })
     } else if (open && mode === 'create') {
       baselineSwapEnabledRef.current = false
@@ -118,6 +128,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange, onSaved }: 
         display_currency: '',
         swap_enabled: false,
         fees_enabled: false,
+        default_slippage_bps: null,
       })
     }
   }, [open, initial?.id, mode, initial, reset])
@@ -141,6 +152,7 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange, onSaved }: 
         display_currency: data.display_currency?.trim() ? data.display_currency.trim() : null,
         swap_enabled: data.swap_enabled ?? false,
         fees_enabled: data.fees_enabled ?? false,
+        default_slippage_bps: data.default_slippage_bps ?? null,
       }
 
       if (mode === 'create') {
@@ -347,6 +359,58 @@ export function GroupFormDialog({ mode, initial, open, onOpenChange, onSaved }: 
             Members of this group will see balances and prices converted to this currency unless their user-level
             currency override is set. Leave empty to use the platform default ({platformDefaultCurrency}).
           </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="group_default_slippage">Default slippage tolerance (optional)</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id="group_default_slippage"
+              type="number"
+              min={0}
+              step={1}
+              placeholder="Use platform default"
+              disabled={isLoading || isReadOnly}
+              value={watch('default_slippage_bps') ?? ''}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') {
+                  setValue('default_slippage_bps', null, { shouldDirty: true })
+                  return
+                }
+                const n = parseInt(raw, 10)
+                if (Number.isFinite(n) && n >= 0) {
+                  setValue('default_slippage_bps', n, { shouldDirty: true })
+                }
+              }}
+              className="w-36"
+            />
+            <span className="text-sm text-text-muted">bps</span>
+            {watch('default_slippage_bps') != null && (
+              <>
+                <span className="text-xs text-text-muted">
+                  ({((watch('default_slippage_bps') as number) / 100).toFixed(2)}%)
+                </span>
+                {mode !== 'view' && (
+                  <button
+                    type="button"
+                    className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
+                    onClick={() => setValue('default_slippage_bps', null, { shouldDirty: true })}
+                  >
+                    Clear
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          <p className="text-xs text-text-muted">
+            Members see this as the default max slippage in the market order ticket. Leave empty to use the platform
+            default ({platformDefaultSlippageBps} bps). Per-order overrides in the terminal are capped at 500 bps (5%);
+            this group value can exceed that cap.
+          </p>
+          {errors.default_slippage_bps && (
+            <p className="text-sm text-danger">{String(errors.default_slippage_bps.message)}</p>
+          )}
         </div>
         <p className="text-xs text-text-muted">
           When checked, users in this group will not see the Leverage collapse in the right panel of the trading terminal.

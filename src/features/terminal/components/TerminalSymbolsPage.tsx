@@ -1,9 +1,10 @@
 import { useRef, useState, useMemo } from 'react'
 import { Menu, X, Search, Star } from 'lucide-react'
 import { useTerminalStore } from '../store/terminalStore'
+import { useShallow } from 'zustand/react/shallow'
 import { Input } from '@/shared/ui'
 import { Skeleton } from '@/shared/ui'
-import { PriceDisplay } from './PriceDisplay'
+import { PriceCell } from './PriceCell'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import { updateTerminalPreferences } from '../api/preferences.api'
@@ -12,6 +13,8 @@ import {
   distinctAssetClasses,
   normalizeSymbolAssetClass,
 } from '../utils/symbolCategories'
+import { useSessionStatusBatch, useSessionCountdownTick } from '../hooks/useSessionStatus'
+import { formatOpensInLabel } from '../utils/sessionCountdown'
 
 interface TerminalSymbolsPageProps {
   onClose: () => void
@@ -29,19 +32,17 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
   const [assetClassFilter, setAssetClassFilter] = useState<string>('all')
   const [searchOpen, setSearchOpen] = useState(false)
 
-  const {
-    getFilteredSymbols,
-    symbols: allSymbols,
-    setSelectedSymbol,
-    setSearchQuery,
-    searchQuery,
-    setActiveTab,
-    watchlist,
-    toggleWatchlist,
-    selectedSymbol,
-    isLoading,
-    activeTab,
-  } = useTerminalStore()
+  const allSymbols = useTerminalStore((s) => s.symbols)
+  const baseFiltered = useTerminalStore(useShallow((s) => s.getFilteredSymbols()))
+  const setSelectedSymbol = useTerminalStore((s) => s.setSelectedSymbol)
+  const setSearchQuery = useTerminalStore((s) => s.setSearchQuery)
+  const searchQuery = useTerminalStore((s) => s.searchQuery)
+  const setActiveTab = useTerminalStore((s) => s.setActiveTab)
+  const watchlist = useTerminalStore((s) => s.watchlist)
+  const toggleWatchlist = useTerminalStore((s) => s.toggleWatchlist)
+  const selectedSymbol = useTerminalStore((s) => s.selectedSymbol)
+  const isLoading = useTerminalStore((s) => s.isLoading)
+  const activeTab = useTerminalStore((s) => s.activeTab)
 
   const assetClassesPresent = useMemo(() => distinctAssetClasses(allSymbols), [allSymbols])
 
@@ -60,11 +61,14 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
     setAssetClassFilter(key)
   }
 
-  const baseFiltered = getFilteredSymbols()
   const symbols = useMemo(() => {
     if (assetClassFilter === 'all') return baseFiltered
     return baseFiltered.filter((s) => normalizeSymbolAssetClass(s) === assetClassFilter)
   }, [baseFiltered, assetClassFilter])
+
+  const symbolCodes = useMemo(() => symbols.map((s) => s.code), [symbols])
+  const { data: sessionMap = {} } = useSessionStatusBatch(symbolCodes)
+  const sessionCountdownNow = useSessionCountdownTick()
 
   const totalCount = allSymbols.length
   const watchlistCount = watchlist.size
@@ -194,11 +198,24 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
           </div>
         ) : (
           <ul className="divide-y divide-white/5">
-            {symbols.map((symbol) => (
+            {symbols.map((symbol) => {
+              const session = sessionMap[symbol.code]
+              const sessionClosed = session != null && !session.isOpen
+              const dimmed = !symbol.enabled || sessionClosed
+              const rowTitle =
+                sessionClosed && session
+                  ? formatOpensInLabel(session.nextOpenAt, session.timezone, sessionCountdownNow) ||
+                    'Market closed'
+                  : !symbol.enabled
+                    ? 'Trading disabled for this symbol'
+                    : undefined
+              return (
               <li
                 key={symbol.id}
+                title={rowTitle}
                 className={cn(
                   'flex items-center w-full px-4 py-3.5 gap-2 hover:bg-white/5 active:bg-white/10 transition-colors',
+                  dimmed && 'opacity-50 hover:opacity-75',
                   selectedSymbol?.id === symbol.id && 'bg-accent/10'
                 )}
               >
@@ -233,21 +250,25 @@ export function TerminalSymbolsPage({ onClose, onOpenMenu }: TerminalSymbolsPage
                   }}
                   className="flex-1 flex items-center justify-between gap-3 min-w-0 text-left"
                 >
-                  <span className="text-sm font-bold text-text truncate">
-                    {symbol.code}
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-bold text-text truncate">{symbol.code}</span>
+                    {dimmed ? (
+                      <span className="text-[10px] font-bold uppercase text-amber-500 shrink-0">
+                        {!symbol.enabled ? 'Off' : 'Closed'}
+                      </span>
+                    ) : null}
                   </span>
                   <div className="shrink-0">
-                    <PriceDisplay
-                      bid={symbol.numericPrice ?? 0}
-                      ask={symbol.numericPrice2 ?? 0}
-                      bidFormatted={symbol.price}
-                      askFormatted={symbol.price2}
+                    <PriceCell
+                      feedSymbol={symbol.priceLookupKey ?? symbol.code}
+                      pricePrecision={symbol.pricePrecision}
                       className="text-sm font-semibold"
                     />
                   </div>
                 </button>
               </li>
-            ))}
+              )
+            })}
           </ul>
         )}
       </div>

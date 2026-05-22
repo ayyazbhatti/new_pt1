@@ -13,12 +13,15 @@ import { Eye, X, CheckCircle } from 'lucide-react'
 import { toast } from '@/shared/components/common'
 import { filterOrders } from '../utils/filters'
 import { useFormatDateTime } from '@/shared/datetime'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 import { mockGroups } from '../mocks/groups.mock'
 import { mockOrders } from '../mocks/orders.mock'
 
 export function OrdersAdminPanel() {
   const openModal = useModalStore((state) => state.openModal)
   const formatDateTime = useFormatDateTime()
+  const symbolMetaLookup = useSymbolMetaLookup()
   const [orders, setOrders] = useState<Order[]>(mockOrders)
   const [filters, setFilters] = useState({
     status: 'all',
@@ -162,7 +165,13 @@ export function OrdersAdminPanel() {
       accessorKey: 'size',
       header: 'Size',
       cell: ({ row }) => {
-        return <span className="font-mono">{row.getValue('size')}</span>
+        const o = row.original
+        const fmt = formatPositionSize(o.size, getSymbolMetaForCode(symbolMetaLookup, o.symbol))
+        return (
+          <span className="font-mono" title={fmt.secondary || undefined}>
+            {fmt.display}
+          </span>
+        )
       },
     },
     {
@@ -227,7 +236,7 @@ export function OrdersAdminPanel() {
         )
       },
     },
-  ], [formatDateTime, openModal, orders])
+  ], [formatDateTime, openModal, orders, symbolMetaLookup])
 
   return (
     <div className="space-y-4">

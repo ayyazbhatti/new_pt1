@@ -12,6 +12,8 @@ import { Skeleton, Input } from '@/shared/ui'
 import { closedPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
 import { useFormatDateTimeSeconds } from '@/shared/datetime'
 import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '../hooks/useSymbolMetaLookup'
 
 type HistorySubTab = 'positions' | 'orders'
 
@@ -41,6 +43,7 @@ export function TerminalHistoryView() {
   const [calendarOpen, setCalendarOpen] = useState(false)
   const [expandedPositionId, setExpandedPositionId] = useState<string | null>(null)
   const { accountSummary } = useAccountSummary()
+  const symbolMetaLookup = useSymbolMetaLookup()
 
   const fetchPositions = useCallback(async () => {
     setLoadingPositions(true)
@@ -322,6 +325,7 @@ export function TerminalHistoryView() {
                 const sizeVal = (pos.status === 'CLOSED' || pos.status === 'LIQUIDATED') && pos.original_size ? pos.original_size : pos.size
                 const sizeNum = parseFloat(sizeVal || '0')
                 const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
+                const sizeFmt = formatPositionSize(sizeNum, getSymbolMetaForCode(symbolMetaLookup, pos.symbol))
                 const exitVal = pos.exit_price ?? (pos as { exitPrice?: string }).exitPrice ?? ''
                 const exitPrice = exitVal && exitVal !== 'null' ? parseFloat(String(exitVal)) : null
                 const { market: marketPnl, net: netClosedPnl } = closedPositionPnlParts(pos)
@@ -336,7 +340,9 @@ export function TerminalHistoryView() {
                         <div className="text-sm font-medium text-text">
                           <span className="font-mono">{pos.symbol}</span>
                           <span className="ml-1 font-bold">{pos.side === 'LONG' ? 'Buy' : 'Sell'}</span>
-                          <span className="ml-1 font-bold">{sizeNum.toFixed(4)}</span>
+                          <span className="ml-1 font-bold" title={sizeFmt.secondary || undefined}>
+                            {sizeFmt.display}
+                          </span>
                         </div>
                         <div className="text-xs text-muted font-mono mt-0.5">
                           {entryPrice.toFixed(5)} → {exitPrice != null ? exitPrice.toFixed(5) : '—'}
@@ -402,6 +408,10 @@ export function TerminalHistoryView() {
               {filteredFilledOrders.map((order) => {
                 const filledSize = parseFloat(order.filled_size || order.size || '0')
                 const avgPrice = parseFloat(order.average_price || order.price || '0')
+                const filledFmt = formatPositionSize(
+                  filledSize,
+                  getSymbolMetaForCode(symbolMetaLookup, order.symbol),
+                )
                 const createdStr = formatDateTimeSeconds(order.created_at)
                 return (
                   <div key={order.id} className="border-b border-white/10 py-3">
@@ -410,7 +420,9 @@ export function TerminalHistoryView() {
                         <div className="text-sm font-medium text-text">
                           <span className="font-mono">{order.symbol}</span>
                           <span className="ml-1 font-bold">{order.side === 'BUY' ? 'Buy' : 'Sell'}</span>
-                          <span className="ml-1 font-bold">{filledSize.toFixed(4)}</span>
+                          <span className="ml-1 font-bold" title={filledFmt.secondary || undefined}>
+                            {filledFmt.display}
+                          </span>
                         </div>
                         <div className="text-xs text-muted mt-0.5">
                           {order.order_type} @ {avgPrice > 0 ? `$${avgPrice.toFixed(2)}` : '—'}

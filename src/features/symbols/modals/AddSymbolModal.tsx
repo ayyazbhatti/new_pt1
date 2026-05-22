@@ -12,6 +12,8 @@ import { AssetClass } from '../types/symbol'
 import { useCreateSymbol } from '../hooks/useSymbols'
 import { useLeverageProfilesList } from '@/features/leverageProfiles/hooks/useLeverageProfiles'
 import { Spinner } from '@/shared/ui/loading'
+import { SessionTemplateSelect } from '@/features/marketSessions/components/SessionTemplateSelect'
+import { assetClassToMarketHint } from '@/features/marketSessions/utils/marketHint'
 
 const symbolSchema = z.object({
   symbol_code: z.string().min(2, 'Symbol code must be at least 2 characters').max(50),
@@ -56,6 +58,7 @@ const symbolSchema = z.object({
     return !isNaN(num) && num > 0
   }, 'Pip position max must be a positive number'),
   leverage_profile_id: z.string().nullable().optional(),
+  session_template_id: z.string().uuid().nullish(),
 }).refine((data) => {
   // Validate lot_min < lot_max if both are provided
   if (data.lot_min && data.lot_max) {
@@ -115,6 +118,7 @@ export function AddSymbolModal() {
       pip_position_min: null,
       pip_position_max: null,
       leverage_profile_id: null,
+      session_template_id: null,
     },
   })
 
@@ -195,6 +199,18 @@ export function AddSymbolModal() {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        </div>
+
+        <div>
+          <Label>Session template</Label>
+          <div className="mt-2">
+            <SessionTemplateSelect
+              value={watch('session_template_id') ?? null}
+              onChange={(v) => setValue('session_template_id', v)}
+              marketHint={assetClassToMarketHint(watch('asset_class'))}
+              disabled={isSubmitting}
+            />
           </div>
         </div>
 

@@ -147,6 +147,9 @@ pub async fn place_order(
         account_type: Some(account_type),
         margin_from_cash: None,
         margin_from_bonus: None,
+        requested_bid: None,
+        requested_ask: None,
+        max_slippage_bps: None,
     };
 
     // Publish to NATS

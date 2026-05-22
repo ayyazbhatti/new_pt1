@@ -239,6 +239,19 @@ fn default_lot_min() -> Decimal {
     Decimal::new(1, 2) // 0.01
 }
 
+/// Maps admin `asset_class` to DB `market_type` for inserts.
+fn market_type_for_asset_class(asset_class: &str) -> &'static str {
+    match asset_class {
+        "FX" => "forex",
+        "Crypto" => "crypto",
+        "Metals" => "commodities",
+        "Indices" => "indices",
+        "Stocks" => "stocks",
+        "Commodities" => "commodities",
+        _ => "forex",
+    }
+}
+
 pub struct AdminSymbolsService {
     pool: PgPool,
 }
@@ -285,10 +298,14 @@ impl AdminSymbolsService {
                 lp.name as leverage_profile_name,
                 s.mmdps_category,
                 s.provider_description,
+                s.market::text as market,
+                s.session_template_id,
+                m.name as session_template_name,
                 s.created_at,
                 s.updated_at
             FROM symbols s
             LEFT JOIN leverage_profiles lp ON s.leverage_profile_id = lp.id
+            LEFT JOIN market_session_templates m ON m.id = s.session_template_id
             WHERE 1=1
             "#
         );
@@ -425,6 +442,9 @@ impl AdminSymbolsService {
                 NULL::text as leverage_profile_name,
                 NULL::text as mmdps_category,
                 NULL::text as provider_description,
+                s.market::text as market,
+                s.session_template_id,
+                NULL::text as session_template_name,
                 s.created_at,
                 s.updated_at
             FROM symbols s
@@ -484,6 +504,9 @@ impl AdminSymbolsService {
                 leverage_profile_name: row.get("leverage_profile_name"),
                 mmdps_category: row.get("mmdps_category"),
                 provider_description: row.get("provider_description"),
+                market: row.get("market"),
+                session_template_id: row.get("session_template_id"),
+                session_template_name: row.get("session_template_name"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
             })
@@ -493,7 +516,10 @@ impl AdminSymbolsService {
 
     pub async fn get_symbol_by_id(&self, id: Uuid) -> Result<Symbol> {
         let symbol = sqlx::query_as::<_, Symbol>(
-            "SELECT id, code as symbol_code, provider_symbol, asset_class::text as asset_class, base_currency, quote_currency, price_precision, volume_precision, contract_size::text as contract_size, tick_size, lot_min, lot_max, default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, leverage_profile_id, mmdps_category, provider_description, created_at, updated_at FROM symbols WHERE id = $1",
+            r#"SELECT s.id, s.code as symbol_code, s.provider_symbol, s.asset_class::text as asset_class, s.base_currency, s.quote_currency, s.price_precision, s.volume_precision, s.contract_size::text as contract_size, s.tick_size, s.lot_min, s.lot_max, s.default_pip_position, s.pip_position_min, s.pip_position_max, s.is_enabled, s.trading_enabled, s.leverage_profile_id, s.mmdps_category, s.provider_description, s.market::text as market, s.session_template_id, m.name as session_template_name, s.created_at, s.updated_at
+            FROM symbols s
+            LEFT JOIN market_session_templates m ON m.id = s.session_template_id
+            WHERE s.id = $1"#,
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -520,6 +546,7 @@ impl AdminSymbolsService {
         pip_position_min: Option<&str>,
         pip_position_max: Option<&str>,
         leverage_profile_id: Option<Uuid>,
+        session_template_id: Option<Uuid>,
     ) -> Result<Symbol> {
         if symbol_code.len() < 2 || symbol_code.len() > 50 {
             return Err(anyhow::anyhow!("Symbol code must be between 2 and 50 characters"));
@@ -544,20 +571,26 @@ impl AdminSymbolsService {
             }
         }
 
+        let market = market_type_for_asset_class(asset_class);
+
         let symbol = sqlx::query_as::<_, Symbol>(
             r#"
             INSERT INTO symbols (
                 code, provider_symbol, asset_class, base_currency, quote_currency,
                 price_precision, volume_precision, contract_size, tick_size, lot_min, lot_max, 
-                default_pip_position, pip_position_min, pip_position_max, leverage_profile_id
+                default_pip_position, pip_position_min, pip_position_max, leverage_profile_id,
+                market, session_template_id
             )
             VALUES ($1, $2, $3::asset_class, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11::numeric, 
-                $12::numeric, $13::numeric, $14::numeric, $15)
+                $12::numeric, $13::numeric, $14::numeric, $15, $16::market_type, $17)
             RETURNING id, code as symbol_code, provider_symbol, asset_class::text as asset_class, 
                 base_currency, quote_currency, price_precision, volume_precision, 
                 contract_size::text as contract_size, tick_size, lot_min, lot_max, 
                 default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
-                leverage_profile_id, mmdps_category, provider_description, created_at, updated_at
+                leverage_profile_id, mmdps_category, provider_description,
+                market::text as market, session_template_id,
+                (SELECT mt.name FROM market_session_templates mt WHERE mt.id = session_template_id) AS session_template_name,
+                created_at, updated_at
             "#,
         )
         .bind(symbol_code)
@@ -575,6 +608,8 @@ impl AdminSymbolsService {
         .bind(pip_position_min_decimal)
         .bind(pip_position_max_decimal)
         .bind(leverage_profile_id)
+        .bind(market)
+        .bind(session_template_id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -601,6 +636,7 @@ impl AdminSymbolsService {
         is_enabled: bool,
         trading_enabled: bool,
         leverage_profile_id: Option<Uuid>,
+        session_template_id: Option<Uuid>,
     ) -> Result<Symbol> {
         // Parse optional decimal fields; use DB-compatible defaults for NOT NULL columns when omitted
         let tick_size_decimal = tick_size
@@ -628,6 +664,8 @@ impl AdminSymbolsService {
             }
         }
 
+        let market = market_type_for_asset_class(asset_class);
+
         let symbol = sqlx::query_as::<_, Symbol>(
             r#"
             UPDATE symbols
@@ -649,13 +687,18 @@ impl AdminSymbolsService {
                 is_enabled = $16,
                 trading_enabled = $17,
                 leverage_profile_id = $18,
+                market = $19::market_type,
+                session_template_id = $20,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, code as symbol_code, provider_symbol, asset_class::text as asset_class, 
                 base_currency, quote_currency, price_precision, volume_precision, 
                 contract_size::text as contract_size, tick_size, lot_min, lot_max, 
                 default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
-                leverage_profile_id, mmdps_category, provider_description, created_at, updated_at
+                leverage_profile_id, mmdps_category, provider_description,
+                market::text as market, session_template_id,
+                (SELECT mt.name FROM market_session_templates mt WHERE mt.id = session_template_id) AS session_template_name,
+                created_at, updated_at
             "#,
         )
         .bind(id)
@@ -676,6 +719,8 @@ impl AdminSymbolsService {
         .bind(is_enabled)
         .bind(trading_enabled)
         .bind(leverage_profile_id)
+        .bind(market)
+        .bind(session_template_id)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Symbol not found"))?;
@@ -707,7 +752,10 @@ impl AdminSymbolsService {
                 base_currency, quote_currency, price_precision, volume_precision, 
                 contract_size::text as contract_size, tick_size, lot_min, lot_max, 
                 default_pip_position, pip_position_min, pip_position_max, is_enabled, trading_enabled, 
-                leverage_profile_id, mmdps_category, provider_description, created_at, updated_at
+                leverage_profile_id, mmdps_category, provider_description,
+                market::text as market, session_template_id,
+                (SELECT mt.name FROM market_session_templates mt WHERE mt.id = session_template_id) AS session_template_name,
+                created_at, updated_at
             "#,
         )
         .bind(id)

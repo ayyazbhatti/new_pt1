@@ -75,6 +75,8 @@ struct UserGroupRowMinimalWithProfiles {
     timezone: Option<String>,
     #[sqlx(default)]
     display_currency: Option<String>,
+    #[sqlx(default)]
+    default_slippage_bps: Option<i32>,
 }
 
 impl From<UserGroupRowMinimal> for UserGroup {
@@ -97,6 +99,7 @@ impl From<UserGroupRowMinimal> for UserGroup {
             display_currency: None,
             swap_enabled: false,
             fees_enabled: false,
+            default_slippage_bps: None,
         }
     }
 }
@@ -121,6 +124,7 @@ impl From<UserGroupRowMinimalWithProfiles> for UserGroup {
             display_currency: r.display_currency,
             swap_enabled: false,
             fees_enabled: false,
+            default_slippage_bps: r.default_slippage_bps,
         }
     }
 }
@@ -284,7 +288,7 @@ impl AdminGroupsService {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, signup_slug, default_price_profile_id, \
              default_leverage_profile_id, margin_call_level, stop_out_level, created_at, updated_at, created_by_user_id, \
-             hide_leverage_in_terminal, timezone, display_currency, swap_enabled, fees_enabled FROM user_groups WHERE 1=1"
+             hide_leverage_in_terminal, timezone, display_currency, swap_enabled, fees_enabled, default_slippage_bps FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
             if !search.is_empty() {
@@ -374,7 +378,7 @@ impl AdminGroupsService {
     ) -> anyhow::Result<Vec<UserGroup>> {
         let mut query = sqlx::QueryBuilder::new(
             "SELECT id, name, description, status, created_at, updated_at, \
-             default_price_profile_id, default_leverage_profile_id, timezone, display_currency FROM user_groups WHERE 1=1"
+             default_price_profile_id, default_leverage_profile_id, timezone, display_currency, default_slippage_bps FROM user_groups WHERE 1=1"
         );
         if let Some(search) = search {
             if !search.is_empty() {
@@ -446,11 +450,17 @@ impl AdminGroupsService {
         display_currency: Option<&str>,
         swap_enabled: bool,
         fees_enabled: bool,
+        default_slippage_bps: Option<i32>,
         created_by_user_id: Option<Uuid>,
     ) -> anyhow::Result<UserGroup> {
         // Validate
         if name.len() < 2 || name.len() > 40 {
             return Err(anyhow::anyhow!("Name must be between 2 and 40 characters"));
+        }
+        if let Some(v) = default_slippage_bps {
+            if v < 0 {
+                return Err(anyhow::anyhow!("default_slippage_bps must be >= 0"));
+            }
         }
 
         let slug: Option<String> = match signup_slug {
@@ -487,9 +497,9 @@ impl AdminGroupsService {
             r#"
             INSERT INTO user_groups (
                 name, description, status, signup_slug, margin_call_level, stop_out_level, display_currency, timezone, created_by_user_id,
-                swap_enabled, fees_enabled
+                swap_enabled, fees_enabled, default_slippage_bps
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING *
             "#,
         )
@@ -504,6 +514,7 @@ impl AdminGroupsService {
         .bind(created_by_user_id)
         .bind(swap_enabled)
         .bind(fees_enabled)
+        .bind(default_slippage_bps)
         .fetch_one(&self.pool)
         .await?;
 
@@ -524,6 +535,7 @@ impl AdminGroupsService {
         display_currency: Option<Option<&str>>,
         swap_enabled: Option<bool>,
         fees_enabled: Option<bool>,
+        default_slippage_bps: Option<Option<i32>>,
     ) -> anyhow::Result<UserGroup> {
         // Validate (same as create)
         if name.len() < 2 || name.len() > 40 {
@@ -563,6 +575,17 @@ impl AdminGroupsService {
             }
         };
 
+        let (update_slip, slip_value): (bool, Option<i32>) = match default_slippage_bps {
+            None => (false, None),
+            Some(None) => (true, None),
+            Some(Some(v)) => {
+                if v < 0 {
+                    return Err(anyhow::anyhow!("default_slippage_bps must be >= 0"));
+                }
+                (true, Some(v))
+            }
+        };
+
         let group = sqlx::query_as::<_, UserGroup>(
             r#"
             UPDATE user_groups
@@ -578,6 +601,7 @@ impl AdminGroupsService {
                 display_currency = CASE WHEN $11 THEN $12 ELSE display_currency END,
                 swap_enabled = COALESCE($13, swap_enabled),
                 fees_enabled = COALESCE($14, fees_enabled),
+                default_slippage_bps = CASE WHEN $15 THEN $16 ELSE default_slippage_bps END,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -597,6 +621,8 @@ impl AdminGroupsService {
         .bind(dc_value)
         .bind(swap_enabled)
         .bind(fees_enabled)
+        .bind(update_slip)
+        .bind(slip_value)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Group not found"))?;

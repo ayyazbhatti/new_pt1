@@ -17,6 +17,15 @@ const subscribers = new Map<string, Set<(price: PriceData) => void>>()
 
 export { normalizeSymbolKey }
 
+/** True if the in-memory price cache has an entry for any of the given feed keys (after normalization). */
+export function hasCachedPriceForAnySymbol(symbols: string[]): boolean {
+  for (const s of symbols) {
+    const k = normalizeSymbolKey(s.toUpperCase().trim())
+    if (k && priceStore.has(k)) return true
+  }
+  return false
+}
+
 function notifySubscribers(symbol: string, price: PriceData) {
   const symbolUpper = symbol.toUpperCase().trim()
   const normalizedKey = normalizeSymbolKey(symbolUpper)
@@ -420,20 +429,13 @@ export function useSymbolPrice(symbol: string | null) {
       return
     }
 
-    console.log(`🔔 useSymbolPrice("${symbol}") -> "${symbolUpper}" subscribing...`)
-    console.log(`🔔 Current price store keys:`, Array.from(priceStore.keys()))
-    console.log(`🔔 Current subscriber keys:`, Array.from(subscribers.keys()))
-
     // Create a stable callback function that checks the current symbol ref
     const priceCallback = (newPrice: PriceData) => {
       // Only update if this callback is still for the current symbol
       const currentSymbol = symbolRef.current
       const currentSymbolUpper = currentSymbol ? currentSymbol.toUpperCase().trim() : null
       if (currentSymbolUpper === symbolUpper) {
-        console.log(`💰 useSymbolPrice(${symbolUpper}) received price update:`, newPrice)
         setPrice(newPrice)
-      } else {
-        console.log(`⏭️ useSymbolPrice(${symbolUpper}) ignoring price - symbol changed to: ${currentSymbol} (${currentSymbolUpper})`)
       }
     }
 
@@ -443,33 +445,23 @@ export function useSymbolPrice(symbol: string | null) {
     // Subscribe FIRST before checking for initial price
     if (!subscribers.has(normalizedSymbol)) {
       subscribers.set(normalizedSymbol, new Set())
-      console.log(`🆕 Created subscriber set for ${symbolUpper} (normalized: ${normalizedSymbol})`)
     }
     const callbacks = subscribers.get(normalizedSymbol)!
     callbacks.add(priceCallback)
-    console.log(`✅ Added price subscriber for ${symbolUpper} (normalized: ${normalizedSymbol}), total subscribers: ${callbacks.size}`)
 
     // Set initial price if available (check AFTER subscribing, use normalized key)
     const initialPrice = priceStore.get(normalizedSymbol)
     if (initialPrice) {
-      console.log(`💰 Initial price found for ${normalizedSymbol}:`, initialPrice)
       setPrice(initialPrice)
-    } else {
-      console.log(`⚠️ No initial price found for ${normalizedSymbol}. Price store has:`, Array.from(priceStore.keys()))
-      console.log(`⚠️ Will wait for price update from WebSocket...`)
     }
 
     return () => {
       const callbacks = subscribers.get(normalizedSymbol)
       if (callbacks) {
-        const removed = callbacks.delete(priceCallback)
-        console.log(`🗑️ Cleanup: Removed subscriber for ${normalizedSymbol}, removed: ${removed}, remaining: ${callbacks.size}`)
+        callbacks.delete(priceCallback)
         if (callbacks.size === 0) {
           subscribers.delete(normalizedSymbol)
-          console.log(`🗑️ Cleanup: Deleted empty subscriber set for ${normalizedSymbol}`)
         }
-      } else {
-        console.log(`🗑️ Cleanup: No subscriber set found for ${symbolUpper}`)
       }
     }
   }, [symbol])

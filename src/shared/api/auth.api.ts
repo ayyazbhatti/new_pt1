@@ -52,6 +52,8 @@ export interface UserResponse {
   effective_display_currency?: string
   effective_display_currency_origin?: string
   platform_display_currency?: string | null
+  effective_slippage_bps?: number | null
+  effective_slippage_source?: string | null
 }
 
 export async function login(email: string, password: string): Promise<{
@@ -162,6 +164,12 @@ export async function logout(refreshToken: string): Promise<void> {
   })
 }
 
+export type SlippageSource =
+  | 'userOverride'
+  | 'groupDefault'
+  | 'platformDefault'
+  | 'hardcodedFallback'
+
 export interface MeResponse {
   id: string
   email: string
@@ -192,6 +200,9 @@ export interface MeResponse {
   effectiveDisplayCurrency: string
   effectiveDisplayCurrencyOrigin: 'user' | 'group' | 'platform' | 'fallback'
   platformDisplayCurrency: string | null
+  /** Resolved max slippage in basis points (1 bp = 0.01%). */
+  effectiveSlippageBps: number
+  effectiveSlippageSource: SlippageSource
 }
 
 export async function me(): Promise<MeResponse> {
@@ -279,6 +290,19 @@ function mapUserResponseToMe(response: UserResponse): MeResponse {
   const co = response.effective_display_currency_origin
   const currencyOrigin: MeResponse['effectiveDisplayCurrencyOrigin'] =
     co === 'user' || co === 'group' || co === 'platform' || co === 'fallback' ? co : 'fallback'
+  const slipSrcRaw = response.effective_slippage_source
+  const hasBps =
+    typeof response.effective_slippage_bps === 'number' && Number.isFinite(response.effective_slippage_bps)
+  const slipBps = hasBps ? Math.round(response.effective_slippage_bps as number) : 50
+  const slipSrc: SlippageSource =
+    slipSrcRaw === 'userOverride' ||
+    slipSrcRaw === 'groupDefault' ||
+    slipSrcRaw === 'platformDefault' ||
+    slipSrcRaw === 'hardcodedFallback'
+      ? slipSrcRaw
+      : hasBps
+        ? 'platformDefault'
+        : 'hardcodedFallback'
   return {
     id: response.id,
     email: response.email,
@@ -307,6 +331,8 @@ function mapUserResponseToMe(response: UserResponse): MeResponse {
     effectiveDisplayCurrency: response.effective_display_currency ?? 'USD',
     effectiveDisplayCurrencyOrigin: currencyOrigin,
     platformDisplayCurrency: response.platform_display_currency ?? null,
+    effectiveSlippageBps: slipBps,
+    effectiveSlippageSource: slipSrc,
   }
 }
 

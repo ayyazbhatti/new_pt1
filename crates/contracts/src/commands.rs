@@ -47,6 +47,15 @@ pub struct PlaceOrderCommand {
     pub margin_from_cash: Option<Decimal>,
     #[serde(default)]
     pub margin_from_bonus: Option<Decimal>,
+    /// Bid at order submission (auth-service Redis snapshot). Phase 2 slippage enforcement.
+    #[serde(default)]
+    pub requested_bid: Option<Decimal>,
+    /// Ask at order submission.
+    #[serde(default)]
+    pub requested_ask: Option<Decimal>,
+    /// Resolved max slippage in basis points for this order.
+    #[serde(default)]
+    pub max_slippage_bps: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

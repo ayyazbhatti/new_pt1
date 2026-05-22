@@ -32,6 +32,11 @@ pub struct Symbol {
     pub leverage_profile_id: Option<Uuid>,
     pub mmdps_category: Option<String>,
     pub provider_description: Option<String>,
+    #[sqlx(rename = "market")]
+    pub market: Option<String>,
+    pub session_template_id: Option<Uuid>,
+    #[sqlx(rename = "session_template_name")]
+    pub session_template_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -68,6 +73,11 @@ pub struct SymbolWithProfile {
     /// Raw MMDPS `category` (e.g. Nasdaq, Forex) when synced from `/feed/symbols`.
     pub mmdps_category: Option<String>,
     pub provider_description: Option<String>,
+    #[sqlx(rename = "market")]
+    pub market: Option<String>,
+    pub session_template_id: Option<Uuid>,
+    #[sqlx(rename = "session_template_name")]
+    pub session_template_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

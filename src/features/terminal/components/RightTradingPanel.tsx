@@ -6,6 +6,7 @@ import { Checkbox } from '@/shared/ui'
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { cn } from '@/shared/utils'
 import { useTerminalStore } from '../store'
+import { SlippageInput } from './SlippageInput'
 import { toast } from '@/shared/components/common'
 import { SinglePriceDisplay } from './SinglePriceDisplay'
 import {
@@ -18,7 +19,7 @@ import { useAuthStore } from '@/shared/store/auth.store'
 import { useFormatFromUsd, useFormatAmount } from '@/shared/currency'
 import type { CurrencyCode } from '@/shared/currency/types'
 import { useQuery } from '@tanstack/react-query'
-import { me, getSymbolLeverage, getEffectiveLeverage } from '@/shared/api/auth.api'
+import { me, getSymbolLeverage, getEffectiveLeverage, type SlippageSource } from '@/shared/api/auth.api'
 import { wsClient } from '@/shared/ws/wsClient'
 import { getWsGatewayUrl } from '@/shared/ws/wsGatewayUrl'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
@@ -35,7 +36,11 @@ import {
 import { AdminSymbol } from '@/features/symbols/types/symbol'
 import type { MockSymbol } from '@/shared/mock/terminalMock'
 import { useSymbolsList } from '@/features/symbols/hooks/useSymbols'
+import { useSymbolPrice } from '@/features/symbols/hooks/usePriceStream'
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
+import { useSessionStatus, useSessionStatusBatch } from '../hooks/useSessionStatus'
+import { formatOpensInLabel, formatClosesInLabel } from '../utils/sessionCountdown'
+import { tryToastPlaceOrderForbiddenError } from '../utils/placeOrderErrorToast'
 import { getPromotionSlides } from '../api/promotions.api'
 import type { PromotionSlidePublic } from '../api/promotions.api'
 import { useEffectiveTimezone, useTimezoneOffsetLabel } from '@/shared/datetime'
@@ -43,8 +48,6 @@ import { useEffectiveTimezone, useTimezoneOffsetLabel } from '@/shared/datetime'
 // Local storage key for trading panel state
 const TRADING_PANEL_STORAGE_KEY = 'trading-panel-state'
 
-/** When true, only Units size mode is shown; Lots and Pip Position are hidden (set to false to show them again). */
-const SHOW_ONLY_UNITS_SIZE_MODE = true
 const WS_WARNING_INITIAL_GRACE_MS = 5000
 const WS_WARNING_STABLE_MS = 2000
 const MIN_EST_MARGIN_DOLLARS = 10
@@ -53,6 +56,8 @@ type WsConnectionState = 'disconnected' | 'connecting' | 'connected' | 'authenti
 interface TradingPanelState {
   orderType: string
   sizeMode: 'units' | 'lots' | 'pipPosition'
+  /** When true, do not auto-snap size mode to the symbol's asset-class default on symbol change or reload. */
+  sizeModeUserExplicit?: boolean
   size: string
   lotSize: string
   pipPosition: string
@@ -107,27 +112,86 @@ function quoteFractionDigits(bid?: string, ask?: string): number {
   return Math.max(frac(bid), frac(ask), 2)
 }
 
-function liveQuoteSpreadFormatted(s: MockSymbol): string {
-  if (s.numericPrice <= 0 || s.numericPrice2 <= 0) return '0'
+function liveQuoteSpreadFormatted(
+  s: MockSymbol,
+  bidNum: number,
+  askNum: number,
+  bidStr?: string,
+  askStr?: string,
+): string {
+  if (bidNum <= 0 || askNum <= 0) return '0'
   if (
     isForexTerminalSymbol(s) &&
-    s.bidQuote !== undefined &&
-    s.bidQuote !== '' &&
-    s.askQuote !== undefined &&
-    s.askQuote !== ''
+    bidStr !== undefined &&
+    bidStr !== '' &&
+    askStr !== undefined &&
+    askStr !== ''
   ) {
-    const diff = Math.abs(parseFloat(s.askQuote) - parseFloat(s.bidQuote))
-    return diff.toFixed(quoteFractionDigits(s.bidQuote, s.askQuote))
+    const diff = Math.abs(parseFloat(askStr) - parseFloat(bidStr))
+    return diff.toFixed(quoteFractionDigits(bidStr, askStr))
   }
   const p = s.pricePrecision ?? 2
-  return Math.abs(s.numericPrice2 - s.numericPrice).toFixed(p)
+  return Math.abs(askNum - bidNum).toFixed(p)
+}
+
+/**
+ * Default ticket size mode by asset class (lots for FX / contract-style symbols; units for crypto & stocks).
+ * Uses admin symbol when loaded; falls back to terminal `MockSymbol.assetClass` only.
+ */
+function getDefaultSizeModeForSymbol(
+  terminalSymbol: MockSymbol | null,
+  admin: AdminSymbol | null,
+): 'units' | 'lots' | 'pipPosition' {
+  if (!terminalSymbol && !admin) return 'units'
+  const ac = (admin?.assetClass ?? terminalSymbol?.assetClass ?? '').toString().trim().toUpperCase()
+  const market = (admin?.market ?? '').toString().trim().toLowerCase()
+  const contractSize = Math.max(0, parseFloat(String(admin?.contractSize ?? '1')) || 0) || 1
+
+  if (ac === 'FX' || market === 'forex') return 'lots'
+
+  if (
+    contractSize > 1 &&
+    (ac === 'INDICES' ||
+      ac === 'INDEX' ||
+      market === 'indices' ||
+      ac === 'METALS' ||
+      ac === 'METAL' ||
+      market === 'metals' ||
+      ac === 'COMMODITIES' ||
+      ac === 'COMMODITY' ||
+      market === 'commodities')
+  ) {
+    return 'lots'
+  }
+
+  return 'units'
+}
+
+/** Interpret `getDefaultSizeForMinMargin()` string (quote or base per active `currency`) as base units. */
+function defaultSizeStringToBaseUnits(
+  sizeStr: string,
+  sym: MockSymbol,
+  currency: string,
+  executionPrice: number,
+): number | null {
+  const n = parseFloat(sizeStr)
+  if (!Number.isFinite(n) || n <= 0 || executionPrice <= 0) return null
+  if (currency === sym.quoteCurrency) return n / executionPrice
+  return n
 }
 
 export function RightTradingPanel() {
-  const { selectedSymbol, setSelectedSymbol, symbols } = useTerminalStore()
+  const selectedSymbol = useTerminalStore((s) => s.selectedSymbol)
+  const setSelectedSymbol = useTerminalStore((s) => s.setSelectedSymbol)
+  const symbols = useTerminalStore((s) => s.symbols)
   const tradingAccess = useAuthStore((s) => s.user?.tradingAccess ?? 'full')
   const canPlaceOrder = tradingAccess === 'full'
   const { data: meData } = useQuery({ queryKey: ['auth', 'me'], queryFn: me })
+  const defaultSlippageBps = useMemo(() => meData?.effectiveSlippageBps ?? 50, [meData?.effectiveSlippageBps])
+  const defaultSlippageSource: SlippageSource = useMemo(
+    () => meData?.effectiveSlippageSource ?? 'platformDefault',
+    [meData?.effectiveSlippageSource],
+  )
   const {
     data: symbolLeverage,
     isLoading: symbolLeverageLoading,
@@ -150,34 +214,51 @@ export function RightTradingPanel() {
     return symbolsData.items.find(s => s.id === selectedSymbol.id) || null
   }, [selectedSymbol, symbolsData])
 
+  const selectedLiveKey = selectedSymbol?.priceLookupKey || selectedSymbol?.code || null
+  const selectedLivePrice = useSymbolPrice(selectedLiveKey)
+  const liveBidNum = useMemo(() => {
+    const b = selectedLivePrice?.bid
+    if (b == null || b === '') return 0
+    const n = parseFloat(b)
+    return Number.isFinite(n) ? n : 0
+  }, [selectedLivePrice?.bid, selectedLivePrice?.ts])
+  const liveAskNum = useMemo(() => {
+    const a = selectedLivePrice?.ask
+    if (a == null || a === '') return 0
+    const n = parseFloat(a)
+    return Number.isFinite(n) ? n : 0
+  }, [selectedLivePrice?.ask, selectedLivePrice?.ts])
+  const liveBidStr = selectedLivePrice?.bid
+  const liveAskStr = selectedLivePrice?.ask
+
   const { accountSummary } = useAccountSummary()
   const formatMoney = useFormatFromUsd()
   const formatAmount = useFormatAmount()
   const formatLiveQuoteBid = useCallback(
     (s: MockSymbol) => {
-      if (s.numericPrice <= 0) return ''
+      if (liveBidNum <= 0) return ''
       const qc = (s.quoteCurrency || 'USD') as CurrencyCode
-      if (isForexTerminalSymbol(s) && s.bidQuote !== undefined && s.bidQuote !== '') {
-        const n = parseFloat(s.bidQuote)
+      if (isForexTerminalSymbol(s) && liveBidStr) {
+        const n = parseFloat(liveBidStr)
         if (!Number.isFinite(n)) return ''
         return formatAmount(n, qc)
       }
-      return formatAmount(s.numericPrice, qc)
+      return formatAmount(liveBidNum, qc)
     },
-    [formatAmount],
+    [formatAmount, liveBidNum, liveBidStr],
   )
   const formatLiveQuoteAsk = useCallback(
     (s: MockSymbol) => {
-      if (s.numericPrice2 <= 0) return ''
+      if (liveAskNum <= 0) return ''
       const qc = (s.quoteCurrency || 'USD') as CurrencyCode
-      if (isForexTerminalSymbol(s) && s.askQuote !== undefined && s.askQuote !== '') {
-        const n = parseFloat(s.askQuote)
+      if (isForexTerminalSymbol(s) && liveAskStr) {
+        const n = parseFloat(liveAskStr)
         if (!Number.isFinite(n)) return ''
         return formatAmount(n, qc)
       }
-      return formatAmount(s.numericPrice2, qc)
+      return formatAmount(liveAskNum, qc)
     },
-    [formatAmount],
+    [formatAmount, liveAskNum, liveAskStr],
   )
   const tz = useEffectiveTimezone()
   const offsetLabel = useTimezoneOffsetLabel()
@@ -189,7 +270,16 @@ export function RightTradingPanel() {
 
   // Load initial state from localStorage only on mount (lazy init) so reload restores tab and values
   const [orderType, setOrderType] = useState(() => loadTradingPanelState().orderType || 'market')
-  const [sizeMode, setSizeMode] = useState<'units' | 'lots' | 'pipPosition'>(() => loadTradingPanelState().sizeMode || 'units')
+  const [sizeModeUserExplicit, setSizeModeUserExplicit] = useState(
+    () => loadTradingPanelState().sizeModeUserExplicit === true,
+  )
+  const [sizeMode, setSizeMode] = useState<'units' | 'lots' | 'pipPosition'>(() => {
+    const p = loadTradingPanelState()
+    const validMode =
+      p.sizeMode === 'units' || p.sizeMode === 'lots' || p.sizeMode === 'pipPosition' ? p.sizeMode : null
+    if (p.sizeModeUserExplicit === true && validMode) return validMode
+    return getDefaultSizeModeForSymbol(useTerminalStore.getState().selectedSymbol, null)
+  })
   const [size, setSize] = useState(() => loadTradingPanelState().size || '0.003457')
   const [lotSize, setLotSize] = useState(() => loadTradingPanelState().lotSize || '0.5')
   const [pipPosition, setPipPosition] = useState(() => loadTradingPanelState().pipPosition || '5')
@@ -213,6 +303,8 @@ export function RightTradingPanel() {
   const [pendingOrders, setPendingOrders] = useState<Set<string>>(new Set())
   /** Which side market/limit preview uses for margin estimate (BUY→ask, SELL→bid). Updated on Buy/Sell hover/focus and click. */
   const [previewOrderSide, setPreviewOrderSide] = useState<'BUY' | 'SELL'>('BUY')
+  const [slippageBps, setSlippageBps] = useState(50)
+  const [slippageOverridden, setSlippageOverridden] = useState(false)
 
   // Filter symbols for dropdown by search (code or price)
   const filteredSymbolsForDropdown = useMemo(() => {
@@ -224,6 +316,23 @@ export function RightTradingPanel() {
         s.price.toLowerCase().includes(q)
     )
   }, [symbols, symbolSearchQuery])
+
+  const { data: session } = useSessionStatus(selectedSymbol?.code)
+  const dropdownCodes = useMemo(
+    () => (symbolDropdownOpen ? filteredSymbolsForDropdown.map((s) => s.code) : []),
+    [symbolDropdownOpen, filteredSymbolsForDropdown]
+  )
+  const { data: dropdownSessionMap = {} } = useSessionStatusBatch(dropdownCodes)
+
+  const isSessionClosed = session != null && !session.isOpen
+  const isSymbolTradingOff = selectedSymbol != null && !selectedSymbol.enabled
+  const sessionBlocksOrders = isSessionClosed || isSymbolTradingOff
+
+  useEffect(() => {
+    if (!slippageOverridden) {
+      setSlippageBps(defaultSlippageBps)
+    }
+  }, [defaultSlippageBps, slippageOverridden])
 
   // Close symbol dropdown when clicking outside
   useEffect(() => {
@@ -246,6 +355,7 @@ export function RightTradingPanel() {
     saveTradingPanelState({
       orderType,
       sizeMode,
+      sizeModeUserExplicit,
       size,
       lotSize,
       pipPosition,
@@ -260,7 +370,7 @@ export function RightTradingPanel() {
       leverageDetailsOpen,
       selectedSymbolCode: selectedSymbol?.code ?? '',
     })
-  }, [orderType, sizeMode, size, lotSize, pipPosition, pipPositionCurrency, currency, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen, userDetailsOpen, leverageDetailsOpen, selectedSymbol?.code])
+  }, [orderType, sizeMode, sizeModeUserExplicit, size, lotSize, pipPosition, pipPositionCurrency, currency, useSlTp, stopLoss, takeProfit, limitPrice, symbolDetailsOpen, userDetailsOpen, leverageDetailsOpen, selectedSymbol?.code])
 
   // Restore selected symbol by code on load when store has symbols but no selection (e.g. after reload)
   useEffect(() => {
@@ -311,10 +421,27 @@ export function RightTradingPanel() {
     }
   }, [selectedSymbol, adminSymbol])
 
+  // When the user has not locked size mode (Segmented or prior explicit save), follow symbol-class default (e.g. FX → lots).
+  useEffect(() => {
+    if (sizeModeUserExplicit) return
+    if (!selectedSymbol) return
+    const next = getDefaultSizeModeForSymbol(selectedSymbol, adminSymbol)
+    setSizeMode((prev) => (prev === next ? prev : next))
+  }, [
+    sizeModeUserExplicit,
+    selectedSymbol?.id,
+    selectedSymbol?.code,
+    selectedSymbol?.assetClass,
+    adminSymbol?.id,
+    adminSymbol?.assetClass,
+    adminSymbol?.market,
+    adminSymbol?.contractSize,
+  ])
+
   // Real-time calculations for different modes
   const sizeCalculations = useMemo(() => {
     const symbolForCalc = getSymbolForCalculations()
-    if (!symbolForCalc || !selectedSymbol || selectedSymbol.numericPrice <= 0) {
+    if (!symbolForCalc || !selectedSymbol || liveBidNum <= 0) {
       return {
         pipValuePerLot: 0,
         currentLotSize: 0,
@@ -323,7 +450,7 @@ export function RightTradingPanel() {
       }
     }
 
-    const price = selectedSymbol.numericPrice
+    const price = liveBidNum
     const pipValuePerLot = calculatePipValuePerLot(symbolForCalc, price, pipPositionCurrency)
 
     let currentLotSize = 0
@@ -361,19 +488,20 @@ export function RightTradingPanel() {
       currentUnits: safeCurrentUnits,
       currentPipPosition: safeCurrentPipPosition,
     }
-  }, [sizeMode, size, lotSize, pipPosition, selectedSymbol, currency, pipPositionCurrency, getSymbolForCalculations])
+  }, [sizeMode, size, lotSize, pipPosition, selectedSymbol, liveBidNum, currency, pipPositionCurrency, getSymbolForCalculations])
 
   // Handle size mode change with conversion
   const handleSizeModeChange = useCallback((newMode: 'units' | 'lots' | 'pipPosition') => {
     if (newMode === sizeMode) return
+    setSizeModeUserExplicit(true)
 
     const symbolForCalc = getSymbolForCalculations()
-    if (!symbolForCalc || !selectedSymbol || selectedSymbol.numericPrice <= 0) {
+    if (!symbolForCalc || !selectedSymbol || liveBidNum <= 0) {
       setSizeMode(newMode)
       return
     }
 
-    const price = selectedSymbol.numericPrice
+    const price = liveBidNum
     const { currentLotSize, currentUnits, currentPipPosition } = sizeCalculations
 
     // Convert current size to new mode
@@ -386,12 +514,12 @@ export function RightTradingPanel() {
     }
 
     setSizeMode(newMode)
-  }, [sizeMode, sizeCalculations, selectedSymbol, getSymbolForCalculations])
+  }, [sizeMode, sizeCalculations, selectedSymbol, getSymbolForCalculations, liveBidNum])
 
   // Compute a default units size so estimated margin targets minimum threshold.
   const getDefaultSizeForMinMargin = useCallback((): string | null => {
     if (!selectedSymbol) return null
-    const marketPrice = selectedSymbol.numericPrice2 || selectedSymbol.numericPrice || 0
+    const marketPrice = liveAskNum || liveBidNum || 0
     const limitPriceNum = parseFloat(limitPrice)
     const executionPrice =
       orderType === 'limit' && Number.isFinite(limitPriceNum) && limitPriceNum > 0
@@ -428,22 +556,67 @@ export function RightTradingPanel() {
     meData?.maxLeverage,
     getSymbolForCalculations,
     currency,
+    liveBidNum,
+    liveAskNum,
   ])
 
   // Auto-seed default size once per context, so initial value meets min estimated margin target.
+  // Previously: SHOW_ONLY_UNITS hid lots/pip and this effect only ran in units — lots mode kept stale lotSize vs min margin.
+  // Fix: seed `size`, `lotSize`, or `pipPosition` from the same target base-units notional; seedKey includes `sizeMode`.
+  // Reference: docs/phase-2-lot-size-investigation.md
   useEffect(() => {
-    if (!(SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units') || !selectedSymbol || !currency) return
+    if (!selectedSymbol || !currency) return
     if (orderType === 'limit' && !limitPrice.trim()) return
 
-    const seedKey = `${selectedSymbol.code}|${currency}|${orderType}|${orderType === 'limit' ? limitPrice.trim() : 'market'}`
+    const seedKey = `${selectedSymbol.code}|${currency}|${orderType}|${orderType === 'limit' ? limitPrice.trim() : 'market'}|${sizeMode}`
     if (autoSizeSeedKeyRef.current === seedKey) return
 
     const nextSize = getDefaultSizeForMinMargin()
     if (!nextSize) return
 
+    const marketPrice = liveAskNum || liveBidNum || 0
+    const limitPriceNum = parseFloat(limitPrice)
+    const executionPrice =
+      orderType === 'limit' && Number.isFinite(limitPriceNum) && limitPriceNum > 0
+        ? limitPriceNum
+        : marketPrice
+    if (executionPrice <= 0) return
+
+    const symbolForCalc = getSymbolForCalculations()
+    if (!symbolForCalc) return
+    const baseUnits = defaultSizeStringToBaseUnits(nextSize, selectedSymbol, currency, executionPrice)
+    if (baseUnits == null || baseUnits <= 0) return
+
     autoSizeSeedKeyRef.current = seedKey
-    setSize(nextSize)
-  }, [selectedSymbol, currency, orderType, limitPrice, sizeMode, getDefaultSizeForMinMargin])
+
+    if (sizeMode === 'units') {
+      setSize(nextSize)
+      return
+    }
+
+    if (sizeMode === 'lots') {
+      const lots = normalizeLotSize(calculateLotsFromUnits(baseUnits, symbolForCalc), symbolForCalc)
+      setLotSize(formatLotSize(lots, symbolForCalc))
+      return
+    }
+
+    if (sizeMode === 'pipPosition') {
+      const lots = normalizeLotSize(calculateLotsFromUnits(baseUnits, symbolForCalc), symbolForCalc)
+      const pip = calculatePipPositionFromLots(lots, symbolForCalc, executionPrice, pipPositionCurrency)
+      if (Number.isFinite(pip) && pip > 0) setPipPosition(pip.toFixed(2))
+    }
+  }, [
+    selectedSymbol,
+    currency,
+    orderType,
+    limitPrice,
+    sizeMode,
+    getDefaultSizeForMinMargin,
+    getSymbolForCalculations,
+    pipPositionCurrency,
+    liveBidNum,
+    liveAskNum,
+  ])
 
   /** Server-side margin (same as place_order). Uses Redis execution price + risk::effective_leverage. */
   const canEstimateServerMargin =
@@ -500,8 +673,8 @@ export function RightTradingPanel() {
       }
     }
 
-    const bid = selectedSymbol.numericPrice || 0
-    const ask = selectedSymbol.numericPrice2 || bid
+    const bid = liveBidNum || 0
+    const ask = liveAskNum || bid
     const refPriceMid = ask !== bid ? (bid + ask) / 2 : bid
 
     const baseSize = sizeCalculations.currentUnits
@@ -542,6 +715,8 @@ export function RightTradingPanel() {
     previewOrderSide,
     orderType,
     limitPrice,
+    liveBidNum,
+    liveAskNum,
   ])
 
   // Current order notional (exposure) for "active tier" indicator in Leverage card (matches preview execution price)
@@ -553,8 +728,8 @@ export function RightTradingPanel() {
         return sizeCalculations.currentUnits * lp
       }
     }
-    const bid = selectedSymbol.numericPrice || 0
-    const ask = selectedSymbol.numericPrice2 || bid
+    const bid = liveBidNum || 0
+    const ask = liveAskNum || bid
     const exec = previewOrderSide === 'SELL' ? bid : ask
     if (exec <= 0) return 0
     return sizeCalculations.currentUnits * exec
@@ -583,8 +758,8 @@ export function RightTradingPanel() {
       orderType === 'limit' && limitPrice.trim() !== '' ? parseFloat(limitPrice) : Number.NaN
     const limitExecutionPrice = Number.isFinite(limitPx) && limitPx > 0 ? limitPx : null
     return clientMarketFallbackMarginUsdOrNull({
-      bid: selectedSymbol.numericPrice || 0,
-      ask: selectedSymbol.numericPrice2 || selectedSymbol.numericPrice || 0,
+      bid: liveBidNum || 0,
+      ask: liveAskNum || liveBidNum || 0,
       side: previewOrderSide,
       baseUnits: sizeCalculations.currentUnits,
       tiers: symbolLeverage?.tiers,
@@ -629,11 +804,11 @@ export function RightTradingPanel() {
 
   // Format live price for limit price placeholder
   const livePricePlaceholder = useMemo(() => {
-    if (!selectedSymbol || selectedSymbol.numericPrice <= 0) {
+    if (!selectedSymbol || liveBidNum <= 0) {
       return 'Enter limit price'
     }
     // Use bid price (numericPrice) as the reference
-    const price = selectedSymbol.numericPrice
+    const price = liveBidNum
     // Determine precision based on price value
     if (price >= 1000) {
       return `Current: ${price.toFixed(2)}`
@@ -646,11 +821,11 @@ export function RightTradingPanel() {
 
   // Format live price for market size placeholder
   const marketSizePlaceholder = useMemo(() => {
-    if (!selectedSymbol || selectedSymbol.numericPrice <= 0) {
+    if (!selectedSymbol || liveBidNum <= 0) {
       return 'Enter size'
     }
     // Show current market price as reference
-    const price = selectedSymbol.numericPrice
+    const price = liveBidNum
     const formattedPrice = price >= 1000 
       ? price.toFixed(2) 
       : price >= 1 
@@ -667,7 +842,7 @@ export function RightTradingPanel() {
   }, [selectedSymbol, currency])
 
   const handleMaxSize = () => {
-    if (!selectedSymbol || !selectedSymbol.numericPrice) {
+    if (!selectedSymbol || !liveBidNum) {
       toast.error('Please select a symbol')
       return
     }
@@ -678,7 +853,7 @@ export function RightTradingPanel() {
       setSize(maxQuoteValue.toFixed(2))
     } else {
       // If in base currency mode, convert to base
-      const maxBaseSize = maxQuoteValue / selectedSymbol.numericPrice
+      const maxBaseSize = maxQuoteValue / liveBidNum
       setSize(maxBaseSize.toFixed(8))
     }
     toast.success('Size set to maximum')
@@ -686,7 +861,7 @@ export function RightTradingPanel() {
 
   // Handle currency change with conversion
   const handleCurrencyChange = (newCurrency: string) => {
-    if (!selectedSymbol || !selectedSymbol.numericPrice || currency === newCurrency) {
+    if (!selectedSymbol || !liveBidNum || currency === newCurrency) {
       setCurrency(newCurrency)
       return
     }
@@ -697,7 +872,7 @@ export function RightTradingPanel() {
       return
     }
 
-    const price = selectedSymbol.numericPrice || 0
+    const price = liveBidNum || 0
     if (price <= 0) {
       setCurrency(newCurrency)
       return
@@ -899,25 +1074,24 @@ export function RightTradingPanel() {
       return
     }
 
-    // Get base size in units based on current mode (when only Units is shown, always use units)
-    const effectiveSizeMode = SHOW_ONLY_UNITS_SIZE_MODE ? 'units' : sizeMode
+    // Get base size in units based on current mode (API always receives base units).
     let baseSize = 0
     let displaySize = ''
 
-    if (effectiveSizeMode === 'units') {
+    if (sizeMode === 'units') {
       const sizeNum = parseFloat(size)
       if (!sizeNum || sizeNum <= 0) {
         toast.error('Please enter a valid size')
         return
       }
       baseSize = sizeNum
-      if (currency === selectedSymbol.quoteCurrency && selectedSymbol.numericPrice > 0) {
-        baseSize = sizeNum / selectedSymbol.numericPrice
+      if (currency === selectedSymbol.quoteCurrency && liveBidNum > 0) {
+        baseSize = sizeNum / liveBidNum
       }
       displaySize = currency === selectedSymbol.quoteCurrency 
         ? `${size} ${selectedSymbol.quoteCurrency} (${baseSize.toFixed(8)} ${selectedSymbol.baseCurrency})`
         : `${size} ${selectedSymbol.baseCurrency}`
-    } else if (effectiveSizeMode === 'lots') {
+    } else if (sizeMode === 'lots') {
       const lotSizeNum = parseFloat(lotSize)
       if (!lotSizeNum || lotSizeNum <= 0) {
         toast.error('Please enter a valid lot size')
@@ -926,13 +1100,13 @@ export function RightTradingPanel() {
       const normalizedLots = normalizeLotSize(lotSizeNum, symbolForCalc)
       baseSize = calculateUnitsFromLots(normalizedLots, symbolForCalc)
       displaySize = `${formatLotSize(normalizedLots, symbolForCalc)} lots (${formatUnits(baseSize, symbolForCalc)} units)`
-    } else if (effectiveSizeMode === 'pipPosition') {
+    } else if (sizeMode === 'pipPosition') {
       const pipPosNum = parseFloat(pipPosition)
       if (!pipPosNum || pipPosNum <= 0) {
         toast.error('Please enter a valid pip position')
         return
       }
-      const price = selectedSymbol.numericPrice || 0
+      const price = liveBidNum || 0
       if (price <= 0) {
         toast.error('Price not available')
         return
@@ -984,6 +1158,7 @@ export function RightTradingPanel() {
         tp: useSlTp && takeProfit ? takeProfit : undefined,
         tif: 'GTC',
         idempotency_key: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
+        ...(orderType === 'market' && slippageOverridden ? { slippage_bps: slippageBps } : {}),
       }
 
       const response = await placeOrder(payload)
@@ -996,6 +1171,7 @@ export function RightTradingPanel() {
       }
       
       setPendingOrders(prev => new Set(prev).add(orderId))
+      useTerminalStore.getState().registerRecentSubmittedOrder(orderId)
 
       useTerminalStore.getState().requestOpenPositionsRefresh()
 
@@ -1007,12 +1183,12 @@ export function RightTradingPanel() {
 
       // Reset form for market orders (keep limit orders for potential modifications)
       if (orderType === 'market') {
-        if (effectiveSizeMode === 'units') {
+        if (sizeMode === 'units') {
           const nextDefaultSize = getDefaultSizeForMinMargin()
           setSize(nextDefaultSize ?? '0.003457')
-        } else if (effectiveSizeMode === 'lots') {
+        } else if (sizeMode === 'lots') {
           setLotSize('0.5')
-        } else if (effectiveSizeMode === 'pipPosition') {
+        } else if (sizeMode === 'pipPosition') {
           setPipPosition('5')
         }
         setStopLoss('')
@@ -1020,6 +1196,9 @@ export function RightTradingPanel() {
         setUseSlTp(false)
       }
     } catch (error: unknown) {
+      if (tryToastPlaceOrderForbiddenError(error, toast, clockNow.getTime())) {
+        return
+      }
       const err = error as { response?: { data?: { error?: string | { code?: string; message?: string }; message?: string }; status?: number }; message?: string }
       const data = err?.response?.data
       const status = err?.response?.status
@@ -1131,7 +1310,11 @@ export function RightTradingPanel() {
                   {filteredSymbolsForDropdown.length === 0 ? (
                     <div className="px-3 py-4 text-center text-slate-600 dark:text-muted text-sm">No symbols match</div>
                   ) : (
-                    filteredSymbolsForDropdown.map((symbol) => (
+                    filteredSymbolsForDropdown.map((symbol) => {
+                      const ddSession = dropdownSessionMap[symbol.code]
+                      const ddClosed = ddSession != null && !ddSession.isOpen
+                      const ddDimmed = !symbol.enabled || ddClosed
+                      return (
                       <button
                         key={symbol.id}
                         type="button"
@@ -1142,15 +1325,24 @@ export function RightTradingPanel() {
                         }}
                         className={cn(
                           'w-full px-3 py-2.5 text-left text-sm font-medium flex items-center justify-between gap-2 transition-colors',
+                          ddDimmed && 'opacity-50 hover:opacity-75',
                           selectedSymbol?.id === symbol.id
                             ? 'bg-accent/15 text-accent'
                             : 'text-text hover:bg-slate-100 dark:hover:bg-white/5'
                         )}
                       >
-                        <span className="truncate">{symbol.code}</span>
+                        <span className="truncate flex items-center gap-2 min-w-0">
+                          {symbol.code}
+                          {ddDimmed ? (
+                            <span className="text-[10px] font-bold uppercase text-amber-500 shrink-0">
+                              {!symbol.enabled ? 'Off' : 'Closed'}
+                            </span>
+                          ) : null}
+                        </span>
                         {selectedSymbol?.id === symbol.id ? <Check className="h-4 w-4 shrink-0 text-accent" /> : null}
                       </button>
-                    ))
+                      )
+                    })
                   )}
                 </div>
               </div>
@@ -1166,14 +1358,38 @@ export function RightTradingPanel() {
                 <span className="text-[10px] font-semibold text-success uppercase tracking-wider">Live</span>
               </div>
               
-              <div className="text-[10px] font-bold text-slate-600 dark:text-muted uppercase tracking-widest mb-3">Live Quote</div>
+              <div className="flex flex-wrap items-center gap-2 pr-14 mb-3">
+                <div className="text-[10px] font-bold text-slate-600 dark:text-muted uppercase tracking-widest">Live Quote</div>
+                {session && !session.is24_7 ? (
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide',
+                      session.isOpen
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'h-1.5 w-1.5 rounded-full shrink-0',
+                        session.isOpen ? 'bg-emerald-500' : 'bg-amber-500'
+                      )}
+                    />
+                    {session.isOpen
+                      ? formatClosesInLabel(session.nextCloseAt, session.timezone, clockNow.getTime()) ||
+                        'Market open'
+                      : formatOpensInLabel(session.nextOpenAt, session.timezone, clockNow.getTime()) ||
+                        'Market closed'}
+                  </span>
+                ) : null}
+              </div>
               
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <div className="text-[10px] text-slate-600/90 dark:text-muted/70 uppercase tracking-wider">Bid</div>
-                  {selectedSymbol.numericPrice > 0 ? (
+                  {liveBidNum > 0 ? (
                     <SinglePriceDisplay
-                      price={selectedSymbol.numericPrice}
+                      price={liveBidNum}
                       formatted={formatLiveQuoteBid(selectedSymbol)}
                     />
                   ) : (
@@ -1182,10 +1398,10 @@ export function RightTradingPanel() {
                 </div>
                 <div className="space-y-1.5 text-right">
                   <div className="text-[10px] text-slate-600/90 dark:text-muted/70 uppercase tracking-wider">Ask</div>
-                  {selectedSymbol.numericPrice2 > 0 ? (
+                  {liveAskNum > 0 ? (
                     <div className="flex justify-end">
                       <SinglePriceDisplay
-                        price={selectedSymbol.numericPrice2}
+                        price={liveAskNum}
                         formatted={formatLiveQuoteAsk(selectedSymbol)}
                       />
                     </div>
@@ -1196,12 +1412,12 @@ export function RightTradingPanel() {
               </div>
               
               {/* Spread indicator */}
-              {selectedSymbol.numericPrice > 0 && selectedSymbol.numericPrice2 > 0 && (
+              {liveBidNum > 0 && liveAskNum > 0 && (
                 <div className="mt-3 pt-3 border-t border-slate-200 dark:border-white/5">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-slate-600/90 dark:text-muted/70">Spread</span>
                     <span className="text-xs font-semibold text-text">
-                      {liveQuoteSpreadFormatted(selectedSymbol)}
+                      {liveQuoteSpreadFormatted(selectedSymbol, liveBidNum, liveAskNum, liveBidStr, liveAskStr)}
                     </span>
                   </div>
                 </div>
@@ -1238,8 +1454,7 @@ export function RightTradingPanel() {
             </div>
           )}
 
-          {/* Size Mode Selector - hidden when only Units is shown */}
-          {!SHOW_ONLY_UNITS_SIZE_MODE && (
+          {/* Size Mode Selector */}
           <div className="mb-3">
             <label className="text-xs font-semibold text-slate-600 dark:text-muted uppercase tracking-wider mb-2 block">Size Mode</label>
             <Segmented
@@ -1253,15 +1468,14 @@ export function RightTradingPanel() {
               className="w-full"
             />
           </div>
-          )}
 
           {/* Size Input - Conditional based on mode */}
           <div className="mb-4">
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-slate-600 dark:text-muted uppercase tracking-wider">
-                {SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units' ? 'Size' : sizeMode === 'lots' ? 'Lot Size' : 'Pip Position'}
+                {sizeMode === 'units' ? 'Size' : sizeMode === 'lots' ? 'Lot Size' : 'Pip Position'}
               </label>
-              {(SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units') && (
+              {sizeMode === 'units' && (
                 <button
                   onClick={handleMaxSize}
                   className="text-xs font-bold text-accent hover:text-accent/80 transition-colors px-2 py-0.5 rounded hover:bg-accent/10"
@@ -1273,7 +1487,7 @@ export function RightTradingPanel() {
             </div>
 
             {/* Units Mode */}
-            {(SHOW_ONLY_UNITS_SIZE_MODE || sizeMode === 'units') && (
+            {sizeMode === 'units' && (
               <>
                 <div className="flex items-center gap-2">
                   <Input
@@ -1319,8 +1533,8 @@ export function RightTradingPanel() {
               </>
             )}
 
-            {/* Lots Mode - hidden when SHOW_ONLY_UNITS_SIZE_MODE */}
-            {!SHOW_ONLY_UNITS_SIZE_MODE && sizeMode === 'lots' && (
+            {/* Lots Mode */}
+            {sizeMode === 'lots' && (
               <>
                 <div className="flex items-center gap-2">
                   <Input
@@ -1355,8 +1569,8 @@ export function RightTradingPanel() {
               </>
             )}
 
-            {/* Pip Position Mode - hidden when SHOW_ONLY_UNITS_SIZE_MODE */}
-            {!SHOW_ONLY_UNITS_SIZE_MODE && sizeMode === 'pipPosition' && (
+            {/* Pip Position Mode */}
+            {sizeMode === 'pipPosition' && (
               <>
                 <div className="flex items-center gap-2">
                   <Input
@@ -1454,8 +1668,8 @@ export function RightTradingPanel() {
                           setStopLoss(price)
                           if (selectedSymbol && price) {
                             const entryPrice = slTpSide === 'LONG'
-                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
-                              : selectedSymbol.numericPrice
+                              ? (liveAskNum || liveBidNum)
+                              : liveBidNum
                             const sizeNum = sizeCalculations.currentUnits
                             const slPriceNum = parseFloat(price)
                             if (!isNaN(slPriceNum) && sizeNum > 0) {
@@ -1483,8 +1697,8 @@ export function RightTradingPanel() {
                           setStopLossAmount(amount)
                           if (selectedSymbol && amount) {
                             const entryPrice = slTpSide === 'LONG'
-                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
-                              : selectedSymbol.numericPrice
+                              ? (liveAskNum || liveBidNum)
+                              : liveBidNum
                             const sizeNum = sizeCalculations.currentUnits
                             const lossAmount = parseFloat(amount)
                             if (!isNaN(lossAmount) && sizeNum > 0) {
@@ -1518,8 +1732,8 @@ export function RightTradingPanel() {
                           setTakeProfit(price)
                           if (selectedSymbol && price) {
                             const entryPrice = slTpSide === 'LONG'
-                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
-                              : selectedSymbol.numericPrice
+                              ? (liveAskNum || liveBidNum)
+                              : liveBidNum
                             const sizeNum = sizeCalculations.currentUnits
                             const tpPriceNum = parseFloat(price)
                             if (!isNaN(tpPriceNum) && sizeNum > 0) {
@@ -1547,8 +1761,8 @@ export function RightTradingPanel() {
                           setTakeProfitAmount(amount)
                           if (selectedSymbol && amount) {
                             const entryPrice = slTpSide === 'LONG'
-                              ? (selectedSymbol.numericPrice2 || selectedSymbol.numericPrice)
-                              : selectedSymbol.numericPrice
+                              ? (liveAskNum || liveBidNum)
+                              : liveBidNum
                             const sizeNum = sizeCalculations.currentUnits
                             const profitAmount = parseFloat(amount)
                             if (!isNaN(profitAmount) && sizeNum > 0) {
@@ -1596,6 +1810,20 @@ export function RightTradingPanel() {
                 <span className="text-slate-600/90 dark:text-muted/80">Est. Liquidation</span>
                 <span className="font-semibold text-text">{costBreakdown.liquidation}</span>
               </div>
+              {orderType === 'market' && (
+                <div className="pt-2 mt-1 border-t border-slate-200/80 dark:border-white/5">
+                  <SlippageInput
+                    value={slippageBps}
+                    defaultBps={defaultSlippageBps}
+                    defaultSource={defaultSlippageSource}
+                    isOverridden={slippageOverridden}
+                    onChange={(bps, isOverride) => {
+                      setSlippageBps(bps)
+                      setSlippageOverridden(isOverride)
+                    }}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -1615,9 +1843,13 @@ export function RightTradingPanel() {
               onMouseEnter={() => setPreviewOrderSide('BUY')}
               onFocus={() => setPreviewOrderSide('BUY')}
               title={
-                marginCalcUnavailable
-                  ? 'Margin cannot be calculated — tier configuration unavailable.'
-                  : undefined
+                sessionBlocksOrders
+                  ? isSessionClosed
+                    ? 'Market is closed for this symbol.'
+                    : 'Trading is disabled for this symbol.'
+                  : marginCalcUnavailable
+                    ? 'Margin cannot be calculated — tier configuration unavailable.'
+                    : undefined
               }
               disabled={
                 isSubmitting ||
@@ -1626,7 +1858,8 @@ export function RightTradingPanel() {
                 marginCalcUnavailable ||
                 insufficientFreeMargin ||
                 belowMinRequiredMargin ||
-                !canPlaceOrder
+                !canPlaceOrder ||
+                sessionBlocksOrders
               }
             >
               <div className="flex items-center justify-center gap-2">
@@ -1645,9 +1878,13 @@ export function RightTradingPanel() {
               onMouseEnter={() => setPreviewOrderSide('SELL')}
               onFocus={() => setPreviewOrderSide('SELL')}
               title={
-                marginCalcUnavailable
-                  ? 'Margin cannot be calculated — tier configuration unavailable.'
-                  : undefined
+                sessionBlocksOrders
+                  ? isSessionClosed
+                    ? 'Market is closed for this symbol.'
+                    : 'Trading is disabled for this symbol.'
+                  : marginCalcUnavailable
+                    ? 'Margin cannot be calculated — tier configuration unavailable.'
+                    : undefined
               }
               disabled={
                 isSubmitting ||
@@ -1656,7 +1893,8 @@ export function RightTradingPanel() {
                 marginCalcUnavailable ||
                 insufficientFreeMargin ||
                 belowMinRequiredMargin ||
-                !canPlaceOrder
+                !canPlaceOrder ||
+                sessionBlocksOrders
               }
             >
               <div className="flex items-center justify-center gap-2">
@@ -1669,6 +1907,16 @@ export function RightTradingPanel() {
               </div>
             </Button>
           </div>
+          {isSessionClosed && session && (
+            <div className="mt-2 text-center text-xs text-amber-500">
+              Market closed —{' '}
+              {formatOpensInLabel(session.nextOpenAt, session.timezone, clockNow.getTime()) ||
+                'No upcoming session'}
+            </div>
+          )}
+          {!isSessionClosed && isSymbolTradingOff && (
+            <div className="mt-2 text-center text-xs text-amber-500">Trading disabled for this symbol.</div>
+          )}
           {insufficientFreeMargin && estMarginDollars != null && estMarginDollars > 0 && (
             <div className="mt-2 text-xs text-danger text-center">
               Insufficient free margin (Est. margin &gt; Free margin)
@@ -1840,7 +2088,7 @@ export function RightTradingPanel() {
                 <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">
                   <span className="text-slate-600/90 dark:text-muted/80">Price</span>
                   <span className="font-semibold text-text">
-                    {selectedSymbol.numericPrice > 0 ? formatLiveQuoteBid(selectedSymbol) : '—'}
+                    {liveBidNum > 0 ? formatLiveQuoteBid(selectedSymbol) : '—'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-slate-200 dark:border-white/5">

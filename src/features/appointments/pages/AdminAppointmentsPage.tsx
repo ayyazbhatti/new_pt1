@@ -32,7 +32,7 @@ import {
   completeAppointment,
   sendAppointmentReminder,
 } from '../api/appointments.api'
-import { Calendar, CalendarCheck, CalendarClock, CalendarDays, AlertCircle, List, Plus, X } from 'lucide-react'
+import { Calendar, CalendarCheck, CalendarClock, CalendarDays, AlertCircle, List, Plus, X, Search } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { toast } from '@/shared/components/common'
 import { useCanAccess } from '@/shared/utils/permissions'
@@ -283,6 +283,24 @@ export function AdminAppointmentsPage() {
     })
   }, [filteredAppointments, calendarDate])
 
+  const hasActiveFilters =
+    searchQuery.trim() !== '' ||
+    statusFilter !== 'all' ||
+    typeFilter !== 'all' ||
+    userFilter !== 'all' ||
+    startDateFilter !== '' ||
+    endDateFilter !== ''
+
+  const handleClearFilters = () => {
+    setSearchQuery('')
+    setStatusFilter('all')
+    setTypeFilter('all')
+    setUserFilter('all')
+    setStartDateFilter('')
+    setEndDateFilter('')
+    setPageIndex(0)
+  }
+
   return (
     <ContentShell>
       <PageHeader
@@ -344,80 +362,105 @@ export function AdminAppointmentsPage() {
         })}
       </div>
 
-      {/* Filters */}
-      <div className="mb-6 rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="relative flex-1 min-w-[180px]">
-            <label className="mb-1 block text-xs text-slate-400">Search</label>
-            <div className="relative">
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by title, user..."
-                className="border-slate-600 bg-slate-700 text-white placeholder:text-slate-400 pr-8"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="w-36">
-            <label className="mb-1 block text-xs text-slate-400">Status</label>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="border-slate-600 bg-slate-700 text-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {(['scheduled', 'confirmed', 'completed', 'cancelled', 'rescheduled'] as AppointmentStatus[]).map((s) => (
-                  <SelectItem key={s} value={s}>{s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="w-36">
-            <label className="mb-1 block text-xs text-slate-400">Type</label>
-            <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger className="border-slate-600 bg-slate-700 text-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {(['consultation', 'support', 'onboarding', 'review', 'other'] as AppointmentType[]).map((t) => (
-                  <SelectItem key={t} value={t}>{t}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="w-40">
-            <label className="mb-1 block text-xs text-slate-400">User</label>
-            <Select value={userFilter} onValueChange={setUserFilter}>
-              <SelectTrigger className="border-slate-600 bg-slate-700 text-white">
-                <SelectValue placeholder="All users" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All users</SelectItem>
-                {userOptions.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-slate-400">Start date</label>
-            <Input type="date" value={startDateFilter} onChange={(e) => setStartDateFilter(e.target.value)} className="w-40 border-slate-600 bg-slate-700 text-white" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-slate-400">End date</label>
-            <Input type="date" value={endDateFilter} onChange={(e) => setEndDateFilter(e.target.value)} className="w-40 border-slate-600 bg-slate-700 text-white" />
-          </div>
+      {/* Filters — same toolbar pattern as other admin list pages */}
+      <div className="mb-6 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-2">
+        <div className="relative min-h-10 min-w-[min(100%,220px)] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+          <Input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by title, user…"
+            className={cn('w-full min-w-0 pl-9', searchQuery.trim() && 'pr-9')}
+          />
+          {searchQuery.trim() ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text"
+              aria-label="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-10 w-fit min-w-[10.5rem] max-w-[min(100%,14rem)] shrink-0">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            {(['scheduled', 'confirmed', 'completed', 'cancelled', 'rescheduled'] as AppointmentStatus[]).map((s) => (
+              <SelectItem key={s} value={s}>
+                {s}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="h-10 w-fit min-w-[11.5rem] max-w-[min(100%,16rem)] shrink-0">
+            <SelectValue placeholder="Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            {(['consultation', 'support', 'onboarding', 'review', 'other'] as AppointmentType[]).map((t) => (
+              <SelectItem key={t} value={t}>
+                {t}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={userFilter} onValueChange={setUserFilter}>
+          <SelectTrigger className="h-10 w-fit min-w-[13rem] max-w-[min(100%,24rem)] shrink-0">
+            <SelectValue placeholder="User" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All users</SelectItem>
+            {userOptions.map((u) => (
+              <SelectItem key={u.id} value={u.id}>
+                {u.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {viewMode === 'list' ? (
+          <>
+            <div className="flex shrink-0 items-center gap-2">
+              <label className="whitespace-nowrap text-xs text-text-muted" htmlFor="apt_filter_start">
+                Start
+              </label>
+              <Input
+                id="apt_filter_start"
+                type="date"
+                value={startDateFilter}
+                onChange={(e) => setStartDateFilter(e.target.value)}
+                className="w-auto min-w-[10.5rem] shrink-0"
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <label className="whitespace-nowrap text-xs text-text-muted" htmlFor="apt_filter_end">
+                End
+              </label>
+              <Input
+                id="apt_filter_end"
+                type="date"
+                value={endDateFilter}
+                onChange={(e) => setEndDateFilter(e.target.value)}
+                className="w-auto min-w-[10.5rem] shrink-0"
+              />
+            </div>
+          </>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={!hasActiveFilters}
+          onClick={handleClearFilters}
+        >
+          Clear
+        </Button>
       </div>
 
       {viewMode === 'list' && (

@@ -4,6 +4,7 @@ import { Button } from '@/shared/ui/button'
 import { Search, X } from 'lucide-react'
 import { useState } from 'react'
 import { useGroupsList } from '@/features/groups/hooks/useGroups'
+import { cn } from '@/shared/utils'
 
 interface SwapFiltersBarProps {
   onFilterChange?: (filters: {
@@ -13,6 +14,22 @@ interface SwapFiltersBarProps {
     status: string
     calcMode: string
   }) => void
+}
+
+function hasActiveFilters(state: {
+  group: string
+  market: string
+  symbol: string
+  status: string
+  calcMode: string
+}) {
+  return Boolean(
+    state.symbol.trim() ||
+      state.group !== 'all' ||
+      state.market !== 'all' ||
+      state.status !== 'all' ||
+      state.calcMode !== 'all',
+  )
 }
 
 export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
@@ -52,21 +69,29 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
   }
 
   return (
-    <div className="flex items-center gap-4 mb-6 flex-wrap">
-      <div className="flex-1 max-w-sm min-w-[200px]">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
-          <Input
-            type="search"
-            placeholder="Search symbols..."
-            value={symbol}
-            onChange={(e) => handleChange('symbol', e.target.value)}
-            className="pl-10"
-          />
-        </div>
+    <div className="mb-6 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-2">
+      <div className="relative min-h-10 min-w-[min(100%,220px)] flex-1">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+        <Input
+          type="search"
+          placeholder="Search symbols..."
+          value={symbol}
+          onChange={(e) => handleChange('symbol', e.target.value)}
+          className={cn('w-full min-w-0 pl-9', symbol.trim() && 'pr-9')}
+        />
+        {symbol.trim() ? (
+          <button
+            type="button"
+            onClick={() => handleChange('symbol', '')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text"
+            aria-label="Clear search"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
       <Select value={group} onValueChange={(value) => handleChange('group', value)}>
-        <SelectTrigger className="w-[180px]">
+        <SelectTrigger className="h-10 w-fit min-w-[13rem] max-w-[min(100%,26rem)] shrink-0">
           <SelectValue placeholder="Group" />
         </SelectTrigger>
         <SelectContent>
@@ -79,7 +104,7 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
         </SelectContent>
       </Select>
       <Select value={market} onValueChange={(value) => handleChange('market', value)}>
-        <SelectTrigger className="w-[180px]">
+        <SelectTrigger className="h-10 w-fit min-w-[11.5rem] max-w-[min(100%,18rem)] shrink-0">
           <SelectValue placeholder="Market" />
         </SelectTrigger>
         <SelectContent>
@@ -92,7 +117,7 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
         </SelectContent>
       </Select>
       <Select value={status} onValueChange={(value) => handleChange('status', value)}>
-        <SelectTrigger className="w-[180px]">
+        <SelectTrigger className="h-10 w-fit min-w-[10.5rem] max-w-[min(100%,15rem)] shrink-0">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
@@ -102,7 +127,7 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
         </SelectContent>
       </Select>
       <Select value={calcMode} onValueChange={(value) => handleChange('calcMode', value)}>
-        <SelectTrigger className="w-[180px]">
+        <SelectTrigger className="h-10 w-fit min-w-[11.5rem] max-w-[min(100%,18rem)] shrink-0">
           <SelectValue placeholder="Calc Mode" />
         </SelectTrigger>
         <SelectContent>
@@ -112,11 +137,15 @@ export function SwapFiltersBar({ onFilterChange }: SwapFiltersBarProps) {
           <SelectItem value="funding_8h">8H Funding</SelectItem>
         </SelectContent>
       </Select>
-      <Button variant="outline" size="sm" onClick={handleClear}>
-        <X className="h-4 w-4 mr-2" />
+      <Button
+        variant="outline"
+        size="sm"
+        className="shrink-0"
+        disabled={!hasActiveFilters({ group, market, symbol, status, calcMode })}
+        onClick={handleClear}
+      >
         Clear
       </Button>
     </div>
   )
 }
-

@@ -1,3 +1,4 @@
 // Terminal API exports
-export {}
+export type { SessionStatus } from './sessions.api'
+export { fetchSessionStatus, fetchSessionStatusBatch } from './sessions.api'
 

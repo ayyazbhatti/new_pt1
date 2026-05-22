@@ -176,6 +176,10 @@ pub struct UserResponse {
     /// Platform default currency from general settings (for client-side resolution chain)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform_display_currency: Option<String>,
+    /// Effective default max slippage (bps) for the user when not overriding per order (`/me`, Phase 3 UI).
+    pub effective_slippage_bps: i32,
+    /// Origin of [`Self::effective_slippage_bps`]: `groupDefault` | `platformDefault` | `hardcodedFallback`.
+    pub effective_slippage_source: crate::services::slippage::SlippageSource,
 }
 
 #[derive(Debug, Serialize)]
@@ -1093,6 +1097,8 @@ async fn build_user_response(
         (permission_profile_name, Some(permissions))
     };
 
+    let slippage_res = crate::services::slippage::resolve_slippage(pool, user.group_id, None).await?;
+
     Ok(UserResponse {
         id: user.id,
         email: user.email.clone(),
@@ -1143,6 +1149,8 @@ async fn build_user_response(
         effective_display_currency,
         effective_display_currency_origin,
         platform_display_currency: platform_currency.clone(),
+        effective_slippage_bps: slippage_res.bps,
+        effective_slippage_source: slippage_res.source,
     })
 }
 

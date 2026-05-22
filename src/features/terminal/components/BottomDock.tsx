@@ -16,7 +16,15 @@ import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.
 import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useWalletStore } from '@/shared/store/walletStore'
-import { usePriceStream, normalizeSymbolKey } from '@/features/symbols/hooks/usePriceStream'
+import { usePriceStreamConnection } from '@/features/symbols/hooks/usePriceStream'
+import {
+  BottomDockCloseProfitableOnlyDialogBody,
+  BottomDockLiveProfitablePresence,
+} from './BottomDockCloseProfitableLive'
+import {
+  BottomDockDesktopOpenPositionRow,
+  BottomDockMobileOpenPositionCard,
+} from './BottomDockOpenPositionRows'
 import { wsClient } from '@/shared/ws/wsClient'
 import { getWsGatewayUrl } from '@/shared/ws/wsGatewayUrl'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
@@ -24,11 +32,9 @@ import { useTerminalStore } from '../store/terminalStore'
 import { useFormatDateTime, useFormatDateTimeSeconds, useFormatTime } from '@/shared/datetime'
 import { useFormatFromUsd, useFormatSignedFromUsd, useFormatConverted, useFormatAmount } from '@/shared/currency'
 import type { MockSymbol } from '@/shared/mock/terminalMock'
-import {
-  openPositionPnlParts,
-  closedPositionPnlParts,
-  PositionPnLBreakdown,
-} from '@/shared/components/PositionPnLBreakdown'
+import { closedPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '../hooks/useSymbolMetaLookup'
 
 /** User-friendly message for close position errors (403 = trading disabled, else use API message). */
 function closePositionErrorMessage(err: unknown): string {
@@ -177,6 +183,20 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const formatSigned = useFormatSignedFromUsd()
   const formatConv = useFormatConverted()
   const formatAmt = useFormatAmount()
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const positionPendingClose = useMemo(() => {
+    if (!closePositionId) return null
+    const key = canonicalPositionId(closePositionId)
+    return positions.find((p) => canonicalPositionId(p.id) === key) ?? null
+  }, [closePositionId, positions])
+
+  const closeDialogSizeFmt = useMemo(() => {
+    if (!positionPendingClose) return null
+    return formatPositionSize(
+      parseFloat(positionPendingClose.size || '0'),
+      getSymbolMetaForCode(symbolMetaLookup, positionPendingClose.symbol),
+    )
+  }, [positionPendingClose, symbolMetaLookup])
   const formatMoneyRef = useRef(formatMoney)
   formatMoneyRef.current = formatMoney
   const terminalSymbols = useTerminalStore((s) => s.symbols)
@@ -204,6 +224,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const [positionsOptionsMenuOpen, setPositionsOptionsMenuOpen] = useState(false)
   const [closeProfitableOnlyDialogOpen, setCloseProfitableOnlyDialogOpen] = useState(false)
   const [closeProfitableOnlyLoading, setCloseProfitableOnlyLoading] = useState(false)
+  /** Live gate for “Close only profitable” (updated only when a position crosses profitable / not). */
+  const [dockHasProfitableLive, setDockHasProfitableLive] = useState(false)
   /** When WS appended an open row before REST/Redis lists it; used to avoid stale GET wiping the row. */
   const wsAppendedAtRef = useRef<Map<string, number>>(new Map())
   /** Position ids we closed locally; suppress stale OPEN from REST for a short window (mergePositions re-add bug). */
@@ -228,53 +250,43 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
     }
   }, [])
 
-  // Get symbols from positions for price streaming
-  const positionSymbols = useMemo(() => {
-    const symbols = positions
-      .filter(p => p.status === 'OPEN')
-      .map(p => p.symbol.toUpperCase())
-      .filter((symbol, index, self) => self.indexOf(symbol) === index) // Remove duplicates
-    return symbols
-  }, [positions])
-
-  // Subscribe to live price stream for position symbols
-  const { prices: livePrices } = usePriceStream(positionSymbols)
-
-  // Open positions with live price and PnL for table and mobile cards
-  const openPositionsWithComputed = useMemo(() => {
-    const open = positions
-      .filter(p => p.status === 'OPEN')
+  const sortedOpenPositions = useMemo(() => {
+    return positions
+      .filter((p) => p.status === 'OPEN')
       .sort((a, b) => {
         const aTime = a.opened_at || a.updated_at || 0
         const bTime = b.opened_at || b.updated_at || 0
         return bTime - aTime
       })
-    return open.map((pos) => {
-      const sizeNum = parseFloat(pos.size || '0')
-      const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
-      const symbolKey = normalizeSymbolKey(pos.symbol)
-      let priceData = livePrices.get(symbolKey)
-      if (!priceData) priceData = livePrices.get(pos.symbol.toUpperCase())
-      const livePrice = priceData
-        ? pos.side === 'LONG'
-          ? parseFloat(priceData.bid)
-          : parseFloat(priceData.ask)
-        : null
-      const { market: marketPnl, net: unrealizedPnl } = openPositionPnlParts(pos, livePrice, sizeNum, entryPrice)
-      return { position: pos, livePrice, unrealizedPnl, marketPnl, sizeNum, entryPrice }
-    })
-  }, [positions, livePrices])
+  }, [positions])
+
+  useEffect(() => {
+    if (sortedOpenPositions.length === 0) setDockHasProfitableLive(false)
+  }, [sortedOpenPositions.length])
+
+  // Get symbols from open positions for price streaming (subscription only; row cells use useSymbolPrice).
+  const positionSymbols = useMemo(() => {
+    const symbols = sortedOpenPositions
+      .map((p) => p.symbol.toUpperCase())
+      .filter((symbol, index, self) => self.indexOf(symbol) === index)
+    return symbols
+  }, [sortedOpenPositions])
+
+  usePriceStreamConnection(positionSymbols)
 
   // Mobile positions list filtered by search (symbol or side)
-  const mobileFilteredPositions = useMemo(() => {
+  const mobileFilteredOpenPositions = useMemo(() => {
     const q = positionsSearchQuery.trim().toLowerCase()
-    if (!q) return openPositionsWithComputed
-    return openPositionsWithComputed.filter(({ position: pos }) => {
+    if (!q) return sortedOpenPositions
+    return sortedOpenPositions.filter((pos) => {
       const symbolMatch = (pos.symbol || '').toLowerCase().includes(q)
-      const sideMatch = (pos.side || '').toLowerCase().includes(q) || (pos.side === 'LONG' && q === 'buy') || (pos.side === 'SHORT' && q === 'sell')
+      const sideMatch =
+        (pos.side || '').toLowerCase().includes(q) ||
+        (pos.side === 'LONG' && q === 'buy') ||
+        (pos.side === 'SHORT' && q === 'sell')
       return symbolMatch || sideMatch
     })
-  }, [openPositionsWithComputed, positionsSearchQuery])
+  }, [sortedOpenPositions, positionsSearchQuery])
 
   useEffect(() => {
     if (positionsSearchOpen) {
@@ -362,22 +374,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const fetchFilledOrders = useCallback(async () => {
     try {
       const data = await listOrders({ status: 'filled', limit: 100 })
-      console.log('📦 Filled orders fetched from API:', {
-        count: data.items.length,
-        total: data.total,
-        orders: data.items.map(o => ({
-          id: o.id,
-          symbol: o.symbol,
-          side: o.side,
-          status: o.status,
-          filled_size: o.filled_size,
-          average_price: (o as any).average_price || (o as any).average_fill_price || o.price
-        }))
-      })
       setFilledOrders(data.items)
-      if (data.items.length > 0) {
-        console.log(`✅ ${data.items.length} filled order(s) loaded`)
-      }
     } catch (error: any) {
       console.error('❌ Failed to fetch filled orders:', error)
       if (visibleDockTabRef.current === 'order-history') {
@@ -470,9 +467,6 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         try {
           lastWsMessageAtRef.current = Date.now()
           const data = JSON.parse(event.data)
-          if (data.type !== 'pong' && data.type !== 'tick') {
-            console.log('📨 [BottomDock] WebSocket message:', data.type, data)
-          }
 
           if (data.type === 'auth_success') {
             if (!mounted || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return
@@ -844,7 +838,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       { label: 'Margin', value: accountSummary != null ? formatMoney(accountSummary.marginLevel === 'inf' ? 0 : accountSummary.marginUsed) : '—', valueClass: 'text-text' },
                       { label: 'Free Margin', value: accountSummary != null ? formatMoney(accountSummary.freeMargin) : '—', valueClass: 'text-text' },
                       { label: 'Margin Level (%)', value: accountSummary != null ? (accountSummary.marginLevel === 'inf' ? '∞' : `${accountSummary.marginLevel}%`) : '—', valueClass: 'text-accent font-semibold' },
-                      { label: 'Total Positions', value: String(openPositionsWithComputed.length), valueClass: 'text-text' },
+                      { label: 'Total Positions', value: String(sortedOpenPositions.length), valueClass: 'text-text' },
                     ].map(({ label, value, valueClass }) => (
                       <div key={label} className="flex justify-between items-center text-sm">
                         <span className="text-slate-600 dark:text-muted">{label}</span>
@@ -904,19 +898,18 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       </button>
                     </div>
                   )}
-                  {openPositionsWithComputed.length === 0 ? (
+                  {sortedOpenPositions.length === 0 ? (
                     <div className="text-center text-slate-600 dark:text-muted py-8 text-sm">No positions found</div>
-                  ) : mobileFilteredPositions.length === 0 ? (
+                  ) : mobileFilteredOpenPositions.length === 0 ? (
                     <div className="text-center text-slate-600 dark:text-muted py-8 text-sm">
                       No positions match &quot;{positionsSearchQuery.trim()}&quot;
                     </div>
                   ) : (
                     <>
-                  {mobileFilteredPositions.map(({ position: pos, livePrice, unrealizedPnl, marketPnl, sizeNum, entryPrice }) => {
+                  {mobileFilteredOpenPositions.map((pos) => {
                     const posQuote = resolveQuoteCurrency(pos.symbol, terminalSymbols)
-                    const marginNum = parseFloat(pos.margin || '0')
                     const openEditPositionPopup = () => {
-                      const currentPos = positions.find(p => p.id === pos.id)
+                      const currentPos = positions.find((p) => p.id === pos.id)
                       if (!currentPos) return
                       setEditingPosition(currentPos)
                       setEditItem({ type: 'position', id: pos.id })
@@ -940,124 +933,31 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       } else setEditTpAmount('')
                       setEditDialogOpen(true)
                     }
-                    const ts = pos.opened_at != null ? (pos.opened_at < 1e12 ? pos.opened_at * 1000 : pos.opened_at) : Date.now()
-                    const openedAtStr = formatDateTimeSeconds(ts)
-                    const openedAtLongStr = formatDateTimeSeconds(ts)
-                    const currentStr = livePrice != null ? formatConv(livePrice, posQuote) : '—'
-                    const isExpanded = expandedPositionId === pos.id
-                    const hasValidSl = pos.sl != null && String(pos.sl).trim() !== '' && pos.sl !== 'null' && !Number.isNaN(Number(pos.sl))
-                    const hasValidTp = pos.tp != null && String(pos.tp).trim() !== '' && pos.tp !== 'null' && !Number.isNaN(Number(pos.tp))
-                    const handleRowClick = () => {
-                      if (longPressHandledRef.current) {
-                        longPressHandledRef.current = false
-                        return
-                      }
-                      setExpandedPositionId((prev) => (prev === pos.id ? null : pos.id))
-                    }
-                    const handleTouchStart = () => {
-                      longPressHandledRef.current = false
-                      longPressTimerRef.current = setTimeout(() => {
-                        longPressTimerRef.current = null
-                        longPressHandledRef.current = true
-                        window.getSelection()?.removeAllRanges()
-                        setActionMenuPositionId(pos.id)
-                      }, 500)
-                    }
-                    const handleTouchEnd = () => {
-                      if (longPressTimerRef.current) {
-                        clearTimeout(longPressTimerRef.current)
-                        longPressTimerRef.current = null
-                      }
-                    }
-                    const handleContextMenu = (e: React.MouseEvent) => {
-                      e.preventDefault()
-                      setActionMenuPositionId(pos.id)
-                    }
                     return (
-                      <div
+                      <BottomDockMobileOpenPositionCard
                         key={pos.id}
-                        className="border-b border-slate-300 dark:border-white/10 py-3 flex flex-col gap-1"
-                      >
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          onClick={handleRowClick}
-                          onKeyDown={(e) => e.key === 'Enter' && handleRowClick()}
-                          onTouchStart={handleTouchStart}
-                          onTouchEnd={handleTouchEnd}
-                          onTouchMove={handleTouchEnd}
-                          onContextMenu={handleContextMenu}
-                          className="flex items-start justify-between gap-3 cursor-pointer active:opacity-90 select-none [-webkit-touch-callout:none]"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-text">
-                              <span className="font-mono">{pos.symbol}</span>
-                              <span className="font-bold text-text ml-1">{pos.side === 'LONG' ? 'Buy' : 'Sell'}</span>
-                              <span className="font-bold text-text ml-1">{sizeNum.toFixed(8)}</span>
-                            </div>
-                            <div className="text-xs text-slate-600 dark:text-muted font-mono mt-0.5">
-                              {formatConv(entryPrice, posQuote)} → {currentStr}
-                            </div>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <div className="text-[11px] text-slate-600 dark:text-muted">{openedAtStr}</div>
-                            <div className={cn('text-sm font-semibold whitespace-nowrap tabular-nums', unrealizedPnl >= 0 ? 'text-success' : 'text-danger')}>
-                              {formatSigned(unrealizedPnl)}
-                            </div>
-                          </div>
-                        </div>
-                        {isExpanded && (
-                          <div className="pt-3 pb-2 space-y-2 border-t border-slate-200 dark:border-white/5 mt-2" onClick={(e) => e.stopPropagation()}>
-                            <div>
-                              <div className="text-xs font-semibold text-slate-600 dark:text-muted mb-1">P&L breakdown</div>
-                              <PositionPnLBreakdown
-                                marketPnlUsd={marketPnl}
-                                accumulatedSwapUsd={pos.accumulatedSwapUsd}
-                                accumulatedFeesUsd={pos.accumulatedFeesUsd}
-                                netPnlUsd={unrealizedPnl}
-                              />
-                            </div>
-                            <div className="text-xs text-slate-600 dark:text-muted font-mono">
-                              {formatConv(entryPrice, posQuote)} → {livePrice != null ? formatConv(livePrice, posQuote) : '—'}
-                            </div>
-                            <div className="text-xs text-slate-600 dark:text-muted">{openedAtLongStr}</div>
-                            <div className="flex justify-between gap-4 text-xs">
-                              <div className="space-y-1 text-slate-600 dark:text-muted">
-                                {hasValidSl && <div>S/L {formatConv(Number(pos.sl), posQuote)}</div>}
-                                <div>Margin {Number.isFinite(marginNum) ? formatMoney(marginNum) : '—'}</div>
-                              </div>
-                              <div className="space-y-1 text-slate-600 dark:text-muted text-right">
-                                {hasValidTp && <div>T/P {formatConv(Number(pos.tp), posQuote)}</div>}
-                                <div className="font-mono">PID {pos.id.slice(0, 8)}</div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 pt-2">
-                              <button
-                                onClick={openEditPositionPopup}
-                                className="flex-1 min-h-[40px] flex items-center justify-center gap-2 rounded-lg bg-accent/20 text-accent font-semibold text-xs"
-                              >
-                                <Edit className="h-4 w-4" />
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => {
-                                  if (!canClosePosition) return
-                                  setClosePositionId(pos.id)
-                                  setClosePositionDialogOpen(true)
-                                }}
-                                disabled={!canClosePosition}
-                                className="flex-1 min-h-[40px] flex items-center justify-center gap-2 rounded-lg bg-danger/20 text-danger font-semibold text-xs disabled:opacity-50 disabled:pointer-events-none"
-                              >
-                                <X className="h-4 w-4" />
-                                Close
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                        pos={pos}
+                        posQuote={posQuote}
+                        symbolMetaLookup={symbolMetaLookup}
+                        expandedPositionId={expandedPositionId}
+                        setExpandedPositionId={setExpandedPositionId}
+                        formatDateTimeSeconds={formatDateTimeSeconds}
+                        formatConv={formatConv}
+                        formatSigned={formatSigned}
+                        formatMoney={formatMoney}
+                        canClosePosition={canClosePosition}
+                        onOpenEdit={openEditPositionPopup}
+                        onRequestClose={() => {
+                          setClosePositionId(pos.id)
+                          setClosePositionDialogOpen(true)
+                        }}
+                        setActionMenuPositionId={setActionMenuPositionId}
+                        longPressHandledRef={longPressHandledRef}
+                        longPressTimerRef={longPressTimerRef}
+                      />
                     )
                   })}
-                  {mobileFilteredPositions.length > 0 && (
+                  {mobileFilteredOpenPositions.length > 0 && (
                     <div className="text-center text-slate-600 dark:text-muted text-xs py-3">No more data</div>
                   )}
                     </>
@@ -1149,204 +1049,73 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   </tr>
                 </thead>
                 <tbody>
-                  {/* Open Positions */}
-                  {(() => {
-                    const openPositions = positions
-                      .filter(p => p.status === 'OPEN')
-                      .sort((a, b) => {
-                        // Sort by opened_at timestamp (newest first)
-                        // Use updated_at as fallback if opened_at is not available
-                        const aTime = a.opened_at || a.updated_at || 0
-                        const bTime = b.opened_at || b.updated_at || 0
-                        return bTime - aTime // Descending order (newest first)
-                      })
-                    if (openPositions.length > 0) {
-                      console.log(`📋 Rendering ${openPositions.length} open position(s) in positions tab`)
+                  {sortedOpenPositions.map((pos, index) => {
+                    const posQuote = resolveQuoteCurrency(pos.symbol, terminalSymbols)
+                    const rowExpanded = expandedPositionId === pos.id
+                    const openEditPositionPopup = () => {
+                      const currentPos = positions.find((p) => p.id === pos.id)
+                      if (!currentPos) return
+                      setEditingPosition(currentPos)
+                      setEditItem({ type: 'position', id: pos.id })
+                      const slPrice = currentPos.sl && currentPos.sl !== 'null' ? currentPos.sl : ''
+                      const tpPrice = currentPos.tp && currentPos.tp !== 'null' ? currentPos.tp : ''
+                      setEditSl(slPrice)
+                      setEditTp(tpPrice)
+                      if (slPrice) {
+                        const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                        const sizeNum = parseFloat(currentPos.size || '0')
+                        const slPriceNum = parseFloat(slPrice)
+                        const slAmount = currentPos.side === 'LONG'
+                          ? (entryPrice - slPriceNum) * sizeNum
+                          : (slPriceNum - entryPrice) * sizeNum
+                        setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
+                      } else {
+                        setEditSlAmount('')
+                      }
+                      if (tpPrice) {
+                        const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
+                        const sizeNum = parseFloat(currentPos.size || '0')
+                        const tpPriceNum = parseFloat(tpPrice)
+                        const tpAmount = currentPos.side === 'LONG'
+                          ? (tpPriceNum - entryPrice) * sizeNum
+                          : (entryPrice - tpPriceNum) * sizeNum
+                        setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
+                      } else {
+                        setEditTpAmount('')
+                      }
+                      setEditDialogOpen(true)
                     }
-                    const positionRows = openPositions.map((pos, index) => {
-                      const sizeNum = parseFloat(pos.size || '0')
-                      const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
-                      const marginNum = parseFloat(pos.margin || '0')
-                      const posQuote = resolveQuoteCurrency(pos.symbol, terminalSymbols)
-
-                      // Get live price for this symbol
-                      // Normalize symbol key to match price stream format (USDT -> USD)
-                      const symbolKey = normalizeSymbolKey(pos.symbol)
-                      // Try both normalized and original format for lookup
-                      let priceData = livePrices.get(symbolKey)
-                      if (!priceData) {
-                        // Fallback to original format in case price is stored with USDT
-                        priceData = livePrices.get(pos.symbol.toUpperCase())
-                      }
-                      // Use bid for LONG positions, ask for SHORT positions
-                      const livePrice = priceData
-                        ? pos.side === 'LONG'
-                          ? parseFloat(priceData.bid)
-                          : parseFloat(priceData.ask)
-                        : null
-
-                      const { market: marketPnl, net: unrealizedPnl } = openPositionPnlParts(pos, livePrice, sizeNum, entryPrice)
-                      const rowExpanded = expandedPositionId === pos.id
-
-                      const openedMs =
-                        pos.opened_at != null
-                          ? pos.opened_at < 1e12
-                            ? pos.opened_at * 1000
-                            : pos.opened_at
-                          : null
-                      const openedAtStr =
-                        openedMs != null ? formatDateTimeSeconds(openedMs) : '—'
-
-                      const openEditPositionPopup = () => {
-                        const currentPos = positions.find(p => p.id === pos.id)
-                        if (!currentPos) return
-                        setEditingPosition(currentPos)
-                        setEditItem({ type: 'position', id: pos.id })
-                        const slPrice = currentPos.sl && currentPos.sl !== 'null' ? currentPos.sl : ''
-                        const tpPrice = currentPos.tp && currentPos.tp !== 'null' ? currentPos.tp : ''
-                        setEditSl(slPrice)
-                        setEditTp(tpPrice)
-                        if (slPrice) {
-                          const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
-                          const sizeNum = parseFloat(currentPos.size || '0')
-                          const slPriceNum = parseFloat(slPrice)
-                          const slAmount = currentPos.side === 'LONG'
-                            ? (entryPrice - slPriceNum) * sizeNum
-                            : (slPriceNum - entryPrice) * sizeNum
-                          setEditSlAmount(slAmount > 0 ? slAmount.toFixed(2) : '')
-                        } else {
-                          setEditSlAmount('')
-                        }
-                        if (tpPrice) {
-                          const entryPrice = parseFloat(currentPos.avg_price || currentPos.entry_price || '0')
-                          const sizeNum = parseFloat(currentPos.size || '0')
-                          const tpPriceNum = parseFloat(tpPrice)
-                          const tpAmount = currentPos.side === 'LONG'
-                            ? (tpPriceNum - entryPrice) * sizeNum
-                            : (entryPrice - tpPriceNum) * sizeNum
-                          setEditTpAmount(tpAmount > 0 ? tpAmount.toFixed(2) : '')
-                        } else {
-                          setEditTpAmount('')
-                        }
-                        setEditDialogOpen(true)
-                      }
-                      return (
-                        <Fragment key={pos.id}>
-                        <tr 
-                          onClick={openEditPositionPopup}
-                          className={cn(
-                            "border-b border-slate-200 dark:border-white/5 hover:bg-surface-2/40 transition-all duration-200 cursor-pointer",
-                            index % 2 === 0 ? "bg-surface/30" : "bg-surface/50"
-                          )}
-                        >
-                          <td className="px-4 py-3 font-mono text-text font-semibold">{pos.id.slice(0, 8)}...</td>
-                          <td className="px-4 py-3 font-mono font-bold text-text">{pos.symbol}</td>
-                          <td className="px-4 py-3 text-text font-medium">{sizeNum.toFixed(6)}</td>
-                          <td className="px-4 py-3">
-                            <span className={cn(
-                              "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
-                              pos.side === 'LONG' 
-                                ? 'bg-success/20 text-success' 
-                                : 'bg-danger/20 text-danger'
-                            )}>
-                              {pos.side}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-text font-semibold">{formatMoney(marginNum)}</td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">{formatConv(entryPrice, posQuote)}</td>
-                          <td className={cn(
-                            "px-4 py-3 font-mono font-bold",
-                            livePrice !== null ? "text-accent" : "text-text/40"
-                          )}>
-                            {livePrice !== null 
-                              ? formatConv(livePrice, posQuote)
-                              : <span className="text-text/40">--</span>
-                            }
-                          </td>
-                          <td
-                            className={cn(
-                              'px-4 py-3 font-mono font-bold whitespace-nowrap tabular-nums',
-                              unrealizedPnl >= 0 ? 'text-success' : 'text-danger',
-                            )}
-                          >
-                            <div className="flex items-center gap-1 justify-end">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setExpandedPositionId((prev) => (prev === pos.id ? null : pos.id))
-                                }}
-                                className="p-1 rounded hover:bg-surface-2 text-slate-600 dark:text-muted shrink-0"
-                                title={rowExpanded ? 'Hide P&L breakdown' : 'Show P&L breakdown'}
-                                aria-expanded={rowExpanded}
-                              >
-                                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', rowExpanded && 'rotate-180')} />
-                              </button>
-                              <span>{formatSigned(unrealizedPnl)}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-text/70">{pos.sl ? formatConv(parseFloat(pos.sl), posQuote) : '-'}</td>
-                          <td className="px-4 py-3 font-mono text-text/70">{pos.tp ? formatConv(parseFloat(pos.tp), posQuote) : '-'}</td>
-                          <td className="px-4 py-3 text-text/90 whitespace-nowrap tabular-nums" title={openedAtStr}>
-                            {openedAtStr}
-                          </td>
-                          <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  openEditPositionPopup()
-                                }}
-                                className="p-2 hover:bg-accent/20 rounded-lg transition-all duration-200 text-accent hover:text-accent/80 hover:scale-110 active:scale-95"
-                                title="Edit Position"
-                              >
-                                <Edit className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  if (!canClosePosition) return
-                                  setClosePositionId(pos.id)
-                                  setClosePositionDialogOpen(true)
-                                }}
-                                disabled={!canClosePosition}
-                                className="p-2 hover:bg-danger/20 rounded-lg transition-all duration-200 text-danger hover:text-danger/80 hover:scale-110 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
-                                title={!canClosePosition ? 'Trading is disabled' : 'Close Position'}
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                        {rowExpanded ? (
-                          <tr
-                            className={cn(
-                              'border-b border-slate-200 dark:border-white/5',
-                              index % 2 === 0 ? 'bg-surface/30' : 'bg-surface/50',
-                            )}
-                          >
-                            <td colSpan={12} className="px-4 py-3 bg-surface-2/40">
-                              <div className="max-w-md">
-                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-muted mb-2">
-                                  P&L breakdown
-                                </div>
-                                <PositionPnLBreakdown
-                                  marketPnlUsd={marketPnl}
-                                  accumulatedSwapUsd={pos.accumulatedSwapUsd}
-                                  accumulatedFeesUsd={pos.accumulatedFeesUsd}
-                                  netPnlUsd={unrealizedPnl}
-                                />
-                              </div>
-                            </td>
-                          </tr>
-                        ) : null}
-                        </Fragment>
-                      )
-                    })
-                    
-                    // Only return open positions (filled orders should only appear in Order History tab)
-                    return positionRows
-                  })()}
+                    return (
+                      <BottomDockDesktopOpenPositionRow
+                        key={pos.id}
+                        pos={pos}
+                        index={index}
+                        rowExpanded={rowExpanded}
+                        symbolMetaLookup={symbolMetaLookup}
+                        posQuote={posQuote}
+                        formatConv={formatConv}
+                        formatSigned={formatSigned}
+                        formatDateTimeSeconds={formatDateTimeSeconds}
+                        formatMoney={formatMoney}
+                        canClosePosition={canClosePosition}
+                        onRowClick={openEditPositionPopup}
+                        onToggleExpand={(e) => {
+                          e.stopPropagation()
+                          setExpandedPositionId((prev) => (prev === pos.id ? null : pos.id))
+                        }}
+                        onEditClick={(e) => {
+                          e.stopPropagation()
+                          openEditPositionPopup()
+                        }}
+                        onCloseClick={(e) => {
+                          e.stopPropagation()
+                          if (!canClosePosition) return
+                          setClosePositionId(pos.id)
+                          setClosePositionDialogOpen(true)
+                        }}
+                      />
+                    )
+                  })}
                 </tbody>
               </table>
                   )}
@@ -1406,6 +1175,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     const statusNorm = (order.status || '').trim().toLowerCase()
                     const isPendingOrder = statusNorm === 'pending'
                     const isCancellingOrder = statusNorm === 'cancelling'
+                    const orderSizeFmt = formatPositionSize(
+                      parseFloat(order.size || '0'),
+                      getSymbolMetaForCode(symbolMetaLookup, order.symbol),
+                    )
                     
                     return (
                     <tr 
@@ -1428,8 +1201,12 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                           {order.side}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-text font-medium">{order.size}</td>
-                      <td className="px-4 py-3 font-mono text-text">{order.price || '-'}</td>
+                      <td
+                        className="px-4 py-3 text-text font-medium"
+                        title={orderSizeFmt.secondary || undefined}
+                      >
+                        {orderSizeFmt.display}
+                      </td>
                       <td className="px-4 py-3">
                         <span className={cn(
                           "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
@@ -1541,6 +1318,14 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     const filledSize = parseFloat(order.filled_size || order.size || '0')
                     const avgPrice = parseFloat(order.average_price || order.price || '0')
                     const orderQuote = resolveQuoteCurrency(order.symbol, terminalSymbols)
+                    const orderSizeFmt = formatPositionSize(
+                      parseFloat(order.size || '0'),
+                      getSymbolMetaForCode(symbolMetaLookup, order.symbol),
+                    )
+                    const filledSizeFmt = formatPositionSize(
+                      filledSize,
+                      getSymbolMetaForCode(symbolMetaLookup, order.symbol),
+                    )
 
                     return (
                     <tr 
@@ -1563,8 +1348,18 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                             {order.side}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-text font-medium">{order.size}</td>
-                        <td className="px-4 py-3 text-text font-medium">{filledSize.toFixed(6)}</td>
+                      <td
+                        className="px-4 py-3 text-text font-medium"
+                        title={orderSizeFmt.secondary || undefined}
+                      >
+                        {orderSizeFmt.display}
+                      </td>
+                        <td
+                          className="px-4 py-3 text-text font-medium"
+                          title={filledSizeFmt.secondary || undefined}
+                        >
+                          {filledSizeFmt.display}
+                        </td>
                         <td className="px-4 py-3 font-mono text-text">{avgPrice > 0 ? formatAmt(avgPrice, orderQuote) : '-'}</td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
@@ -1637,6 +1432,10 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                       const historyExpanded = expandedHistoryPositionId === pos.id
                       const closedAt = pos.updated_at ? formatDateTime(pos.updated_at) : '-'
                       const posQuote = resolveQuoteCurrency(pos.symbol, terminalSymbols)
+                      const historySizeFmt = formatPositionSize(
+                        sizeNum,
+                        getSymbolMetaForCode(symbolMetaLookup, pos.symbol),
+                      )
 
                       return (
                     <Fragment key={pos.id}>
@@ -1648,7 +1447,12 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     >
                           <td className="px-4 py-3 font-mono text-text font-semibold">{pos.id.slice(0, 8)}...</td>
                       <td className="px-4 py-3 font-mono font-bold text-text">{pos.symbol}</td>
-                          <td className="px-4 py-3 text-text font-medium">{sizeNum.toFixed(6)}</td>
+                          <td
+                            className="px-4 py-3 text-text font-medium"
+                            title={historySizeFmt.secondary || undefined}
+                          >
+                            {historySizeFmt.display}
+                          </td>
                       <td className="px-4 py-3">
                             <span className={cn(
                               "px-2 py-1 rounded font-bold text-[10px] uppercase tracking-wider",
@@ -1818,7 +1622,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                   }}
                   disabled={
                     !canClosePosition ||
-                    openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0).length === 0
+                    sortedOpenPositions.length === 0 ||
+                    !dockHasProfitableLive
                   }
                   className="w-full py-4 px-4 text-left text-sm font-medium text-text hover:bg-slate-100 dark:hover:bg-white/5 active:bg-slate-200 dark:active:bg-white/10 disabled:opacity-50 disabled:pointer-events-none flex items-center gap-3"
                 >
@@ -1912,81 +1717,15 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-slate-900/40 dark:bg-black/50 z-50" />
           <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-surface border border-border rounded-lg p-6 z-50 w-full max-w-md">
-            <Dialog.Title className="text-lg font-semibold text-text mb-2 flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-success" />
-              Close only profitable positions
-            </Dialog.Title>
-            <Dialog.Description className="text-sm text-slate-600 dark:text-muted mb-6">
-              {(() => {
-                const profitable = openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0)
-                const count = profitable.length
-                if (count === 0) return 'No profitable positions to close.'
-                return `Close ${count} position(s) with positive unrealized PnL? This action cannot be undone.`
-              })()}
-            </Dialog.Description>
-            <div className="flex items-center justify-end gap-3">
-              <button
-                onClick={() => setCloseProfitableOnlyDialogOpen(false)}
-                disabled={closeProfitableOnlyLoading}
-                className="px-4 py-2 text-sm text-text hover:bg-surface-2 rounded transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  const toClose = openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0).map((x) => x.position)
-                  if (toClose.length === 0) {
-                    setCloseProfitableOnlyDialogOpen(false)
-                    return
-                  }
-                  setCloseProfitableOnlyLoading(true)
-                  let closed = 0
-                  const failedPositions: { id: string; symbol: string; error: string }[] = []
-                  try {
-                    for (const pos of toClose) {
-                      try {
-                        const pk = canonicalPositionId(pos.id)
-                        flushSync(() => {
-                          positionCloseTombstonesRef.current.set(pk, Date.now())
-                          setPositions((prev) => prev.filter((p) => canonicalPositionId(p.id) !== pk))
-                        })
-                        await closePosition(pos.id)
-                        closed++
-                      } catch (err: unknown) {
-                        positionCloseTombstonesRef.current.delete(canonicalPositionId(pos.id))
-                        void fetchOpenPositions(true)
-                        failedPositions.push({ id: pos.id, symbol: pos.symbol, error: closePositionErrorMessage(err) })
-                      }
-                    }
-                    if (closed > 0) {
-                      toast.success(
-                        closed === toClose.length
-                          ? `Closed ${closed} profitable position(s)`
-                          : `Closed ${closed} position(s)${failedPositions.length > 0 ? `, ${failedPositions.length} failed` : ''}`
-                      )
-                    }
-                    if (failedPositions.length > 0) {
-                      const detail =
-                        failedPositions.length === 1
-                          ? `${failedPositions[0].symbol}: ${failedPositions[0].error}`
-                          : `${failedPositions.length} position(s) failed to close`
-                      toast.error(closed === 0 ? detail : detail)
-                    }
-                    setCloseProfitableOnlyDialogOpen(false)
-                    fetchOpenPositions(true)
-                  } finally {
-                    setCloseProfitableOnlyLoading(false)
-                  }
-                }}
-                disabled={
-                  closeProfitableOnlyLoading ||
-                  openPositionsWithComputed.filter((x) => x.unrealizedPnl > 0).length === 0
-                }
-                className="px-4 py-2 text-sm bg-success text-white hover:bg-success/90 rounded transition-colors disabled:opacity-50"
-              >
-                {closeProfitableOnlyLoading ? 'Closing...' : 'Close profitable'}
-              </button>
-            </div>
+            <BottomDockCloseProfitableOnlyDialogBody
+              openPositions={sortedOpenPositions}
+              closeProfitableOnlyLoading={closeProfitableOnlyLoading}
+              setCloseProfitableOnlyLoading={setCloseProfitableOnlyLoading}
+              onCloseDialog={() => setCloseProfitableOnlyDialogOpen(false)}
+              positionCloseTombstonesRef={positionCloseTombstonesRef}
+              setPositions={setPositions}
+              fetchOpenPositions={fetchOpenPositions}
+            />
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -2001,7 +1740,20 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
               Close Position
             </Dialog.Title>
             <Dialog.Description className="text-sm text-slate-600 dark:text-muted mb-6">
-              Are you sure you want to close position {closePositionId}? This action cannot be undone.
+              Are you sure you want to close position {closePositionId?.slice(0, 8)}…?
+              {closeDialogSizeFmt ? (
+                <>
+                  {' '}
+                  Size:{' '}
+                  <span className="font-mono font-medium text-text" title={closeDialogSizeFmt.secondary || undefined}>
+                    {closeDialogSizeFmt.display}
+                  </span>
+                  {closeDialogSizeFmt.secondary ? (
+                    <span className="block text-xs mt-1 text-text-muted">Raw: {closeDialogSizeFmt.secondary}</span>
+                  ) : null}
+                </>
+              ) : null}
+              <span className="block mt-2">This action cannot be undone.</span>
             </Dialog.Description>
             <div className="flex items-center justify-end gap-3">
               <button
@@ -2320,6 +2072,12 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+      {sortedOpenPositions.length > 0 ? (
+        <BottomDockLiveProfitablePresence
+          positions={sortedOpenPositions}
+          onHasProfitableChange={setDockHasProfitableLive}
+        />
+      ) : null}
     </div>
   )
 }
