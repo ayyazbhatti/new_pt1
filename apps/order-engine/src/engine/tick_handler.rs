@@ -237,6 +237,21 @@ impl TickHandler {
             error!("SL/TP check failed for {}: {}", tick.symbol, e);
         }
 
+        if let Err(e) = crate::engine::position_tick_unrealized::refresh_symbol_positions_unrealized(
+            &mut conn,
+            &tick.symbol,
+            tick.bid,
+            tick.ask,
+            group_id.as_deref(),
+        )
+        .await
+        {
+            debug!(
+                "Tick unrealized refresh for {}: {}",
+                tick.symbol, e
+            );
+        }
+
         Ok(())
     }
 

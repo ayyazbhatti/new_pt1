@@ -12,6 +12,11 @@ use contracts::VersionedMessage;
 use redis::AsyncCommands;
 use redis_model::keys::Keys;
 use redis_model::models::BalanceModel;
+use redis_model::{
+    aggregate_user_unrealized_usd_e6_in_redis, clear_position_unrealized_usd_e6_for_ids,
+    decimal_usd_to_micro_e6, key_swap_open_usd_e6_cache, key_user_unrealized_agg_e6,
+    FIELD_UNREALIZED_PNL_USD_E6,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -790,6 +795,13 @@ async fn fetch_position_aggregates_from_redis(
             return Ok(None);
         }
     };
+    if let Err(e) = clear_position_unrealized_usd_e6_for_ids(&mut conn, &position_ids).await {
+        warn!(
+            user_id = %user_id,
+            error = %e,
+            "clear unrealized_pnl_usd_e6 on position hashes before re-aggregate"
+        );
+    }
     let mut margin_used = Decimal::ZERO;
     let mut unrealized_pnl = Decimal::ZERO;
     let mut realized_pnl = Decimal::ZERO;
@@ -923,6 +935,10 @@ async fn fetch_position_aggregates_from_redis(
                             };
                             unrealized_pnl += u_usd;
                             realized_pnl += real_usd;
+                            let micro = decimal_usd_to_micro_e6(u_usd);
+                            let _: Result<(), _> = conn
+                                .hset(&pos_key, FIELD_UNREALIZED_PNL_USD_E6, micro.to_string())
+                                .await;
                             continue;
                         }
                     }
@@ -1005,6 +1021,10 @@ async fn fetch_position_aggregates_from_redis(
             };
             unrealized_pnl += unreal_usd;
             realized_pnl += real_usd;
+            let micro = decimal_usd_to_micro_e6(unreal_usd);
+            let _: Result<(), _> = conn
+                .hset(&pos_key, FIELD_UNREALIZED_PNL_USD_E6, micro.to_string())
+                .await;
     }
 
     if margin_calculation_type.eq_ignore_ascii_case("net") && !net_groups.is_empty() {
@@ -1029,6 +1049,19 @@ async fn fetch_position_aggregates_from_redis(
         .await
         .unwrap_or(Decimal::ZERO);
     let unrealized_pnl = unrealized_pnl - swap_open;
+
+    let swap_e6 = decimal_usd_to_micro_e6(swap_open);
+    let swap_cache_key = key_swap_open_usd_e6_cache(user_id);
+    let _: Result<(), _> = conn
+        .set::<_, _, ()>(&swap_cache_key, swap_e6.to_string())
+        .await;
+    if let Err(e) = aggregate_user_unrealized_usd_e6_in_redis(&mut conn, user_id, swap_e6).await {
+        warn!(
+            user_id = %user_id,
+            error = %e,
+            "Redis Lua aggregate pos:agg:unrealized_usd_e6 failed"
+        );
+    }
 
     Ok(Some((margin_used, unrealized_pnl, realized_pnl)))
 }
@@ -2250,6 +2283,41 @@ pub async fn publish_wallet_balance_updated_nats(
     }
 }
 
+/// `pos:summary` is refreshed on events and throttled publishes; **order-engine** updates
+/// `pos:agg:unrealized_usd_e6:{user}` on every tick. When that aggregate key exists, prefer it
+/// for `unrealized_pnl` and re-derive `equity`, `free_margin`, and `margin_level` so HTTP account
+/// summary matches live Redis tick state without forcing a full recompute.
+async fn merge_live_unrealized_from_redis_agg(
+    redis: &crate::redis_pool::RedisPool,
+    user_id: Uuid,
+    summary: &mut AccountSummary,
+) {
+    let Ok(mut conn) = redis.get().await else {
+        return;
+    };
+    let agg_key = key_user_unrealized_agg_e6(user_id);
+    let raw: Option<String> = conn.get(&agg_key).await.ok().flatten();
+    let Some(raw) = raw else {
+        return;
+    };
+    let Ok(micro) = raw.trim().parse::<i64>() else {
+        return;
+    };
+    let live_unreal = (micro as f64) / 1_000_000f64;
+    summary.unrealized_pnl = live_unreal;
+    summary.equity = summary.balance + summary.bonus + live_unreal;
+    summary.free_margin = if summary.equity >= summary.margin_used {
+        summary.equity - summary.margin_used
+    } else {
+        0.0
+    };
+    summary.margin_level = if summary.margin_used > 0.0 {
+        format!("{:.2}", (summary.equity / summary.margin_used) * 100.0)
+    } else {
+        "inf".to_string()
+    };
+}
+
 async fn get_account_summary(
     State(pool): State<PgPool>,
     Extension(deposits_state): Extension<DepositsState>,
@@ -2312,7 +2380,7 @@ async fn get_account_summary(
                 .flatten()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0);
-            return Ok(Json(AccountSummary {
+            let mut summary = AccountSummary {
                 user_id: user_id.to_string(),
                 balance: balance_f,
                 equity: equity.parse().unwrap_or(0.0),
@@ -2327,7 +2395,9 @@ async fn get_account_summary(
                 total_swap_paid_usd: total_swap_f,
                 total_fees_paid_usd: total_fees_f,
                 updated_at,
-            }));
+            };
+            merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary).await;
+            return Ok(Json(summary));
         }
     }
     // Cache miss: compute, cache, return (use Redis for position metrics so they match Positions tab)
@@ -2342,11 +2412,12 @@ async fn get_account_summary(
                 (None, None)
             };
             compute_and_cache_account_summary(&pool, redis, user_id).await;
-            let summary_with_threshold = AccountSummary {
+            let mut summary_with_threshold = AccountSummary {
                 margin_call_level_threshold: threshold,
                 stop_out_level_threshold: stop_out,
                 ..summary
             };
+            merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary_with_threshold).await;
             Ok(Json(summary_with_threshold))
         }
         Err(e) => {
@@ -2416,7 +2487,7 @@ pub async fn get_account_summary_for_user(
                 .flatten()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0);
-            return Ok(AccountSummary {
+            let mut summary = AccountSummary {
                 user_id: user_id.to_string(),
                 balance: balance_f,
                 equity: equity.parse().unwrap_or(0.0),
@@ -2431,7 +2502,9 @@ pub async fn get_account_summary_for_user(
                 total_swap_paid_usd: total_swap_f,
                 total_fees_paid_usd: total_fees_f,
                 updated_at,
-            });
+            };
+            merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary).await;
+            return Ok(summary);
         }
     }
     match compute_account_summary_inner(pool, Some(redis), user_id, None).await {
@@ -2445,11 +2518,12 @@ pub async fn get_account_summary_for_user(
                 (None, None)
             };
             compute_and_cache_account_summary(pool, redis, user_id).await;
-            let summary_with_threshold = AccountSummary {
+            let mut summary_with_threshold = AccountSummary {
                 margin_call_level_threshold: threshold,
                 stop_out_level_threshold: stop_out,
                 ..summary
             };
+            merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary_with_threshold).await;
             Ok(summary_with_threshold)
         }
         Err(e) => {

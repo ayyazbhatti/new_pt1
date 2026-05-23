@@ -390,11 +390,11 @@ export function LeftSidebar({ onOpenDeposit }: LeftSidebarProps = {}) {
         </div>
       </div>
 
-      {/* Balance from WebSocket/wallet store (realtime); Equity & Margin from account summary */}
+      {/* Balance / equity / margin from account summary when loaded (single WS: account.summary.updated); walletStore fallback until first summary */}
       <div className="shrink-0 px-4 py-3.5 border-b border-slate-200 dark:border-white/5 bg-gradient-to-b from-slate-100/80 dark:from-white/[0.02] to-transparent">
         <div className="space-y-2.5">
           {(() => {
-            const displayBalance = balance ?? 0
+            const displayBalance = accountSummary?.balance ?? balance ?? 0
             const displayEquity = accountSummary?.equity ?? equity ?? 0
             // Margin used is for open positions only; when margin level is "inf" there is no margin in use
             const displayMargin =

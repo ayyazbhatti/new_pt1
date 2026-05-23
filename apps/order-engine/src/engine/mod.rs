@@ -9,6 +9,7 @@ pub mod position_handler;
 pub mod sltp_handler;
 pub mod warm_cache;
 pub mod slippage_reject;
+pub mod position_tick_unrealized;
 
 pub use cache::*;
 pub use lua::*;
