@@ -159,16 +159,27 @@ async fn sum_closed_realized_pnl_usd(
 ) -> Result<Decimal, sqlx::Error> {
     #[derive(sqlx::FromRow)]
     struct ClosedPnlRow {
-        pnl: Decimal,
+        /// Prefer `positions.pnl` when auth-service synced it; otherwise `realized_pnl` + `unrealized_pnl`
+        /// (core-api `persist_position` updates the latter but not `pnl`, which would stay 0).
+        row_pnl: Decimal,
         bonus_loss_absorbed: Option<Decimal>,
         quote_currency: String,
     }
     let rows = sqlx::query_as::<_, ClosedPnlRow>(
         r#"
-        SELECT p.pnl, p.bonus_loss_absorbed, s.quote_currency
+        SELECT
+            (
+                CASE
+                    WHEN p.pnl IS DISTINCT FROM 0 THEN p.pnl
+                    ELSE COALESCE(p.realized_pnl, 0) + COALESCE(p.unrealized_pnl, 0)
+                END
+            ) AS row_pnl,
+            p.bonus_loss_absorbed,
+            s.quote_currency
         FROM positions p
         INNER JOIN symbols s ON s.id = p.symbol_id
-        WHERE p.user_id = $1 AND p.status = 'closed'::position_status
+        WHERE p.user_id = $1
+          AND p.status IN ('closed'::position_status, 'liquidated'::position_status)
         "#,
     )
     .bind(user_id)
@@ -177,19 +188,93 @@ async fn sum_closed_realized_pnl_usd(
 
     let mut sum = Decimal::ZERO;
     for row in rows {
-        let raw = row.pnl + row.bonus_loss_absorbed.unwrap_or(Decimal::ZERO);
+        let raw = row.row_pnl + row.bonus_loss_absorbed.unwrap_or(Decimal::ZERO);
         let q = row.quote_currency.trim();
         if !quote_currency_supported(snapshot, q) {
             warn!(
                 user_id = %user_id,
                 quote = %q,
-                "closed position row skipped in realized PnL sum (quote not in FX snapshot)"
+                "closed/liquidated position row skipped in realized PnL sum (quote not in FX snapshot)"
             );
             continue;
         }
         match fx_rates::convert_with_rates(raw, q, "USD", &snapshot.rates) {
             Ok(v) => sum += v,
             Err(e) => warn!(user_id = %user_id, error = %e, "closed position FX conversion failed; skipping row"),
+        }
+    }
+    Ok(sum)
+}
+
+/// Closed P&L from Redis `pos:by_id:*` (same source as `GET .../positions?status=closed`). Used when Postgres
+/// has no synced `pnl` / `realized_pnl` rows so DB-only [`sum_closed_realized_pnl_usd`] returns 0.
+async fn sum_closed_realized_pnl_redis_usd(
+    pool: &PgPool,
+    redis: &crate::redis_pool::RedisPool,
+    user_id: Uuid,
+    snapshot: &FxRatesSnapshot,
+) -> anyhow::Result<Decimal> {
+    let symbol_map = get_symbol_code_to_quote_currency_map(pool).await?;
+    let mut conn = redis
+        .get()
+        .await
+        .map_err(|e| anyhow::anyhow!("redis: {}", e))?;
+    let positions_key = Keys::positions_set(user_id);
+    let position_ids: Vec<String> = conn
+        .smembers(&positions_key)
+        .await
+        .unwrap_or_default();
+    let mut sum = Decimal::ZERO;
+    for pos_id_str in position_ids {
+        let pos_id = match Uuid::parse_str(&pos_id_str) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+        let pos_key = Keys::position_by_id(pos_id);
+        let status: Option<String> = conn.hget(&pos_key, "status").await.ok().flatten();
+        let st = status.as_deref().unwrap_or("").trim();
+        if !st.eq_ignore_ascii_case("CLOSED") && !st.eq_ignore_ascii_case("LIQUIDATED") {
+            continue;
+        }
+        let symbol_code: String = conn
+            .hget(&pos_key, "symbol")
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let sym_key = symbol_code.trim().to_ascii_uppercase();
+        let Some(q_owned) = symbol_map.get(&sym_key).cloned() else {
+            warn!(
+                position_id = %pos_id,
+                symbol = %symbol_code,
+                "redis closed PnL sum: unknown symbol code"
+            );
+            continue;
+        };
+        let quote = q_owned.as_str();
+        if !quote_currency_supported(snapshot, quote) {
+            warn!(
+                position_id = %pos_id,
+                quote = %quote,
+                "redis closed PnL sum: quote not convertible to USD"
+            );
+            continue;
+        }
+        let rp_s: Option<String> = conn.hget(&pos_key, "realized_pnl").await.ok().flatten();
+        let rp = rp_s
+            .as_deref()
+            .and_then(|s| Decimal::from_str(s).ok())
+            .unwrap_or(Decimal::ZERO);
+        if rp.is_zero() {
+            continue;
+        }
+        match fx_rates::convert_with_rates(rp, quote, "USD", &snapshot.rates) {
+            Ok(usd) => sum += usd,
+            Err(e) => warn!(
+                position_id = %pos_id,
+                error = %e,
+                "redis closed PnL sum: FX conversion failed"
+            ),
         }
     }
     Ok(sum)
@@ -2122,7 +2207,16 @@ pub(crate) async fn compute_account_summary_inner(
         }
     };
 
-    let realized_pnl: Decimal = sum_closed_realized_pnl_usd(pool, &fx_snapshot, user_id).await?;
+    let mut realized_pnl: Decimal = sum_closed_realized_pnl_usd(pool, &fx_snapshot, user_id).await?;
+    if realized_pnl.is_zero() {
+        match sum_closed_realized_pnl_redis_usd(pool, redis_pool, user_id, &fx_snapshot).await {
+            Ok(redis_sum) if !redis_sum.is_zero() => {
+                realized_pnl = redis_sum;
+            }
+            Ok(_) => {}
+            Err(e) => warn!(user_id = %user_id, error = %e, "redis fallback for closed realized PnL failed"),
+        }
+    }
 
     let bonus_balance: Decimal = sqlx::query_scalar(
         r#"SELECT COALESCE(bonus_balance, 0) FROM wallets WHERE user_id = $1 AND wallet_type = 'spot'::wallet_type AND currency = 'USD'"#,
@@ -2318,6 +2412,29 @@ async fn merge_live_unrealized_from_redis_agg(
     };
 }
 
+/// When cached summary shows 0 realized P&L but closed trades exist on Redis (same as position history),
+/// derive realized from `pos:by_id:*` hashes so the UI matches without waiting for a full recompute.
+async fn patch_zero_realized_pnl_from_redis(
+    pool: &PgPool,
+    redis: &crate::redis_pool::RedisPool,
+    user_id: Uuid,
+    summary: &mut AccountSummary,
+) {
+    if summary.realized_pnl != 0.0 {
+        return;
+    }
+    let Ok(Some(snapshot)) = fx_rates::get_cached_snapshot(redis).await else {
+        return;
+    };
+    let Ok(alt) = sum_closed_realized_pnl_redis_usd(pool, redis, user_id, &snapshot).await else {
+        return;
+    };
+    if alt.is_zero() {
+        return;
+    }
+    summary.realized_pnl = alt.to_string().parse::<f64>().unwrap_or(0.0);
+}
+
 async fn get_account_summary(
     State(pool): State<PgPool>,
     Extension(deposits_state): Extension<DepositsState>,
@@ -2397,6 +2514,7 @@ async fn get_account_summary(
                 updated_at,
             };
             merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary).await;
+            patch_zero_realized_pnl_from_redis(&pool, redis, user_id, &mut summary).await;
             return Ok(Json(summary));
         }
     }
@@ -2418,6 +2536,7 @@ async fn get_account_summary(
                 ..summary
             };
             merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary_with_threshold).await;
+            patch_zero_realized_pnl_from_redis(&pool, redis, user_id, &mut summary_with_threshold).await;
             Ok(Json(summary_with_threshold))
         }
         Err(e) => {
@@ -2504,6 +2623,7 @@ pub async fn get_account_summary_for_user(
                 updated_at,
             };
             merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary).await;
+            patch_zero_realized_pnl_from_redis(pool, redis, user_id, &mut summary).await;
             return Ok(summary);
         }
     }
@@ -2524,6 +2644,7 @@ pub async fn get_account_summary_for_user(
                 ..summary
             };
             merge_live_unrealized_from_redis_agg(redis, user_id, &mut summary_with_threshold).await;
+            patch_zero_realized_pnl_from_redis(pool, redis, user_id, &mut summary_with_threshold).await;
             Ok(summary_with_threshold)
         }
         Err(e) => {
@@ -2865,7 +2986,8 @@ async fn create_direct_deposit(
     let total_realized_pnl: Decimal = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(pnl), 0) FROM positions
-        WHERE user_id = $1 AND status = 'closed'::position_status
+        WHERE user_id = $1
+          AND status IN ('closed'::position_status, 'liquidated'::position_status)
         "#,
     )
     .bind(user_id)
@@ -3066,11 +3188,12 @@ async fn approve_deposit(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // 3. Calculate total realized PnL (from closed positions)
+    // 3. Calculate total realized PnL (from closed and liquidated positions)
     let total_realized_pnl: Decimal = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(pnl), 0) FROM positions
-        WHERE user_id = $1 AND status = 'closed'::position_status
+        WHERE user_id = $1
+          AND status IN ('closed'::position_status, 'liquidated'::position_status)
         "#
     )
     .bind(user_id)

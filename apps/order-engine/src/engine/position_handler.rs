@@ -5,8 +5,10 @@ use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::engine::cache::normalize_symbol;
+use crate::engine::position_events;
 use crate::engine::{OrderCache, LuaScripts};
 use crate::models::{PositionClosedEvent, BalanceUpdatedEvent};
+use contracts::enums::PositionStatus;
 use crate::nats::NatsClient;
 use crate::observability::Metrics;
 use crate::subjects::subjects as nats_subjects;
@@ -266,7 +268,21 @@ impl PositionHandler {
                 }
                 
                 self.metrics.inc_positions_closed();
-                
+
+                if let Err(e) = position_events::publish_position_updated(
+                    self.nats.as_ref(),
+                    &mut conn,
+                    position_id,
+                    Some(PositionStatus::Closed),
+                )
+                .await
+                {
+                    warn!(
+                        "Failed to publish evt.position.updated after manual close {}: {}",
+                        position_id, e
+                    );
+                }
+
                 // Publish balance updated event
                 let balance_key = format!("user:{}:balance", user_id);
                 let balance_json: Option<String> = redis::cmd("GET")
