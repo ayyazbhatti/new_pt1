@@ -12,8 +12,10 @@ import { liquidatePosition } from '../api/positions'
 import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
-import { useFormatFromUsd } from '@/shared/currency'
+import { useFormatFromQuoteCurrency } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 /** Fixed column widths so header and body columns stay aligned when cells are empty */
@@ -27,7 +29,7 @@ const COLUMN_WIDTHS = [
   '80px',  // Size
   '95px',  // Entry
   '90px',  // Mark
-  '95px',  // Live PnL (USD-denominated; cell uses hooks)
+  '95px',  // Live PnL (quote-denominated; cell converts to display currency)
   '80px',  // PnL %
   '90px',  // Margin
   '85px',  // SL
@@ -47,7 +49,7 @@ interface PositionsTableProps {
 
 export function PositionsTable({ positions, onPositionClick, readOnly }: PositionsTableProps) {
   const { setSelectedPositionId, setOpenModal } = useAdminTradingStore()
-  const formatMoney = useFormatFromUsd()
+  const formatFromQuote = useFormatFromQuoteCurrency()
   const [openActionsMenuId, setOpenActionsMenuId] = useState<string | null>(null)
   const canClosePosition = useCanAccess('trading:close_position')
   const canLiquidate = useCanAccess('trading:liquidate')
@@ -165,18 +167,24 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
       {
         accessorKey: 'entryPrice',
         header: 'Entry',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">
-            {row.original.entryPrice.toFixed(2)}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const p = row.original
+          const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+          return (
+            <span className="text-sm font-mono text-text">
+              {formatSymbolPrice(p.entryPrice, meta)}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'markPrice',
         header: 'Mark',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">{row.original.markPrice.toFixed(2)}</span>
-        ),
+        cell: ({ row }) => {
+          const p = row.original
+          const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+          return <span className="text-sm font-mono text-text">{formatSymbolPrice(p.markPrice, meta)}</span>
+        },
       },
       {
         id: 'livePnlAmount',
@@ -191,29 +199,42 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
       {
         accessorKey: 'marginUsed',
         header: 'Margin',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">
-            {formatMoney(row.original.marginUsed)}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const p = row.original
+          const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+          const q = (meta?.quoteCurrency ?? 'USD').trim() || 'USD'
+          return (
+            <span className="text-sm font-mono text-text">
+              {formatFromQuote(row.original.marginUsed, q as CurrencyCode)}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'stopLoss',
         header: 'SL',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">
-            {row.original.stopLoss ? row.original.stopLoss.toFixed(2) : '—'}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const p = row.original
+          const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+          return (
+            <span className="text-sm font-mono text-text">
+              {row.original.stopLoss ? formatSymbolPrice(row.original.stopLoss, meta) : '—'}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'takeProfit',
         header: 'TP',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">
-            {row.original.takeProfit ? row.original.takeProfit.toFixed(2) : '—'}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const p = row.original
+          const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+          return (
+            <span className="text-sm font-mono text-text">
+              {row.original.takeProfit ? formatSymbolPrice(row.original.takeProfit, meta) : '—'}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'status',
@@ -278,7 +299,7 @@ export function PositionsTable({ positions, onPositionClick, readOnly }: Positio
       canLiquidate,
       readOnly,
       openActionsMenuId,
-      formatMoney,
+      formatFromQuote,
       symbolMetaLookup,
     ]
   )

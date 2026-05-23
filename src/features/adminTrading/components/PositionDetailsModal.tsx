@@ -3,16 +3,18 @@ import { Badge } from '@/shared/ui/badge'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { format } from 'date-fns'
 import { cn } from '@/shared/utils'
-import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { useFormatFromQuoteCurrency, useFormatSignedFromQuoteCurrency } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 import { closedPositionPnlParts, openPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
 
 export function PositionDetailsModal() {
   const { openModal, setOpenModal, selectedPositionId, positions, positionHistory } =
     useAdminTradingStore()
-  const formatMoney = useFormatFromUsd()
-  const formatSigned = useFormatSignedFromUsd()
+  const formatFromQuote = useFormatFromQuoteCurrency()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
   const symbolMetaLookup = useSymbolMetaLookup()
   const position = selectedPositionId
     ? positions.get(selectedPositionId) ?? positionHistory.get(selectedPositionId)
@@ -21,10 +23,10 @@ export function PositionDetailsModal() {
 
   if (!position) return null
 
-  const sizeFmt = formatPositionSize(
-    position.size,
-    getSymbolMetaForCode(symbolMetaLookup, position.symbol),
-  )
+  const rowMeta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+  const posQuote = (rowMeta?.quoteCurrency ?? 'USD').trim() || 'USD'
+
+  const sizeFmt = formatPositionSize(position.size, rowMeta)
 
   const isOpen = position.status === 'OPEN' || position.status === 'open'
   const pnlParts = isOpen
@@ -103,37 +105,39 @@ export function PositionDetailsModal() {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Entry Price</div>
-            <div className="text-sm font-mono text-text">{position.entryPrice.toFixed(2)}</div>
+            <div className="text-sm font-mono text-text">{formatSymbolPrice(position.entryPrice, rowMeta)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Mark Price</div>
-            <div className="text-sm font-mono text-text">{position.markPrice.toFixed(2)}</div>
+            <div className="text-sm font-mono text-text">{formatSymbolPrice(position.markPrice, rowMeta)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">PnL (engine)</div>
             <div className={cn('text-sm font-mono font-semibold', pnlIsPositive ? 'text-success' : 'text-danger')}>
-              {formatSigned(position.pnl)} ({pnlIsPositive ? '+' : ''}
+              {formatSignedQuote(position.pnl, posQuote as CurrencyCode)} ({pnlIsPositive ? '+' : ''}
               {position.pnlPercent.toFixed(2)}%)
             </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Margin Used</div>
-            <div className="text-sm font-mono text-text">{formatMoney(position.marginUsed)}</div>
+            <div className="text-sm font-mono text-text">
+              {formatFromQuote(position.marginUsed, posQuote as CurrencyCode)}
+            </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Liquidation Price</div>
-            <div className="text-sm font-mono text-text">{position.liquidationPrice.toFixed(2)}</div>
+            <div className="text-sm font-mono text-text">{formatSymbolPrice(position.liquidationPrice, rowMeta)}</div>
           </div>
           {position.stopLoss && (
             <div>
               <div className="text-xs text-text-muted mb-1">Stop Loss</div>
-              <div className="text-sm font-mono text-text">{position.stopLoss.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{formatSymbolPrice(position.stopLoss, rowMeta)}</div>
             </div>
           )}
           {position.takeProfit && (
             <div>
               <div className="text-xs text-text-muted mb-1">Take Profit</div>
-              <div className="text-sm font-mono text-text">{position.takeProfit.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{formatSymbolPrice(position.takeProfit, rowMeta)}</div>
             </div>
           )}
           <div>
@@ -154,6 +158,7 @@ export function PositionDetailsModal() {
             accumulatedSwapUsd={position.accumulatedSwapUsd}
             accumulatedFeesUsd={position.accumulatedFeesUsd}
             netPnlUsd={pnlParts.net}
+            quoteCurrency={posQuote}
           />
         </div>
       </div>

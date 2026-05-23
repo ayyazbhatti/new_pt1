@@ -29,12 +29,23 @@ import {
   Activity,
 } from 'lucide-react'
 import { cn } from '@/shared/utils'
-import { getOpenPositions, getClosedPositions, Position } from '@/features/terminal/api/positions.api'
+import { getOpenPositions, getClosedPositions, type Position } from '@/features/terminal/api/positions.api'
 import {
   usePriceStreamConnection,
   useSymbolPrice,
   normalizeSymbolKey,
 } from '@/features/symbols/hooks/usePriceStream'
+import {
+  useCurrencyCode,
+  useFormatFromQuoteCurrency,
+  useFormatSignedFromQuoteCurrency,
+  useFxRatesMap,
+} from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
+import { convertAmount, formatAmount, formatSignedAmount } from '@/shared/currency/format'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 function StatCard({
   title,
@@ -94,15 +105,18 @@ type ViewMode = 'open' | 'history'
 
 const OpenPositionUnrealizedPnlCell = memo(function OpenPositionUnrealizedPnlCell({ pos }: { pos: Position }) {
   const tick = useSymbolPrice(normalizeSymbolKey(pos.symbol))
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
   const pnl = useMemo(() => unrealizedPnlFromTick(pos, tick), [pos, tick])
   const positive = pnl >= 0
+  const meta = getSymbolMetaForCode(symbolMetaLookup, pos.symbol)
+  const quote = (meta?.quoteCurrency ?? 'USD').trim() || 'USD'
   const notional = parseNum(pos.entry_price) * parseNum(pos.size)
   const pnlPercent = notional > 0 ? (pnl / notional) * 100 : 0
   return (
     <span className="inline-flex flex-col items-start gap-0.5">
       <span className={cn('tabular-nums font-medium', positive ? 'text-success' : 'text-danger')}>
-        {positive ? '+' : ''}
-        ${pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        {formatSignedQuote(pnl, quote as CurrencyCode)}
       </span>
       <span className={cn('text-xs tabular-nums', positive ? 'text-success' : 'text-danger')}>
         ({positive ? '+' : ''}
@@ -117,13 +131,13 @@ const UserPositionUnrealizedOverviewShard = memo(function UserPositionUnrealized
   onReport,
 }: {
   position: Position
-  onReport: (id: string, n: number) => void
+  onReport: (id: string, n: number, symbol: string) => void
 }) {
   const tick = useSymbolPrice(normalizeSymbolKey(position.symbol))
   const n = useMemo(() => unrealizedPnlFromTick(position, tick), [position, tick])
   useEffect(() => {
-    onReport(position.id, n)
-  }, [position.id, n, onReport])
+    onReport(position.id, n, position.symbol)
+  }, [position.id, position.symbol, n, onReport])
   return null
 })
 
@@ -131,38 +145,75 @@ const UserPositionsOverviewSection = memo(function UserPositionsOverviewSection(
   isLoading,
   filterView,
   total,
-  totalExposure,
-  totalMarginUsed,
-  totalRealizedPnl,
   filteredPositions,
 }: {
   isLoading: boolean
   filterView: ViewMode
   total: number
-  totalExposure: number
-  totalMarginUsed: number
-  totalRealizedPnl: number
   filteredPositions: Position[]
 }) {
   const isHistory = filterView === 'history'
-  const pnlPartsRef = useRef<Map<string, number>>(new Map())
+  const displayCode = useCurrencyCode()
+  const rates = useFxRatesMap()
+  const symbolMetaLookup = useSymbolMetaLookup()
+
+  const pnlPartsRef = useRef<Map<string, { v: number; sym: string }>>(new Map())
   const [pnlTick, setPnlTick] = useState(0)
-  const reportPnl = useCallback((id: string, v: number) => {
+  const reportPnl = useCallback((id: string, v: number, symbol: string) => {
     const prev = pnlPartsRef.current.get(id)
-    if (prev === v) return
-    pnlPartsRef.current.set(id, v)
+    if (prev && prev.v === v && prev.sym === symbol) return
+    pnlPartsRef.current.set(id, { v, sym: symbol })
     setPnlTick((t) => t + 1)
   }, [])
 
+  const quoteFor = useCallback(
+    (symbol: string) =>
+      (getSymbolMetaForCode(symbolMetaLookup, symbol)?.quoteCurrency ?? 'USD').trim() || 'USD',
+    [symbolMetaLookup],
+  )
+
+  const totalExposureConverted = useMemo(
+    () =>
+      filteredPositions.reduce((sum, p) => {
+        const q = quoteFor(p.symbol) as CurrencyCode
+        const raw = parseNum(p.size) * parseNum(p.entry_price)
+        return sum + (convertAmount(raw, q, displayCode, rates) ?? 0)
+      }, 0),
+    [filteredPositions, quoteFor, displayCode, rates],
+  )
+
+  const totalMarginConverted = useMemo(
+    () =>
+      filteredPositions.reduce((sum, p) => {
+        const q = quoteFor(p.symbol) as CurrencyCode
+        const raw = parseNum(p.margin)
+        return sum + (convertAmount(raw, q, displayCode, rates) ?? 0)
+      }, 0),
+    [filteredPositions, quoteFor, displayCode, rates],
+  )
+
+  const totalRealizedConverted = useMemo(
+    () =>
+      filteredPositions.reduce((sum, p) => {
+        const q = quoteFor(p.symbol) as CurrencyCode
+        const raw = parseNum(p.realized_pnl)
+        return sum + (convertAmount(raw, q, displayCode, rates) ?? 0)
+      }, 0),
+    [filteredPositions, quoteFor, displayCode, rates],
+  )
+
   const totalUnrealizedLive = useMemo(() => {
     return filteredPositions.reduce((sum, p) => {
-      const v = pnlPartsRef.current.get(p.id)
-      return sum + (v !== undefined ? v : parseNum(p.unrealized_pnl))
+      const snap = pnlPartsRef.current.get(p.id)
+      const raw = snap !== undefined ? snap.v : parseNum(p.unrealized_pnl)
+      const sym = snap !== undefined ? snap.sym : p.symbol
+      const q = quoteFor(sym) as CurrencyCode
+      return sum + (convertAmount(raw, q, displayCode, rates) ?? 0)
     }, 0)
-  }, [filteredPositions, pnlTick])
+  }, [filteredPositions, pnlTick, quoteFor, displayCode, rates])
 
-  const displayPnl = isHistory ? totalRealizedPnl : totalUnrealizedLive
-  const isProfit = isHistory ? totalRealizedPnl >= 0 : totalUnrealizedLive >= 0
+  const displayPnl = isHistory ? totalRealizedConverted : totalUnrealizedLive
+  const isProfit = isHistory ? totalRealizedConverted >= 0 : totalUnrealizedLive >= 0
 
   return (
     <section className="mb-8">
@@ -192,26 +243,97 @@ const UserPositionsOverviewSection = memo(function UserPositionsOverviewSection(
           />
           <StatCard
             title="Total exposure"
-            value={`$${totalExposure.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-            subtext="Notional value"
+            value={formatAmount(totalExposureConverted, displayCode)}
+            subtext="Notional value (converted)"
             icon={TrendingUp}
           />
           <StatCard
             title={isHistory ? 'Realized P/L' : 'Unrealized P/L'}
-            value={`${isProfit ? '+' : ''}$${displayPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            value={formatSignedAmount(displayPnl, displayCode)}
             subtext={isHistory ? 'Closed P/L' : 'Floating profit/loss'}
             icon={DollarSign}
             valueClassName={isProfit ? 'text-success' : 'text-danger'}
           />
           <StatCard
             title="Margin used"
-            value={`$${totalMarginUsed.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-            subtext="Collateral in use"
+            value={formatAmount(totalMarginConverted, displayCode)}
+            subtext="Collateral in use (converted)"
             icon={Wallet}
           />
         </div>
       )}
     </section>
+  )
+})
+
+const UserPositionSizeCell = memo(function UserPositionSizeCell({ position }: { position: Position }) {
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const meta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+  const fmt = formatPositionSize(parseNum(position.size), meta)
+  return (
+    <span className="tabular-nums text-text" title={fmt.secondary || undefined}>
+      {fmt.display}
+    </span>
+  )
+})
+
+const UserPositionEntryPriceCell = memo(function UserPositionEntryPriceCell({ position }: { position: Position }) {
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const meta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+  return (
+    <span className="tabular-nums text-text-muted">
+      {formatSymbolPrice(parseNum(position.entry_price), meta)}
+    </span>
+  )
+})
+
+const UserPositionExitPriceCell = memo(function UserPositionExitPriceCell({ position }: { position: Position }) {
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const meta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+  const ex = position.exit_price
+  if (ex == null || String(ex).trim() === '') {
+    return <span className="tabular-nums text-text-muted">—</span>
+  }
+  return (
+    <span className="tabular-nums text-text-muted">{formatSymbolPrice(parseNum(ex), meta)}</span>
+  )
+})
+
+const UserPositionMarginCell = memo(function UserPositionMarginCell({ position }: { position: Position }) {
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const formatFromQuote = useFormatFromQuoteCurrency()
+  const meta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+  const quote = (meta?.quoteCurrency ?? 'USD').trim() || 'USD'
+  return (
+    <span className="tabular-nums text-text-muted">
+      {formatFromQuote(parseNum(position.margin), quote as CurrencyCode)}
+    </span>
+  )
+})
+
+const ClosedPositionRealizedPnlCell = memo(function ClosedPositionRealizedPnlCell({
+  position,
+}: {
+  position: Position
+}) {
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
+  const pnl = parseNum(position.realized_pnl)
+  const positive = pnl >= 0
+  const meta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+  const quote = (meta?.quoteCurrency ?? 'USD').trim() || 'USD'
+  const notional = parseNum(position.entry_price) * parseNum(position.size)
+  const pnlPercent = notional > 0 ? (pnl / notional) * 100 : 0
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <span className={cn('tabular-nums font-medium', positive ? 'text-success' : 'text-danger')}>
+        {formatSignedQuote(pnl, quote as CurrencyCode)}
+      </span>
+      <span className={cn('text-xs tabular-nums', positive ? 'text-success' : 'text-danger')}>
+        ({positive ? '+' : ''}
+        {pnlPercent.toFixed(2)}%)
+      </span>
+    </span>
   )
 })
 
@@ -233,7 +355,7 @@ function buildPositionColumns(viewMode: ViewMode): ColumnDef<Position>[] {
           <span
             className={cn(
               'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium',
-              isLong ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger'
+              isLong ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger',
             )}
           >
             {isLong ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
@@ -245,20 +367,12 @@ function buildPositionColumns(viewMode: ViewMode): ColumnDef<Position>[] {
     {
       accessorKey: 'size',
       header: 'Size',
-      cell: ({ row }) => (
-        <span className="tabular-nums text-text">
-          {parseNum(row.original.size).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}
-        </span>
-      ),
+      cell: ({ row }) => <UserPositionSizeCell position={row.original} />,
     },
     {
       accessorKey: 'entry_price',
       header: 'Entry price',
-      cell: ({ row }) => (
-        <span className="tabular-nums text-text-muted">
-          ${parseNum(row.original.entry_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </span>
-      ),
+      cell: ({ row }) => <UserPositionEntryPriceCell position={row.original} />,
     },
     ...(isHistory
       ? [
@@ -266,11 +380,7 @@ function buildPositionColumns(viewMode: ViewMode): ColumnDef<Position>[] {
             id: 'exit_price',
             header: 'Exit price',
             cell: ({ row }: { row: { original: Position } }) => (
-              <span className="tabular-nums text-text-muted">
-                {row.original.exit_price
-                  ? `$${parseNum(row.original.exit_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                  : '—'}
-              </span>
+              <UserPositionExitPriceCell position={row.original} />
             ),
           } as ColumnDef<Position>,
         ]
@@ -288,22 +398,7 @@ function buildPositionColumns(viewMode: ViewMode): ColumnDef<Position>[] {
       cell: ({ row }) => {
         const pos = row.original
         if (isHistory) {
-          const pnl = parseNum(pos.realized_pnl)
-          const positive = pnl >= 0
-          const notional = parseNum(pos.entry_price) * parseNum(pos.size)
-          const pnlPercent = notional > 0 ? (pnl / notional) * 100 : 0
-          return (
-            <span className="inline-flex flex-col items-start gap-0.5">
-              <span className={cn('tabular-nums font-medium', positive ? 'text-success' : 'text-danger')}>
-                {positive ? '+' : ''}
-                ${pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-              <span className={cn('text-xs tabular-nums', positive ? 'text-success' : 'text-danger')}>
-                ({positive ? '+' : ''}
-                {pnlPercent.toFixed(2)}%)
-              </span>
-            </span>
-          )
+          return <ClosedPositionRealizedPnlCell position={pos} />
         }
         return <OpenPositionUnrealizedPnlCell pos={pos} />
       },
@@ -311,11 +406,7 @@ function buildPositionColumns(viewMode: ViewMode): ColumnDef<Position>[] {
     {
       accessorKey: 'margin',
       header: 'Margin',
-      cell: ({ row }) => (
-        <span className="tabular-nums text-text-muted">
-          ${parseNum(row.original.margin).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </span>
-      ),
+      cell: ({ row }) => <UserPositionMarginCell position={row.original} />,
     },
     ...(isHistory
       ? [
@@ -335,15 +426,19 @@ function buildPositionColumns(viewMode: ViewMode): ColumnDef<Position>[] {
           } as ColumnDef<Position>,
         ]
       : []),
-    ...(isHistory ? [] : [{
-      id: 'actions',
-      header: '',
-      cell: () => (
-        <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="More actions">
-          <MoreHorizontal className="h-4 w-4" />
-        </Button>
-      ),
-    } as ColumnDef<Position>]),
+    ...(isHistory
+      ? []
+      : [
+          {
+            id: 'actions',
+            header: '',
+            cell: () => (
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="More actions">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            ),
+          } as ColumnDef<Position>,
+        ]),
   ]
   return columns
 }
@@ -406,19 +501,6 @@ export function UserPositionsPage() {
     if (page > totalPages) setPage(1)
   }, [total, pageSize, page])
 
-  const totalExposure = useMemo(
-    () => filteredPositions.reduce((sum, p) => sum + parseNum(p.size) * parseNum(p.entry_price), 0),
-    [filteredPositions]
-  )
-  const totalRealizedPnl = useMemo(
-    () => filteredPositions.reduce((sum, p) => sum + parseNum(p.realized_pnl), 0),
-    [filteredPositions]
-  )
-  const totalMarginUsed = useMemo(
-    () => filteredPositions.reduce((sum, p) => sum + parseNum(p.margin), 0),
-    [filteredPositions]
-  )
-
   const clearFilters = () => {
     setFilterSymbol('')
     setFilterSide('all')
@@ -436,9 +518,6 @@ export function UserPositionsPage() {
         isLoading={isLoading}
         filterView={filterView}
         total={total}
-        totalExposure={totalExposure}
-        totalMarginUsed={totalMarginUsed}
-        totalRealizedPnl={totalRealizedPnl}
         filteredPositions={filteredPositions}
       />
 

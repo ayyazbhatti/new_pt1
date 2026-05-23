@@ -108,3 +108,26 @@ export function formatSignedFromUsd(
   if (formatted === '—') return '—'
   return n >= 0 ? `+${formatted}` : `-${formatted}`
 }
+
+/** Signed +/- display for an amount already denominated in `currency` (no FX conversion). */
+export function formatSignedAmount(amount: MoneyInput, currency: CurrencyCode): string {
+  const n = toNumber(amount)
+  if (n == null) return '—'
+  const formatted = formatAmount(Math.abs(n), currency)
+  if (formatted === '—') return '—'
+  return n >= 0 ? `+${formatted}` : `-${formatted}`
+}
+
+/** Convert from `fromCurrency` to `toCurrency`, then format with +/- for P&L-style rows. */
+export function formatSignedConverted(
+  amount: MoneyInput,
+  fromCurrency: CurrencyCode,
+  toCurrency: CurrencyCode,
+  rates: FxRatesSnapshot['rates'],
+): string {
+  const n = toNumber(amount)
+  if (n == null) return '—'
+  const formatted = formatConverted(Math.abs(n), fromCurrency, toCurrency, rates)
+  if (formatted === '—') return '—'
+  return n >= 0 ? `+${formatted}` : `-${formatted}`
+}

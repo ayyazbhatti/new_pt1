@@ -23,7 +23,10 @@ export interface SymbolMeta {
   market?: string | null
   contractSize?: string | number | null
   baseCurrency?: string | null
+  quoteCurrency?: string | null
   volumePrecision?: number | null
+  pricePrecision?: number | null
+  digits?: number | null
 }
 
 function formatRawUnits(units: number, baseCurrency?: string | null): string {
@@ -37,6 +40,11 @@ function normalizeAssetClass(assetClass?: string | null): string {
 
 function normalizeMarket(market?: string | null): string {
   return (market ?? '').trim().toLowerCase()
+}
+
+/** FX lots: always show 4 decimals so sub–0.01 lots are not rounded away (e.g. 0.0051 not 0.01). */
+function formatFxLotsForDisplay(lots: number): string {
+  return lots.toFixed(4)
 }
 
 function fallbackFormatted(rawUnits: number | string): FormattedSize {
@@ -88,7 +96,7 @@ export function formatPositionSize(
 
   if (isFx) {
     const lots = contractSize > 0 ? units / contractSize : units
-    const primary = lots.toFixed(precision)
+    const primary = formatFxLotsForDisplay(lots)
     const secondary = formatRawUnits(units, symbol.baseCurrency)
     return {
       primary,

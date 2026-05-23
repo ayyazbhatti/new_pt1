@@ -8,6 +8,8 @@ export {
   useFormatSignedFromUsd,
   useFormatAmount,
   useFormatConverted,
+  useFormatFromQuoteCurrency,
+  useFormatSignedFromQuoteCurrency,
   useCurrencyCode,
   useCurrencySymbol,
 } from './hooks'

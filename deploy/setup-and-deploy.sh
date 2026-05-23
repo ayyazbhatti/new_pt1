@@ -40,10 +40,25 @@ if [ ! -f deploy/.env.production ]; then
   echo "  Generated secrets saved in deploy/.env.production (keep a backup)."
 fi
 
+# First-time browser login needs CORS to match the URL users open (port 8080 on this host).
+if [ -f deploy/.env.production ] && ! grep -q '^CORS_ORIGINS=' deploy/.env.production; then
+  PUB_PRE="$(curl -fsS --max-time 3 https://ipv4.icanhazip.com 2>/dev/null || true)"
+  if [ -n "$PUB_PRE" ]; then
+    echo "CORS_ORIGINS=http://${PUB_PRE}:8080" >> deploy/.env.production
+    echo "  Appended CORS_ORIGINS=http://${PUB_PRE}:8080 (edit if you use HTTPS or a domain)."
+  else
+    echo "  Add CORS_ORIGINS to deploy/.env.production (e.g. http://YOUR_IP:8080) before relying on browser login."
+  fi
+fi
+
 echo "==> Building and starting..."
 docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production build --no-cache 2>/dev/null || docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production build
 docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production up -d
 
+PUB_IP="$(curl -fsS --max-time 3 https://ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')"
 echo ""
-echo "==> Deploy complete. App should be on http://$(curl -sS --max-time 2 169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || hostname -I | awk '{print $1}'):80"
-echo "    To view logs: docker compose -f deploy/docker-compose.prod.yml logs -f"
+echo "==> Deploy complete."
+echo "    App: http://${PUB_IP}:8080/"
+echo "    If login fails from the browser, check CORS_ORIGINS in deploy/.env.production matches that URL, then:"
+echo "      docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production up -d auth"
+echo "    Logs: docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production logs -f"

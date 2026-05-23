@@ -4,6 +4,7 @@ import { Order } from '../types/adminTrading'
 import { useModalStore } from '@/app/store'
 import { useFormatDateTime } from '@/shared/datetime'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 interface OrderDetailsModalProps {
@@ -15,6 +16,7 @@ export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
   const closeModal = useModalStore((state) => state.closeModal)
   const symbolMetaLookup = useSymbolMetaLookup()
   const sizeFmt = formatPositionSize(order.size, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
+  const orderMeta = getSymbolMetaForCode(symbolMetaLookup, order.symbol)
   const filledFmt =
     order.filledSize != null
       ? formatPositionSize(order.filledSize, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
@@ -88,13 +90,13 @@ export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
           {order.price && (
             <div>
               <div className="text-xs text-text-muted mb-1">Price</div>
-              <div className="font-mono text-text">{order.price.toFixed(2)}</div>
+              <div className="font-mono text-text">{formatSymbolPrice(order.price, orderMeta)}</div>
             </div>
           )}
           {order.stopPrice && (
             <div>
               <div className="text-xs text-text-muted mb-1">Stop Price</div>
-              <div className="font-mono text-text">{order.stopPrice.toFixed(2)}</div>
+              <div className="font-mono text-text">{formatSymbolPrice(order.stopPrice, orderMeta)}</div>
             </div>
           )}
           {order.filledSize != null && (
@@ -108,7 +110,7 @@ export function OrderDetailsModal({ order }: OrderDetailsModalProps) {
           {order.averagePrice && (
             <div>
               <div className="text-xs text-text-muted mb-1">Average Price</div>
-              <div className="font-mono text-text">{order.averagePrice.toFixed(2)}</div>
+              <div className="font-mono text-text">{formatSymbolPrice(order.averagePrice, orderMeta)}</div>
             </div>
           )}
         </div>

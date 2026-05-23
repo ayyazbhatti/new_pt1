@@ -8,8 +8,10 @@ import {
   PositionPnLBreakdown,
 } from '@/shared/components/PositionPnLBreakdown'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { getSymbolMetaForCode } from '../hooks/useSymbolMetaLookup'
 import type { SymbolMeta } from '@/shared/finance/sizeFormat'
+import type { CurrencyCode } from '@/shared/currency/types'
 
 function livePriceFromTick(
   pos: Pick<Position, 'side'>,
@@ -26,9 +28,8 @@ export interface BottomDockDesktopOpenPositionRowProps {
   symbolMetaLookup: Map<string, SymbolMeta>
   posQuote: string
   formatConv: (value: number, quoteCurrency: string) => string
-  formatSigned: (value: number) => string
+  formatSigned: (value: number, quoteCurrency: CurrencyCode) => string
   formatDateTimeSeconds: (tsMs: number) => string
-  formatMoney: (value: number) => string
   canClosePosition: boolean
   onRowClick: () => void
   onToggleExpand: (e: MouseEvent) => void
@@ -45,7 +46,6 @@ export const BottomDockDesktopOpenPositionRow = memo(function BottomDockDesktopO
   formatConv,
   formatSigned,
   formatDateTimeSeconds,
-  formatMoney,
   canClosePosition,
   onRowClick,
   onToggleExpand,
@@ -63,7 +63,8 @@ export const BottomDockDesktopOpenPositionRow = memo(function BottomDockDesktopO
     [pos, livePrice, sizeNum, entryPrice],
   )
 
-  const sizeDisplayFmt = formatPositionSize(sizeNum, getSymbolMetaForCode(symbolMetaLookup, pos.symbol))
+  const rowSymbolMeta = getSymbolMetaForCode(symbolMetaLookup, pos.symbol)
+  const sizeDisplayFmt = formatPositionSize(sizeNum, rowSymbolMeta)
 
   const openedMs =
     pos.opened_at != null
@@ -97,10 +98,12 @@ export const BottomDockDesktopOpenPositionRow = memo(function BottomDockDesktopO
             {pos.side}
           </span>
         </td>
-        <td className="px-4 py-3 text-text font-semibold">{formatMoney(marginNum)}</td>
-        <td className="px-4 py-3 font-mono text-text font-medium">{formatConv(entryPrice, posQuote)}</td>
+        <td className="px-4 py-3 text-text font-semibold">
+          {Number.isFinite(marginNum) ? formatConv(marginNum, posQuote as CurrencyCode) : '—'}
+        </td>
+        <td className="px-4 py-3 font-mono text-text font-medium">{formatSymbolPrice(entryPrice, rowSymbolMeta)}</td>
         <td className={cn('px-4 py-3 font-mono font-bold', livePrice !== null ? 'text-accent' : 'text-text/40')}>
-          {livePrice !== null ? formatConv(livePrice, posQuote) : <span className="text-text/40">--</span>}
+          {livePrice !== null ? formatSymbolPrice(livePrice, rowSymbolMeta) : <span className="text-text/40">--</span>}
         </td>
         <td
           className={cn(
@@ -118,14 +121,14 @@ export const BottomDockDesktopOpenPositionRow = memo(function BottomDockDesktopO
             >
               <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', rowExpanded && 'rotate-180')} />
             </button>
-            <span>{formatSigned(unrealizedPnl)}</span>
+            <span>{formatSigned(unrealizedPnl, posQuote as CurrencyCode)}</span>
           </div>
         </td>
         <td className="px-4 py-3 font-mono text-text/70">
-          {pos.sl ? formatConv(parseFloat(pos.sl), posQuote) : '-'}
+          {pos.sl ? formatSymbolPrice(parseFloat(pos.sl), rowSymbolMeta) : '-'}
         </td>
         <td className="px-4 py-3 font-mono text-text/70">
-          {pos.tp ? formatConv(parseFloat(pos.tp), posQuote) : '-'}
+          {pos.tp ? formatSymbolPrice(parseFloat(pos.tp), rowSymbolMeta) : '-'}
         </td>
         <td className="px-4 py-3 text-text/90 whitespace-nowrap tabular-nums" title={openedAtStr}>
           {openedAtStr}
@@ -167,6 +170,7 @@ export const BottomDockDesktopOpenPositionRow = memo(function BottomDockDesktopO
                 accumulatedSwapUsd={pos.accumulatedSwapUsd}
                 accumulatedFeesUsd={pos.accumulatedFeesUsd}
                 netPnlUsd={unrealizedPnl}
+                quoteCurrency={posQuote}
               />
             </div>
           </td>
@@ -184,8 +188,7 @@ export interface BottomDockMobileOpenPositionCardProps {
   setExpandedPositionId: Dispatch<SetStateAction<string | null>>
   formatDateTimeSeconds: (tsMs: number) => string
   formatConv: (value: number, quoteCurrency: string) => string
-  formatSigned: (value: number) => string
-  formatMoney: (value: number) => string
+  formatSigned: (value: number, quoteCurrency: CurrencyCode) => string
   canClosePosition: boolean
   onOpenEdit: () => void
   onRequestClose: () => void
@@ -203,7 +206,6 @@ export const BottomDockMobileOpenPositionCard = memo(function BottomDockMobileOp
   formatDateTimeSeconds,
   formatConv,
   formatSigned,
-  formatMoney,
   canClosePosition,
   onOpenEdit,
   onRequestClose,
@@ -222,12 +224,13 @@ export const BottomDockMobileOpenPositionCard = memo(function BottomDockMobileOp
     [pos, livePrice, sizeNum, entryPrice],
   )
 
-  const sizeDisplayFmt = formatPositionSize(sizeNum, getSymbolMetaForCode(symbolMetaLookup, pos.symbol))
+  const rowSymbolMeta = getSymbolMetaForCode(symbolMetaLookup, pos.symbol)
+  const sizeDisplayFmt = formatPositionSize(sizeNum, rowSymbolMeta)
 
   const ts = pos.opened_at != null ? (pos.opened_at < 1e12 ? pos.opened_at * 1000 : pos.opened_at) : Date.now()
   const openedAtStr = formatDateTimeSeconds(ts)
   const openedAtLongStr = formatDateTimeSeconds(ts)
-  const currentStr = livePrice != null ? formatConv(livePrice, posQuote) : '—'
+  const currentStr = livePrice != null ? formatSymbolPrice(livePrice, rowSymbolMeta) : '—'
   const isExpanded = expandedPositionId === pos.id
   const hasValidSl = pos.sl != null && String(pos.sl).trim() !== '' && pos.sl !== 'null' && !Number.isNaN(Number(pos.sl))
   const hasValidTp = pos.tp != null && String(pos.tp).trim() !== '' && pos.tp !== 'null' && !Number.isNaN(Number(pos.tp))
@@ -284,7 +287,7 @@ export const BottomDockMobileOpenPositionCard = memo(function BottomDockMobileOp
             </span>
           </div>
           <div className="text-xs text-slate-600 dark:text-muted font-mono mt-0.5">
-            {formatConv(entryPrice, posQuote)} → {currentStr}
+            {formatSymbolPrice(entryPrice, rowSymbolMeta)} → {currentStr}
           </div>
         </div>
         <div className="text-right shrink-0">
@@ -295,7 +298,7 @@ export const BottomDockMobileOpenPositionCard = memo(function BottomDockMobileOp
               unrealizedPnl >= 0 ? 'text-success' : 'text-danger',
             )}
           >
-            {formatSigned(unrealizedPnl)}
+            {formatSigned(unrealizedPnl, posQuote as CurrencyCode)}
           </div>
         </div>
       </div>
@@ -311,19 +314,24 @@ export const BottomDockMobileOpenPositionCard = memo(function BottomDockMobileOp
               accumulatedSwapUsd={pos.accumulatedSwapUsd}
               accumulatedFeesUsd={pos.accumulatedFeesUsd}
               netPnlUsd={unrealizedPnl}
+              quoteCurrency={posQuote}
             />
           </div>
           <div className="text-xs text-slate-600 dark:text-muted font-mono">
-            {formatConv(entryPrice, posQuote)} → {livePrice != null ? formatConv(livePrice, posQuote) : '—'}
+            {formatSymbolPrice(entryPrice, rowSymbolMeta)} →{' '}
+            {livePrice != null ? formatSymbolPrice(livePrice, rowSymbolMeta) : '—'}
           </div>
           <div className="text-xs text-slate-600 dark:text-muted">{openedAtLongStr}</div>
           <div className="flex justify-between gap-4 text-xs">
             <div className="space-y-1 text-slate-600 dark:text-muted">
-              {hasValidSl && <div>S/L {formatConv(Number(pos.sl), posQuote)}</div>}
-              <div>Margin {Number.isFinite(marginNum) ? formatMoney(marginNum) : '—'}</div>
+              {hasValidSl && <div>S/L {formatSymbolPrice(Number(pos.sl), rowSymbolMeta)}</div>}
+              <div>
+                Margin{' '}
+                {Number.isFinite(marginNum) ? formatConv(marginNum, posQuote as CurrencyCode) : '—'}
+              </div>
             </div>
             <div className="space-y-1 text-slate-600 dark:text-muted text-right">
-              {hasValidTp && <div>T/P {formatConv(Number(pos.tp), posQuote)}</div>}
+              {hasValidTp && <div>T/P {formatSymbolPrice(Number(pos.tp), rowSymbolMeta)}</div>}
               <div className="font-mono">PID {pos.id.slice(0, 8)}</div>
             </div>
           </div>

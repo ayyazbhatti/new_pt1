@@ -26,6 +26,7 @@ import { useTerminalOrderRejectToast } from '@/features/terminal/hooks/useTermin
 import { MarginCallModal } from '@/features/wallet/components/MarginCallModal'
 import { DepositModal } from '@/features/wallet/components/DepositModal'
 import { useAuthStore } from '@/shared/store/auth.store'
+import { wsClient } from '@/shared/ws/wsClient'
 import { getTerminalPreferences } from '../api/preferences.api'
 import { terminalFeedSymbol, terminalPriceLookupKey } from '../utils/terminalFeedSymbol'
 
@@ -97,6 +98,14 @@ export function AppShellTerminal() {
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const { accountSummary } = useAccountSummary()
   useInvalidateSessionStatusOnVisibility()
+
+  useEffect(() => {
+    if (!user?.id) return
+    if (wsClient.getState() === 'disconnected') {
+      wsClient.connect()
+    }
+  }, [user?.id])
+
   const marginCall = useMarginCall(accountSummary ?? null)
 
   // Load terminal preferences from server once (chart options + favourite symbols)

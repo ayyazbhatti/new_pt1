@@ -48,6 +48,25 @@ export function useFormatConverted() {
   )
 }
 
+/**
+ * Format a value denominated in a symbol's **quote** currency (e.g. CAD on AUDCAD, JPY on USDJPY)
+ * into the user's effective display currency. Same math as `useFormatConverted`; alias for call-site clarity.
+ */
+export function useFormatFromQuoteCurrency() {
+  return useFormatConverted()
+}
+
+/** Signed P&L style: amount is in `quoteCurrency`, shown in the user's effective currency. */
+export function useFormatSignedFromQuoteCurrency() {
+  const code = useEffectiveCurrency().code
+  const rates = useFxRatesMap()
+  return useCallback(
+    (amount: MoneyInput, quoteCurrency: CurrencyCode) =>
+      fmt.formatSignedConverted(amount, quoteCurrency, code, rates),
+    [code, rates],
+  )
+}
+
 /** Returns just the effective currency code string — useful for labels/symbols. */
 export function useCurrencyCode(): string {
   return useEffectiveCurrency().code

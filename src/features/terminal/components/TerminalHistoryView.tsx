@@ -11,8 +11,10 @@ import { listOrders, type Order } from '../api/orders.api'
 import { Skeleton, Input } from '@/shared/ui'
 import { closedPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
 import { useFormatDateTimeSeconds } from '@/shared/datetime'
-import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { useFormatFromUsd, useFormatSignedFromUsd, useFormatSignedFromQuoteCurrency } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '../hooks/useSymbolMetaLookup'
 
 type HistorySubTab = 'positions' | 'orders'
@@ -30,7 +32,8 @@ function toDateString(ts: number): string {
 export function TerminalHistoryView() {
   const formatDateTimeSeconds = useFormatDateTimeSeconds()
   const formatMoney = useFormatFromUsd()
-  const formatSigned = useFormatSignedFromUsd()
+  const formatSignedUsd = useFormatSignedFromUsd()
+  const formatSignedFromQuote = useFormatSignedFromQuoteCurrency()
   const [historySubTab, setHistorySubTab] = useState<HistorySubTab>('positions')
   const [positions, setPositions] = useState<Position[]>([])
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
@@ -126,7 +129,7 @@ export function TerminalHistoryView() {
             { label: 'Balance:', value: accountSummary != null ? formatMoney(accountSummary.balance) : '—' },
             {
               label: 'Profit:',
-              value: accountSummary != null ? formatSigned(accountSummary.realizedPnl) : '—',
+              value: accountSummary != null ? formatSignedUsd(accountSummary.realizedPnl) : '—',
               valueClass: accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success',
             },
             { label: 'Equity:', value: accountSummary != null ? formatMoney(accountSummary.equity) : '—' },
@@ -141,7 +144,7 @@ export function TerminalHistoryView() {
             { label: 'Balance:', value: accountSummary != null ? formatMoney(accountSummary.balance) : '—' },
             {
               label: 'Profit:',
-              value: accountSummary != null ? formatSigned(accountSummary.realizedPnl) : '—',
+              value: accountSummary != null ? formatSignedUsd(accountSummary.realizedPnl) : '—',
               valueClass: accountSummary != null && accountSummary.realizedPnl < 0 ? 'text-danger' : 'text-success',
             },
             { label: 'Equity:', value: accountSummary != null ? formatMoney(accountSummary.equity) : '—' },
@@ -157,7 +160,7 @@ export function TerminalHistoryView() {
       lastTenOrders,
       accountSummary,
       formatMoney,
-      formatSigned,
+      formatSignedUsd,
     ],
   )
 
@@ -325,7 +328,9 @@ export function TerminalHistoryView() {
                 const sizeVal = (pos.status === 'CLOSED' || pos.status === 'LIQUIDATED') && pos.original_size ? pos.original_size : pos.size
                 const sizeNum = parseFloat(sizeVal || '0')
                 const entryPrice = parseFloat(pos.avg_price || pos.entry_price || '0')
-                const sizeFmt = formatPositionSize(sizeNum, getSymbolMetaForCode(symbolMetaLookup, pos.symbol))
+                const rowMeta = getSymbolMetaForCode(symbolMetaLookup, pos.symbol)
+                const posQuote = (rowMeta?.quoteCurrency ?? 'USD').trim() || 'USD'
+                const sizeFmt = formatPositionSize(sizeNum, rowMeta)
                 const exitVal = pos.exit_price ?? (pos as { exitPrice?: string }).exitPrice ?? ''
                 const exitPrice = exitVal && exitVal !== 'null' ? parseFloat(String(exitVal)) : null
                 const { market: marketPnl, net: netClosedPnl } = closedPositionPnlParts(pos)
@@ -345,7 +350,8 @@ export function TerminalHistoryView() {
                           </span>
                         </div>
                         <div className="text-xs text-muted font-mono mt-0.5">
-                          {entryPrice.toFixed(5)} → {exitPrice != null ? exitPrice.toFixed(5) : '—'}
+                          {formatSymbolPrice(entryPrice, rowMeta)} →{' '}
+                          {exitPrice != null ? formatSymbolPrice(exitPrice, rowMeta) : '—'}
                         </div>
                       </div>
                       <div className="text-right shrink-0">
@@ -357,7 +363,9 @@ export function TerminalHistoryView() {
                           aria-expanded={expanded}
                         >
                           <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', expanded && 'rotate-180')} />
-                          <span className={netClosedPnl >= 0 ? 'text-success' : 'text-danger'}>{formatSigned(netClosedPnl)}</span>
+                          <span className={netClosedPnl >= 0 ? 'text-success' : 'text-danger'}>
+                            {formatSignedFromQuote(netClosedPnl, posQuote as CurrencyCode)}
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -369,6 +377,7 @@ export function TerminalHistoryView() {
                           accumulatedSwapUsd={pos.accumulatedSwapUsd}
                           accumulatedFeesUsd={pos.accumulatedFeesUsd}
                           netPnlUsd={netClosedPnl}
+                          quoteCurrency={posQuote}
                         />
                       </div>
                     ) : null}
@@ -408,10 +417,8 @@ export function TerminalHistoryView() {
               {filteredFilledOrders.map((order) => {
                 const filledSize = parseFloat(order.filled_size || order.size || '0')
                 const avgPrice = parseFloat(order.average_price || order.price || '0')
-                const filledFmt = formatPositionSize(
-                  filledSize,
-                  getSymbolMetaForCode(symbolMetaLookup, order.symbol),
-                )
+                const orderMeta = getSymbolMetaForCode(symbolMetaLookup, order.symbol)
+                const filledFmt = formatPositionSize(filledSize, orderMeta)
                 const createdStr = formatDateTimeSeconds(order.created_at)
                 return (
                   <div key={order.id} className="border-b border-white/10 py-3">
@@ -425,7 +432,7 @@ export function TerminalHistoryView() {
                           </span>
                         </div>
                         <div className="text-xs text-muted mt-0.5">
-                          {order.order_type} @ {avgPrice > 0 ? `$${avgPrice.toFixed(2)}` : '—'}
+                          {order.order_type} @ {avgPrice > 0 ? formatSymbolPrice(avgPrice, orderMeta) : '—'}
                         </div>
                       </div>
                       <div className="text-right shrink-0">

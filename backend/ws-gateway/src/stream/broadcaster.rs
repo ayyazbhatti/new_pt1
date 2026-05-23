@@ -25,19 +25,31 @@ fn try_dispatch_conn(
     match sender.try_send(msg) {
         Ok(()) => {}
         Err(TrySendError::Full(m)) => {
+            // Outbound queue saturation tiers (see docs/ws-gateway-account-summary-forwarding-diagnostic.md):
+            // 1) Ticks — safe to drop (high rate, UI interpolates).
+            // 2) Order / position / account summary — user-visible trading & balance state; must not be lost
+            //    behind tick bursts → async send retry.
+            // 3) Everything else — drop with warn for ops visibility (non-critical under tick pressure).
             if matches!(m, ServerMessage::Tick { .. }) {
                 // expected under high tick rate
             } else if matches!(
                 &m,
-                ServerMessage::OrderUpdate { .. } | ServerMessage::PositionUpdate { .. }
+                ServerMessage::OrderUpdate { .. }
+                    | ServerMessage::PositionUpdate { .. }
+                    | ServerMessage::AccountSummaryUpdated { .. }
             ) {
-                // Avoid dropping fills / position opens when the queue is full of ticks.
+                // Avoid dropping fills, position opens, and account state updates when the queue is full of ticks.
+                // These are user-visible financial state changes that must be delivered even under tick pressure.
                 let sender2 = sender.clone();
                 tokio::spawn(async move {
                     let _ = sender2.send(m).await;
                 });
             } else {
-                debug!("conn {} outbound queue full; dropping non-tick", conn_id);
+                warn!(
+                    conn_id = %conn_id,
+                    kind = ?std::mem::discriminant(&m),
+                    "outbound queue full; dropping non-critical message"
+                );
             }
         }
         Err(TrySendError::Closed(_)) => {
@@ -634,8 +646,15 @@ impl Broadcaster {
         };
 
         let connections = registry.get_user_connections(user_id);
-        for conn_id in connections {
-            try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
+        if connections.is_empty() {
+            warn!(
+                user_id = %user_id,
+                "Account summary update received but no WebSocket connections registered for user"
+            );
+        } else {
+            for conn_id in connections {
+                try_dispatch_conn(registry, connection_txs, conn_id, message.clone());
+            }
         }
 
         Ok(())

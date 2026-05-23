@@ -1,11 +1,90 @@
-import { useEffect, useRef } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { wsClient } from '@/shared/ws/wsClient'
 import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { fetchAccountSummary, type AccountSummaryResponse } from '../api'
 
 const QUERY_KEY = ['accountSummary'] as const
+
+/** Shared with `applyAccountSummaryWsToQueryCache` so BottomDock + wsClient agree on the all-zero reconnect guard. */
+let lastEquityForSummaryWsGuard: number | null = null
+
+function normalizeUserIdForCompare(id: string | undefined | null): string {
+  if (id == null) return ''
+  return String(id).trim().toLowerCase().replace(/-/g, '')
+}
+
+/**
+ * Apply `account.summary.updated` payload into the shared React Query cache.
+ * Used by `useAccountSummary` (wsClient) and by BottomDock’s dedicated positions WebSocket
+ * so the dock stats bar stays live even when events only hit one socket.
+ */
+export function applyAccountSummaryWsToQueryCache(
+  queryClient: QueryClient,
+  currentUserId: string | undefined | null,
+  raw: unknown,
+): void {
+  if (!currentUserId || typeof raw !== 'object' || raw === null) return
+  const r = raw as Record<string, unknown>
+  const userIdRaw = String((r.userId ?? r.user_id) ?? '').trim()
+  if (!userIdRaw) return
+  if (normalizeUserIdForCompare(userIdRaw) !== normalizeUserIdForCompare(currentUserId)) return
+
+  const balance = Number((r.balance ?? 0))
+  const equity = Number((r.equity ?? 0))
+  const marginUsed = Number((r.marginUsed ?? r.margin_used ?? 0))
+  const freeMargin = Number((r.freeMargin ?? r.free_margin ?? 0))
+  const marginLevel = String(r.marginLevel ?? r.margin_level ?? '')
+  const realizedPnl = Number((r.realizedPnl ?? r.realized_pnl ?? 0))
+  const unrealizedPnl = Number((r.unrealizedPnl ?? r.unrealized_pnl ?? 0))
+  const bonus = Number((r.bonus ?? 0))
+  const totalSwapPaidUsd =
+    r.totalSwapPaidUsd != null
+      ? Number(r.totalSwapPaidUsd)
+      : r.total_swap_paid_usd != null
+        ? Number(r.total_swap_paid_usd)
+        : undefined
+  const totalFeesPaidUsd =
+    r.totalFeesPaidUsd != null
+      ? Number(r.totalFeesPaidUsd)
+      : r.total_fees_paid_usd != null
+        ? Number(r.total_fees_paid_usd)
+        : undefined
+  const updatedAt = String(r.updatedAt ?? r.updated_at ?? '')
+  const isZeros = balance === 0 && equity === 0 && marginUsed === 0
+  if (isZeros && lastEquityForSummaryWsGuard != null && lastEquityForSummaryWsGuard > 0) return
+  lastEquityForSummaryWsGuard = equity
+  const marginCallLevelThreshold =
+    r.marginCallLevelThreshold != null
+      ? Number(r.marginCallLevelThreshold)
+      : r.margin_call_level_threshold != null
+        ? Number(r.margin_call_level_threshold)
+        : null
+  const stopOutLevelThreshold =
+    r.stopOutLevelThreshold != null
+      ? Number(r.stopOutLevelThreshold)
+      : r.stop_out_level_threshold != null
+        ? Number(r.stop_out_level_threshold)
+        : null
+  const payload: AccountSummaryResponse = {
+    userId: userIdRaw,
+    balance,
+    equity,
+    marginUsed,
+    freeMargin,
+    marginLevel,
+    marginCallLevelThreshold,
+    stopOutLevelThreshold,
+    realizedPnl,
+    unrealizedPnl,
+    bonus,
+    totalSwapPaidUsd,
+    totalFeesPaidUsd,
+    updatedAt,
+  }
+  queryClient.setQueryData<AccountSummaryResponse>(QUERY_KEY, payload)
+}
 
 /**
  * Single shared source for account summary. Only one fetch runs for the whole app;
@@ -15,7 +94,6 @@ const QUERY_KEY = ['accountSummary'] as const
 export function useAccountSummary() {
   const { user } = useAuthStore()
   const queryClient = useQueryClient()
-  const lastEquityRef = useRef<number | null>(null)
 
   const { data: accountSummary, isLoading } = useQuery({
     queryKey: QUERY_KEY,
@@ -32,69 +110,13 @@ export function useAccountSummary() {
     const unsubscribe = wsClient.subscribe((event: WsInboundEvent) => {
       if (event.type === 'account.summary.updated') {
         const raw = (event as { type: 'account.summary.updated'; payload: Record<string, unknown> }).payload
-        if (!raw || typeof raw !== 'object') return
-        // Accept both camelCase and snake_case from backend
-        const userId = String((raw.userId ?? raw.user_id) ?? '').trim()
-        if (userId !== currentUserId) return
-        const balance = Number((raw.balance ?? 0))
-        const equity = Number((raw.equity ?? 0))
-        const marginUsed = Number((raw.marginUsed ?? raw.margin_used ?? 0))
-        const freeMargin = Number((raw.freeMargin ?? raw.free_margin ?? 0))
-        const marginLevel = String(raw.marginLevel ?? raw.margin_level ?? '')
-        const realizedPnl = Number((raw.realizedPnl ?? raw.realized_pnl ?? 0))
-        const unrealizedPnl = Number((raw.unrealizedPnl ?? raw.unrealized_pnl ?? 0))
-        const bonus = Number((raw.bonus ?? 0))
-        const totalSwapPaidUsd =
-          raw.totalSwapPaidUsd != null
-            ? Number(raw.totalSwapPaidUsd)
-            : raw.total_swap_paid_usd != null
-              ? Number(raw.total_swap_paid_usd)
-              : undefined
-        const totalFeesPaidUsd =
-          raw.totalFeesPaidUsd != null
-            ? Number(raw.totalFeesPaidUsd)
-            : raw.total_fees_paid_usd != null
-              ? Number(raw.total_fees_paid_usd)
-              : undefined
-        const updatedAt = String(raw.updatedAt ?? raw.updated_at ?? '')
-        const isZeros = balance === 0 && equity === 0 && marginUsed === 0
-        if (isZeros && lastEquityRef.current != null && lastEquityRef.current > 0) return
-        lastEquityRef.current = equity
-        const marginCallLevelThreshold =
-          raw.marginCallLevelThreshold != null
-            ? Number(raw.marginCallLevelThreshold)
-            : raw.margin_call_level_threshold != null
-              ? Number(raw.margin_call_level_threshold)
-              : null
-        const stopOutLevelThreshold =
-          raw.stopOutLevelThreshold != null
-            ? Number(raw.stopOutLevelThreshold)
-            : raw.stop_out_level_threshold != null
-              ? Number(raw.stop_out_level_threshold)
-              : null
-        const payload: AccountSummaryResponse = {
-          userId,
-          balance,
-          equity,
-          marginUsed,
-          freeMargin,
-          marginLevel,
-          marginCallLevelThreshold,
-          stopOutLevelThreshold,
-          realizedPnl,
-          unrealizedPnl,
-          bonus,
-          totalSwapPaidUsd,
-          totalFeesPaidUsd,
-          updatedAt,
-        }
-        queryClient.setQueryData<AccountSummaryResponse>(QUERY_KEY, payload)
+        applyAccountSummaryWsToQueryCache(queryClient, currentUserId, raw)
       }
     })
     return unsubscribe
   }, [user?.id, queryClient])
 
-  if (accountSummary) lastEquityRef.current = accountSummary.equity
+  if (accountSummary) lastEquityForSummaryWsGuard = accountSummary.equity
 
   return { accountSummary: accountSummary ?? null, isLoading }
 }

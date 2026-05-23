@@ -3,7 +3,9 @@ import { useAdminTradingStore } from '../store/adminTrading.store'
 import type { AdminPosition } from '../types'
 import { cn } from '@/shared/utils'
 import { computePositionPnl, computePnlPercent } from '../utils/pnl'
-import { useFormatSignedFromUsd } from '@/shared/currency'
+import { useFormatSignedFromQuoteCurrency } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 interface LivePnlCellProps {
   position: AdminPosition
@@ -29,16 +31,19 @@ function useLivePnlValues(position: AdminPosition, readOnly?: boolean) {
   return { pnl, pnlPercent, isPositive: pnl >= 0 }
 }
 
-/** Dollar PnL only — subscribes to this row's symbol mark. */
+/** Row P&L from mark-to-market is in the symbol's quote currency; convert to the user's display currency. */
 export const LivePnlAmountCell = memo(function LivePnlAmountCell({
   position,
   readOnly,
 }: LivePnlCellProps) {
   const { pnl, isPositive } = useLivePnlValues(position, readOnly)
-  const formatSigned = useFormatSignedFromUsd()
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
+  const quote =
+    (getSymbolMetaForCode(symbolMetaLookup, position.symbol)?.quoteCurrency ?? 'USD').trim() || 'USD'
   return (
     <span className={cn('text-sm font-mono', isPositive ? 'text-success' : 'text-danger')}>
-      {formatSigned(pnl)}
+      {formatSignedQuote(pnl, quote as CurrencyCode)}
     </span>
   )
 })

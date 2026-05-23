@@ -14,8 +14,10 @@ import { toast } from '@/shared/components/common'
 import { filterPositions } from '../utils/filters'
 import { formatPercent } from '@/shared/utils/number'
 import { useFormatDateTime } from '@/shared/datetime'
-import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { useFormatFromQuoteCurrency, useFormatSignedFromQuoteCurrency } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 import { mockGroups } from '../mocks/groups.mock'
 import { mockPositions } from '../mocks/positions.mock'
@@ -23,8 +25,8 @@ import { mockPositions } from '../mocks/positions.mock'
 export function PositionsAdminPanel() {
   const openModal = useModalStore((state) => state.openModal)
   const formatDateTime = useFormatDateTime()
-  const formatMoney = useFormatFromUsd()
-  const formatSigned = useFormatSignedFromUsd()
+  const formatFromQuote = useFormatFromQuoteCurrency()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
   const symbolMetaLookup = useSymbolMetaLookup()
   const [positions, setPositions] = useState<Position[]>(mockPositions)
   const [filters, setFilters] = useState({
@@ -139,14 +141,18 @@ export function PositionsAdminPanel() {
       accessorKey: 'entryPrice',
       header: 'Entry',
       cell: ({ row }) => {
-        return <span className="font-mono">{row.getValue('entryPrice')}</span>
+        const p = row.original
+        const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+        return <span className="font-mono">{formatSymbolPrice(p.entryPrice, meta)}</span>
       },
     },
     {
       accessorKey: 'markPrice',
       header: 'Mark',
       cell: ({ row }) => {
-        return <span className="font-mono">{row.getValue('markPrice')}</span>
+        const p = row.original
+        const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+        return <span className="font-mono">{formatSymbolPrice(p.markPrice, meta)}</span>
       },
     },
     {
@@ -154,11 +160,13 @@ export function PositionsAdminPanel() {
       header: 'PnL',
       cell: ({ row }) => {
         const position = row.original
+        const meta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+        const quote = (meta?.quoteCurrency ?? 'USD').trim() || 'USD'
         const color = position.pnl >= 0 ? 'text-success' : 'text-danger'
         return (
           <div>
             <div className={`font-mono font-semibold ${color}`}>
-              {formatSigned(position.pnl)}
+              {formatSignedQuote(position.pnl, quote as CurrencyCode)}
             </div>
             <div className={`text-xs ${color}`}>{formatPercent(position.pnlPercent)}</div>
           </div>
@@ -176,14 +184,23 @@ export function PositionsAdminPanel() {
       accessorKey: 'marginUsed',
       header: 'Margin Used',
       cell: ({ row }) => {
-        return <span className="font-mono">{formatMoney(row.getValue('marginUsed') as number)}</span>
+        const p = row.original
+        const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+        const quote = (meta?.quoteCurrency ?? 'USD').trim() || 'USD'
+        return (
+          <span className="font-mono">{formatFromQuote(row.getValue('marginUsed') as number, quote as CurrencyCode)}</span>
+        )
       },
     },
     {
       accessorKey: 'liquidationPrice',
       header: 'Liquidation',
       cell: ({ row }) => {
-        return <span className="font-mono text-danger">{row.getValue('liquidationPrice')}</span>
+        const p = row.original
+        const meta = getSymbolMetaForCode(symbolMetaLookup, p.symbol)
+        return (
+          <span className="font-mono text-danger">{formatSymbolPrice(p.liquidationPrice, meta)}</span>
+        )
       },
     },
     {
@@ -218,7 +235,7 @@ export function PositionsAdminPanel() {
         )
       },
     },
-  ], [formatDateTime, formatMoney, formatSigned, openModal, positions, symbolMetaLookup])
+  ], [formatDateTime, formatFromQuote, formatSignedQuote, openModal, positions, symbolMetaLookup])
 
   return (
     <div className="space-y-4">

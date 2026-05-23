@@ -4,8 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/ui/tabs'
 import { User } from '../types/users'
 import { useModalStore } from '@/app/store'
-import { CurrencyOverrideProvider } from '@/shared/currency'
-import { formatConverted, formatFromUsd, formatSignedFromUsd } from '@/shared/currency/format'
+import { CurrencyOverrideProvider, useFormatFromQuoteCurrency, useFormatSignedFromQuoteCurrency, useEffectiveCurrency } from '@/shared/currency'
+import { formatConverted, formatFromUsd, formatSignedFromUsd, convertAmount, formatSignedAmount } from '@/shared/currency/format'
 import { useFxRatesMap } from '@/shared/currency/rates'
 import { resolveEffectiveCurrency } from '@/shared/currency/resolve'
 import { formatAccountAge } from '@/shared/utils/duration'
@@ -69,6 +69,10 @@ import {
   useSymbolPrice,
   normalizeSymbolKey,
 } from '@/features/symbols/hooks/usePriceStream'
+import type { CurrencyCode } from '@/shared/currency/types'
+import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
+import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 import { Input } from '@/shared/ui'
 import { cn } from '@/shared/utils'
 import {
@@ -276,6 +280,10 @@ const UserDetailsOpenPositionRow = memo(function UserDetailsOpenPositionRow({
   onModifyPosition: (p: Position) => void
   onClosePosition: (p: Position) => void
 }) {
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
+  const rowMeta = getSymbolMetaForCode(symbolMetaLookup, pos.symbol)
+  const posQuote = (rowMeta?.quoteCurrency ?? 'USD').trim() || 'USD'
   const tick = useSymbolPrice(normalizeSymbolKey(pos.symbol))
   const sizeNum = parsePosNum(pos.size)
   const entryPrice = parsePosNum(pos.avg_price || pos.entry_price)
@@ -290,6 +298,7 @@ const UserDetailsOpenPositionRow = memo(function UserDetailsOpenPositionRow({
       : parsePosNum(pos.unrealized_pnl)
   const slNum = pos.sl != null && !Number.isNaN(parseFloat(pos.sl)) ? parseFloat(pos.sl) : null
   const tpNum = pos.tp != null && !Number.isNaN(parseFloat(pos.tp)) ? parseFloat(pos.tp) : null
+  const sizeFmt = formatPositionSize(sizeNum, rowMeta)
   return (
     <tr>
       <td className="px-4 py-3 font-mono text-white">{pos.symbol}</td>
@@ -303,10 +312,12 @@ const UserDetailsOpenPositionRow = memo(function UserDetailsOpenPositionRow({
           {pos.side}
         </span>
       </td>
-      <td className="px-4 py-3 text-slate-300">{sizeNum.toFixed(6)}</td>
-      <td className="px-4 py-3 font-mono text-slate-300">${entryPrice.toFixed(2)}</td>
+      <td className="px-4 py-3 text-slate-300" title={sizeFmt.secondary || undefined}>
+        {sizeFmt.display}
+      </td>
+      <td className="px-4 py-3 font-mono text-slate-300">{formatSymbolPrice(entryPrice, rowMeta)}</td>
       <td className="px-4 py-3 font-mono text-blue-400">
-        {livePriceFin != null ? `$${livePriceFin.toFixed(2)}` : '—'}
+        {livePriceFin != null ? formatSymbolPrice(livePriceFin, rowMeta) : '—'}
       </td>
       <td
         className={cn(
@@ -314,10 +325,14 @@ const UserDetailsOpenPositionRow = memo(function UserDetailsOpenPositionRow({
           unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400',
         )}
       >
-        {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}
+        {formatSignedQuote(unrealizedPnl, posQuote as CurrencyCode)}
       </td>
-      <td className="px-4 py-3 font-mono text-slate-400">{slNum != null ? `$${slNum.toFixed(2)}` : '—'}</td>
-      <td className="px-4 py-3 font-mono text-slate-400">{tpNum != null ? `$${tpNum.toFixed(2)}` : '—'}</td>
+      <td className="px-4 py-3 font-mono text-slate-400">
+        {slNum != null ? formatSymbolPrice(slNum, rowMeta) : '—'}
+      </td>
+      <td className="px-4 py-3 font-mono text-slate-400">
+        {tpNum != null ? formatSymbolPrice(tpNum, rowMeta) : '—'}
+      </td>
       {canClosePosition && (
         <td className="px-4 py-3 text-right">
           <div className="flex items-center justify-end gap-1">
@@ -361,12 +376,128 @@ const UserDetailsOpenPositionRow = memo(function UserDetailsOpenPositionRow({
   )
 })
 
+const UserDetailsClosedPositionRow = memo(function UserDetailsClosedPositionRow({
+  pos,
+  formatDateTime,
+  canClosePosition,
+  canCreateOrder,
+  reopeningPositionId,
+  onModifyOpen,
+  onReopen,
+}: {
+  pos: Position
+  formatDateTime: (iso: string) => string
+  canClosePosition: boolean
+  canCreateOrder: boolean
+  reopeningPositionId: string | null
+  onModifyOpen: (p: Position) => void
+  onReopen: (p: Position) => void
+}) {
+  const symbolMetaLookup = useSymbolMetaLookup()
+  const formatFromQuote = useFormatFromQuoteCurrency()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
+  const meta = getSymbolMetaForCode(symbolMetaLookup, pos.symbol)
+  const posQuote = (meta?.quoteCurrency ?? 'USD').trim() || 'USD'
+  const closedAtMs = pos.closed_at != null ? (pos.closed_at < 1e12 ? pos.closed_at * 1000 : pos.closed_at) : null
+  const openedAtMs = pos.opened_at != null ? (pos.opened_at < 1e12 ? pos.opened_at * 1000 : pos.opened_at) : null
+  const sizeNum = parseFloat(pos.original_size || pos.size || '0')
+  const sizeFmt = formatPositionSize(sizeNum, meta)
+  const entryPx = parseFloat(pos.entry_price || pos.avg_price || '0')
+  const exitRaw = pos.exit_price
+  const pnlNum = parseFloat(pos.realized_pnl || '0')
+  const marginNum = pos.margin != null ? parseFloat(pos.margin) : NaN
+  return (
+    <tr>
+      <td className="px-4 py-3 font-mono text-white" title={pos.symbol}>
+        {pos.symbol}
+      </td>
+      <td className="px-4 py-3">
+        <span
+          className={cn(
+            'inline-block rounded px-2 py-0.5 text-xs',
+            pos.side === 'LONG' ? 'text-green-400' : 'text-red-400',
+          )}
+        >
+          {pos.side}
+        </span>
+      </td>
+      <td className="px-4 py-3 font-mono text-slate-300" title={sizeFmt.secondary || undefined}>
+        {sizeFmt.display}
+      </td>
+      <td className="px-4 py-3 font-mono text-slate-400">{formatSymbolPrice(entryPx, meta)}</td>
+      <td className="px-4 py-3 font-mono text-slate-400">
+        {exitRaw != null && String(exitRaw).trim() !== ''
+          ? formatSymbolPrice(parseFloat(String(exitRaw)), meta)
+          : '—'}
+      </td>
+      <td className="px-4 py-3 font-mono text-slate-400">{pos.leverage ? `${pos.leverage}×` : '—'}</td>
+      <td className="px-4 py-3 font-mono text-slate-400">
+        {pos.margin != null && Number.isFinite(marginNum)
+          ? formatFromQuote(marginNum, posQuote as CurrencyCode)
+          : '—'}
+      </td>
+      <td className="px-4 py-3 text-slate-400" title={openedAtMs != null ? formatDateTime(new Date(openedAtMs).toISOString()) : undefined}>
+        {openedAtMs != null ? formatDateTime(new Date(openedAtMs).toISOString()) : '—'}
+      </td>
+      <td className="px-4 py-3 text-slate-400" title={closedAtMs != null ? formatDateTime(new Date(closedAtMs).toISOString()) : undefined}>
+        {closedAtMs != null ? formatDateTime(new Date(closedAtMs).toISOString()) : '—'}
+      </td>
+      <td className={cn('px-4 py-3 font-mono', pnlNum >= 0 ? 'text-green-400' : 'text-red-400')}>
+        {formatSignedQuote(pnlNum, posQuote as CurrencyCode)}
+      </td>
+      {(canClosePosition || canCreateOrder) && (
+        <td className="px-4 py-3 text-right !overflow-visible">
+          <div className="flex items-center justify-end gap-1">
+            {canCreateOrder && (
+              <div className="relative group inline-flex">
+                <button
+                  type="button"
+                  onClick={() => onModifyOpen(pos)}
+                  title="Modify & open (change size, SL/TP then open)"
+                  className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[100]">
+                  Modify & open
+                </span>
+              </div>
+            )}
+            {canClosePosition && (
+              <div className="relative group inline-flex">
+                <button
+                  type="button"
+                  onClick={() => onReopen(pos)}
+                  disabled={reopeningPositionId === pos.id}
+                  title="Re-open position (same parameters)"
+                  className={cn(
+                    'rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                  )}
+                >
+                  {reopeningPositionId === pos.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-4 w-4" />
+                  )}
+                </button>
+                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[100]">
+                  Re-open
+                </span>
+              </div>
+            )}
+          </div>
+        </td>
+      )}
+    </tr>
+  )
+})
+
 const UserDetailsUnrealizedShard = memo(function UserDetailsUnrealizedShard({
   pos,
   onReport,
 }: {
   pos: Position
-  onReport: (id: string, n: number) => void
+  onReport: (id: string, n: number, symbol: string) => void
 }) {
   const tick = useSymbolPrice(normalizeSymbolKey(pos.symbol))
   const n = useMemo(() => {
@@ -380,8 +511,8 @@ const UserDetailsUnrealizedShard = memo(function UserDetailsUnrealizedShard({
       : (entryPrice - livePrice) * sizeNum
   }, [pos, tick])
   useEffect(() => {
-    onReport(pos.id, n)
-  }, [pos.id, n, onReport])
+    onReport(pos.id, n, pos.symbol)
+  }, [pos.id, pos.symbol, n, onReport])
   return null
 })
 
@@ -390,31 +521,44 @@ const UserDetailsMetricsBar = memo(function UserDetailsMetricsBar({
   accountSummary,
   balanceFallback,
   formatMoney,
-  formatSignedMoney,
 }: {
   openPositions: Position[]
   accountSummary: AdminAccountSummaryResponse | null | undefined
   balanceFallback: number
   formatMoney: (n: number) => string
-  formatSignedMoney: (n: number) => string
 }) {
-  const pnlsRef = useRef<Map<string, number>>(new Map())
+  const { code: displayCode } = useEffectiveCurrency()
+  const rates = useFxRatesMap()
+  const symbolMetaLookup = useSymbolMetaLookup()
+
+  const pnlsRef = useRef<Map<string, { v: number; sym: string }>>(new Map())
   const [gen, setGen] = useState(0)
-  const report = useCallback((id: string, v: number) => {
+  const report = useCallback((id: string, v: number, symbol: string) => {
     const prev = pnlsRef.current.get(id)
-    if (prev === v) return
-    pnlsRef.current.set(id, v)
+    if (prev && prev.v === v && prev.sym === symbol) return
+    pnlsRef.current.set(id, { v, sym: symbol })
     setGen((g) => g + 1)
   }, [])
+
+  const quoteFor = useCallback(
+    (symbol: string) =>
+      (getSymbolMetaForCode(symbolMetaLookup, symbol)?.quoteCurrency ?? 'USD').trim() || 'USD',
+    [symbolMetaLookup],
+  )
 
   const metrics = useMemo(() => {
     const balance = accountSummary?.balance ?? balanceFallback ?? 0
     let totalMargin = 0
     let unrealizedPnl = 0
     openPositions.forEach((pos) => {
-      totalMargin += parsePosNum(pos.margin)
+      const qM = quoteFor(pos.symbol) as CurrencyCode
+      totalMargin += convertAmount(parsePosNum(pos.margin), qM, displayCode, rates) ?? 0
       const stored = parsePosNum(pos.unrealized_pnl)
-      unrealizedPnl += pnlsRef.current.has(pos.id) ? (pnlsRef.current.get(pos.id) as number) : stored
+      const snap = pnlsRef.current.get(pos.id)
+      const rawPnl = snap !== undefined ? snap.v : stored
+      const sym = snap !== undefined ? snap.sym : pos.symbol
+      const qP = quoteFor(sym) as CurrencyCode
+      unrealizedPnl += convertAmount(rawPnl, qP, displayCode, rates) ?? 0
     })
     const clientEquityFallback = balance + unrealizedPnl
     const equity = accountSummary?.equity ?? clientEquityFallback
@@ -442,7 +586,7 @@ const UserDetailsMetricsBar = memo(function UserDetailsMetricsBar({
       marginLevel,
       unrealizedPnl,
     }
-  }, [accountSummary, balanceFallback, openPositions, gen])
+  }, [accountSummary, balanceFallback, openPositions, gen, displayCode, rates, quoteFor])
 
   return (
     <>
@@ -496,7 +640,7 @@ const UserDetailsMetricsBar = memo(function UserDetailsMetricsBar({
               metrics.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400',
             )}
           >
-            {formatSignedMoney(metrics.unrealizedPnl)}
+            {formatSignedAmount(metrics.unrealizedPnl, displayCode)}
           </div>
         </div>
       </div>
@@ -1544,7 +1688,6 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
             accountSummary={accountSummary}
             balanceFallback={userState.balance ?? 0}
             formatMoney={formatMoney}
-            formatSignedMoney={formatSignedMoney}
           />
         )}
       </div>
@@ -2366,84 +2509,28 @@ export function UserDetailsModal({ user }: UserDetailsModalProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700">
-                    {positions.filter((p) => p.status === 'CLOSED').slice(0, 20).map((pos) => {
-                      const closedAtMs = pos.closed_at != null ? (pos.closed_at < 1e12 ? pos.closed_at * 1000 : pos.closed_at) : null
-                      const openedAtMs = pos.opened_at != null ? (pos.opened_at < 1e12 ? pos.opened_at * 1000 : pos.opened_at) : null
-                      return (
-                        <tr key={pos.id}>
-                          <td className="px-4 py-3 font-mono text-white" title={pos.symbol}>{pos.symbol}</td>
-                          <td className="px-4 py-3">
-                            <span className={cn('inline-block rounded px-2 py-0.5 text-xs', pos.side === 'LONG' ? 'text-green-400' : 'text-red-400')}>{pos.side}</span>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-slate-300" title={parseFloat(pos.original_size || pos.size || '0').toLocaleString(undefined, { maximumFractionDigits: 6 })}>
-                            {parseFloat(pos.original_size || pos.size || '0').toLocaleString(undefined, { maximumFractionDigits: 6 })}
-                          </td>
-                          <td className="px-4 py-3 font-mono text-slate-400">${parseFloat(pos.entry_price || pos.avg_price || '0').toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-slate-400">{pos.exit_price != null ? `$${parseFloat(pos.exit_price).toFixed(2)}` : '—'}</td>
-                          <td className="px-4 py-3 font-mono text-slate-400">{pos.leverage ? `${pos.leverage}×` : '—'}</td>
-                          <td className="px-4 py-3 font-mono text-slate-400">{pos.margin != null ? `$${parseFloat(pos.margin).toFixed(2)}` : '—'}</td>
-                          <td className="px-4 py-3 text-slate-400" title={openedAtMs != null ? formatDateTime(new Date(openedAtMs).toISOString()) : undefined}>
-                            {openedAtMs != null ? formatDateTime(new Date(openedAtMs).toISOString()) : '—'}
-                          </td>
-                          <td className="px-4 py-3 text-slate-400" title={closedAtMs != null ? formatDateTime(new Date(closedAtMs).toISOString()) : undefined}>
-                            {closedAtMs != null ? formatDateTime(new Date(closedAtMs).toISOString()) : '—'}
-                          </td>
-                          <td className={cn('px-4 py-3 font-mono', parseFloat(pos.realized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400')}>
-                            ${parseFloat(pos.realized_pnl || '0').toFixed(2)}
-                          </td>
-                          {(canClosePosition || canCreateOrder) && (
-                            <td className="px-4 py-3 text-right !overflow-visible">
-                              <div className="flex items-center justify-end gap-1">
-                                {canCreateOrder && (
-                                  <div className="relative group inline-flex">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setModifyOpenPosition(pos)
-                                        setModifyOpenDialogOpen(true)
-                                      }}
-                                      title="Modify & open (change size, SL/TP then open)"
-                                      className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
-                                    >
-                                      <Pencil className="h-4 w-4" />
-                                    </button>
-                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[100]">
-                                      Modify & open
-                                    </span>
-                                  </div>
-                                )}
-                                {canClosePosition && (
-                                  <div className="relative group inline-flex">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setReopenPositionId(pos.id)
-                                        setReopenPositionSymbol(pos.symbol)
-                                        setReopenPositionDialogOpen(true)
-                                      }}
-                                      disabled={reopeningPositionId === pos.id}
-                                      title="Re-open position (same parameters)"
-                                      className={cn(
-                                        'rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
-                                      )}
-                                    >
-                                      {reopeningPositionId === pos.id ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                      ) : (
-                                        <RotateCcw className="h-4 w-4" />
-                                      )}
-                                    </button>
-                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs font-medium text-white bg-slate-700 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[100]">
-                                      Re-open
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                          )}
-                        </tr>
-                      )
-                    })}
+                    {positions
+                      .filter((p) => p.status === 'CLOSED')
+                      .slice(0, 20)
+                      .map((pos) => (
+                        <UserDetailsClosedPositionRow
+                          key={pos.id}
+                          pos={pos}
+                          formatDateTime={formatDateTime}
+                          canClosePosition={canClosePosition}
+                          canCreateOrder={canCreateOrder}
+                          reopeningPositionId={reopeningPositionId}
+                          onModifyOpen={(p) => {
+                            setModifyOpenPosition(p)
+                            setModifyOpenDialogOpen(true)
+                          }}
+                          onReopen={(p) => {
+                            setReopenPositionId(p.id)
+                            setReopenPositionSymbol(p.symbol)
+                            setReopenPositionDialogOpen(true)
+                          }}
+                        />
+                      ))}
                   </tbody>
                 </table>
                 {positions.filter((p) => p.status === 'CLOSED').length === 0 && (

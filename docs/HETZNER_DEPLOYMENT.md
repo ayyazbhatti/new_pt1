@@ -1,5 +1,19 @@
 # Deploy on Hetzner (production)
 
+**Not a developer?** Use the step-by-step copy-paste guide: **[`DEPLOY_HETZNER_SIMPLE_GUIDE.md`](./DEPLOY_HETZNER_SIMPLE_GUIDE.md)**.
+
+## Quick checklist (new server)
+
+1. **Hetzner Cloud:** Ubuntu 22.04+ VM, **≥ 4 GB RAM** recommended for first `docker compose build` (Rust + Node).
+2. **Firewall:** allow **TCP 22** (SSH) and **TCP 8080** (app). Add **80/443** later if you put TLS on the host.
+3. **On the server:** clone this repo to `/opt/newpt` (or set `APP_DIR`), then run **`sudo bash deploy/setup-and-deploy.sh`** (see §2).
+4. **Browser:** open **`http://YOUR_SERVER_IP:8080/`**.
+5. **CORS:** set **`CORS_ORIGINS`** in **`deploy/.env.production`** to that exact origin (see **`deploy/.env.production.example`**), then recreate **`auth`** (see §3).
+
+Provisioning the VM and SSH access must be done in **your** Hetzner account; this document describes only what to run on the server.
+
+---
+
 This repo runs the stack with **Docker Compose** (`deploy/docker-compose.prod.yml`). The **browser UI** is exposed on the host as **port `8080`** (maps to nginx `80` inside the `frontend` container). Internal services (auth `3000`, ws-gateway `3003`, core-api `3004`, etc.) are **not** published to the host by default; the SPA talks to `/api`, `/v1`, WebSockets, etc. **through nginx** on that same origin.
 
 ## 1. Hetzner Cloud
@@ -37,7 +51,7 @@ From the repo root (adjust server user/host):
 ./deploy/run-remote-setup.sh root@YOUR_SERVER_IP
 ```
 
-That curls `setup-and-deploy.sh` from GitHub **`main`** — use **Option A** if the repo is private or not on that URL.
+That curls `setup-and-deploy.sh` from GitHub **`main`**. Use **`SETUP_SCRIPT_URL`** if you use a fork or pinned commit. Use **Option A** if the repo is private or GitHub raw is blocked.
 
 **Option C — large volume + Docker on `/mnt/data500`**
 

@@ -13,7 +13,10 @@ import {
   closePosition,
 } from '../api/positions.api'
 import { listOrders, Order, cancelOrder as cancelOrderApi } from '../api/orders.api'
-import { useAccountSummary } from '@/features/wallet/hooks/useAccountSummary'
+import {
+  useAccountSummary,
+  applyAccountSummaryWsToQueryCache,
+} from '@/features/wallet/hooks/useAccountSummary'
 import { useAuthStore } from '@/shared/store/auth.store'
 import { useWalletStore } from '@/shared/store/walletStore'
 import { usePriceStreamConnection } from '@/features/symbols/hooks/usePriceStream'
@@ -25,16 +28,22 @@ import {
   BottomDockDesktopOpenPositionRow,
   BottomDockMobileOpenPositionCard,
 } from './BottomDockOpenPositionRows'
-import { wsClient } from '@/shared/ws/wsClient'
 import { getWsGatewayUrl } from '@/shared/ws/wsGatewayUrl'
-import { WsInboundEvent } from '@/shared/ws/wsEvents'
 import { useTerminalStore } from '../store/terminalStore'
 import { useFormatDateTime, useFormatDateTimeSeconds, useFormatTime } from '@/shared/datetime'
-import { useFormatFromUsd, useFormatSignedFromUsd, useFormatConverted, useFormatAmount } from '@/shared/currency'
+import {
+  useFormatFromUsd,
+  useFormatSignedFromUsd,
+  useFormatConverted,
+  useFormatSignedFromQuoteCurrency,
+} from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
 import type { MockSymbol } from '@/shared/mock/terminalMock'
 import { closedPositionPnlParts, PositionPnLBreakdown } from '@/shared/components/PositionPnLBreakdown'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '../hooks/useSymbolMetaLookup'
+import { useQueryClient } from '@tanstack/react-query'
 
 /** User-friendly message for close position errors (403 = trading disabled, else use API message). */
 function closePositionErrorMessage(err: unknown): string {
@@ -175,14 +184,17 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
   const [isBottomDockFullscreen, setIsBottomDockFullscreen] = useState(false)
   const bottomDockRef = useRef<HTMLDivElement>(null)
   const [filledOrders, setFilledOrders] = useState<Order[]>([])
+  const queryClient = useQueryClient()
   const { accountSummary } = useAccountSummary()
   const formatDateTime = useFormatDateTime()
   const formatDateTimeSeconds = useFormatDateTimeSeconds()
   const formatTime = useFormatTime()
   const formatMoney = useFormatFromUsd()
+  /** Account summary / wallet lines are USD-anchored from the backend. */
   const formatSigned = useFormatSignedFromUsd()
+  /** Open & closed position P&L from mark-to-market is in the symbol's quote currency. */
+  const formatSignedFromQuote = useFormatSignedFromQuoteCurrency()
   const formatConv = useFormatConverted()
-  const formatAmt = useFormatAmount()
   const symbolMetaLookup = useSymbolMetaLookup()
   const positionPendingClose = useMemo(() => {
     if (!closePositionId) return null
@@ -511,6 +523,12 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                 }
               }
             }
+          } else if (data.type === 'account.summary.updated') {
+            const payload = data.payload
+            if (payload && typeof payload === 'object') {
+              const uid = useAuthStore.getState().user?.id
+              applyAccountSummaryWsToQueryCache(queryClient, uid, payload)
+            }
           } else if (data.type === 'auth_error') {
             console.error('❌ WebSocket authentication failed:', data.error)
             toast.error(`WebSocket auth failed: ${data.error}`)
@@ -703,7 +721,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
         wsRef.current = null
       }
     }
-  }, [fetchOpenPositions, fetchOrders, fetchFilledOrders])
+  }, [fetchOpenPositions, fetchOrders, fetchFilledOrders, queryClient])
 
   const tabForContent = effectiveTab ?? activeTab
 
@@ -943,8 +961,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                         setExpandedPositionId={setExpandedPositionId}
                         formatDateTimeSeconds={formatDateTimeSeconds}
                         formatConv={formatConv}
-                        formatSigned={formatSigned}
-                        formatMoney={formatMoney}
+                        formatSigned={formatSignedFromQuote}
                         canClosePosition={canClosePosition}
                         onOpenEdit={openEditPositionPopup}
                         onRequestClose={() => {
@@ -1094,9 +1111,8 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                         symbolMetaLookup={symbolMetaLookup}
                         posQuote={posQuote}
                         formatConv={formatConv}
-                        formatSigned={formatSigned}
+                        formatSigned={formatSignedFromQuote}
                         formatDateTimeSeconds={formatDateTimeSeconds}
-                        formatMoney={formatMoney}
                         canClosePosition={canClosePosition}
                         onRowClick={openEditPositionPopup}
                         onToggleExpand={(e) => {
@@ -1317,7 +1333,6 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                     const timeStr = formatDateTime(order.created_at)
                     const filledSize = parseFloat(order.filled_size || order.size || '0')
                     const avgPrice = parseFloat(order.average_price || order.price || '0')
-                    const orderQuote = resolveQuoteCurrency(order.symbol, terminalSymbols)
                     const orderSizeFmt = formatPositionSize(
                       parseFloat(order.size || '0'),
                       getSymbolMetaForCode(symbolMetaLookup, order.symbol),
@@ -1360,7 +1375,11 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                         >
                           {filledSizeFmt.display}
                         </td>
-                        <td className="px-4 py-3 font-mono text-text">{avgPrice > 0 ? formatAmt(avgPrice, orderQuote) : '-'}</td>
+                        <td className="px-4 py-3 font-mono text-text">
+                          {avgPrice > 0
+                            ? formatSymbolPrice(avgPrice, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
+                            : '-'}
+                        </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 rounded bg-success/20 text-success font-bold text-[10px] uppercase tracking-wider">
                           {order.status}
@@ -1463,9 +1482,13 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               {pos.side}
                         </span>
                       </td>
-                          <td className="px-4 py-3 font-mono text-text font-medium">{formatConv(entryPrice, posQuote)}</td>
                           <td className="px-4 py-3 font-mono text-text font-medium">
-                            {exitPrice !== null ? formatConv(exitPrice, posQuote) : '-'}
+                            {formatSymbolPrice(entryPrice, getSymbolMetaForCode(symbolMetaLookup, pos.symbol))}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-text font-medium">
+                            {exitPrice !== null
+                              ? formatSymbolPrice(exitPrice, getSymbolMetaForCode(symbolMetaLookup, pos.symbol))
+                              : '-'}
                           </td>
                           <td className={cn(
                             "px-4 py-3 font-mono font-bold whitespace-nowrap tabular-nums",
@@ -1483,7 +1506,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               >
                                 <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', historyExpanded && 'rotate-180')} />
                               </button>
-                              <span>{formatSigned(netClosedPnl)}</span>
+                              <span>{formatSignedFromQuote(netClosedPnl, posQuote as CurrencyCode)}</span>
                             </div>
                           </td>
                           <td className="px-4 py-3">
@@ -1508,6 +1531,7 @@ export function BottomDock({ fullHeight = false, standaloneTab }: BottomDockProp
                               accumulatedSwapUsd={pos.accumulatedSwapUsd}
                               accumulatedFeesUsd={pos.accumulatedFeesUsd}
                               netPnlUsd={netClosedPnl}
+                              quoteCurrency={posQuote}
                             />
                           </div>
                         </td>

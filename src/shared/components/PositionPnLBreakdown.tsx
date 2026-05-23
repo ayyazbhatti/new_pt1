@@ -1,4 +1,5 @@
-import { useFormatSignedFromUsd } from '@/shared/currency'
+import { useFormatSignedFromUsd, useFormatSignedFromQuoteCurrency } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
 
 /**
  * Trading-costs P&L breakdown (Phase 5).
@@ -64,6 +65,11 @@ export interface PositionPnLBreakdownProps {
   /** Net after costs; if omitted, computed as market − swap − fees. */
   netPnlUsd?: string | number | null
   compact?: boolean
+  /**
+   * When set, **market** and **net** lines are converted from this quote currency into the user's display currency.
+   * Swap/fees remain USD-denominated (see `accumulatedSwapUsd` / `accumulatedFeesUsd`).
+   */
+  quoteCurrency?: string | null
 }
 
 export function PositionPnLBreakdown({
@@ -72,8 +78,14 @@ export function PositionPnLBreakdown({
   accumulatedFeesUsd,
   netPnlUsd,
   compact,
+  quoteCurrency,
 }: PositionPnLBreakdownProps) {
-  const formatSigned = useFormatSignedFromUsd()
+  const formatSignedUsd = useFormatSignedFromUsd()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
+  const quote = (quoteCurrency ?? '').trim()
+  const formatMarketNet =
+    quote !== '' ? (n: number) => formatSignedQuote(n, quote as CurrencyCode) : formatSignedUsd
+  const formatCostUsd = formatSignedUsd
 
   const swap = pnlCostNumber(accumulatedSwapUsd)
   const fees = pnlCostNumber(accumulatedFeesUsd)
@@ -85,31 +97,31 @@ export function PositionPnLBreakdown({
   const hasCosts = swap !== 0 || fees !== 0
 
   if (!hasCosts && compact) {
-    return <span>{formatSigned(net)}</span>
+    return <span>{formatMarketNet(net)}</span>
   }
 
   return (
     <div className="space-y-1 text-sm">
       <div className="flex justify-between gap-3 font-semibold">
         <span>Net P&L</span>
-        <span className={net >= 0 ? 'text-success' : 'text-danger'}>{formatSigned(net)}</span>
+        <span className={net >= 0 ? 'text-success' : 'text-danger'}>{formatMarketNet(net)}</span>
       </div>
       {hasCosts && (
         <div className="text-xs space-y-0.5 pl-2 opacity-80">
           <div className="flex justify-between gap-3">
             <span>Market P&L</span>
-            <span>{formatSigned(market)}</span>
+            <span>{formatMarketNet(market)}</span>
           </div>
           {swap !== 0 && (
             <div className="flex justify-between gap-3">
               <span>Swap</span>
-              <span>{formatSigned(-swap)}</span>
+              <span>{formatCostUsd(-swap)}</span>
             </div>
           )}
           {fees !== 0 && (
             <div className="flex justify-between gap-3">
               <span>Fees</span>
-              <span>{formatSigned(-fees)}</span>
+              <span>{formatCostUsd(-fees)}</span>
             </div>
           )}
         </div>

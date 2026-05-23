@@ -29,7 +29,9 @@ export function useSymbolMetaLookup() {
         market: s.market ?? undefined,
         contractSize: s.contractSize,
         baseCurrency: s.baseCurrency ?? undefined,
+        quoteCurrency: s.quoteCurrency ?? undefined,
         volumePrecision: s.volumePrecision,
+        pricePrecision: s.pricePrecision ?? undefined,
       }
       map.set(code, meta)
       map.set(code.toUpperCase(), meta)

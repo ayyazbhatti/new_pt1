@@ -3,6 +3,7 @@ import { Badge } from '@/shared/ui/badge'
 import { useAdminTradingStore } from '../store/adminTrading.store'
 import { format } from 'date-fns'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 export function OrderDetailsModal() {
@@ -16,6 +17,7 @@ export function OrderDetailsModal() {
   if (!order) return null
 
   const sizeFmt = formatPositionSize(order.size, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
+  const orderMeta = getSymbolMetaForCode(symbolMetaLookup, order.symbol)
   const filledFmt =
     order.filledSize != null
       ? formatPositionSize(order.filledSize, getSymbolMetaForCode(symbolMetaLookup, order.symbol))
@@ -78,7 +80,7 @@ export function OrderDetailsModal() {
           {order.price && (
             <div>
               <div className="text-xs text-text-muted mb-1">Price</div>
-              <div className="text-sm font-mono text-text">{order.price.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{formatSymbolPrice(order.price, orderMeta)}</div>
             </div>
           )}
           {order.filledSize != null && (
@@ -92,7 +94,7 @@ export function OrderDetailsModal() {
           {order.averagePrice && (
             <div>
               <div className="text-xs text-text-muted mb-1">Average Price</div>
-              <div className="text-sm font-mono text-text">{order.averagePrice.toFixed(2)}</div>
+              <div className="text-sm font-mono text-text">{formatSymbolPrice(order.averagePrice, orderMeta)}</div>
             </div>
           )}
           <div>

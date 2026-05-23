@@ -11,6 +11,7 @@ import { useCanAccess } from '@/shared/utils/permissions'
 import { toast } from '@/shared/components/common'
 import { cn } from '@/shared/utils'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
 interface OrdersTableProps {
@@ -125,11 +126,19 @@ export function OrdersTable({ orders, onOrderClick }: OrdersTableProps) {
       {
         accessorKey: 'price',
         header: 'Price',
-        cell: ({ row }) => (
-          <span className="text-sm font-mono text-text">
-            {row.original.price ? row.original.price.toFixed(2) : 'MKT'}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const o = row.original
+          const meta = getSymbolMetaForCode(symbolMetaLookup, o.symbol)
+          const p = o.price
+          const hasLimit =
+            p != null &&
+            (typeof p === 'number' ? Number.isFinite(p) && p > 0 : String(p).trim() !== '')
+          return (
+            <span className="text-sm font-mono text-text">
+              {hasLimit ? formatSymbolPrice(p, meta) : 'MKT'}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'status',

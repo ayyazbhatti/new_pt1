@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { formatPositionSize } from './sizeFormat'
 
 describe('formatPositionSize', () => {
-  it('formats FX as lots', () => {
+  it('formats FX as lots with 4 decimal places (sub–0.01 lots visible)', () => {
     const result = formatPositionSize(150000, {
       code: 'EURUSD',
       assetClass: 'FX',
@@ -10,10 +10,34 @@ describe('formatPositionSize', () => {
       baseCurrency: 'EUR',
       volumePrecision: 2,
     })
-    expect(result.primary).toBe('1.50')
+    expect(result.primary).toBe('1.5000')
     expect(result.unit).toBe('lots')
     expect(result.secondary).toContain('150,000')
-    expect(result.display).toBe('1.50 lots')
+    expect(result.display).toBe('1.5000 lots')
+  })
+
+  it('FX lots show enough precision to distinguish near-zero positions (AUDCAD-style)', () => {
+    const result = formatPositionSize(507.52, {
+      code: 'AUDCAD',
+      assetClass: 'FX',
+      contractSize: '100000',
+      baseCurrency: 'AUD',
+      volumePrecision: 2,
+    })
+    expect(result.primary).toBe('0.0051')
+    expect(result.unit).toBe('lots')
+  })
+
+  it('FX full lot shows four decimals', () => {
+    const result = formatPositionSize(100000, {
+      code: 'EURUSD',
+      assetClass: 'FX',
+      contractSize: '100000',
+      baseCurrency: 'EUR',
+      volumePrecision: 2,
+    })
+    expect(result.primary).toBe('1.0000')
+    expect(result.display).toBe('1.0000 lots')
   })
 
   it('formats crypto as base units', () => {

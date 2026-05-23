@@ -7,7 +7,9 @@ import { useModalStore } from '@/app/store'
 import { formatPercent } from '@/shared/utils/number'
 import { useFormatDateTime } from '@/shared/datetime'
 import { toast } from '@/shared/components/common'
-import { useFormatFromUsd, useFormatSignedFromUsd } from '@/shared/currency'
+import { useFormatFromQuoteCurrency, useFormatSignedFromQuoteCurrency } from '@/shared/currency'
+import type { CurrencyCode } from '@/shared/currency/types'
+import { formatSymbolPrice } from '@/shared/finance/priceFormat'
 import { formatPositionSize } from '@/shared/finance/sizeFormat'
 import { useSymbolMetaLookup, getSymbolMetaForCode } from '@/features/terminal/hooks/useSymbolMetaLookup'
 
@@ -17,13 +19,12 @@ interface PositionDetailsModalProps {
 
 export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
   const formatDateTime = useFormatDateTime()
-  const formatMoney = useFormatFromUsd()
-  const formatSigned = useFormatSignedFromUsd()
+  const formatFromQuote = useFormatFromQuoteCurrency()
+  const formatSignedQuote = useFormatSignedFromQuoteCurrency()
   const symbolMetaLookup = useSymbolMetaLookup()
-  const sizeFmt = formatPositionSize(
-    position.size,
-    getSymbolMetaForCode(symbolMetaLookup, position.symbol),
-  )
+  const rowMeta = getSymbolMetaForCode(symbolMetaLookup, position.symbol)
+  const posQuote = (rowMeta?.quoteCurrency ?? 'USD').trim() || 'USD'
+  const sizeFmt = formatPositionSize(position.size, rowMeta)
   const closeModal = useModalStore((state) => state.closeModal)
   const [notes, setNotes] = useState('')
 
@@ -70,16 +71,16 @@ export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Entry Price</div>
-            <div className="font-mono text-text">{position.entryPrice.toFixed(2)}</div>
+            <div className="font-mono text-text">{formatSymbolPrice(position.entryPrice, rowMeta)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Mark Price</div>
-            <div className="font-mono text-text">{position.markPrice.toFixed(2)}</div>
+            <div className="font-mono text-text">{formatSymbolPrice(position.markPrice, rowMeta)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">PnL</div>
             <div className={`font-mono font-semibold ${pnlColor}`}>
-              {formatSigned(position.pnl)}
+              {formatSignedQuote(position.pnl, posQuote as CurrencyCode)}
             </div>
             <div className={`text-xs ${pnlColor}`}>{formatPercent(position.pnlPercent)}</div>
           </div>
@@ -89,11 +90,13 @@ export function PositionDetailsModal({ position }: PositionDetailsModalProps) {
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Margin Used</div>
-            <div className="font-mono text-text">{formatMoney(position.marginUsed)}</div>
+            <div className="font-mono text-text">
+              {formatFromQuote(position.marginUsed, posQuote as CurrencyCode)}
+            </div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Liquidation Price</div>
-            <div className="font-mono text-danger">{position.liquidationPrice.toFixed(2)}</div>
+            <div className="font-mono text-danger">{formatSymbolPrice(position.liquidationPrice, rowMeta)}</div>
           </div>
           <div>
             <div className="text-xs text-text-muted mb-1">Size</div>
